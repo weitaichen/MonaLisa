@@ -5,8 +5,11 @@ import { deps } from './deps';
 import { app, go, toast, type EditorSource } from './state';
 
 function maxImportEdge(): number {
-  // RB §4: long edge 2048, 1440 on tier L
-  return app.get().prefs.tier === 'L' ? 1440 : 2048;
+  // RB §4: long edge 2048, 1440 on tier L. 'auto' means the tier the live loop settled on this session
+  // (H until the camera has run, so an import before that still decodes at 2048).
+  const pref = app.get().prefs.tier;
+  const tier = pref === 'auto' ? deps.autoTierSession() : pref;
+  return tier === 'L' ? 1440 : 2048;
 }
 
 /** Decode a photo (file or history original) and open it in the editor. */

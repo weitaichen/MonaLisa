@@ -149,6 +149,13 @@ let engineP: Promise<EngineBundle> | null = null;
 let trackerP: Promise<EngineBundle> | null = null;
 /** basic mode came from a createTracker failure (not the user's 基本模式 choice): a delegate change may retry */
 let trackerFailed = false;
+/**
+ * The tracker of the current (or pending) bundle: the only one whose health reaches svc.tracker. Not tied to
+ * the engine state, so a transition while recoverEngine reloads the engine (state 'loading') is kept.
+ */
+let liveTracker: Tracker | null = null;
+/** the delegate pref the current bundle's tracker was built for (null: no tracker build, i.e. 基本模式) */
+let trackerDelegate: Prefs['delegate'] | null = null;
 
 function engineOptions(prefs: Prefs) {
   return { mirror: false, matchGpupixel: prefs.matchGpupixel, showLandmarks: prefs.showLandmarks };
@@ -174,9 +181,9 @@ async function createTrackerSafe(
 ): Promise<{ tracker: Tracker | null; note: string | null }> {
   let created: Tracker | null = null;
   const onStateChange = (state: TrackerState) => {
-    // only the tracker of the current bundle speaks for the UI (a replaced one is closed anyway)
-    const cur = svc.get().engine;
-    if (!created || cur.state !== 'ready' || cur.bundle.tracker !== created) return;
+    // only the tracker of the current bundle speaks for the UI (a replaced one is closed anyway); written even
+    // while the engine is loading: the badge is drawn only once it is ready
+    if (!created || created !== liveTracker) return;
     if (state === 'ok') debug({ delegate: created.delegate }); // an 'auto' rebuild may have fallen back to CPU
     svc.set({ tracker: state });
   };
@@ -204,6 +211,8 @@ async function buildTracker(eng: Engine, model: Uint8Array): Promise<EngineBundl
     }
     trackerFailed = !tracker;
     const bundle: EngineBundle = { engine: eng, tracker, basic: !tracker };
+    liveTracker = tracker;
+    trackerDelegate = want; // even when it failed: a later delegate change is what retries it
     svc.set({ tracker: 'ok' });
     setEngineState({ state: 'ready', bundle, note });
     return bundle;
@@ -243,6 +252,8 @@ export function ensureEngine(basic = false): Promise<EngineBundle> {
     }
     if (!modelP) {
       trackerFailed = false;
+      liveTracker = null;
+      trackerDelegate = null;
       const bundle: EngineBundle = { engine: eng, tracker: null, basic: true };
       setEngineState({ state: 'ready', bundle, note: '基本模式：僅美膚與濾鏡，臉型與美妝效果已停用' });
       return bundle;
@@ -268,22 +279,35 @@ export function ensureEngine(basic = false): Promise<EngineBundle> {
   return engineP;
 }
 
+/** a ready bundle with a tracker build (not the user's 基本模式) whose delegate differs from the pref */
+function trackerStale(): boolean {
+  const cur = svc.get().engine;
+  if (cur.state !== 'ready' || (cur.bundle.basic && !trackerFailed)) return false;
+  return trackerDelegate !== getPrefs().delegate;
+}
+
 /**
  * Delegate pref changed: rebuild the tracker on the same engine (new bundle → live loop restarts).
- * Joins an in-flight build (which re-checks the pref when it finishes), so there is only ever one
- * tracker being built and rapid toggles end on the last pref. A tracker that failed to start may be retried.
+ * Joins an in-flight build and re-checks the pref once it settles (a recoverEngine reload keeps the old
+ * tracker, so it is rebuilt then), so there is only ever one tracker being built and rapid toggles end on
+ * the last pref. A tracker that failed to start may be retried.
  */
 export function restartTracker(): Promise<void> {
   const pending = trackerP ?? engineP;
-  if (pending) return pending.then(
-    () => undefined,
-    () => undefined,
-  );
+  if (pending) {
+    return pending
+      .then(
+        () => (trackerStale() ? restartTracker() : undefined),
+        () => undefined,
+      )
+      .then(() => undefined);
+  }
   const cur = svc.get().engine;
   if (cur.state !== 'ready' || (cur.bundle.basic && !trackerFailed)) return Promise.resolve();
   const old = cur.bundle.tracker;
   const eng = cur.bundle.engine;
   const p = prefetchAssets().then((model) => {
+    liveTracker = null;
     old?.close();
     return buildTracker(eng, model);
   });
@@ -320,11 +344,13 @@ export function recoverEngine(): void {
   // a build in flight finishes against the old engine first (the overlay is hidden while loading anyway)
   if (engineP || trackerP) return;
   const tracker = cur.state === 'ready' ? cur.bundle.tracker : null;
+  liveTracker = tracker; // kept: its health keeps reaching svc.tracker during the reload
   discardEngine();
   const canvas = makeCanvas();
   svc.set({ canvas, lost: false });
   const fail = (e: unknown, where: string) => {
     // 重試 goes through ensureEngine(false), which builds a new engine and tracker
+    if (liveTracker === tracker) liveTracker = null;
     tracker?.close();
     setEngineState({ state: 'error', message: reportError(e, where), canBasic: false });
   };
@@ -333,13 +359,25 @@ export function recoverEngine(): void {
     engine = fresh;
     const bundle: EngineBundle = { engine: fresh, tracker, basic: !tracker };
     setEngineState({ state: 'loading', step: 'engine' });
-    fresh.ready.then(
-      () => setEngineState({ state: 'ready', bundle, note: null }),
+    // an in-flight build like any other: ensureEngine / restartTracker during the reload join it instead of
+    // building a second tracker next to the kept one
+    const p = fresh.ready.then(
+      () => {
+        setEngineState({ state: 'ready', bundle, note: null });
+        return bundle;
+      },
       (e: unknown) => {
         if (engine === fresh) discardEngine();
         fail(e, 'engine.ready');
+        throw e;
       },
     );
+    engineP = p;
+    const clear = () => {
+      if (engineP === p) engineP = null;
+    };
+    p.then(clear, clear);
+    p.catch(() => undefined); // surfaced through svc.engine; nobody has to await a recovery
   } catch (e) {
     discardEngine();
     fail(e, 'createEngine');

@@ -380,6 +380,37 @@ describe('createTracker: inference failures', () => {
     expect(h.created).toHaveLength(3);
   });
 
+  it("stops replacing after MAX_ESCALATIONS when fresh instances fail too, reports 'failed', recovers on success", async () => {
+    const { MAX_ESCALATIONS, REBUILD_INTERVAL_MS } = await load();
+    expect(MAX_ESCALATIONS).toBeGreaterThanOrEqual(2);
+    const t = await make();
+    let broken = true;
+    const step = async () => {
+      for (const lm of h.created)
+        lm.detectForVideo.mockImplementation(() => {
+          if (broken) throw new Error('Graph has errors');
+          return hit();
+        });
+      try {
+        t.detectVideo(video, performance.now());
+      } catch {
+        /* expected */
+      }
+      await vi.advanceTimersByTimeAsync(REBUILD_INTERVAL_MS);
+    };
+    for (let i = 0; i < 60; i++) await step();
+    expect(h.created).toHaveLength(1 + MAX_ESCALATIONS);
+    expect(states.at(-1)).toBe('failed');
+    for (let i = 0; i < 60; i++) await step(); // another minute of failures: no new instances
+    expect(h.created).toHaveLength(1 + MAX_ESCALATIONS);
+    expect(h.created.slice(0, -1).every((l) => l.close.mock.calls.length > 0)).toBe(true);
+    expect(last().close).not.toHaveBeenCalled();
+    broken = false;
+    await step();
+    expect(t.detectVideo(video, performance.now())).not.toBeNull();
+    expect(states.at(-1)).toBe('ok');
+  });
+
   it('explicit delegate never falls back', async () => {
     const t = await make('GPU');
     h.onCreate = (o) => {

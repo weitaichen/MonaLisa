@@ -135,7 +135,7 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
         }
         if (t.width !== FILTER_LUT_SIZE || t.height !== FILTER_LUT_SIZE) {
           deleteTexture(gl, t);
-          filterFailed.add(filterId);
+          if (!lost) filterFailed.add(filterId);
           throw new Error(`filter LUT ${filterId} is ${t.width}×${t.height}, expected 512×512`);
         }
         filterFailed.delete(filterId);
@@ -144,7 +144,9 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       (err: unknown) => {
         if (gen === generation) {
           filterLoads.delete(filterId);
-          filterFailed.add(filterId);
+          // A load that failed on the lost context (createTexture returns null) is not the filter's fault:
+          // leave no mark, so the restored context's first frame retries it implicitly.
+          if (!lost) filterFailed.add(filterId);
         }
         throw err;
       },

@@ -26,8 +26,9 @@ let memo: Promise<{ modelBuffer: Uint8Array }> | null = null;
 let lastProgress: EngineAssetsProgress | null = null;
 
 /**
- * Fetch model (+ warm the wasm into HTTP/SW cache) with progress. Validated binaries are also written to
- * ENGINE_CACHE when no service worker controls the page, and older engine versions are pruned from it. Memoised: concurrent callers share one download.
+ * Fetch model (+ warm the wasm and its loader script into HTTP/SW cache) with progress, so 'done' means every file
+ * an offline tracker start needs has been requested. Validated binaries are also written to ENGINE_CACHE when no
+ * service worker controls the page, and older engine versions are pruned from it. Memoised: concurrent callers share one download.
  * `loaded`/`total` are bytes of the current phase ('done' carries the sum of both phases). A caller joining late
  * immediately receives the latest event. A failed download clears the memo, so calling again retries.
  */
@@ -63,8 +64,14 @@ async function download(): Promise<{ modelBuffer: Uint8Array }> {
   } catch (e) {
     console.warn('[assets] wasm warm-up failed (MediaPipe will fetch it itself)', e);
   }
+  try {
+    // MediaPipe adds the loader as a <script> only when a tracker is created; the download may run without one
+    // (idle prefetch from Home), so request it here too or an offline first camera start falls back to 基本模式.
+    await warmLoader(stash);
+  } catch (e) {
+    console.warn('[assets] wasm loader warm-up failed (MediaPipe will fetch it itself)', e);
+  }
   // Best-effort and not awaited: the download is done whether or not Cache Storage cooperates.
-  if (stash) stashLoader().catch(() => {});
   pruneStale().catch(() => {});
   const sum = model.loaded + wasmBytes;
   emit({ phase: 'done', loaded: sum, total: sum });
@@ -74,9 +81,9 @@ async function download(): Promise<{ modelBuffer: Uint8Array }> {
 // ───────────── Cache Storage (offline engine) ─────────────
 
 /**
- * The page writes the engine binaries into ENGINE_CACHE itself only while no service worker controls it
- * (the first session before clientsClaim lands, a SW that failed to install): a controlled page's fetches
- * already go through the SW's CacheFirst route, which stores them.
+ * The page writes the engine binaries (model, wasm, wasm loader) into ENGINE_CACHE itself only while no service
+ * worker controls it (the first session before clientsClaim lands, a SW that failed to install): a controlled
+ * page's fetches already go through the SW's CacheFirst route, which stores them. All three are fetched either way.
  */
 function stashTarget(): boolean {
   try {
@@ -98,12 +105,22 @@ function stashResponse(url: string, res: Response): void {
   }
 }
 
-/** MediaPipe loads the wasm loader script itself; fetch a copy so an offline launch finds it too. */
-async function stashLoader(): Promise<void> {
+/**
+ * MediaPipe loads the wasm loader script itself; fetch it so an offline launch finds it too. Uncontrolled page:
+ * stash the response. Controlled page: drain the body, so the SW's CacheFirst route stores it.
+ */
+async function warmLoader(stash: boolean): Promise<void> {
   const url = ENGINE_PATHS.wasmLoader;
-  const res = await fetch(url);
-  if (!res.ok || (res.headers.get('content-type') ?? '').includes('text/html')) return;
-  stashResponse(url, res);
+  const ac = new AbortController();
+  const stall = setTimeout(() => ac.abort(new Error(`${url}: stalled for ${STALL_TIMEOUT_MS} ms`)), STALL_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: ac.signal });
+    if (!res.ok || (res.headers.get('content-type') ?? '').includes('text/html')) return;
+    if (stash) stashResponse(url, res);
+    else await res.arrayBuffer();
+  } finally {
+    clearTimeout(stall);
+  }
 }
 
 /** Entries of older engine versions (versioned paths) are never requested again: free the space. */

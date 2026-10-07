@@ -7,7 +7,10 @@ import type { Framebuffer, GL, Program } from '../gl/gl';
 export interface MaskPass {
   /** Clear `dst` (R8, typically ¼ processing res) and draw the feathered face mask (1 inside, 0 outside). */
   draw(dst: Framebuffer, face: Face, faceWeight: number): void;
-  /** Fill `dst` with `value` (used when no face / mask disabled, so skin smoothing still applies everywhere). */
+  /**
+   * Fill `dst` with `value`. The pipeline does not call this: with no face / mask disabled it skips the mask pass
+   * and binds the white texture instead (planPasses). Used by the T2 harness to check the clear path.
+   */
   fill(dst: Framebuffer, value: number): void;
   dispose(): void;
 }

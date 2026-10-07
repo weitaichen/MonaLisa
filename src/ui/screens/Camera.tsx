@@ -265,7 +265,12 @@ export function Camera() {
   const faceOff = !!faceNote && FACE_TABS.includes(sel.tab);
 
   useEffect(() => {
-    if (!ready) hold.release(); // a toggled compare must not outlive the preview it applies to
+    if (ready) return;
+    // a toggled compare or a countdown must not outlive the preview / the shutter that cancels it
+    // (a context loss disables the shutter without touching the live loop)
+    hold.release();
+    clearInterval(countTimer.current);
+    setCount(null);
   }, [ready]);
 
   let overlay = null;

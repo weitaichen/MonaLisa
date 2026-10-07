@@ -44,7 +44,7 @@ export function EngineStatus() {
         <Status
           spinner
           title="正在準備美顏引擎"
-          body="首次使用需下載約 4 MB，之後可離線使用。"
+          body="首次使用需下載約 6–8 MB，之後可離線使用。"
           progress={f ?? 'indeterminate'}
           meta={progressText(p)}
         />

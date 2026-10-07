@@ -165,9 +165,13 @@ export function fakeCamera(video: FakeVideo, state: CameraState = 'live', facing
     resume: vi.fn(() => Promise.resolve()),
     flip: vi.fn(() => Promise.resolve()),
     stop: vi.fn(),
+    // like the real controller (src/media/camera.ts): calls back immediately with the current snapshot
     subscribe(cb: (s: CameraSnapshot) => void) {
       subs.add(cb);
-      return () => subs.delete(cb);
+      cb(snapshot);
+      return () => {
+        subs.delete(cb);
+      };
     },
     set(patch: Partial<CameraSnapshot>) {
       snapshot = { ...snapshot, ...patch };

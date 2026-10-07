@@ -13,8 +13,9 @@
 //     Calls then return no faces without throwing, and MediaPipe never preventDefaults the loss, so
 //     the context is never restored (and its GL objects would be gone anyway). The instance is
 //     replaced by a new one on a fresh canvas (RB §3 Fallbacks 5); likewise after ESCALATE_AFTER
-//     consecutive failures that in-place rebuilds did not fix. Replacing only on these rare events
-//     keeps to the single-instance rule.
+//     consecutive failures that in-place rebuilds did not fix, at most MAX_ESCALATIONS times in a
+//     row (an error that survives fresh instances too is reported as 'failed'). Replacing only on
+//     these rare events keeps to the single-instance rule.
 import { FaceLandmarker, FilesetResolver, type FaceLandmarkerOptions } from '@mediapipe/tasks-vision';
 import type { Delegate, Landmarks478, Tracker, TrackerOptions, TrackerState } from '../types';
 
@@ -31,6 +32,11 @@ export const RECREATE_BACKOFF_MS: readonly number[] = [500, 1000, 2000, 5000];
 export const CPU_FALLBACK_AFTER = 2;
 /** Failed replacement attempts before 'failed' is reported and retries wait for a detect call / return to foreground. */
 export const SELF_RETRY_ATTEMPTS = 8;
+/**
+ * Failure-driven replacements since the last completed inference before 'failed' is reported and the instance is
+ * kept (only throttled in-place rebuilds from then on). At least 2, so 'auto' gets its GPU retry and then CPU.
+ */
+export const MAX_ESCALATIONS = 3;
 /** Distinct errors logged per tracker. */
 const MAX_LOGGED = 8;
 
@@ -300,6 +306,8 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
     escalations = 0;
     attempts = 0;
     everSucceeded = true;
+    // the instance kept after MAX_ESCALATIONS works again
+    if (state === 'failed' && !inst.dead) emit('ok');
     return r;
   };
 
@@ -309,6 +317,11 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
     needsRebuild = true;
     if (++failures >= ESCALATE_AFTER) {
       failures = 0;
+      // Fresh instances fail the same way: stop replacing (each create/close leaks on WebKit, MPI 5036).
+      if (escalations >= MAX_ESCALATIONS) {
+        emit('failed');
+        return e;
+      }
       // RB §3 sanctions CPU only as a last resort: on 'auto', a GPU graph that never produced a
       // result and whose GPU replacement failed the same way.
       forceCpu = opts.delegate === 'auto' && inst.delegate === 'GPU' && !everSucceeded && escalations >= 1;

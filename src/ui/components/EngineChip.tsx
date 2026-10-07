@@ -1,4 +1,5 @@
-// Engine-download progress chip (spec §7.2 Home). Model ≈ 3.7 MB + wasm warm-up.
+// Engine-download progress chip (spec §7.2 Home). Model ≈ 3.7 MB + wasm warm-up
+// (≈ 6–8 MB over the wire in total, RB row 14 / risk 11).
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { progressFraction, progressText } from '../format';
 import { Icon } from '../icons';

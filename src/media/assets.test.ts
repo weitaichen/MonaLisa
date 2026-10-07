@@ -62,6 +62,7 @@ function stubFetch(routes: Record<string, Served | (() => Served)>) {
 
 const MODEL = '/models/face_landmarker/float16-1/face_landmarker.task';
 const WASM = '/mediapipe/0.10.35/vision_wasm_internal.wasm';
+const LOADER = '/mediapipe/0.10.35/vision_wasm_internal.js';
 
 beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -73,7 +74,7 @@ afterEach(() => {
 });
 
 describe('loadEngineAssets', () => {
-  it('streams the model with progress, warms the wasm, then reports done', async () => {
+  it('streams the model with progress, warms the wasm and its loader, then reports done', async () => {
     const model = bytes(300_000);
     const wasm = bytes(120_000, 7);
     const { calls } = stubFetch({ [MODEL]: { bytes: model, chunk: 50_000 }, [WASM]: { bytes: wasm } });
@@ -82,7 +83,8 @@ describe('loadEngineAssets', () => {
     const ev: EngineAssetsProgress[] = [];
     const { modelBuffer } = await loadEngineAssets((p) => ev.push(p));
     expect(modelBuffer).toEqual(model);
-    expect(calls).toEqual([MODEL, WASM]);
+    // the loader is requested too, so an offline first tracker start finds it (C1)
+    expect(calls).toEqual([MODEL, WASM, LOADER]);
 
     const m = ev.filter((e) => e.phase === 'model');
     expect(m[0]).toEqual({ phase: 'model', loaded: 0, total: 300_000 });
@@ -126,7 +128,7 @@ describe('loadEngineAssets', () => {
     const b: EngineAssetsProgress[] = [];
     const [ra, rb] = await Promise.all([loadEngineAssets((p) => a.push(p)), loadEngineAssets((p) => b.push(p))]);
     expect(ra.modelBuffer).toBe(rb.modelBuffer);
-    expect(fetchMock).toHaveBeenCalledTimes(2); // model + wasm, once
+    expect(fetchMock).toHaveBeenCalledTimes(3); // model + wasm + loader, once
     expect(a.at(-1)?.phase).toBe('done');
     expect(b.at(-1)?.phase).toBe('done');
 
@@ -134,7 +136,7 @@ describe('loadEngineAssets', () => {
     const rc = await loadEngineAssets((p) => late.push(p));
     expect(rc.modelBuffer).toBe(ra.modelBuffer);
     expect(late).toEqual([a.at(-1)]);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     // finished callers are unsubscribed
     expect(a.filter((e) => e.phase === 'done')).toHaveLength(1);
   });
@@ -263,8 +265,6 @@ function stubCaches(opts: { openFails?: boolean; seed?: string[] } = {}) {
   return { buckets, put, storage };
 }
 
-const LOADER = '/mediapipe/0.10.35/vision_wasm_internal.js';
-
 describe('loadEngineAssets → Cache Storage', () => {
   it('an uncontrolled page stashes the validated model, wasm and loader in ENGINE_CACHE', async () => {
     const model = bytes(50_000);
@@ -284,7 +284,7 @@ describe('loadEngineAssets → Cache Storage', () => {
     expect(new Uint8Array(await b.get(LOADER)!.arrayBuffer())).toEqual(loader);
   });
 
-  it('a page controlled by the service worker leaves caching to its CacheFirst route', async () => {
+  it('a page controlled by the service worker leaves caching to its CacheFirst route but still requests every engine file', async () => {
     const { calls } = stubFetch({ [MODEL]: { bytes: bytes(1000) }, [WASM]: { bytes: bytes(10) } });
     const { put } = stubCaches();
     vi.stubGlobal('navigator', { serviceWorker: { controller: {} } });
@@ -292,7 +292,7 @@ describe('loadEngineAssets → Cache Storage', () => {
     await loadEngineAssets();
     await new Promise((r) => setTimeout(r, 20));
     expect(put).not.toHaveBeenCalled();
-    expect(calls).toEqual([MODEL, WASM]);
+    expect(calls).toEqual([MODEL, WASM, LOADER]);
   });
 
   it('a truncated download is never stashed', async () => {

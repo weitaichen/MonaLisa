@@ -3,7 +3,7 @@
 // Playwright test, which compares them with the pngjs-decoded source in Node.
 import landmarks from '../../fixtures/landmarks_sample_face.json';
 import { createEngine } from '../../../src/engine/index';
-import { applyPreset, setParam, setShade } from '../../../src/engine/params';
+import { applyPreset, setFilter, setParam, setShade } from '../../../src/engine/params';
 import { adapt } from '../../../src/tracking/adapter111';
 import type { BeautyParams, RenderInput } from '../../../src/types';
 
@@ -44,7 +44,8 @@ window.runEngineCheck = async () => {
   const canvas = document.getElementById('gl') as HTMLCanvasElement;
   const engine = createEngine(canvas, { mirror: false });
   await engine.ready;
-  await engine.loadFilter('natural');
+  // resident before the first render: an implicit (frame-path) load would skip the filter on that frame
+  await engine.loadFilter('mono');
   const gl = canvas.getContext('webgl2') as WebGL2RenderingContext;
   const dbg = gl.getExtension('WEBGL_debug_renderer_info');
   const renderer = String(gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
@@ -63,6 +64,8 @@ window.runEngineCheck = async () => {
     natural: applyPreset('natural', 1),
     // big eyes only: proves the landmark-driven warp moves pixels near the eyes and nowhere else
     bigEye: setParam(applyPreset('original', 1), 'shape.eyeEnlarge', 1),
+    // the 512² LUT path (load + size check, unit 7, lookup + mix) at full strength, nothing else on
+    filterMono: setFilter(applyPreset('original', 1), 'mono'),
   };
   for (const [name, params] of Object.entries(cases)) {
     // a display render first, so the pass list for the case is recorded

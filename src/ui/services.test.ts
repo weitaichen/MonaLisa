@@ -263,3 +263,182 @@ describe('services: self-healing tracker state', () => {
     expect(svc.svc.get().tracker).toBe('ok');
   });
 });
+
+describe('services: recoverEngine', () => {
+  let prefs: { current: Prefs };
+  let engines: (Engine & { lost: boolean; dispose: ReturnType<typeof vi.fn> })[];
+  let readies: Deferred<void>[];
+  let made: FakeTracker[];
+  let opts: TrackerOptions[];
+  beforeEach(() => {
+    prefs = { current: { ...PREFS } };
+    engines = [];
+    readies = [];
+    made = [];
+    opts = [];
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** engines after the first get a deferred `ready` (the reload after a lost context) */
+  async function setup(basic = false) {
+    const { svc, deps } = await load(prefs);
+    // every makeCanvas() gets its own element, so a replaced canvas is observable
+    vi.stubGlobal('document', { createElement: () => ({ className: '', addEventListener: vi.fn() }) });
+    deps.createEngine = vi.fn(() => {
+      let ready = Promise.resolve();
+      if (engines.length > 0) {
+        const d = deferred<void>();
+        readies.push(d);
+        ready = d.promise;
+      }
+      const e = fakeEngine(ready) as (typeof engines)[number];
+      engines.push(e);
+      return e;
+    }) as unknown as Deps['createEngine'];
+    deps.createTracker = (async (o: TrackerOptions) => {
+      opts.push(o);
+      const t: FakeTracker = { delegate: 'GPU', close: vi.fn() };
+      made.push(t);
+      return t;
+    }) as unknown as Deps['createTracker'];
+    const first = await svc.ensureEngine(basic);
+    return { svc, first };
+  }
+  const unclosed = () => made.filter((t) => t.close.mock.calls.length === 0);
+
+  it('a live engine: only clears the lost flag', async () => {
+    const { svc } = await setup();
+    svc.svc.set({ lost: true });
+    svc.recoverEngine();
+    expect(svc.svc.get().lost).toBe(false);
+    expect(engines).toHaveLength(1);
+    expect(svc.svc.get().engine.state).toBe('ready');
+  });
+
+  it('a lost engine: new canvas + engine, the same tracker, loading → ready', async () => {
+    const { svc, first } = await setup();
+    const canvas = svc.svc.get().canvas;
+    engines[0].lost = true;
+    svc.svc.set({ lost: true });
+    svc.recoverEngine();
+    expect(engines[0].dispose).toHaveBeenCalled();
+    expect(engines).toHaveLength(2);
+    expect(svc.svc.get().canvas).not.toBe(canvas);
+    expect(svc.svc.get().lost).toBe(false);
+    expect(svc.svc.get().engine).toEqual({ state: 'loading', step: 'engine' });
+    readies[0].resolve();
+    await flush();
+    const s = svc.svc.get().engine;
+    expect(s.state).toBe('ready');
+    if (s.state !== 'ready') return;
+    expect(s.bundle.engine).toBe(engines[1]);
+    expect(s.bundle.tracker).toBe(first.tracker);
+    expect(s.bundle.basic).toBe(false);
+    expect(made).toHaveLength(1);
+    expect(unclosed()).toHaveLength(1);
+  });
+
+  it('without a tracker the recovered bundle stays basic', async () => {
+    const { svc } = await setup(true);
+    engines[0].lost = true;
+    svc.recoverEngine();
+    readies[0].resolve();
+    await flush();
+    const s = svc.svc.get().engine;
+    expect(s.state === 'ready' && s.bundle.basic).toBe(true);
+    expect(s.state === 'ready' && s.bundle.tracker).toBe(null);
+  });
+
+  it('a failed reload ends in error (no 基本模式 offer) and closes the kept tracker', async () => {
+    const { svc } = await setup();
+    engines[0].lost = true;
+    svc.recoverEngine();
+    readies[0].reject(new Error('lut 404'));
+    await flush();
+    expect(svc.svc.get().engine).toMatchObject({ state: 'error', canBasic: false });
+    expect(made[0].close).toHaveBeenCalled();
+    expect(engines[1].dispose).toHaveBeenCalled();
+  });
+
+  it('is a no-op while a build is in flight', async () => {
+    const { svc } = await setup();
+    engines[0].lost = true;
+    prefs.current = { ...prefs.current, delegate: 'CPU' };
+    const r = svc.restartTracker(); // tracker rebuild in flight
+    svc.recoverEngine();
+    expect(engines).toHaveLength(1);
+    expect(engines[0].dispose).not.toHaveBeenCalled();
+    await r;
+  });
+
+  it('ensureEngine during the reload joins the recovery: no second tracker', async () => {
+    const { svc, first } = await setup();
+    engines[0].lost = true;
+    svc.recoverEngine();
+    const joined = svc.ensureEngine(); // Camera / Editor mount while the engine reloads
+    readies[0].resolve();
+    const bundle = await joined;
+    await flush();
+    expect(made).toHaveLength(1);
+    expect(bundle.tracker).toBe(first.tracker);
+    expect(bundle.engine).toBe(engines[1]);
+    expect(unclosed()).toEqual([first.tracker]);
+    const s = svc.svc.get().engine;
+    expect(s.state === 'ready' && s.bundle).toBe(bundle);
+  });
+
+  it('a delegate change during the reload rebuilds the kept tracker on the new engine once it is ready', async () => {
+    const { svc, first } = await setup();
+    engines[0].lost = true;
+    svc.recoverEngine();
+    prefs.current = { ...prefs.current, delegate: 'CPU' };
+    const r = svc.restartTracker(); // joins the recovery, which keeps the old-delegate tracker
+    readies[0].resolve();
+    await r;
+    await flush();
+    expect(made).toHaveLength(2);
+    expect(opts[1].delegate).toBe('CPU');
+    expect(first.tracker?.close).toHaveBeenCalled();
+    expect(unclosed()).toEqual([made[1]]);
+    const s = svc.svc.get().engine;
+    expect(s.state === 'ready' && s.bundle.engine).toBe(engines[1]);
+    expect(s.state === 'ready' && s.bundle.tracker).toBe(made[1]);
+  });
+
+  it('a restart joining a build that already honoured the pref does not build again', async () => {
+    const { svc } = await setup();
+    prefs.current = { ...prefs.current, delegate: 'CPU' };
+    const r1 = svc.restartTracker();
+    const r2 = svc.restartTracker(); // joins r1's build, which is already for 'CPU'
+    await Promise.all([r1, r2]);
+    await flush();
+    expect(made).toHaveLength(2);
+    expect(unclosed()).toEqual([made[1]]);
+  });
+
+  it('tracker health changes during the reload are kept', async () => {
+    const { svc } = await setup();
+    const onState = opts[0].onStateChange!;
+    onState('lost'); // GPU-process reset: the tracker's own context went too
+    expect(svc.svc.get().tracker).toBe('lost');
+    engines[0].lost = true;
+    svc.recoverEngine();
+    onState('ok'); // its replacement finished while the engine reloads
+    readies[0].resolve();
+    await flush();
+    expect(svc.svc.get().engine.state).toBe('ready');
+    expect(svc.svc.get().tracker).toBe('ok');
+
+    // and the reverse: ok → lost during a second reload stays lost
+    engines[1].lost = true;
+    svc.recoverEngine();
+    onState('lost');
+    readies[1].resolve();
+    await flush();
+    expect(svc.svc.get().engine.state).toBe('ready');
+    expect(svc.svc.get().tracker).toBe('lost');
+  });
+});

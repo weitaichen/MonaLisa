@@ -188,7 +188,7 @@ export const CREDITS: readonly Credit[] = [
   {
     name: 'GPUImage',
     license: 'BSD-3-Clause',
-    body: 'Copyright (c) 2012, Brad Larson, Ben Cochran, Hugues Lismonde, Keitaroh Kobayashi, Alaric Cole, Matthew Clark, Jacob Gundersen, Chris Williams. 方框模糊的取樣位移演算法源自 GPUImage。授權條件與免責聲明全文見下方。',
+    body: 'Copyright (c) 2012, Brad Larson, Ben Cochran, Hugues Lismonde, Keitaroh Kobayashi, Alaric Cole, Matthew Clark, Jacob Gundersen, Chris Williams. 方框模糊的取樣位移與 64³ 色彩查找表（LUT）的取樣演算法源自 GPUImage（經由 GPUPixel）。授權條件與免責聲明全文見下方。',
     text: 'GPUImage-BSD-3-Clause.txt',
   },
   {

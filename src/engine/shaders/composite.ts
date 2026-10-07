@@ -13,6 +13,34 @@
  * (so preview tiers and the full-res capture sharpen the same footprint); added 紅潤 soft-light
  * tint, a 512² LUT filter (GPUImage 64³ layout, the same lookup math as lookupCustom) and the
  * present flip/mirror (PRESENT_VS); output alpha is 1.0 (opaque export).
+ *
+ * lut64() (the 512² / 64³ lookup used for lookup_light and the filter LUTs) is GPUImageLookupFilter's
+ * lookup math, carried through GPUPixel beauty_face_unit_filter.cc:136-157. Modified: GLSL ES 3.00,
+ * written as a function that takes the LUT sampler.
+ *
+ * GPUImage — Copyright (c) 2012, Brad Larson, Ben Cochran, Hugues Lismonde, Keitaroh Kobayashi,
+ * Alaric Cole, Matthew Clark, Jacob Gundersen, Chris Williams. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification, are permitted
+ * provided that the following conditions are met:
+ *
+ * Redistributions of source code must retain the above copyright notice, this list of conditions
+ * and the following disclaimer.
+ * Redistributions in binary form must reproduce the above copyright notice, this list of
+ * conditions and the following disclaimer in the documentation and/or other materials provided
+ * with the distribution.
+ * Neither the name of the GPUImage framework nor the names of its contributors may be used to
+ * endorse or promote products derived from this software without specific prior written
+ * permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
  */
 
 // P5 composite + present (RB §2.3 parts 1–2, §2.5). Draw with PRESENT_VS.
@@ -77,7 +105,7 @@ vec3 lut16(sampler2D lut, vec3 texel) {
   return mix(newColor1, newColor2, fract(blueColor));
 }
 
-// 64³ LUT stored as 512×512 in 8×8 tiles (GPUImage layout; lookup_light and our filters).
+// 64³ LUT stored as 512×512 in 8×8 tiles (GPUImage layout and lookup math; lookup_light and our filters).
 vec3 lut64(sampler2D lut, vec3 color) {
   float blueColor = color.b * 63.0;
   vec2 quad1;

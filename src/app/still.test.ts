@@ -235,6 +235,124 @@ describe('createStillSession', () => {
     await expect(s.prepareExport(applyPreset('glow'))).resolves.toBeUndefined();
   });
 
+  it('after a restore, redraws once the new engine.ready resolves and prepareExport waits for it', async () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, fakeTracker(), bitmap());
+    s.render(natural);
+    await Promise.resolve();
+    vi.advanceTimersByTime(16);
+    // the engine swaps in a fresh `ready` on restore (its listener runs before the session's)
+    let ready!: () => void;
+    (engine as { ready: Promise<void> }).ready = new Promise<void>((r) => (ready = r));
+    engine.canvas.dispatchEvent(new Event('webglcontextrestored'));
+    vi.advanceTimersByTime(16);
+    const renders = engine.render.mock.calls.length;
+    let settled = false;
+    const p = s.prepareExport(natural).then(() => (settled = true));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(s.exportReady(natural)).toBe(false);
+    ready();
+    await p;
+    expect(s.exportReady(natural)).toBe(true);
+    vi.advanceTimersByTime(16);
+    expect(engine.render.mock.calls.length).toBe(renders + 1);
+  });
+
+  it('prepareExport re-waits when the context is lost and restored during its wait', async () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, fakeTracker(), bitmap());
+    const glow = applyPreset('glow');
+    const loads: (() => void)[] = [];
+    engine.loadFilter.mockImplementation(() => new Promise<void>((r) => loads.push(r)));
+    let settled = false;
+    const p = s.prepareExport(glow).then(() => (settled = true));
+    // loss + restore while the LUT downloads: the old load settles without leaving a texture behind
+    let ready!: () => void;
+    (engine as { ready: Promise<void> }).ready = new Promise<void>((r) => (ready = r));
+    engine.canvas.dispatchEvent(new Event('webglcontextrestored'));
+    const flushAll = async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    };
+    loads[0]();
+    await flushAll();
+    expect(settled).toBe(false); // waits for the new `ready` and a fresh filter load
+    ready();
+    await flushAll();
+    expect(settled).toBe(false);
+    const fresh = loads.length - 1;
+    expect(fresh).toBeGreaterThan(0);
+    for (const done of loads.slice(1)) done();
+    await p;
+    expect(settled).toBe(true);
+    expect(s.exportReady(glow)).toBe(true);
+  });
+
+  it('prepareExport resolves (no retry) while the context is still lost', async () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, fakeTracker(), bitmap());
+    engine.lost = true;
+    (engine as { ready: Promise<void> }).ready = Promise.resolve();
+    await expect(s.prepareExport(applyPreset('glow'))).resolves.toBeUndefined();
+    expect(s.exportReady(applyPreset('glow'))).toBe(false);
+  });
+
+  it('exportReady is false until the static textures and the filter LUT have settled', async () => {
+    let ready!: () => void;
+    let lut!: (e?: unknown) => void;
+    const engine = fakeEngine();
+    (engine as { ready: Promise<void> }).ready = new Promise<void>((r) => (ready = r));
+    engine.loadFilter.mockImplementation(() => new Promise<void>((_r, rej) => (lut = rej)));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const s = createStillSession(engine, fakeTracker(), bitmap());
+    const glow = applyPreset('glow');
+    s.render(glow);
+    expect(s.exportReady(natural)).toBe(false);
+    ready();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(s.exportReady(natural)).toBe(true);
+    expect(s.exportReady(glow)).toBe(false);
+    lut(new Error('404')); // a failed LUT is skipped by the preview too: the export then matches it
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(s.exportReady(glow)).toBe(true);
+  });
+
+  it('stopDisplay: no more display renders, exports still work', () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, fakeTracker(), bitmap());
+    s.render(natural);
+    s.stopDisplay();
+    vi.advanceTimersByTime(100);
+    expect(engine.render).not.toHaveBeenCalled();
+    expect(s.exportImageData(natural).width).toBe(1536);
+    s.render(natural);
+    vi.advanceTimersByTime(100);
+    expect(engine.render).not.toHaveBeenCalled();
+  });
+
+  it('an injected face skips detection; faceKnown is false only when the detector threw', () => {
+    const tracker = fakeTracker();
+    const known = makeFace(3);
+    const s = createStillSession(fakeEngine(), tracker, bitmap(), { face: known });
+    expect(tracker.detectImage).not.toHaveBeenCalled();
+    expect(s.face).toBe(known);
+    expect(s.faceKnown).toBe(true);
+    const none = createStillSession(fakeEngine(), tracker, bitmap(), { face: null });
+    expect(tracker.detectImage).not.toHaveBeenCalled();
+    expect(none.face).toBeNull();
+    expect(createStillSession(fakeEngine(), fakeTracker(undefined, false), bitmap()).faceKnown).toBe(true);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    tracker.detectImage.mockImplementation(() => {
+      throw new Error('graph');
+    });
+    const threw = createStillSession(fakeEngine(), tracker, bitmap());
+    expect(threw.face).toBeNull();
+    expect(threw.faceKnown).toBe(false);
+  });
+
   it('a throwing render is reported, not thrown into rAF', () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     const engine = fakeEngine();

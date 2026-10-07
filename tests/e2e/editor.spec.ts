@@ -1,4 +1,21 @@
+import { PNG } from 'pngjs';
 import { debugState, dragSlider, expect, hold, mad, SAMPLE_FACE, settled, shot, test } from './fixtures';
+
+/** A face-free photo: a soft grey gradient. */
+function noFacePng(width = 600, height = 800): Buffer {
+  const png = new PNG({ width, height });
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const v = 90 + Math.round((70 * (x + y)) / (width + height));
+      png.data[i] = v;
+      png.data[i + 1] = v;
+      png.data[i + 2] = v + 6;
+      png.data[i + 3] = 255;
+    }
+  }
+  return PNG.sync.write(png);
+}
 
 test('import → editor: face detected, slider, undo/redo, hold-to-compare, save, history', async ({ page }) => {
   await page.goto('/');
@@ -118,4 +135,35 @@ test('import → editor: face detected, slider, undo/redo, hold-to-compare, save
   await page.getByRole('tab', { name: '美膚' }).click();
   await page.getByRole('option', { name: '美白', exact: true }).click();
   await expect(page.getByRole('slider')).toHaveAttribute('aria-valuenow', '98');
+});
+
+test('no face in the photo: 美型 / 美妝 are dimmed with a note and no slider; 美膚 stays available', async ({ page }) => {
+  await page.goto('/');
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: /匯入照片/ }).click();
+  await (await chooser).setFiles({ name: 'no_face.png', mimeType: 'image/png', buffer: noFacePng() });
+
+  await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 90_000 });
+  await expect.poll(async () => (await debugState(page)).screen).toBe('editor');
+  expect((await debugState(page)).face).toBe(false);
+  // a healthy tracker that found nothing: the definite "no face" answer (toast + panel note)
+  await expect(page.getByText('未偵測到臉部，僅套用美膚與濾鏡')).toBeVisible();
+
+  const note = page.getByRole('note');
+  const tab = (name: string) => page.getByRole('tab', { name, exact: true });
+  await tab('美型').click();
+  await expect(note).toHaveText('未偵測到臉部，臉型與美妝不會套用');
+  const options = page.getByRole('option');
+  expect(await options.count()).toBeGreaterThan(0);
+  for (const o of await options.all()) await expect(o).toHaveAttribute('aria-disabled', 'true');
+  await expect(tab('美型')).toHaveClass(/\bunavailable\b/);
+  await expect(tab('美妝')).toHaveClass(/\bunavailable\b/);
+  await expect(tab('美膚')).not.toHaveClass(/\bunavailable\b/);
+  await expect(page.getByRole('slider')).toHaveCount(0);
+  await shot(page, '15-editor-no-face-shape');
+
+  await tab('美膚').click();
+  await expect(note).toHaveCount(0);
+  for (const o of await options.all()) await expect(o).not.toHaveAttribute('aria-disabled', 'true');
+  await expect(page.getByRole('slider')).toHaveCount(1);
 });

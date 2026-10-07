@@ -2,7 +2,8 @@
 //   <id>.png        512×512, GPUImage 64³ layout: 8×8 tiles of 64×64; blue picks the tile,
 //                   x = (b % 8)·64 + r, y = floor(b / 8)·64 + g   (r, g, b ∈ 0..63)
 //   <id>_thumb.png  96×96 synthetic portrait swatch graded with that LUT (filter strip thumbnail)
-// plus none_thumb.png (the ungraded swatch) for the 無 item.
+// plus none_thumb.png (the ungraded swatch), the reference tests/harness/t5 compares each look's thumbnail
+// against (the 無 item in the strip uses an icon, see src/ui/panelModel.ts).
 //
 // Looks are built in OKLab (perceptual, on linear light): white balance in linear RGB, tone
 // curves on lightness (authored on sRGB-encoded luminance), chroma/hue edits in LCh with skin

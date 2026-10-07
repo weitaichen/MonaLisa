@@ -223,6 +223,7 @@ function fakeStill(engine: Engine, _t: Tracker | null, bitmap: ImageBitmap, opts
     width: bitmap.width,
     height: bitmap.height,
     face: flag('face') === '0' ? null : ({} as StillSession['face']),
+    faceKnown: true,
     render(p) {
       last = p;
       if (!raf) raf = requestAnimationFrame(paint);
@@ -232,7 +233,13 @@ function fakeStill(engine: Engine, _t: Tracker | null, bitmap: ImageBitmap, opts
       if (!raf) raf = requestAnimationFrame(paint);
     },
     prepareExport: (p) => (p.filterId === 'none' ? Promise.resolve() : engine.loadFilter(p.filterId).catch(() => undefined)),
+    exportReady: () => true,
     exportImageData: (p) => engine.renderToImageData(input(p), { mirror: false }),
+    stopDisplay() {
+      cancelAnimationFrame(raf);
+      raf = 0;
+      last = null;
+    },
     dispose() {
       cancelAnimationFrame(raf);
       if (opts.ownsBitmap ?? true) bitmap.close();

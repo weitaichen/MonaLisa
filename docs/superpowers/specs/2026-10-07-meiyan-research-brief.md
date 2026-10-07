@@ -398,17 +398,16 @@ public/makeup/gp/{lip,blush}{,_mask}.png
 - In a Safari tab (`!matchMedia('(display-mode: standalone)').matches && !navigator.standalone`), show a one-time generic hint: "分享 → 加入主畫面".
 - Do not name button positions; they moved in iOS 26 and again in 27.
 
-**`vercel.json` sketch** (verify the path-pattern syntax on deploy):
+**`vercel.json` sketch** (verify the path-pattern syntax on deploy; the shipped `vercel.json` is authoritative). LUTs (`/luts/`) and makeup PNGs are unversioned, so they get no immutable rule and keep the default revalidation (spec §9):
 ```json
 { "headers": [
   { "source": "/assets/(.*)",    "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
   { "source": "/mediapipe/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
   { "source": "/models/(.*)",    "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
-  { "source": "/luts/(.*)",      "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
   { "source": "/(.*)\\.wasm",    "headers": [{ "key": "Content-Type",  "value": "application/wasm" }] },
   { "source": "/sw.js",          "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }] },
   { "source": "/(.*)", "headers": [
-    { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'" },
+    { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; img-src 'self' blob: data:; media-src 'self' blob: mediastream:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'" },
     { "key": "Permissions-Policy", "value": "camera=(self)" },
     { "key": "X-Content-Type-Options", "value": "nosniff" },
     { "key": "Referrer-Policy", "value": "no-referrer" } ] } ] }

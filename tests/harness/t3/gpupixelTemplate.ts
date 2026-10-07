@@ -1,3 +1,10 @@
+/*
+ * GPUPixel
+ *
+ * Created by PixPark on 2021/6/24.
+ * Copyright © 2021 PixPark. All rights reserved.
+ */
+
 // GPUPixel 111-point face template, copied verbatim from FaceMakeupFilter::FaceTextureCoordinates().
 // Derived from GPUPixel src/filter/face_makeup_filter.cc (Apache-2.0, Copyright (c) 2021 PixPark),
 // pinned commit ef552bf8ce2d0d41fa9b979bfb5c7cf79374ca88; modified: reformatted only. Test-harness use.

@@ -88,7 +88,7 @@ export interface PassPlan {
   mean: boolean;
 }
 
-/** Skip rules (pure). Without a mask pass the composite uses mask = 1, identical to fill(1). */
+/** Skip rules (pure). Without a mask pass the composite binds the white texture (mask = 1, uMaskOn = 0). */
 export function planPasses(i: PassPlanInput): PassPlan {
   const faceOn = i.hasFace && i.faceWeight > 0;
   const mean = needsMean(i.skin);

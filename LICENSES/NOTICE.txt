@@ -7,19 +7,22 @@ This app ships code and assets from the projects below. The full license texts a
 
 GPUPixel — Copyright (c) 2021 PixPark — Apache License 2.0 (GPUPixel-Apache-2.0.txt)
   https://github.com/pixpark/gpupixel (commit ef552bf8ce2d0d41fa9b979bfb5c7cf79374ca88)
-  - Skin smoothing, face reshape and makeup shaders: ported to WebGL2 and modified (src/engine/shaders).
+  - Skin smoothing, face reshape and makeup shaders: ported to WebGL2 and modified
+    (src/engine/shaders/composite.ts, mean.ts; src/engine/passes/reshape.ts, makeup.ts, faceMesh.ts;
+    each file's header lists its changes).
   - GPUPixel resources, pixels unchanged (re-encoded to drop colour-management chunks):
       src/res/lookup_gray.png, lookup_origin.png, lookup_skin.png, lookup_light.png -> public/luts/gp/
       src/res/mouth.png   -> public/makeup/gp/lip.png
       src/res/blusher.png -> public/makeup/gp/blush.png
   - Modified derivatives (Apache-2.0 §4(b) change notice), produced by scripts/gen-makeup.mjs:
-      public/makeup/gp/lip_mask.png   from mouth.png:   single channel 1 − min(G,B), stretched to 0..1
+      public/makeup/gp/lip_mask.png   from mouth.png:   mask value 1 − min(G,B), stretched to 0..1
       public/makeup/gp/blush_mask.png from blusher.png: same, plus a σ 1.5 blur
-      Both re-encoded as greyscale PNG without colour chunks.
+      Both stored as 8-bit RGBA PNG (R=G=B=mask, A=255) without colour chunks.
 
 GPUImage — Copyright (c) 2012, Brad Larson, Ben Cochran, Hugues Lismonde, Keitaroh Kobayashi,
   Alaric Cole, Matthew Clark, Jacob Gundersen, Chris Williams — BSD 3-Clause (GPUImage-BSD-3-Clause.txt)
   - Box-blur tap layout (via GPUPixel), src/engine/shaders/mean.ts.
+  - 64³ colour-lookup math of GPUImageLookupFilter (via GPUPixel), src/engine/shaders/composite.ts lut64().
 
 GPUImage-x — Copyright (c) 2017 Yijin Wang, Yiqian Wang — Apache License 2.0
 CainCamera — Copyright (c) 2018 cain.huang — Apache License 2.0

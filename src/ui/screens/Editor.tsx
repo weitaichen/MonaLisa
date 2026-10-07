@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { StillSession } from '../../app/still';
 import { applyPreset } from '../../engine/params';
-import type { BeautyParams, Engine } from '../../types';
+import type { BeautyParams, Engine, Face } from '../../types';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
 import { CanvasHost } from '../components/CanvasHost';
 import { IconButton } from '../components/Controls';
@@ -13,6 +13,7 @@ import { SliderRow } from '../components/Slider';
 import { Status } from '../components/Status';
 import { reportError } from '../debug';
 import { deps, type UndoLike } from '../deps';
+import { detectSession, exportOnLatest, RedetectBudget } from '../editorModel';
 import { Icon } from '../icons';
 import { INITIAL_SELECTION, sliderFor, type PanelSelection } from '../panelModel';
 import { haptic } from '../platform';
@@ -25,6 +26,8 @@ import { useZoomPan } from './zoomPan';
 const ENCODE_DEBOUNCE_MS = 400;
 const THUMB_EDGE = 360;
 const ORIGINAL_EDGE = 2048;
+/** how long a history flush waits for a filter LUT still downloading before giving up on correcting the thumb */
+const FLUSH_LUT_WAIT_MS = 3000;
 
 let lastSel: PanelSelection = INITIAL_SELECTION;
 
@@ -33,14 +36,25 @@ const keyOf = (p: BeautyParams) => JSON.stringify(p);
 export function Editor({ source }: { source: EditorSource }) {
   const engine = useStore(svc, (s) => s.engine);
   const lost = useStore(svc, (s) => s.lost);
+  /** the tracker is replacing a dead graph ('lost') or paused its automatic retries ('failed') */
+  const trackerHealth = useStore(svc, (s) => s.tracker);
   const bundle = engine.state === 'ready' ? engine.bundle : null;
 
   const [params, setParamsState] = useState(source.params);
   const paramsRef = useRef(params);
   paramsRef.current = params;
   const [sel, setSelState] = useState(lastSel);
-  /** the still session plus the engine it draws with (recoverEngine replaces the engine → a new session) */
-  const [bound, setBound] = useState<{ s: StillSession; engine: Engine } | null>(null);
+  /**
+   * the still session plus the engine it draws with (recoverEngine replaces the engine → a new session).
+   * unsure: its "no face" came from a tracker that could not answer (recovering, or the detect call threw).
+   */
+  const [bound, setBound] = useState<{ s: StillSession; engine: Engine; unsure: boolean } | null>(null);
+  /** a definite detection result for this photo (a face, or a real "no face"); undefined → not known yet */
+  const knownFace = useRef<Face | null | undefined>(undefined);
+  /** bumped to detect again on the same engine once the tracker can answer (bounded: RedetectBudget) */
+  const [detectGen, setDetectGen] = useState(0);
+  const [redetect] = useState(() => new RedetectBudget(trackerHealth));
+  const sessionGen = useRef(-1);
   const [fatal, setFatal] = useState<string | null>(null);
   const fatalRef = useRef(fatal);
   fatalRef.current = fatal;
@@ -102,10 +116,12 @@ export function Editor({ source }: { source: EditorSource }) {
   const unmounted = useRef(false);
   const currentEngine = bundle?.engine ?? null;
   useEffect(() => {
-    if (!bundle || sessionEngine.current === bundle.engine) return;
+    if (!bundle || (sessionEngine.current === bundle.engine && sessionGen.current === detectGen)) return;
     const target = bundle.engine;
     const tracker = bundle.tracker;
+    const gen = detectGen;
     sessionEngine.current = target;
+    sessionGen.current = gen;
     try {
       target.setOptions({ mirror: false });
     } catch (e) {
@@ -124,16 +140,32 @@ export function Editor({ source }: { source: EditorSource }) {
     }
     // let the "analysing" spinner paint before the synchronous face detection
     window.setTimeout(() => {
-      if (unmounted.current || sessionEngine.current !== target) return;
+      if (unmounted.current || sessionEngine.current !== target || sessionGen.current !== gen) return;
+      const replacing = !!sessionRef.current;
       if (sessionRef.current) {
         sessionRef.current.dispose();
         sessionRef.current = null;
       }
       try {
-        const s = deps.createStillSession(target, tracker, source.bitmap, { ownsBitmap: false });
+        // the photo is unchanged: a face found before (e.g. by the session a lost engine took with it) still holds
+        const face = tracker ? knownFace.current : undefined;
+        const { s, unsure } = detectSession(
+          !!tracker,
+          () => svc.get().tracker === 'ok',
+          () => deps.createStillSession(target, tracker, source.bitmap, { ownsBitmap: false, face }),
+        );
+        if (tracker && !unsure) {
+          if (s.face && knownFace.current === undefined && replacing) {
+            // found on a re-detect: what was encoded / autosaved so far lacks the face effects
+            fresh.current = null;
+            savedKey.current = null;
+          }
+          knownFace.current = s.face;
+        }
         sessionRef.current = s;
-        setBound({ s, engine: target });
-        if (!faceToastDone.current) {
+        setBound({ s, engine: target, unsure });
+        // a tracker that could not answer is not "no face": wait for the re-detect before saying so
+        if (!faceToastDone.current && !unsure) {
           faceToastDone.current = true;
           if (tracker && !s.face) toast('未偵測到臉部，僅套用美膚與濾鏡', 3200);
         }
@@ -141,51 +173,77 @@ export function Editor({ source }: { source: EditorSource }) {
         setFatal(reportError(e, 'createStillSession'));
       }
     }, 60);
-  }, [currentEngine]);
+  }, [currentEngine, detectGen]);
+
+  // the tracker is back (or a throwing detect call has rebuilt its graph): detect again on this photo until
+  // it gives a real answer (a few non-answers in a row; a tracker recovery allows a few more)
+  useEffect(() => {
+    if (redetect.next(!!bound?.unsure && bound.engine === currentEngine, trackerHealth)) setDetectGen((n) => n + 1);
+  }, [bound, trackerHealth, currentEngine]);
 
   /** Queue the history write for `p` (thumb + update, or a new entry) and publish it for Home. */
   const queueHistory = (p: BeautyParams, img: ImageData, size: { width: number; height: number }) => {
     savedKey.current = keyOf(p);
-    const { width, height } = size;
     historyChain.current = historyChain.current
-      .then(async () => {
-        const thumb = await deps.toJpegBlob(img, THUMB_EDGE, 0.82);
-        if (historyId.current) {
-          await deps.updateEntry(historyId.current, { params: p, thumb });
-        } else {
-          const original = await (originalBlob.current ?? deps.toJpegBlob(img, ORIGINAL_EDGE, 0.9));
-          historyId.current = await deps.addEntry({ original, thumb, params: p, width, height });
-        }
-      })
+      .then(() => writeHistory(p, img, size))
       .catch((e: unknown) => reportError(e, 'history autosave'));
     setPendingHistory(historyChain.current);
+  };
+
+  /** thumb + update, or a new entry (one step of historyChain) */
+  const writeHistory = async (p: BeautyParams, img: ImageData, size: { width: number; height: number }) => {
+    const { width, height } = size;
+    const thumb = await deps.toJpegBlob(img, THUMB_EDGE, 0.82);
+    if (historyId.current) {
+      await deps.updateEntry(historyId.current, { params: p, thumb });
+    } else {
+      const original = await (originalBlob.current ?? deps.toJpegBlob(img, ORIGINAL_EDGE, 0.9));
+      historyId.current = await deps.addEntry({ original, thumb, params: p, width, height });
+    }
   };
 
   /**
    * Write the current params to history now if the debounce has not (✕ / 返回 within 400 ms of an edit,
    * or the app going to the background). Synchronous readback, so it works right before dispose.
+   * When the filter LUT is not resident yet, a corrected thumbnail follows on historyChain: the session must
+   * stay alive until that settles.
    */
   const flushHistory = () => {
     const s = sessionRef.current;
     if (!s || fatalRef.current) return;
     const p = paramsRef.current;
-    if (savedKey.current === keyOf(p)) return;
+    const key = keyOf(p);
+    if (savedKey.current === key) return;
     if (sessionEngine.current?.lost) {
       // no GL to render a thumbnail: keep at least the params of an existing entry
       const id = historyId.current;
       if (!id) return;
-      savedKey.current = keyOf(p);
+      savedKey.current = key;
       historyChain.current = historyChain.current
         .then(() => deps.updateEntry(id, { params: p }))
         .catch((e: unknown) => reportError(e, 'history flush'));
       setPendingHistory(historyChain.current);
       return;
     }
+    const ready = s.exportReady(p);
     try {
       queueHistory(p, s.exportImageData(p), s);
     } catch (e) {
       reportError(e, 'history flush');
+      return;
     }
+    if (ready) return;
+    // the filter LUT (or a static texture) was still loading, so that thumbnail lacks it: write a corrected
+    // one once it is resident, unless a newer edit was queued meanwhile (iOS may suspend us first: the
+    // synchronous write above keeps the params either way)
+    historyChain.current = historyChain.current
+      .then(() => Promise.race([s.prepareExport(p), new Promise((r) => window.setTimeout(r, FLUSH_LUT_WAIT_MS))]))
+      .then(async () => {
+        if (savedKey.current !== key || !s.exportReady(p)) return;
+        await writeHistory(p, s.exportImageData(p), s);
+      })
+      .catch((e: unknown) => reportError(e, 'history flush'));
+    setPendingHistory(historyChain.current);
   };
 
   useEffect(() => {
@@ -201,13 +259,20 @@ export function Editor({ source }: { source: EditorSource }) {
     () => () => {
       unmounted.current = true;
       flushHistory(); // before dispose: the readback needs the live session
-      sessionRef.current?.dispose();
+      const s = sessionRef.current;
       sessionRef.current = null;
-      try {
-        source.bitmap.close();
-      } catch {
-        /* already closed */
-      }
+      const release = () => {
+        s?.dispose();
+        try {
+          source.bitmap.close();
+        } catch {
+          /* already closed */
+        }
+      };
+      // a corrected thumbnail (flushHistory: filter LUT not resident yet) may still need the session and the
+      // bitmap: release them once the history writes queued so far have landed, drawing nothing meanwhile
+      s?.stopDisplay();
+      historyChain.current.then(release, release);
     },
     [],
   );
@@ -244,7 +309,8 @@ export function Editor({ source }: { source: EditorSource }) {
         try {
           const r = await encode(s, params);
           img = r.img;
-          if (keyOf(paramsRef.current) === key) fresh.current = { key, file: r.file };
+          // (a session replaced meanwhile, e.g. by a re-detect that found the face, made this file stale)
+          if (keyOf(paramsRef.current) === key && sessionRef.current === s) fresh.current = { key, file: r.file };
         } catch (e) {
           // closing mid-encode is not an error (the unmount flush writes history itself), and neither is a
           // context loss (this effect re-arms once the context is restored)
@@ -306,10 +372,16 @@ export function Editor({ source }: { source: EditorSource }) {
       return;
     }
     setPreparing(true);
-    encode(session, params).then(
-      (r) => {
+    // a re-detect or an engine recovery may replace (and dispose) the session while this waits for the filter
+    // LUT: export from the replacement instead of failing
+    const replacement = (failed: StillSession) => {
+      const cur = sessionRef.current;
+      return !unmounted.current && cur && cur !== failed && !sessionEngine.current?.lost ? cur : null;
+    };
+    exportOnLatest(session, (s) => encode(s, params), replacement).then(
+      ({ s, result: r }) => {
         setPreparing(false);
-        fresh.current = { key, file: r.file };
+        if (sessionRef.current === s) fresh.current = { key, file: r.file };
         share(r.file);
       },
       (e: unknown) => {
@@ -357,8 +429,15 @@ export function Editor({ source }: { source: EditorSource }) {
 
   const binding = sliderFor(params, sel);
   // face effects cannot apply: 基本模式, or no face in this photo (null while analysing, so no flash)
-  const faceNote =
-    session && !session.face ? (bundle?.basic ? '基本模式不支援臉型與美妝' : '未偵測到臉部，臉型與美妝不會套用') : null;
+  // (a tracker that could not answer gets a neutral note until the re-detect gives a real answer)
+  let faceNote: string | null = null;
+  if (session && !session.face) {
+    if (bundle?.basic) faceNote = '基本模式不支援臉型與美妝';
+    else if (!bound?.unsure) faceNote = '未偵測到臉部，臉型與美妝不會套用';
+    else if (trackerHealth === 'lost') faceNote = '臉部偵測重新啟動中，臉型與美妝暫不套用';
+    else if (trackerHealth === 'failed') faceNote = '臉部偵測暫停，臉型與美妝暫不套用';
+    else faceNote = '臉部偵測失敗，臉型與美妝暫不套用';
+  }
   const faceOff = !!faceNote && FACE_TABS.includes(sel.tab);
   const ratio = session ? session.width / session.height : source.bitmap.width / Math.max(1, source.bitmap.height) || 0.75;
 

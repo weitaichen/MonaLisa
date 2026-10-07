@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="MonaLisa" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="description" content="在手機上即時美顏與修圖，所有處理都在裝置上完成。" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon-180.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <title>MonaLisa 美顏</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <!-- portrait-only layout (RB §4 "Lock to portrait in CSS"; iOS ignores manifest orientation, RB §1 #11).
+         Static so it works before Preact mounts; shown by a theme.css media query, covering #app without hiding it. -->
+    <div class="rotate-hint" role="alert">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="7" y="2.5" width="10" height="19" rx="2.2" />
+        <path d="M10.5 18.5h3" />
+      </svg>
+      <p>請將手機轉為直向使用</p>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

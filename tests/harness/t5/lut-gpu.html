@@ -1,0 +1,105 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>T5 LUT GPU check</title>
+<canvas id="c" width="1" height="1"></canvas>
+<script type="module">
+  // Runs GPUPixel's 64³ lookup (beauty_face_unit_filter.cc, lookUpCustom block, GLSL ES 3.00)
+  // over all 256³ colours (4096×4096: x = r + 256·(b % 16), y = g + 256·floor(b / 16)) with a LUT
+  // loaded exactly like the engine loads it (gl.ts loadImageTexture: createImageBitmap with no
+  // colour conversion / premultiply, UNPACK_FLIP_Y false).
+  import {
+    FULLSCREEN_VS,
+    bindTarget,
+    bindTexture,
+    createFramebuffer,
+    createProgram,
+    createTexture,
+    drawFullscreen,
+    loadImageTexture,
+    setUnpackState,
+  } from '/src/engine/gl/gl.ts';
+
+  const FS = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uSrc;
+uniform sampler2D uLut;
+out vec4 outColor;
+vec3 lut64(vec3 color) {
+  highp float blueColor = color.b * 63.0;
+  highp vec2 quad1;
+  quad1.y = floor(floor(blueColor) / 8.0);
+  quad1.x = floor(blueColor) - (quad1.y * 8.0);
+  highp vec2 quad2;
+  quad2.y = floor(ceil(blueColor) / 8.0);
+  quad2.x = ceil(blueColor) - (quad2.y * 8.0);
+  highp vec2 texPos1;
+  texPos1.x = (quad1.x * 1.0 / 8.0) + 0.5 / 512.0 + ((1.0 / 8.0 - 1.0 / 512.0) * color.r);
+  texPos1.y = (quad1.y * 1.0 / 8.0) + 0.5 / 512.0 + ((1.0 / 8.0 - 1.0 / 512.0) * color.g);
+  highp vec2 texPos2;
+  texPos2.x = (quad2.x * 1.0 / 8.0) + 0.5 / 512.0 + ((1.0 / 8.0 - 1.0 / 512.0) * color.r);
+  texPos2.y = (quad2.y * 1.0 / 8.0) + 0.5 / 512.0 + ((1.0 / 8.0 - 1.0 / 512.0) * color.g);
+  vec3 newColor1 = texture(uLut, texPos1).rgb;
+  vec3 newColor2 = texture(uLut, texPos2).rgb;
+  return mix(newColor1, newColor2, fract(blueColor));
+}
+void main() {
+  vec3 c = texture(uSrc, vUv).rgb;
+  outColor = vec4(lut64(c), 1.0);
+}`;
+
+  const N = 4096;
+  const gl = document.getElementById('c').getContext('webgl2', { antialias: false, premultipliedAlpha: false });
+  const prog = createProgram(gl, FULLSCREEN_VS, FS, 't5-lut');
+
+  const src = createTexture(gl, 0, 0, { filter: gl.NEAREST });
+  const all = new Uint8Array(N * N * 4);
+  for (let b = 0; b < 256; b++)
+    for (let g = 0; g < 256; g++)
+      for (let r = 0; r < 256; r++) {
+        const i = (((b >> 4) * 256 + g) * N + (b & 15) * 256 + r) * 4;
+        all[i] = r;
+        all[i + 1] = g;
+        all[i + 2] = b;
+        all[i + 3] = 255;
+      }
+  gl.bindTexture(gl.TEXTURE_2D, src.tex);
+  setUnpackState(gl);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, N, N, 0, gl.RGBA, gl.UNSIGNED_BYTE, all);
+  const fb = createFramebuffer(gl, N, N);
+  const out = new Uint8Array(N * N * 4);
+
+  /** Grades all 256³ colours; returns {maxDiffVsInput, mismatches, samples (every `step`-th texel, base64 RGB in/out)}. */
+  window.runLut = async (url, step) => {
+    const lut = await loadImageTexture(gl, url);
+    bindTarget(gl, fb);
+    prog.use();
+    bindTexture(gl, 0, src);
+    bindTexture(gl, 1, lut);
+    gl.uniform1i(prog.u('uSrc'), 0);
+    gl.uniform1i(prog.u('uLut'), 1);
+    drawFullscreen(gl);
+    gl.readPixels(0, 0, N, N, gl.RGBA, gl.UNSIGNED_BYTE, out);
+    const err = gl.getError();
+    let maxDiff = 0;
+    let mismatches = 0;
+    for (let i = 0; i < out.length; i += 4) {
+      for (let c = 0; c < 3; c++) {
+        const d = Math.abs(out[i + c] - all[i + c]);
+        if (d) mismatches++;
+        if (d > maxDiff) maxDiff = d;
+      }
+    }
+    const n = Math.floor((N * N) / step);
+    const pack = new Uint8Array(n * 6);
+    for (let k = 0; k < n; k++) {
+      const i = k * step * 4;
+      pack.set([all[i], all[i + 1], all[i + 2], out[i], out[i + 1], out[i + 2]], k * 6);
+    }
+    let bin = '';
+    for (let i = 0; i < pack.length; i += 0x8000) bin += String.fromCharCode(...pack.subarray(i, i + 0x8000));
+    gl.deleteTexture(lut.tex);
+    return { glError: err, renderer: gl.getParameter(gl.RENDERER), maxDiffVsInput: maxDiff, mismatches, samples: btoa(bin) };
+  };
+  window.ready = true;
+</script>

@@ -1,0 +1,311 @@
+/*
+ * GPUPixel
+ *
+ * Created by PixPark on 2021/6/24.
+ * Copyright © 2021 PixPark. All rights reserved.
+ */
+// Derived from GPUPixel src/filter/face_reshape_filter.cc (GLES variant, pixpark/gpupixel@ef552bf, Apache-2.0);
+// modified: GLSL ES 3.00; vec2 uPts[111] instead of float facePoints[212]; curveWarp / enlargeEye kept,
+// new scaleAround / shiftAround primitives and V-face, narrow, chin, forehead, nose, mouth and
+// eye-distance warps (RB §2.4); big-eye radius from eye width instead of lid distance; yaw
+// attenuation; uniform early-outs (zero deltas, face bounding box).
+import type { Face, ParamId } from '../../types';
+import { signed } from '../params';
+import { createProgram, drawFullscreen, bindTarget, bindTexture, FULLSCREEN_VS } from '../gl/gl';
+import type { Framebuffer, GL, Program, Texture } from '../gl/gl';
+import { FACE_TEMPLATE } from './faceMesh';
+
+/** Engine-space deltas (already scaled per RB §2.4 table and multiplied by faceWeight). */
+export interface ReshapeUniforms {
+  faceSlim: number;
+  faceV: number;
+  faceNarrow: number;
+  chin: number;
+  forehead: number;
+  noseSlim: number;
+  mouthSize: number;
+  eyeDistance: number;
+  eyeEnlarge: number;
+}
+
+/** RB §2.4 "Delta" column. eyeDistance is a fraction of the inter-ocular distance (signed). */
+export const RESHAPE_SCALE = {
+  faceSlim: 0.1,
+  faceV: 0.1,
+  faceNarrow: 0.07,
+  chin: 0.1,
+  forehead: -0.1,
+  noseSlim: 0.15,
+  mouthSize: 0.3,
+  eyeDistance: 0.08,
+  eyeEnlarge: 0.2,
+} as const satisfies ReshapeUniforms;
+
+const clamp01 = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
+const clampS = (v: number) => Math.min(1, Math.max(-1, signed(clamp01(v))));
+
+export function reshapeUniforms(values: Record<ParamId, number>, faceWeight: number): ReshapeUniforms {
+  const w = clamp01(faceWeight);
+  const one = (id: ParamId) => clamp01(values[id]) * w;
+  const bi = (id: ParamId) => clampS(values[id]) * w;
+  const k = RESHAPE_SCALE;
+  return {
+    faceSlim: k.faceSlim * one('shape.faceSlim'),
+    faceV: k.faceV * one('shape.faceV'),
+    faceNarrow: k.faceNarrow * one('shape.faceNarrow'),
+    chin: k.chin * bi('shape.chin'),
+    forehead: k.forehead * bi('shape.forehead'),
+    noseSlim: k.noseSlim * one('shape.noseSlim'),
+    mouthSize: k.mouthSize * bi('shape.mouthSize'),
+    eyeDistance: k.eyeDistance * bi('shape.eyeDistance'),
+    eyeEnlarge: k.eyeEnlarge * one('shape.eyeEnlarge'),
+  };
+}
+
+export function reshapeActive(u: ReshapeUniforms): boolean {
+  return (Object.keys(u) as (keyof ReshapeUniforms)[]).some((key) => Math.abs(u[key]) > 1e-4);
+}
+
+/** RB §2.4 yaw attenuation: full effect up to |yaw| 0.15, none beyond 0.35 (contour unreliable). */
+export function yawAttenuation(yaw: number): number {
+  const t = Math.min(1, Math.max(0, (Math.abs(yaw) - 0.35) / (0.15 - 0.35)));
+  return Number.isFinite(t) ? t * t * (3 - 2 * t) : 0;
+}
+
+type V2 = [number, number];
+const pt = (a: Float32Array, i: number): V2 => [a[i * 2], a[i * 2 + 1]];
+
+/**
+ * Big-eye radius = EYE_RADIUS_K × eye width (corner to corner). GPUPixel uses 5 × |p74 − p72|
+ * (centre to upper lid), which pulses on blinks; κ is calibrated so both agree on the template.
+ */
+export const EYE_RADIUS_K = (() => {
+  const d = (a: V2, b: V2) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const t = (i: number) => pt(FACE_TEMPLATE, i);
+  const left = (5 * d(t(74), t(72))) / d(t(52), t(55));
+  const right = (5 * d(t(77), t(75))) / d(t(58), t(61));
+  return (left + right) / 2;
+})();
+
+const SLIM: readonly (readonly [number, number])[] = [
+  [3, 44], [29, 44], [7, 45], [25, 45], [10, 46], [22, 46], [14, 49], [18, 49], [16, 49],
+];
+const V_JAW = [8, 10, 12, 24, 22, 20] as const;
+const NARROW = [2, 4, 30, 28] as const;
+const NOSE: readonly (readonly [number, number])[] = [[80, 46], [81, 46], [82, 49], [83, 49]];
+
+/** Anchors derived on the CPU once per frame (cheaper than per fragment). All in UV space. */
+export interface ReshapeGeometry {
+  vTargets: Float32Array; // 6 × vec2
+  narrowTargets: Float32Array; // 4 × vec2
+  chinTarget: V2;
+  mouthR: number; // iso units
+  eyeR: V2; // iso units, image-left / image-right eye
+  eyeDisp: V2; // UV displacement of the image-left eye (right eye gets the negation)
+  /** UV bounding box (minX, minY, maxX, maxY) of every active warp's influence disc */
+  box: [number, number, number, number];
+}
+
+/** Compute warp anchors for `face` at aspect W/H. Exported for unit tests and the harness. */
+export function reshapeGeometry(face: Face, aspect: number, u: ReshapeUniforms): ReshapeGeometry {
+  const P = face.pts111;
+  const iso = (p: V2): V2 => [p[0], p[1] / aspect];
+  const uv = (q: V2): V2 => [q[0], q[1] * aspect];
+  const dist = (a: V2, b: V2) => {
+    const ia = iso(a);
+    const ib = iso(b);
+    return Math.hypot(ia[0] - ib[0], ia[1] - ib[1]);
+  };
+  const p = (i: number) => pt(P, i);
+
+  // Projection on the face midline p43 → p16, done in iso space so it is a true perpendicular.
+  const m0 = iso(p(43));
+  const m1 = iso(p(16));
+  const md: V2 = [m1[0] - m0[0], m1[1] - m0[1]];
+  const mlen2 = md[0] * md[0] + md[1] * md[1] || 1e-12;
+  const project = (i: number): V2 => {
+    const q = iso(p(i));
+    const t = ((q[0] - m0[0]) * md[0] + (q[1] - m0[1]) * md[1]) / mlen2;
+    return uv([m0[0] + md[0] * t, m0[1] + md[1] * t]);
+  };
+
+  const vTargets = new Float32Array(12);
+  V_JAW.forEach((i, k) => vTargets.set(project(i), k * 2));
+  const narrowTargets = new Float32Array(8);
+  NARROW.forEach((i, k) => narrowTargets.set(project(i), k * 2));
+
+  const p16 = p(16);
+  const p49 = p(49);
+  const chinTarget: V2 = [2 * p16[0] - p49[0], 2 * p16[1] - p49[1]];
+  const mouthR = 0.7 * dist(p(84), p(90));
+  const eyeR: V2 = [EYE_RADIUS_K * dist(p(52), p(55)), EYE_RADIUS_K * dist(p(58), p(61))];
+
+  // disp = −eyeDistance·IOD·û with û = unit(p77 − p74), i.e. −eyeDistance·(p77 − p74); + moves eyes apart.
+  const e0 = p(74);
+  const e1 = p(77);
+  const eyeDisp: V2 = [-u.eyeDistance * (e1[0] - e0[0]), -u.eyeDistance * (e1[1] - e0[1])];
+
+  // Union of influence discs (iso radius r around o) → UV box. Warps outside every disc are identity,
+  // and a coordinate outside all discs is never moved, so skipping it is exact.
+  const box: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
+  const disc = (o: V2, r: number) => {
+    box[0] = Math.min(box[0], o[0] - r);
+    box[1] = Math.min(box[1], o[1] - r * aspect);
+    box[2] = Math.max(box[2], o[0] + r);
+    box[3] = Math.max(box[3], o[1] + r * aspect);
+  };
+  const curve = (o: V2, t: V2) => disc(o, dist(o, t));
+  if (u.faceSlim) for (const [o, t] of SLIM) curve(p(o), p(t));
+  if (u.faceV) V_JAW.forEach((i, k) => curve(p(i), [vTargets[k * 2], vTargets[k * 2 + 1]]));
+  if (u.faceNarrow) NARROW.forEach((i, k) => curve(p(i), [narrowTargets[k * 2], narrowTargets[k * 2 + 1]]));
+  if (u.chin) curve(p16, chinTarget);
+  if (u.forehead) curve(pt(face.ext, 0), pt(face.ext, 3));
+  if (u.noseSlim) for (const [o, t] of NOSE) curve(p(o), p(t));
+  if (u.mouthSize) disc(p(106), mouthR);
+  if (u.eyeDistance || u.eyeEnlarge) {
+    disc(p(74), eyeR[0]);
+    disc(p(77), eyeR[1]);
+  }
+  const pad = 2 / 1024;
+  box[0] -= pad;
+  box[1] -= pad;
+  box[2] += pad;
+  box[3] += pad;
+  return { vTargets, narrowTargets, chinTarget, mouthR, eyeR, eyeDisp, box };
+}
+
+const RESHAPE_FS = /* glsl */ `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uSrc;
+uniform vec2 uPts[111];
+uniform vec2 uExt[8];   // MediaPipe-only anchors (types.ts Face.ext order)
+uniform float uAspect;  // W/H
+uniform vec4 uBox;      // UV bounds of all active warps
+uniform float uSlim, uV, uNarrow, uChin, uForehead, uNose, uMouth, uEye;
+uniform vec2 uVT[6];
+uniform vec2 uNT[4];
+uniform vec2 uChinT;
+uniform float uMouthR;
+uniform vec2 uEyeR;
+uniform vec2 uEyeDisp;
+out vec4 outColor;
+
+vec2 iso(vec2 p) { return vec2(p.x, p.y / uAspect); }
+
+// GPUPixel curveWarp: content within |t − o| of o moves toward t by up to d·(t − o).
+vec2 curveWarp(vec2 tc, vec2 o, vec2 t, float d) {
+  vec2 dir = (t - o) * d;
+  float r = max(distance(iso(t), iso(o)), 1e-6);
+  float k = clamp(1.0 - distance(iso(tc), iso(o)) / r, 0.0, 1.0);
+  return tc - dir * k;
+}
+
+// GPUPixel enlargeEye: magnify only (weight clamped to [0,1]).
+vec2 enlargeEye(vec2 tc, vec2 c, float R, float d) {
+  float w = distance(iso(tc), iso(c)) / max(R, 1e-6);
+  w = clamp(1.0 - (1.0 - w * w) * d, 0.0, 1.0);
+  return c + (tc - c) * w;
+}
+
+// Bidirectional scale; monotonic (no fold) for |d| <= 0.5.
+vec2 scaleAround(vec2 tc, vec2 c, float R, float d) {
+  float w = distance(iso(tc), iso(c)) / max(R, 1e-6);
+  return w >= 1.0 ? tc : c + (tc - c) * (1.0 - (1.0 - w * w) * d);
+}
+
+// Local translate: content near c moves by disp, smoothly fading to 0 at R.
+vec2 shiftAround(vec2 tc, vec2 c, float R, vec2 disp) {
+  float w = distance(iso(tc), iso(c)) / max(R, 1e-6);
+  float k = clamp(1.0 - w * w, 0.0, 1.0);
+  return tc - disp * k * k;
+}
+
+const ivec2 SLIM[9] = ivec2[9](ivec2(3,44), ivec2(29,44), ivec2(7,45), ivec2(25,45),
+                               ivec2(10,46), ivec2(22,46), ivec2(14,49), ivec2(18,49), ivec2(16,49));
+const int V_JAW[6] = int[6](8, 10, 12, 24, 22, 20);
+const int NARROW[4] = int[4](2, 4, 30, 28);
+const ivec2 NOSE[4] = ivec2[4](ivec2(80,46), ivec2(81,46), ivec2(82,49), ivec2(83,49));
+
+void main() {
+  vec2 tc = vUv;
+  if (all(greaterThanEqual(tc, uBox.xy)) && all(lessThanEqual(tc, uBox.zw))) {
+    if (uSlim != 0.0) {
+      for (int i = 0; i < 9; i++) tc = curveWarp(tc, uPts[SLIM[i].x], uPts[SLIM[i].y], uSlim);
+    }
+    if (uV != 0.0) {
+      for (int i = 0; i < 6; i++) tc = curveWarp(tc, uPts[V_JAW[i]], uVT[i], uV);
+    }
+    if (uNarrow != 0.0) {
+      for (int i = 0; i < 4; i++) tc = curveWarp(tc, uPts[NARROW[i]], uNT[i], uNarrow);
+    }
+    if (uChin != 0.0) tc = curveWarp(tc, uPts[16], uChinT, uChin);
+    if (uForehead != 0.0) tc = curveWarp(tc, uExt[0], uExt[3], uForehead);
+    if (uNose != 0.0) {
+      for (int i = 0; i < 4; i++) tc = curveWarp(tc, uPts[NOSE[i].x], uPts[NOSE[i].y], uNose);
+    }
+    if (uMouth != 0.0) tc = scaleAround(tc, uPts[106], uMouthR, uMouth);
+    if (uEyeDisp != vec2(0.0)) {
+      tc = shiftAround(tc, uPts[74], uEyeR.x, uEyeDisp);
+      tc = shiftAround(tc, uPts[77], uEyeR.y, -uEyeDisp);
+    }
+    if (uEye != 0.0) {
+      tc = enlargeEye(tc, uPts[74], uEyeR.x, uEye);
+      tc = enlargeEye(tc, uPts[77], uEyeR.y, uEye);
+    }
+  }
+  outColor = texture(uSrc, tc);
+}`;
+
+export interface ReshapePass {
+  /**
+   * Sample `src` (any size, by UV) and write the warped image into `dst` (processing size).
+   * `aspect` (W/H of the processing size) defaults to dst's; pass it when dst is a scaled buffer
+   * (the ¼-res mask) so the map is exactly the image's.
+   */
+  draw(src: Texture, dst: Framebuffer, face: Face, u: ReshapeUniforms, aspect?: number): void;
+  dispose(): void;
+}
+
+export function createReshapePass(gl: GL): ReshapePass {
+  const prog: Program = createProgram(gl, FULLSCREEN_VS, RESHAPE_FS, 'reshape');
+  prog.use();
+  gl.uniform1i(prog.u('uSrc'), 0);
+
+  return {
+    draw(src, dst, face, uIn, aspectIn) {
+      const att = yawAttenuation(face.yaw);
+      const u: ReshapeUniforms = { ...uIn };
+      for (const key of Object.keys(u) as (keyof ReshapeUniforms)[]) u[key] *= att;
+      const aspect = aspectIn ?? dst.width / dst.height;
+      const g = reshapeGeometry(face, aspect, u);
+
+      bindTarget(gl, dst);
+      gl.disable(gl.BLEND);
+      prog.use();
+      bindTexture(gl, 0, src);
+      gl.uniform2fv(prog.u('uPts'), face.pts111);
+      gl.uniform2fv(prog.u('uExt'), face.ext);
+      gl.uniform1f(prog.u('uAspect'), aspect);
+      gl.uniform4f(prog.u('uBox'), g.box[0], g.box[1], g.box[2], g.box[3]);
+      gl.uniform1f(prog.u('uSlim'), u.faceSlim);
+      gl.uniform1f(prog.u('uV'), u.faceV);
+      gl.uniform1f(prog.u('uNarrow'), u.faceNarrow);
+      gl.uniform1f(prog.u('uChin'), u.chin);
+      gl.uniform1f(prog.u('uForehead'), u.forehead);
+      gl.uniform1f(prog.u('uNose'), u.noseSlim);
+      gl.uniform1f(prog.u('uMouth'), u.mouthSize);
+      gl.uniform1f(prog.u('uEye'), u.eyeEnlarge);
+      gl.uniform2fv(prog.u('uVT'), g.vTargets);
+      gl.uniform2fv(prog.u('uNT'), g.narrowTargets);
+      gl.uniform2f(prog.u('uChinT'), g.chinTarget[0], g.chinTarget[1]);
+      gl.uniform1f(prog.u('uMouthR'), g.mouthR);
+      gl.uniform2f(prog.u('uEyeR'), g.eyeR[0], g.eyeR[1]);
+      gl.uniform2f(prog.u('uEyeDisp'), g.eyeDisp[0], g.eyeDisp[1]);
+      drawFullscreen(gl);
+    },
+    dispose() {
+      prog.dispose();
+    },
+  };
+}

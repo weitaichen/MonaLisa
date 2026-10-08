@@ -22,3 +22,7 @@ public/bench-face.jpg
 tests/harness/**/*.png
 tests/harness/**/*.jpg
 tests/harness/review-ui/
+# 美體 harnesses (re-creatable): generated baseline engine copy, outputs and screenshots
+tests/harness/b2/baseline/
+tests/harness/*/out/
+tests/harness/b5/shots/

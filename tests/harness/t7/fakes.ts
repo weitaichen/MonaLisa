@@ -7,6 +7,9 @@ import type { StillSession } from '../../../src/app/still';
 import type { Deps, UndoLike } from '../../../src/ui/deps';
 import type {
   BeautyParams,
+  BodyDetection,
+  BodyField,
+  BodyTracker,
   CameraController,
   CameraErrorKind,
   CameraSnapshot,
@@ -208,10 +211,16 @@ function fakeLiveLoop(d: LiveDeps): LiveLoop {
   };
 }
 
-function fakeStill(engine: Engine, _t: Tracker | null, bitmap: ImageBitmap, opts: { ownsBitmap?: boolean } = {}): StillSession {
+function fakeStill(
+  engine: Engine,
+  _t: Tracker | null,
+  bitmap: ImageBitmap,
+  opts: { ownsBitmap?: boolean; body?: BodyField | null } = {},
+): StillSession {
   let raf = 0;
   let last: BeautyParams | null = null;
   let compare = false;
+  let body = opts.body ?? null;
   const input = (p: BeautyParams) => ({ source: bitmap, width: bitmap.width, height: bitmap.height, face: null, faceWeight: 1, params: p });
   const paint = () => {
     raf = 0;
@@ -222,7 +231,11 @@ function fakeStill(engine: Engine, _t: Tracker | null, bitmap: ImageBitmap, opts
   return {
     width: bitmap.width,
     height: bitmap.height,
-    face: flag('face') === '0' ? null : ({} as StillSession['face']),
+    // a structurally valid Face (美體 measures head anchors from it); only its presence matters to the screens
+    face:
+      flag('face') === '0'
+        ? null
+        : { pts111: new Float32Array(222).fill(0.5), ext: new Float32Array(16).fill(0.5), oval: new Float32Array(72).fill(0.5), yaw: 0 },
     faceKnown: true,
     render(p) {
       last = p;
@@ -230,6 +243,13 @@ function fakeStill(engine: Engine, _t: Tracker | null, bitmap: ImageBitmap, opts
     },
     setCompare(on) {
       compare = on;
+      if (!raf) raf = requestAnimationFrame(paint);
+    },
+    get body() {
+      return body;
+    },
+    setBody(f) {
+      body = f; // the 2D fake engine cannot warp: the field is only recorded
       if (!raf) raf = requestAnimationFrame(paint);
     },
     prepareExport: (p) => (p.filterId === 'none' ? Promise.resolve() : engine.loadFilter(p.filterId).catch(() => undefined)),
@@ -245,6 +265,29 @@ function fakeStill(engine: Engine, _t: Tracker | null, bitmap: ImageBitmap, opts
       if (opts.ownsBitmap ?? true) bitmap.close();
     },
   };
+}
+
+// ───────── 美體 ─────────
+
+/** The recorded full-body fixture (B3), or null when it is not there yet. */
+async function fixturePose(): Promise<BodyDetection | null> {
+  try {
+    const r = await fetch('/tests/fixtures/pose_fullbody.json');
+    if (!r.ok) return null;
+    const j = (await r.json()) as {
+      width: number;
+      height: number;
+      people: number;
+      points: number[];
+      mask: { width: number; height: number; data: string } | null;
+    };
+    const mask = j.mask
+      ? { width: j.mask.width, height: j.mask.height, data: Uint8Array.from(atob(j.mask.data), (c) => c.charCodeAt(0)) }
+      : null;
+    return { pose: { points: Float32Array.from(j.points) }, mask, people: j.people, width: j.width, height: j.height };
+  } catch {
+    return null;
+  }
 }
 
 // ───────── media / store ─────────
@@ -349,6 +392,28 @@ export async function installFakes(deps: Deps, defaults: { params: BeautyParams;
       await sleep(150);
       if (flag('tracker') === 'fail') throw new Error('FaceLandmarker: GPU and CPU delegates both failed');
       return { delegate: 'GPU', detectVideo: () => null, detectImage: () => null, close() {} } satisfies Tracker;
+    },
+    // pose=fail (download fails) · none (no person) · slow (download stalls at 40 %)
+    loadPoseModel: async (_variant: string, onProgress?: (p: EngineAssetsProgress) => void) => {
+      const total = 9_398_198;
+      for (let i = 1; i <= 20; i++) {
+        if (flag('pose') === 'slow' && i > 8) await new Promise(() => undefined);
+        await sleep(60);
+        if (flag('pose') === 'fail' && i > 12) throw new TypeError('Failed to fetch');
+        onProgress?.({ loaded: Math.round((total * i) / 20), total, phase: 'model' });
+      }
+      return new Uint8Array(4);
+    },
+    createBodyTracker: async () => {
+      await sleep(200);
+      const det = flag('pose') === 'none' ? null : await fixturePose();
+      return {
+        variant: 'full',
+        delegate: 'CPU',
+        detect: () => det,
+        detectVideo: () => det,
+        close() {},
+      } satisfies BodyTracker;
     },
     createCamera: fakeCamera,
     startLiveLoop: fakeLiveLoop,

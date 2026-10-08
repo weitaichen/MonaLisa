@@ -18,7 +18,9 @@ import {
   PRESETS,
   resetGroup,
   sanitizeParams,
+  setBodyProtect,
   setFilter,
+  setHeightBand,
   setParam,
   setPresetAmount,
   setShade,
@@ -27,8 +29,8 @@ import {
 } from './params';
 
 const PRESET_IDS: PresetId[] = ['original', 'natural', 'refined', 'glow'];
-const GROUPS: ParamGroup[] = ['skin', 'shape', 'filter', 'makeup'];
-const BIDIRECTIONAL: ParamId[] = ['shape.chin', 'shape.forehead', 'shape.mouthSize', 'shape.eyeDistance'];
+const GROUPS: ParamGroup[] = ['skin', 'shape', 'body', 'filter', 'makeup'];
+const BIDIRECTIONAL: ParamId[] = ['shape.chin', 'shape.forehead', 'shape.mouthSize', 'shape.eyeDistance', 'body.hip'];
 
 function deepFreeze<T>(o: T): T {
   if (o && typeof o === 'object') {
@@ -39,9 +41,9 @@ function deepFreeze<T>(o: T): T {
 }
 
 describe('PARAM_DEFS schema (RB §5)', () => {
-  it('has the 16 params, unique ids, valid groups', () => {
-    expect(PARAM_DEFS).toHaveLength(16);
-    expect(new Set(PARAM_DEFS.map((d) => d.id)).size).toBe(16);
+  it('has the 26 params (16 face/colour + 10 美體), unique ids, valid groups', () => {
+    expect(PARAM_DEFS).toHaveLength(26);
+    expect(new Set(PARAM_DEFS.map((d) => d.id)).size).toBe(26);
     for (const d of PARAM_DEFS) {
       expect(GROUPS).toContain(d.group);
       expect(d.id.startsWith(`${d.group}.`)).toBe(true);
@@ -52,7 +54,7 @@ describe('PARAM_DEFS schema (RB §5)', () => {
     }
   });
 
-  it('bidirectional params are exactly chin / forehead / mouth / eye distance, neutral 0.5', () => {
+  it('bidirectional params are exactly chin / forehead / mouth / eye distance / 美臀, neutral 0.5', () => {
     expect(PARAM_DEFS.filter((d) => d.bidirectional).map((d) => d.id).sort()).toEqual([...BIDIRECTIONAL].sort());
     for (const d of PARAM_DEFS) {
       expect(neutralValue(d)).toBe(d.bidirectional ? 0.5 : 0);
@@ -75,6 +77,17 @@ describe('PARAM_DEFS schema (RB §5)', () => {
       'shape.forehead': 0.5,
       'shape.noseSlim': 0.1,
       'shape.mouthSize': 0.5,
+      // 美體: neutral by default (never part of a preset)
+      'body.legs': 0,
+      'body.slim': 0,
+      'body.waist': 0,
+      'body.whr': 0,
+      'body.hip': 0.5,
+      'body.legSlim': 0,
+      'body.arms': 0,
+      'body.shoulder': 0,
+      'body.neck': 0,
+      'body.head': 0,
       'filter.amount': 0.5,
       'makeup.lip': 0,
       'makeup.blush': 0,
@@ -88,6 +101,10 @@ describe('PARAM_DEFS schema (RB §5)', () => {
     expect(paramsInGroup('skin').map((d) => d.id)).toEqual(['skin.smooth', 'skin.whiten', 'skin.rosy', 'skin.sharpen']);
     expect(paramsInGroup('filter').map((d) => d.id)).toEqual(['filter.amount']);
     expect(paramsInGroup('makeup').map((d) => d.id)).toEqual(['makeup.lip', 'makeup.blush']);
+    expect(paramsInGroup('body').map((d) => d.id)).toEqual([
+      'body.legs', 'body.slim', 'body.waist', 'body.whr', 'body.hip',
+      'body.legSlim', 'body.arms', 'body.shoulder', 'body.neck', 'body.head',
+    ]);
     expect(GROUPS.flatMap((g) => paramsInGroup(g)).length).toBe(PARAM_DEFS.length);
   });
 });
@@ -363,14 +380,46 @@ describe('setShade', () => {
   });
 });
 
+describe('美體 params stay outside presets', () => {
+  it('applyPreset carries body values, 背景保護 and the 增高 band over from keep', () => {
+    let p = setParam(applyPreset('natural'), 'body.waist', 0.6);
+    p = setHeightBand(setBodyProtect(p, false), { top: 0.5, bottom: 0.8, amount: 0.4 });
+    expect(p.presetId).toBe('natural'); // body edits keep the preset
+    const q = applyPreset('refined', 0.7, p);
+    expect(q.values['body.waist']).toBe(0.6);
+    expect(q.bodyProtect).toBe(false);
+    expect(q.heightBand).toEqual({ top: 0.5, bottom: 0.8, amount: 0.4 });
+    expect(applyPreset('refined').values['body.waist']).toBe(0);
+    expect(setPresetAmount(q, 0.3).values['body.waist']).toBe(0.6);
+  });
+
+  it('sanitizeParams keeps a preset id when only body values differ, and validates the band', () => {
+    const p = setParam(applyPreset('glow', 0.8), 'body.legs', 0.5);
+    expect(sanitizeParams(JSON.parse(JSON.stringify(p))).presetId).toBe('glow');
+    expect(sanitizeParams({ ...p, heightBand: { top: 0.9, bottom: 0.2, amount: 2 } }).heightBand).toEqual({ top: 0.2, bottom: 0.9, amount: 1 });
+    expect(sanitizeParams({ ...p, heightBand: { top: 0.5, bottom: 0.51, amount: 1 } }).heightBand).toBeNull();
+    expect(sanitizeParams({ ...p, heightBand: 'x' }).heightBand).toBeNull();
+    expect(sanitizeParams({ ...p, bodyProtect: 'no' }).bodyProtect).toBe(true);
+  });
+
+  it('resetGroup(body) also clears the 增高 band but keeps 背景保護', () => {
+    const p = setHeightBand(setBodyProtect(setParam(defaultParams(), 'body.slim', 0.5), false), { top: 0.4, bottom: 0.9, amount: 1 });
+    const r = resetGroup(p, 'body');
+    expect(r.values['body.slim']).toBe(0);
+    expect(r.heightBand).toBeNull();
+    expect(r.bodyProtect).toBe(false);
+  });
+});
+
 describe('resetGroup (⊘ 原圖 item)', () => {
-  it.each(GROUPS)('%s → that group neutral, others untouched, custom', (group) => {
+  it.each(GROUPS)('%s → that group neutral, others untouched, custom (body keeps the preset)', (group) => {
     const base = deepFreeze(applyPreset('glow'));
     const p = resetGroup(base, group);
     for (const d of PARAM_DEFS) {
       expect(p.values[d.id]).toBe(d.group === group ? neutralValue(d) : base.values[d.id]);
     }
-    expect(p.presetId).toBe('custom');
+    // 美體 is outside every preset, so resetting it must not drop the active one
+    expect(p.presetId).toBe(group === 'body' ? 'glow' : 'custom');
     expect(p.filterId).toBe(group === 'filter' ? 'none' : base.filterId);
     expect(p.lipShade).toBe(group === 'makeup' ? null : base.lipShade);
     expect(p.blushShade).toBe(group === 'makeup' ? null : base.blushShade);
@@ -562,7 +611,7 @@ describe('sanitizeParams', () => {
 
   it('has exactly the BeautyParams keys (unknown keys dropped)', () => {
     const p = sanitizeParams({ ...applyPreset('glow'), evil: 1, constructor: 'x' });
-    expect(Object.keys(p).sort()).toEqual(['blushShade', 'filterId', 'lipShade', 'presetAmount', 'presetId', 'values']);
+    expect(Object.keys(p).sort()).toEqual(['blushShade', 'bodyProtect', 'filterId', 'heightBand', 'lipShade', 'presetAmount', 'presetId', 'values']);
   });
 
   it('ignores a "__proto__" key from JSON', () => {

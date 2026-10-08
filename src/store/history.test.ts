@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { IDBDatabase as FDBDatabase, IDBFactory, IDBObjectStore as FDBObjectStore, forceCloseDatabase } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyPreset, defaultParams, setParam } from '../engine/params';
-import type { HistoryEntry } from '../types';
+import type { BodyDetection, HistoryEntry } from '../types';
 import {
   addEntry,
   closeHistory,
@@ -13,6 +13,7 @@ import {
   getEntry,
   HISTORY_LIMIT,
   listEntries,
+  normalizeBody,
   normalizeEntry,
   OPEN_TIMEOUT_MS,
   STORE_NAME,
@@ -274,6 +275,78 @@ describe('updateEntry', () => {
     await expect(updateEntry('missing', { params: applyPreset('glow') })).resolves.toBeUndefined();
     expect(await listEntries()).toHaveLength(1);
     expect(await getEntry('missing')).toBeUndefined();
+  });
+});
+
+function body(people = 1): BodyDetection {
+  const points = new Float32Array(33 * 4).map((_, i) => (i % 4 === 3 ? 0.9 : (i % 7) / 10));
+  const data = new Uint8Array(6 * 8).map((_, i) => (i * 37) % 256);
+  return { pose: { points }, mask: { width: 6, height: 8, data }, people, width: 1536, height: 2048 };
+}
+
+describe('美體 detection cache (HistoryEntry.body)', () => {
+  it('is stored with the entry and read back with its typed arrays intact', async () => {
+    const b = body(2);
+    const id = await addEntry({ ...entry('a'), body: b });
+    const got = (await getEntry(id))!;
+    expect(got.body).toBeTruthy();
+    expect(got.body!.pose.points).toBeInstanceOf(Float32Array);
+    expect(Array.from(got.body!.pose.points)).toEqual(Array.from(b.pose.points));
+    expect(got.body!.mask!.data).toBeInstanceOf(Uint8Array);
+    expect(Array.from(got.body!.mask!.data)).toEqual(Array.from(b.mask!.data));
+    expect(got.body!.people).toBe(2);
+    expect((await listEntries())[0].body).toEqual(got.body);
+  });
+
+  it('null ("no person") is kept; older entries have no body at all', async () => {
+    const none = await addEntry({ ...entry('n'), body: null });
+    const old = await addEntry(entry('o'));
+    expect((await getEntry(none))!.body).toBeNull();
+    expect('body' in (await getEntry(old))!).toBe(false);
+  });
+
+  it('a body-only update caches the detection without reordering 最近編輯', async () => {
+    const a = await addEntry(entry('a'));
+    await addEntry(entry('b'));
+    const before = (await getEntry(a))!;
+    await updateEntry(a, { body: body() });
+    const after = (await getEntry(a))!;
+    expect(after.body?.people).toBe(1);
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect((await listEntries())[0].id).not.toBe(a);
+    // an edit still moves it to the front and keeps the cached body
+    await updateEntry(a, { params: applyPreset('glow') });
+    const edited = (await getEntry(a))!;
+    expect(edited.updatedAt).toBeGreaterThan(before.updatedAt);
+    expect(edited.body?.people).toBe(1);
+    expect((await listEntries())[0].id).toBe(a);
+  });
+
+  it('a corrupt cached body is dropped (re-detect), the entry survives', async () => {
+    await rawPut([{ ...validRecord('c', 5), body: { pose: { points: [1, 2, 3] }, mask: null, people: 1, width: 1, height: 1 } }]);
+    const e = (await getEntry('c'))!;
+    expect(e).toBeTruthy();
+    expect('body' in e).toBe(false);
+  });
+
+  it('normalizeBody validates every field', () => {
+    const ok = body();
+    expect(normalizeBody(ok)).toEqual(ok);
+    expect(normalizeBody({ ...ok, mask: null })).toEqual({ ...ok, mask: null });
+    const bad: unknown[] = [
+      null,
+      {},
+      { ...ok, width: 0 },
+      { ...ok, people: 0 },
+      { ...ok, people: Number.NaN },
+      { ...ok, pose: { points: new Float32Array(10) } },
+      { ...ok, pose: { points: Array.from(ok.pose.points) } },
+      { ...ok, pose: { points: new Float32Array(132).fill(Number.NaN) } },
+      { ...ok, mask: { width: 6, height: 8, data: new Uint8Array(3) } },
+      { ...ok, mask: { width: 6.5, height: 8, data: new Uint8Array(52) } },
+      { ...ok, mask: { width: 6, height: 8, data: Array.from(ok.mask!.data) } },
+    ];
+    for (const b of bad) expect(normalizeBody(b)).toBeNull();
   });
 });
 

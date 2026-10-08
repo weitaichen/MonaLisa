@@ -1,7 +1,7 @@
 // Session-wide singletons: the display canvas, one Engine, one Tracker, one CameraController,
-// and the engine-asset download. Exposed as an observable store so screens can show
+// the engine-asset download and (美體, on demand) one BodyTracker. Exposed as an observable store so screens can show
 // loading / error states instead of failing silently.
-import type { CameraController, Engine, EngineAssetsProgress, Prefs, Tracker, TrackerState } from '../types';
+import type { BodyTracker, CameraController, Engine, EngineAssetsProgress, Prefs, Tracker, TrackerState } from '../types';
 import { debug, errorText, reportError } from './debug';
 import { deps } from './deps';
 import { createStore } from './store';
@@ -27,8 +27,18 @@ export type EngineState =
   | { state: 'error'; message: string; /** assets failed → 基本模式 is possible */ canBasic: boolean }
   | { state: 'unsupported' };
 
+/** The 美體 pose tracker: created on demand (first use of the 美體 tab), once per session. */
+export type BodyTrackerState =
+  | { state: 'idle' }
+  /** model: downloading the pose model (progress 0..1, null = unknown) · tracker: waiting for / creating the graph */
+  | { state: 'loading'; step: 'model' | 'tracker'; progress: number | null }
+  | { state: 'ready' }
+  /** retryable: the next ensureBodyTracker starts over (a downloaded model is reused) */
+  | { state: 'error'; message: string; hint: string };
+
 interface ServicesState {
   assets: AssetsState;
+  body: BodyTrackerState;
   engine: EngineState;
   /** WebGL context lost and not yet restored */
   lost: boolean;
@@ -51,6 +61,7 @@ function makeCanvas(): HTMLCanvasElement {
 
 export const svc = createStore<ServicesState>({
   assets: { state: 'idle' },
+  body: { state: 'idle' },
   engine: { state: 'idle' },
   lost: false,
   tracker: 'ok',
@@ -382,6 +393,69 @@ export function recoverEngine(): void {
     discardEngine();
     fail(e, 'createEngine');
   }
+}
+
+// ───────────── 美體 body tracker ─────────────
+
+let bodyTracker: BodyTracker | null = null;
+let bodyP: Promise<BodyTracker> | null = null;
+const bodyProgress = new Set<(p: EngineAssetsProgress) => void>();
+
+/**
+ * The 美體 PoseLandmarker (full model, IMAGE mode, with the person mask — which in 0.10.35 means the GPU graph;
+ * 'CPU' below is the delegate of the mask-less fallback, see BodyTrackerOptions): downloads the model and creates the graph
+ * the first time it is asked for, then returns the same instance for the rest of the session. It starts only
+ * after a face-tracker build in flight has settled (never alongside it: two MediaPipe graphs initialising
+ * at once is the memory peak that gets SE-class iPhones killed). A failure leaves a retryable error in
+ * svc.body; the next call starts over.
+ */
+export function ensureBodyTracker(onProgress?: (p: EngineAssetsProgress) => void): Promise<BodyTracker> {
+  if (bodyTracker) return Promise.resolve(bodyTracker);
+  if (onProgress) bodyProgress.add(onProgress);
+  if (bodyP) return bodyP;
+  let lastBodyPct = -1;
+  const progress = (p: EngineAssetsProgress) => {
+    for (const cb of bodyProgress) cb(p);
+    const pct = p.total > 0 ? Math.floor((p.loaded / p.total) * 100) : -1;
+    if (pct === lastBodyPct && p.phase !== 'done') return;
+    lastBodyPct = pct;
+    if (svc.get().body.state === 'loading') {
+      svc.set({ body: { state: 'loading', step: 'model', progress: pct >= 0 ? Math.min(1, pct / 100) : null } });
+    }
+  };
+  const run = (async () => {
+    svc.set({ body: { state: 'loading', step: 'tracker', progress: null } });
+    const pending = trackerP ?? engineP;
+    if (pending) await pending.catch(() => undefined);
+    svc.set({ body: { state: 'loading', step: 'model', progress: null } });
+    const modelBuffer = await deps.loadPoseModel('full', progress);
+    svc.set({ body: { state: 'loading', step: 'tracker', progress: 1 } });
+    const t = await deps.createBodyTracker({
+      modelBuffer,
+      wasmBase: deps.wasmBase,
+      variant: 'full',
+      delegate: 'CPU',
+      runningMode: 'IMAGE',
+    });
+    bodyTracker = t;
+    return t;
+  })();
+  const p = run.then(
+    (t) => {
+      bodyP = null;
+      bodyProgress.clear();
+      svc.set({ body: { state: 'ready' } });
+      return t;
+    },
+    (e: unknown) => {
+      bodyP = null;
+      bodyProgress.clear();
+      svc.set({ body: { state: 'error', message: reportError(e, 'ensureBodyTracker'), hint: downloadHint(e) } });
+      throw e;
+    },
+  );
+  bodyP = p;
+  return p;
 }
 
 // ───────────── camera ─────────────

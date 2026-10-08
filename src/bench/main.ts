@@ -1,18 +1,40 @@
 // OWNER: app-glue agent. Performance-spike page (bench.html).
 // Plain DOM (no Preact): 開始 → engine download → engine → tracker → front camera → live loop,
 // with an fps / detect / render HUD, tier / params / delegate controls and a copyable 5 s sample log.
+// 美體偵測 (body research report P0): PoseLandmarker lite/full × IMAGE/VIDEO × CPU/GPU on a picked photo — model
+// load, graph creation, first and median detect time, mask size, visibility sanity — added to 複製結果. It needs
+// no camera, so it can run from the start screen too.
 import { debugState, reportError } from '../app/debug';
 import { type LiveLoop, type LiveStats, autoTierSession, resetAutoTierSession, startLiveLoop } from '../app/live';
 import { type StillSession, createStillSession } from '../app/still';
-import { ENGINE_PATHS, loadEngineAssets } from '../engine/assets';
+import { ENGINE_PATHS, loadEngineAssets, loadPoseModel } from '../engine/assets';
 import { createEngine, isWebGL2Supported } from '../engine/index';
 import { applyPreset, resetGroup } from '../engine/params';
 import { createCamera } from '../media/camera';
 import { encodeJpeg } from '../media/exporter';
 import { importPhoto } from '../media/importer';
+import { createBodyTracker } from '../tracking/bodyTracker';
 import { createTracker } from '../tracking/tracker';
-import type { BeautyParams, CameraController, Delegate, Engine, EngineAssetsProgress, Prefs, Tracker } from '../types';
-import { type BenchSample, formatElapsed, formatReport, summarize } from './report';
+import type {
+  BeautyParams,
+  BodyDetection,
+  CameraController,
+  Delegate,
+  Engine,
+  EngineAssetsProgress,
+  Prefs,
+  Tracker,
+} from '../types';
+import {
+  type BenchSample,
+  type BodyBenchRow,
+  formatElapsed,
+  formatReport,
+  maskCoverage,
+  median,
+  summarize,
+  visibilitySanity,
+} from './report';
 
 type Mode = 'skin' | 'skin+shape' | 'all';
 
@@ -29,6 +51,20 @@ const TIERS: { id: Prefs['tier']; label: string }[] = [
 ];
 const SAMPLE_EVERY_MS = 5000;
 const SHOWN_ROWS = 8;
+
+interface BodyConfig {
+  variant: 'full' | 'lite';
+  mode: 'IMAGE' | 'VIDEO';
+  requested: Delegate;
+}
+/**
+ * Masks only for IMAGE on the GPU (the photo-editor configuration): CPU + masks aborts the wasm in 0.10.35, and
+ * live (VIDEO) would run without masks (BR P2), so the VIDEO rows measure landmarks only.
+ */
+const BODY_CONFIGS: BodyConfig[] = (['lite', 'full'] as const).flatMap((variant) =>
+  (['IMAGE', 'VIDEO'] as const).flatMap((mode) => (['CPU', 'GPU'] as const).map((requested) => ({ variant, mode, requested }))),
+);
+const BODY_RUNS: Record<BodyConfig['mode'], number> = { IMAGE: 5, VIDEO: 15 };
 
 /** 自然 = skin + shape; "all" adds a LUT filter and both makeup parts (氣色 preset) to load every pass. */
 function paramsFor(mode: Mode): BeautyParams {
@@ -59,6 +95,7 @@ let stats: LiveStats | null = null;
 let startedAt = 0;
 let busy = false;
 const samples: BenchSample[] = [];
+const bodyRows: BodyBenchRow[] = [];
 
 // ───────────────────────── DOM ─────────────────────────
 
@@ -89,6 +126,8 @@ button.primary { background: #B8F02A; color: #000; border-color: #B8F02A; font-w
 .gate p { margin: 0; color: #8E8E93; max-width: 30em; }
 .gate button.primary { min-width: 160px; min-height: 52px; font-size: 18px; border-radius: 26px; }
 .note { color: #B8F02A; font: 12px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
+.body-bench { max-width: 100%; max-height: 40vh; overflow: auto; text-align: left; -webkit-user-select: text; user-select: text; }
+.body-bench td:nth-child(-n+3), .body-bench th:nth-child(-n+3) { text-align: left; }
 table { border-collapse: collapse; width: 100%; font: 11px/1.3 ui-monospace, Menlo, monospace; margin-top: 6px; }
 td, th { padding: 1px 4px; text-align: right; color: #ddd; } th { color: #8E8E93; font-weight: 400; }
 textarea { width: 100%; height: 30vh; background: #1C1C1E; color: #fff; border: 1px solid #4A4A4C; border-radius: 8px;
@@ -124,7 +163,17 @@ hud.hidden = true;
 const startBtn = button('開始', () => void start(), 'primary');
 const gateMsg = el('p', { textContent: '測量即時美顏在這台裝置上的效能：偵測、渲染時間與 fps。需要相機權限，所有處理都在裝置上完成。' });
 const gateProgress = el('div', { className: 'note' });
-const gate = el('div', { className: 'gate' }, el('h1', { textContent: 'MonaLisa Bench' }), gateMsg, startBtn, gateProgress);
+const gateBodyBtn = button('美體偵測', () => bodyTest());
+const gate = el(
+  'div',
+  { className: 'gate' },
+  el('h1', { textContent: 'MonaLisa Bench' }),
+  gateMsg,
+  startBtn,
+  gateProgress,
+  el('p', { textContent: '美體偵測：選一張全身照，量測姿態模型的載入、偵測時間與遮罩（不需相機）。' }),
+  gateBodyBtn,
+);
 
 const tierBtns = TIERS.map((t) => {
   const b = button(t.label, () => setTier(t.id));
@@ -150,6 +199,23 @@ const compareBtn = button('按住對比', () => {});
 const captureBtn = button('擷取測試', () => void captureTest());
 const stillBtn = button('靜態圖片測試', () => void stillTest());
 const copyBtn = button('複製結果', () => copyResults());
+const bodyBtn = button('美體偵測', () => bodyTest());
+const bodyOut = el('div', { className: 'note' });
+const bodyTable = el('tbody');
+const bodyCopyBtn = button('複製結果', () => copyResults());
+bodyCopyBtn.hidden = true;
+const bodySection = el(
+  'div',
+  { className: 'body-bench' },
+  bodyOut,
+  el(
+    'table',
+    {},
+    el('thead', {}, el('tr', {}, ...['模型', '模式', '委派', '建立', '首次', '偵測', '遮罩', '可見'].map((h) => el('th', { textContent: h })))),
+    bodyTable,
+  ),
+  bodyCopyBtn,
+);
 const resumeBtn = button('恢復相機', () => void camera?.resume().catch((e: unknown) => showError('resume', e)), 'primary');
 resumeBtn.hidden = true;
 const note = el('div', { className: 'note' });
@@ -167,7 +233,7 @@ const panel = el(
   { className: 'panel' },
   el('div', { className: 'row' }, el('span', { textContent: '畫質' }), ...tierBtns),
   el('div', { className: 'row' }, el('span', { textContent: '參數' }), ...modeBtns),
-  el('div', { className: 'row' }, delegateBtn, landmarksBtn, compareBtn, captureBtn, stillBtn, resumeBtn),
+  el('div', { className: 'row' }, delegateBtn, landmarksBtn, compareBtn, captureBtn, stillBtn, bodyBtn, resumeBtn),
   el('div', { className: 'row' }, copyBtn, note),
   table,
   copyArea,
@@ -406,6 +472,169 @@ async function runStill(file: File): Promise<void> {
   }
 }
 
+// ───────────────────────── 美體偵測 ─────────────────────────
+
+const bodyInput = (() => {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.tabIndex = -1;
+  input.setAttribute('aria-hidden', 'true');
+  input.style.cssText = 'position:fixed;left:-100px;top:0;width:1px;height:1px;opacity:0';
+  input.addEventListener('change', () => {
+    const f = input.files?.[0];
+    input.value = '';
+    if (f) void runBodyBench(f);
+  });
+  root.appendChild(input);
+  return input;
+})();
+
+function bodyTest(): void {
+  if (busy) return;
+  bodyInput.click(); // synchronous inside the tap (iOS user-activation rule)
+}
+
+interface MemoryInfo {
+  usedJSHeapSize: number;
+}
+
+function heapMb(): number {
+  const m = (performance as Performance & { memory?: MemoryInfo }).memory;
+  return m ? m.usedJSHeapSize / 1048576 : 0;
+}
+
+const nextPaint = () => new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+
+async function runBodyBench(file: File): Promise<void> {
+  if (busy) return;
+  busy = true;
+  gateBodyBtn.disabled = bodyBtn.disabled = true;
+  (gate.hidden ? panel : gate).append(bodySection);
+  bodyCopyBtn.hidden = true;
+  try {
+    const bitmap = await importPhoto(file, 2048);
+    const size = `${bitmap.width}×${bitmap.height}`;
+    // VIDEO mode is fed a canvas holding the photo: the same frame every time, so tracking from the previous
+    // result kicks in as it would on a steady live subject
+    const frame = el('canvas', { width: bitmap.width, height: bitmap.height });
+    frame.getContext('2d')?.drawImage(bitmap, 0, 0);
+    bodyRows.length = 0;
+    const loaded = new Set<string>();
+    renderBodyTable();
+    for (const cfg of BODY_CONFIGS) {
+      bodyOut.textContent = `${size}：量測 ${cfg.variant} ${cfg.mode} ${cfg.requested}…`;
+      await nextPaint();
+      bodyRows.push(await measureBody(cfg, bitmap, frame, loaded));
+      renderBodyTable();
+    }
+    bitmap.close();
+    const failed = bodyRows.filter((r) => r.error).length;
+    bodyOut.textContent = `${size}：完成（ms；遮罩 off = 未要求）${failed ? `，${failed} 項失敗` : ''}`;
+    bodyCopyBtn.hidden = false;
+  } catch (err) {
+    showError('body', err);
+    bodyOut.textContent = `失敗：${errText(err)}`;
+  } finally {
+    busy = false;
+    gateBodyBtn.disabled = bodyBtn.disabled = false;
+  }
+}
+
+/** Compact on-screen table; the full TSV (load, mask coverage, heap, errors) goes to 複製結果. */
+function renderBodyTable(): void {
+  bodyTable.replaceChildren(
+    ...bodyRows.map((r) =>
+      el(
+        'tr',
+        {},
+        ...[
+          r.variant,
+          r.mode,
+          r.delegate === r.requested ? (r.delegate ?? '–') : `${r.requested}→${r.delegate ?? '✗'}`,
+          r.createMs.toFixed(0),
+          r.firstMs.toFixed(0),
+          r.error ? '✗' : r.detectMs.toFixed(1),
+          r.mask,
+          r.error ? r.error.slice(0, 24) : `${r.visibility.ok}/33`,
+        ].map((v) => el('td', { textContent: v })),
+      ),
+    ),
+  );
+}
+
+async function measureBody(
+  cfg: BodyConfig,
+  bitmap: ImageBitmap,
+  frame: HTMLCanvasElement,
+  loaded: Set<string>,
+): Promise<BodyBenchRow> {
+  const row: BodyBenchRow = {
+    ...cfg,
+    delegate: null,
+    loadMs: 0,
+    createMs: 0,
+    firstMs: 0,
+    detectMs: 0,
+    n: 0,
+    people: 0,
+    mask: '-',
+    maskCoverage: 0,
+    visibility: { present: false, min: 0, mean: 0, ok: 0, inFrame: 0 },
+    error: null,
+    heapMb: 0,
+  };
+  const outputMask = cfg.requested === 'GPU' && cfg.mode === 'IMAGE';
+  let t = performance.now();
+  try {
+    const model = await loadPoseModel(cfg.variant, (p) => {
+      if (p.phase === 'model') bodyOut.textContent = `下載 ${cfg.variant} 模型 ${(p.loaded / 1048576).toFixed(1)} MB`;
+    });
+    // first-load cost only for the first configuration of a variant; later ones hit the memo
+    if (!loaded.has(cfg.variant)) row.loadMs = performance.now() - t;
+    loaded.add(cfg.variant);
+    t = performance.now();
+    const tracker = await createBodyTracker({
+      modelBuffer: model.slice(), // re-read on graph rebuilds: each tracker gets its own copy
+      wasmBase: ENGINE_PATHS.wasmBase,
+      variant: cfg.variant,
+      delegate: cfg.requested,
+      runningMode: cfg.mode,
+      outputMask,
+    });
+    row.createMs = performance.now() - t;
+    row.delegate = tracker.delegate;
+    try {
+      let ts = performance.now();
+      const detect = (): BodyDetection | null =>
+        cfg.mode === 'IMAGE' ? tracker.detect(bitmap) : tracker.detectVideo(frame as unknown as HTMLVideoElement, (ts += 33));
+      t = performance.now();
+      let det = detect();
+      row.firstMs = performance.now() - t;
+      const times: number[] = [];
+      for (let i = 0; i < BODY_RUNS[cfg.mode]; i++) {
+        t = performance.now();
+        det = detect() ?? det;
+        times.push(performance.now() - t);
+      }
+      row.detectMs = median(times);
+      row.n = times.length;
+      row.heapMb = heapMb();
+      if (det) {
+        row.people = det.people;
+        row.visibility = visibilitySanity(det.pose.points);
+        row.maskCoverage = maskCoverage(det);
+      }
+      row.mask = !outputMask ? 'off' : det?.mask ? `${det.mask.width}x${det.mask.height}` : 'none';
+    } finally {
+      tracker.close();
+    }
+  } catch (err) {
+    row.error = errText(err);
+  }
+  return row;
+}
+
 function takeSample(): void {
   if (!loop || !stats) return;
   samples.push({
@@ -453,7 +682,10 @@ function reportMeta(): Record<string, string> {
 }
 
 function copyResults(): void {
-  const text = formatReport(reportMeta(), samples);
+  const text = formatReport(reportMeta(), samples, bodyRows);
+  // the body section may be on the start screen, where the panel (and its textarea) is hidden
+  if (panel.hidden) bodySection.append(copyArea);
+  else if (copyArea.parentElement !== panel) panel.append(copyArea);
   const fallback = () => {
     copyArea.hidden = false;
     copyArea.value = text;
@@ -465,6 +697,7 @@ function copyResults(): void {
   navigator.clipboard.writeText(text).then(() => {
     copyArea.hidden = true;
     note.textContent = `已複製 ${samples.length} 筆`;
+    if (bodyRows.length) bodyCopyBtn.textContent = `已複製（美體 ${bodyRows.length} 列）`;
   }, fallback);
 }
 

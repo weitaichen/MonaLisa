@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadImageTexture } from './gl/gl';
 import { createEngine } from './index';
 import { defaultParams } from './params';
+import { createPipeline, type FrameJob } from './pipeline';
+import type { BodyField } from '../types';
 
 vi.mock('./gl/gl', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./gl/gl')>()),
@@ -16,7 +18,7 @@ vi.mock('./gl/gl', async (importOriginal) => ({
 vi.mock('./pipeline', () => ({
   createPipeline: vi.fn(() => ({
     preloadMakeup: async () => undefined,
-    run: () => ({ passes: [], output: null }),
+    run: vi.fn(() => ({ passes: [], output: null })),
     drawOverlay: vi.fn(),
     drawSource: vi.fn(),
     dispose: vi.fn(),
@@ -88,5 +90,43 @@ describe('createEngine: filter loads across a context loss', () => {
     const params = { ...defaultParams(), filterId: 'y' };
     engine.render({ source: {} as TexImageSource, width: 640, height: 480, face: null, faceWeight: 0, params });
     expect(filterCalls('y')).toBe(1);
+  });
+});
+
+describe('createEngine: 美體 field', () => {
+  const lastJob = (): FrameJob => {
+    const pipe = vi.mocked(createPipeline).mock.results.at(-1)!.value as { run: { mock: { calls: [FrameJob][] } } };
+    return pipe.run.mock.calls.at(-1)![0];
+  };
+  const body: BodyField = { width: 4, height: 3, data: new Float32Array(24), version: 7 };
+  const input = (b?: BodyField | null) => ({
+    source: {} as TexImageSource,
+    width: 640,
+    height: 480,
+    face: null,
+    faceWeight: 0,
+    params: defaultParams(),
+    ...(b === undefined ? {} : { body: b }),
+  });
+
+  it('passes RenderInput.body to the frame job of render and of renderToImageData (preview = export)', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    engine.render(input(body), { still: true });
+    expect(lastJob().body).toBe(body);
+    expect(() => engine.renderToImageData(input(body), { mirror: false })).toThrow('no output buffer');
+    expect(lastJob().body).toBe(body);
+    expect(lastJob().target).toBe('fbo');
+  });
+
+  it('absent or null body → null in the job', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    engine.render(input());
+    expect(lastJob().body).toBeNull();
+    engine.render(input(null));
+    expect(lastJob().body).toBeNull();
   });
 });

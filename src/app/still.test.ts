@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyPreset, setParam } from '../engine/params';
 import { adapt } from '../tracking/adapter111';
 import { createStillSession } from './still';
-import { fakeEngine, fakeTracker, makeFace, stubRaf } from './testFakes';
+import { fakeEngine, fakeTracker, makeBodyField, makeFace, stubRaf } from './testFakes';
 
 vi.mock('../tracking/adapter111', () => ({
   adapt: vi.fn(() => makeFace(7)),
@@ -366,5 +366,76 @@ describe('createStillSession', () => {
     s.render(natural);
     vi.advanceTimersByTime(16);
     expect(engine.render).toHaveBeenCalledTimes(2);
+  });
+  it('setBody: the 美體 field reaches every render and export (preview = export); null removes it', () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, fakeTracker(), bitmap());
+    expect(s.body).toBeNull();
+    s.render(natural);
+    vi.advanceTimersByTime(16);
+    expect(engine.lastInput()!.body).toBeNull();
+
+    const field = makeBodyField(0.02);
+    s.setBody(field);
+    expect(s.body).toBe(field);
+    vi.advanceTimersByTime(16); // setBody alone redraws
+    expect(engine.render).toHaveBeenCalledTimes(2);
+    expect(engine.lastInput()!.body).toBe(field);
+    s.exportImageData(natural);
+    expect(engine.renderToImageData.mock.calls[0][0].body).toBe(field);
+
+    // the builder refilled the same buffer (new version): passing it again redraws
+    field.version++;
+    s.setBody(field);
+    vi.advanceTimersByTime(16);
+    expect(engine.render.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(engine.lastInput()!.body!.version).toBe(2);
+
+    s.setBody(null);
+    vi.advanceTimersByTime(16);
+    expect(engine.lastInput()!.body).toBeNull();
+    s.exportImageData(natural);
+    expect(engine.renderToImageData.mock.calls[1][0].body).toBeNull();
+  });
+
+  it('an export keeps the field captured when it was asked for, while setBody moves the preview on', async () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, fakeTracker(), bitmap(), { body: makeBodyField(0.01) });
+    s.render(natural);
+    const snap = makeBodyField(0.01); // the field at the tap (a copy)
+    const pending = s.prepareExport(natural);
+    const later = makeBodyField(0.03);
+    s.setBody(later); // a 美體 drag while the export waits for its LUT
+    await pending;
+    s.exportImageData(natural, snap);
+    expect(engine.renderToImageData.mock.calls[0][0].body).toBe(snap);
+    s.exportImageData(natural, null); // explicitly none
+    expect(engine.renderToImageData.mock.calls[1][0].body).toBeNull();
+    vi.advanceTimersByTime(16);
+    expect(engine.lastInput()!.body).toBe(later); // the preview keeps the live field
+  });
+
+  it('a replacement session starts with the field it is given (no unretouched first frame)', () => {
+    const engine = fakeEngine();
+    const field = makeBodyField();
+    const s = createStillSession(engine, fakeTracker(), bitmap(), { body: field });
+    expect(s.body).toBe(field);
+    s.render(natural);
+    vi.advanceTimersByTime(16);
+    expect(engine.lastInput()!.body).toBe(field);
+  });
+
+  it('hold-to-compare shows the original without the body field; setBody after dispose is ignored', () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, fakeTracker(), bitmap(), { body: makeBodyField() });
+    s.render(natural);
+    s.setCompare(true);
+    vi.advanceTimersByTime(16);
+    expect(engine.renderOriginal).toHaveBeenCalledTimes(1);
+    expect(engine.render).not.toHaveBeenCalled();
+    s.dispose();
+    s.setBody(null);
+    vi.advanceTimersByTime(16);
+    expect(engine.render).not.toHaveBeenCalled();
   });
 });

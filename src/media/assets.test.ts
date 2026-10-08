@@ -333,3 +333,95 @@ describe('loadEngineAssets → Cache Storage', () => {
     await new Promise((r) => setTimeout(r, 20));
   });
 });
+
+describe('loadPoseModel (美體)', () => {
+  const FULL = '/models/pose_landmarker/full-float16-1/pose_landmarker_full.task';
+  const LITE = '/models/pose_landmarker/lite-float16-1/pose_landmarker_lite.task';
+
+  it('versioned self-hosted paths', async () => {
+    const { POSE_MODELS } = await fresh();
+    expect(POSE_MODELS).toEqual({ full: FULL, lite: LITE });
+  });
+
+  it('streams the model with progress, then reports done, and returns its bytes', async () => {
+    const model = bytes(200_000, 9);
+    const { calls } = stubFetch({ [FULL]: { bytes: model, chunk: 40_000 } });
+    const { loadPoseModel } = await fresh();
+    const ev: EngineAssetsProgress[] = [];
+    expect(await loadPoseModel('full', (p) => ev.push(p))).toEqual(model);
+    expect(calls).toEqual([FULL]);
+    expect(ev[0]).toEqual({ phase: 'model', loaded: 0, total: 200_000 });
+    expect(ev.at(-1)).toEqual({ phase: 'done', loaded: 200_000, total: 200_000 });
+    expect(ev.map((e) => e.phase).filter((p, i, a) => p !== a[i - 1])).toEqual(['model', 'done']);
+  });
+
+  it('memoised per variant: concurrent and late callers share one download; variants are independent', async () => {
+    const { calls } = stubFetch({ [FULL]: { bytes: bytes(1000) }, [LITE]: { bytes: bytes(500, 2) } });
+    const { loadPoseModel } = await fresh();
+    const [a, b] = await Promise.all([loadPoseModel('full'), loadPoseModel('full')]);
+    expect(a).toBe(b);
+    const late: EngineAssetsProgress[] = [];
+    expect(await loadPoseModel('full', (p) => late.push(p))).toBe(a);
+    expect(late).toEqual([{ phase: 'done', loaded: 1000, total: 1000 }]);
+    expect((await loadPoseModel('lite')).byteLength).toBe(500);
+    expect(calls).toEqual([FULL, LITE]);
+  });
+
+  it('does not report to engine-download listeners, and the engine does not report to it', async () => {
+    stubFetch({ [FULL]: { bytes: bytes(1000) }, [MODEL]: { bytes: bytes(300) }, [WASM]: { bytes: bytes(10) } });
+    const { loadPoseModel, loadEngineAssets } = await fresh();
+    const eng: EngineAssetsProgress[] = [];
+    const pose: EngineAssetsProgress[] = [];
+    await Promise.all([loadEngineAssets((p) => eng.push(p)), loadPoseModel('full', (p) => pose.push(p))]);
+    expect(pose.at(-1)).toEqual({ phase: 'done', loaded: 1000, total: 1000 });
+    expect(pose.every((p) => p.phase !== 'wasm')).toBe(true);
+    expect(eng.at(-1)).toEqual({ phase: 'done', loaded: 310, total: 310 });
+    expect(eng.some((p) => p.loaded === 1000)).toBe(false);
+  });
+
+  it('a failed download rejects, clears the memo and can be retried', async () => {
+    let fail = true;
+    const { calls } = stubFetch({ [FULL]: () => (fail ? { status: 503 } : { bytes: bytes(800) }) });
+    const { loadPoseModel } = await fresh();
+    await expect(loadPoseModel('full')).rejects.toThrow(/503/);
+    fail = false;
+    expect((await loadPoseModel('full')).byteLength).toBe(800);
+    expect(calls).toEqual([FULL, FULL]);
+  });
+
+  it('HTML fallback (missing model behind the SPA fallback) is rejected', async () => {
+    stubFetch({ [FULL]: { bytes: bytes(100), headers: { 'content-type': 'text/html' } } });
+    const { loadPoseModel } = await fresh();
+    await expect(loadPoseModel('full')).rejects.toThrow(/HTML/);
+  });
+
+  it('an uncontrolled page stashes the validated model in ENGINE_CACHE; a controlled one leaves it to the SW', async () => {
+    const model = bytes(3000, 4);
+    stubFetch({ [LITE]: { bytes: model } });
+    const { buckets } = stubCaches();
+    vi.stubGlobal('navigator', { serviceWorker: { controller: null } });
+    let mod = await fresh();
+    await mod.loadPoseModel('lite');
+    await vi.waitFor(() => expect(buckets.get(mod.ENGINE_CACHE)?.size).toBe(1));
+    expect(new Uint8Array(await buckets.get(mod.ENGINE_CACHE)!.get(LITE)!.arrayBuffer())).toEqual(model);
+
+    const { put } = stubCaches();
+    vi.stubGlobal('navigator', { serviceWorker: { controller: {} } });
+    mod = await fresh();
+    await mod.loadPoseModel('lite');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it('the engine download prunes old pose versions but keeps the current pose models', async () => {
+    stubFetch({ [MODEL]: { bytes: bytes(1000) }, [WASM]: { bytes: bytes(10) }, [LOADER]: { bytes: bytes(10) } });
+    const { buckets } = stubCaches({
+      seed: [FULL, LITE, '/models/pose_landmarker/full-float16-0/pose_landmarker_full.task'],
+    });
+    vi.stubGlobal('navigator', { serviceWorker: { controller: {} } });
+    const { loadEngineAssets, ENGINE_CACHE } = await fresh();
+    await loadEngineAssets();
+    await vi.waitFor(() => expect(buckets.get(ENGINE_CACHE)?.size).toBe(2));
+    expect([...buckets.get(ENGINE_CACHE)!.keys()].sort()).toEqual([FULL, LITE]);
+  });
+});

@@ -133,6 +133,8 @@ describe('UndoStack duplicate pushes', () => {
     // same content, different construction / key order
     const p = defaultParams();
     const reordered: BeautyParams = {
+      heightBand: p.heightBand,
+      bodyProtect: p.bodyProtect,
       presetAmount: p.presetAmount,
       presetId: p.presetId,
       blushShade: p.blushShade,

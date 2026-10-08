@@ -3,7 +3,7 @@
 
 // ───────────────────────── Parameters ─────────────────────────
 
-export type ParamGroup = 'skin' | 'shape' | 'filter' | 'makeup';
+export type ParamGroup = 'skin' | 'shape' | 'body' | 'filter' | 'makeup';
 
 export type ParamId =
   | 'skin.smooth'
@@ -19,6 +19,16 @@ export type ParamId =
   | 'shape.forehead'
   | 'shape.noseSlim'
   | 'shape.mouthSize'
+  | 'body.legs'
+  | 'body.slim'
+  | 'body.waist'
+  | 'body.whr'
+  | 'body.hip'
+  | 'body.legSlim'
+  | 'body.arms'
+  | 'body.shoulder'
+  | 'body.neck'
+  | 'body.head'
   | 'filter.amount'
   | 'makeup.lip'
   | 'makeup.blush';
@@ -75,6 +85,22 @@ export interface BeautyParams {
   presetId: PresetId | 'custom';
   /** 程度: scales each param's distance from neutral, 0..1 */
   presetAmount: number;
+  /** 背景保護: constrain body displacement to the feathered person mask (default true) */
+  bodyProtect: boolean;
+  /** manual 增高 band (works without pose detection); null = off */
+  heightBand: HeightBand | null;
+}
+
+/**
+ * Manual height band: vertical stretch of the image rows between top and bottom (normalized y, top-left origin).
+ * top/bottom are SOURCE rows: in the output the band runs from top to top + (bottom − top)·S, and the content
+ * below moves down (the frame size is unchanged, so up to 8 % is pushed off the bottom edge).
+ */
+export interface HeightBand {
+  top: number;
+  bottom: number;
+  /** 0..1 → stretch S = 1 + min(0.15·amount, 0.08 / (bottom − top)) inside the band (src/body/bands.ts heightBandStretch) */
+  amount: number;
 }
 
 // ───────────────────────── Tracking ─────────────────────────
@@ -101,6 +127,87 @@ export interface Face {
 }
 
 export type Delegate = 'GPU' | 'CPU';
+
+// ───────────────────────── Body (美體) ─────────────────────────
+
+/** MediaPipe PoseLandmarker output for one person: 33 × (x, y, z, visibility); x,y normalized, top-left, UNMIRRORED. */
+export interface Pose33 {
+  points: Float32Array; // length 33 * 4
+}
+
+/** Person segmentation of the selected person, downscaled (≈256 long edge). */
+export interface PersonMask {
+  width: number;
+  height: number;
+  /** 0..255 person confidence, row-major, row 0 = image top */
+  data: Uint8Array;
+}
+
+/** One body detection on a still image (cached in history so reopening needs no pose model). */
+export interface BodyDetection {
+  pose: Pose33;
+  /** null when segmentation was unavailable */
+  mask: PersonMask | null;
+  /** people detected (≥ 2 → only the largest / most central is edited, UI shows a hint) */
+  people: number;
+  /** pixel size of the image the normalized coordinates refer to (for aspect) */
+  width: number;
+  height: number;
+}
+
+export type BodyRegion = 'head' | 'shoulder' | 'arms' | 'torso' | 'legs';
+
+export interface RegionStatus {
+  ok: boolean;
+  /** 繁體中文 reason shown when disabled (e.g. 拍攝全身照可使用長腿／瘦腿) */
+  reason: string | null;
+}
+
+/**
+ * Low-resolution BACKWARD displacement field in UV units (RG): the engine samples
+ * src at uv + field(uv) as the outermost mapping of the P2 reshape pass (body research report).
+ */
+export interface BodyField {
+  width: number;
+  height: number;
+  /** width*height*2 floats, row 0 = image top */
+  data: Float32Array;
+  /** increment whenever data changes (engine re-uploads on change) */
+  version: number;
+}
+
+export interface BodyTracker {
+  readonly variant: 'full' | 'lite';
+  readonly delegate: Delegate;
+  /**
+   * IMAGE mode (photo editor). Returns null when no person. Throws BodyTrackerRecovering (retry shortly) while a
+   * lost, aborted or failing graph is being replaced; throws BodyTrackerUnavailable (not a recovering error: show it)
+   * while there is no replacement (creating one failed, or the replacement cap since the last completed detection
+   * was reached) and the retry backoff (5 s, doubling to 60 s) has not elapsed — a 重試 after that makes one new
+   * attempt, so detection comes back once memory does. After any other throw the graph is rebuilt on the next call.
+   */
+  detect(image: ImageBitmap | HTMLCanvasElement): BodyDetection | null;
+  /** VIDEO mode (bench / future live): tsMs strictly increasing */
+  detectVideo(video: HTMLVideoElement, tsMs: number): BodyDetection | null;
+  close(): void;
+}
+
+export interface BodyTrackerOptions {
+  modelBuffer: Uint8Array;
+  /** e.g. '/mediapipe/0.10.35' */
+  wasmBase: string;
+  variant: 'full' | 'lite';
+  /**
+   * default 'CPU'; only honoured when outputMask is false. In tasks-vision 0.10.35 the CPU graph aborts the wasm
+   * when segmentation masks are on, so with masks the tracker runs the GPU graph (read synchronously — masks read
+   * inside the callback come back empty, MPI 4757) and falls back to CPU without masks. BodyTracker.delegate
+   * reports what actually runs.
+   */
+  delegate?: Delegate;
+  runningMode?: 'IMAGE' | 'VIDEO';
+  /** default true */
+  outputMask?: boolean;
+}
 
 export interface Tracker {
   /** Delegate of the current graph; re-read it on onStateChange('ok'): a rebuild under 'auto' may fall back to CPU. */
@@ -159,6 +266,8 @@ export interface RenderInput {
   /** 0..1, scales all landmark-driven effects (eased by caller on face gain/loss) */
   faceWeight: number;
   params: BeautyParams;
+  /** body displacement field (美體); null/undefined = none */
+  body?: BodyField | null;
 }
 
 export interface RenderStats {
@@ -257,6 +366,11 @@ export interface HistoryEntry {
   params: BeautyParams;
   width: number;
   height: number;
+  /**
+   * cached 美體 detection for this photo: null = checked, nobody in the photo; absent = never checked (older
+   * entries too). A body-only updateEntry leaves updatedAt alone, so caching it does not reorder 最近編輯.
+   */
+  body?: BodyDetection | null;
 }
 
 // ───────────────────────── Debug ─────────────────────────

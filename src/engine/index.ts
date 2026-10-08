@@ -179,6 +179,8 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       halfMean,
       face: input.face,
       faceWeight: Math.min(1, Math.max(0, input.faceWeight)),
+      // preview and export share this path, so the 美體 field is applied identically to both
+      body: input.body ?? null,
       params: input.params,
       skin: skinUniforms(input.params, filterLut !== null),
       luts,

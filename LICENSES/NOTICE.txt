@@ -29,15 +29,28 @@ CainCamera — Copyright (c) 2018 cain.huang — Apache License 2.0
   - Lineage only (GPUPixel derives from them); no code or assets of theirs are used directly.
     Same Apache-2.0 text as GPUPixel-Apache-2.0.txt.
 
-MediaPipe Tasks Vision 0.10.35 and the Face Landmarker model (Face Mesh V2) — Copyright Google LLC —
-  Apache License 2.0 (MediaPipe-Apache-2.0.txt)
-  - Self-hosted unmodified under /mediapipe/0.10.35/ and /models/face_landmarker/float16-1/.
+MediaPipe Tasks Vision 0.10.35, the Face Landmarker model (Face Mesh V2) and the Pose Landmarker models
+  (BlazePose GHUM 3D, full and lite, float16 version 1) — Copyright Google LLC — Apache License 2.0
+  (MediaPipe-Apache-2.0.txt)
+  - Self-hosted unmodified under /mediapipe/0.10.35/, /models/face_landmarker/float16-1/ and
+    /models/pose_landmarker/{full,lite}-float16-1/ (the pose models are downloaded on demand for 美體 and the
+    bench; never precached). Source: storage.googleapis.com/mediapipe-models/pose_landmarker/, md5-pinned in
+    scripts/fetch-assets.mjs.
 
 Preact 10.29.8 — Copyright (c) 2015-present Jason Miller — MIT (Preact-MIT.txt)
 Workbox 7.4 — Copyright 2018 Google LLC — MIT (Workbox-MIT.txt)
 vite-plugin-pwa 2.0.0 — Copyright (c) 2020-present Anthony Fu — MIT (vite-plugin-pwa-MIT.txt)
 
 Original to this project: the filter LUTs, makeup shade colours and the icons.
+
+Test data in the repository only (not part of the deployed app):
+  - tests/fixtures/fullbody.jpg (male_full_height_hands.jpg) and tests/fixtures/fullbody_yoga.jpg (pose.jpg):
+    MediaPipe tasks test data (mediapipe/tasks/testdata/vision, google-ai-edge/mediapipe, Copyright Google LLC,
+    Apache License 2.0 — MediaPipe-Apache-2.0.txt), downloaded unmodified from the mediapipe-assets bucket and
+    sha256-checked against third_party/external_files.bzl. tests/fixtures/pose_fullbody.json and
+    fullbody_yoga.pose.json are this project's recorded Pose Landmarker results on them.
+  - tests/fixtures/sample_face.png: GPUPixel demo image (Apache-2.0, see GPUPixel above).
+    tests/fixtures/sample_face.pose.json is this project's recorded Pose Landmarker result on it.
 
 Parameter design (ranges, defaults, presets) follows public SDK documentation of PixelFree,
 FaceUnity FULiveDemo and Alibaba Cloud Queen SDK; none of their code or assets is used.

@@ -2,7 +2,9 @@
 //   [P0 mask → R8 ¼-res M] → [P1 makeup → A] → [P2 reshape → B (+ mask M → N)] → P3 meanH → C → P4 meanV → D
 //   → P5 composite + present (canvas, or the free one of A/B for capture).
 // Face passes (T2) are constructed lazily the first time a frame actually needs them.
-import type { BeautyParams, Face } from '../types';
+// 美體: the body field is an RG16F texture sampled as the outermost backward map of P2 (no extra FBO,
+// one resample), so P2 also runs for a body-only frame and the skin mask follows via maskWarp.
+import type { BeautyParams, BodyField, Face } from '../types';
 import {
   bindTarget,
   bindTexture,
@@ -17,6 +19,7 @@ import {
   hexToRgb,
   type Program,
   resizeFramebuffer,
+  setUnpackState,
   type Texture,
 } from './gl/gl';
 import { createMakeupPass, makeupActive, makeupUniforms, type MakeupPass } from './passes/makeup';
@@ -54,6 +57,8 @@ export interface FrameJob {
   halfMean: boolean;
   face: Face | null;
   faceWeight: number;
+  /** 美體 backward displacement field (UV units); null = none. Not scaled by faceWeight or yaw. */
+  body: BodyField | null;
   params: BeautyParams;
   skin: SkinUniforms;
   /** null until the GPUPixel LUTs are uploaded (whitening is skipped meanwhile) */
@@ -79,6 +84,8 @@ export interface PassPlanInput {
   makeupActive: boolean;
   makeupReady: boolean;
   reshapeActive: boolean;
+  /** a valid body field will be applied */
+  bodyOn: boolean;
 }
 
 export interface PassPlan {
@@ -95,7 +102,7 @@ export function planPasses(i: PassPlanInput): PassPlan {
   return {
     mask: faceOn && !i.matchGpupixel && mean,
     makeup: faceOn && i.makeupActive && i.makeupReady,
-    reshape: faceOn && i.reshapeActive,
+    reshape: (faceOn && i.reshapeActive) || i.bodyOn,
     mean,
   };
 }
@@ -117,6 +124,45 @@ export interface Pipeline {
 }
 
 type FbName = 'A' | 'B' | 'C' | 'D' | 'M' | 'N';
+
+/** sanity cap (fields are ≈256 long edge); keeps texImage2D within every device's MAX_TEXTURE_SIZE */
+export const MAX_BODY_FIELD_EDGE = 2048;
+
+/** true when `f` can be uploaded: positive integer size and enough RG floats. */
+export function bodyFieldValid(f: BodyField): boolean {
+  return (
+    Number.isInteger(f.width) &&
+    Number.isInteger(f.height) &&
+    f.width > 0 &&
+    f.height > 0 &&
+    f.width <= MAX_BODY_FIELD_EDGE &&
+    f.height <= MAX_BODY_FIELD_EDGE &&
+    f.data instanceof Float32Array &&
+    f.data.length >= f.width * f.height * 2
+  );
+}
+
+/** What the body texture currently holds; a field is re-uploaded only when one of these changes. */
+export interface BodyUploadKey {
+  field: BodyField;
+  data: Float32Array;
+  version: number;
+  width: number;
+  height: number;
+  /** false when the data held a non-finite value (nothing was uploaded) */
+  usable: boolean;
+}
+
+export function bodyUploadNeeded(prev: BodyUploadKey | null, f: BodyField): boolean {
+  return (
+    !prev ||
+    prev.field !== f ||
+    prev.data !== f.data ||
+    prev.version !== f.version ||
+    prev.width !== f.width ||
+    prev.height !== f.height
+  );
+}
 
 export function createPipeline(gl: GL): Pipeline {
   const meanProg = createProgram(gl, MEAN_VS, MEAN_FS, 'mean');
@@ -161,6 +207,41 @@ export function createPipeline(gl: GL): Pipeline {
   let makeupReady = false;
   let reshape: ReshapePass | null = null;
   let overlay: LandmarkOverlay | null = null;
+  let bodyTex: Texture | null = null;
+  let bodyKey: BodyUploadKey | null = null;
+  let bodyWarned = false;
+
+  /** The field's texture (uploaded only on version / size / buffer change), or null when unusable. */
+  function bodyTexture(f: BodyField | null): Texture | null {
+    if (!f) return null;
+    if (!bodyFieldValid(f)) {
+      if (!bodyWarned) console.warn('[engine] ignoring malformed body field', { width: f.width, height: f.height });
+      bodyWarned = true;
+      return null;
+    }
+    if (!bodyUploadNeeded(bodyKey, f)) return bodyKey?.usable ? bodyTex : null;
+    const n = f.width * f.height * 2;
+    const data = f.data.length === n ? f.data : f.data.subarray(0, n);
+    const usable = data.every(Number.isFinite);
+    bodyKey = { field: f, data: f.data, version: f.version, width: f.width, height: f.height, usable };
+    if (!usable) {
+      // A NaN would turn the sample coordinate into garbage across the whole image.
+      console.warn('[engine] ignoring body field with non-finite values');
+      return null;
+    }
+    bodyTex ??= createTexture(gl, 0, 0);
+    gl.bindTexture(gl.TEXTURE_2D, bodyTex.tex);
+    setUnpackState(gl);
+    if (bodyTex.width === f.width && bodyTex.height === f.height) {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, f.width, f.height, gl.RG, gl.FLOAT, data);
+    } else {
+      // RG16F from FLOAT data: core WebGL2, filterable (LINEAR) without extensions.
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG16F, f.width, f.height, 0, gl.RG, gl.FLOAT, data);
+      bodyTex.width = f.width;
+      bodyTex.height = f.height;
+    }
+    return bodyTex;
+  }
 
   function getMakeup(): MakeupPass {
     if (!makeup) {
@@ -212,6 +293,7 @@ export function createPipeline(gl: GL): Pipeline {
       const ru = faceOn ? reshapeUniforms(job.params.values, job.faceWeight) : null;
       const wantMakeup = mu !== null && makeupActive(mu);
       if (wantMakeup) getMakeup();
+      const body = bodyTexture(job.body);
       const plan = planPasses({
         hasFace: face !== null,
         faceWeight: job.faceWeight,
@@ -220,6 +302,7 @@ export function createPipeline(gl: GL): Pipeline {
         makeupActive: wantMakeup,
         makeupReady,
         reshapeActive: ru !== null && reshapeActive(ru),
+        bodyOn: body !== null,
       });
 
       let maskTex: Texture | null = null;
@@ -240,20 +323,25 @@ export function createPipeline(gl: GL): Pipeline {
         baseFb = a;
         passes.push('makeup');
       }
-      if (plan.reshape && face && ru) {
+      if (plan.reshape) {
         reshape ??= createReshapePass(gl);
+        // Face deltas only when the face plan is on (a body-only frame passes null: empty uBox).
+        const faceWarp = faceOn && ru !== null && reshapeActive(ru);
+        const rf = faceWarp ? face : null;
+        const rru = faceWarp ? ru : null;
         const b = fb('B', job.size);
-        reshape.draw(base, b, face, ru);
+        reshape.draw(base, b, rf, rru, undefined, body);
         base = b.tex;
         baseFb = b;
         passes.push('reshape');
+        if (body) passes.push('body');
         if (maskTex) {
           // The mask is built from the detected landmarks but gates the warped image: push it
-          // through the same backward map, or 瘦臉/V臉 leave background inside the mask where the
-          // jaw moved in. Same pass, uniforms and yaw attenuation; the image's aspect, not the
-          // rounded ¼-res buffer's.
+          // through the same backward map (face and body), or 瘦臉/V臉/細腰 leave background inside
+          // the mask where the contour moved in. Same pass, uniforms and yaw attenuation; the
+          // image's aspect, not the rounded ¼-res buffer's.
           const n = fb('N', maskBufferSize(job.size), gl.R8);
-          reshape.draw(maskTex, n, face, ru, job.size.width / job.size.height);
+          reshape.draw(maskTex, n, rf, rru, job.size.width / job.size.height, body);
           maskTex = n.tex;
           passes.push('maskWarp');
         }
@@ -334,8 +422,11 @@ export function createPipeline(gl: GL): Pipeline {
         makeup?.dispose();
         reshape?.dispose();
         overlay?.dispose();
+        deleteTexture(gl, bodyTex);
       }
       mask = makeup = reshape = overlay = null;
+      bodyTex = null;
+      bodyKey = null;
       makeupReady = false;
       for (const k of Object.keys(fbs) as FbName[]) delete fbs[k];
     },

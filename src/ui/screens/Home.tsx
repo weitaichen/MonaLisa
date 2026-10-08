@@ -90,7 +90,7 @@ export function Home() {
         reload();
         return;
       }
-      await openInEditor(entry.original, { params: entry.params, historyId: entry.id, returnTo: 'home' });
+      await openInEditor(entry.original, { params: entry.params, historyId: entry.id, body: entry.body, returnTo: 'home' });
     } catch (e) {
       toast(`無法開啟紀錄：${reportError(e, 'getEntry')}`, 4000);
     }

@@ -1,8 +1,14 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import preact from '@preact/preset-vite';
 import { defineConfig } from 'vitest/config';
 
+// same build-time constant as vite.config.ts (src/version.ts)
+const pkg = JSON.parse(readFileSync(resolve(import.meta.dirname, 'package.json'), 'utf8')) as { version: string };
+
 export default defineConfig({
   plugins: [preact()],
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   test: {
     environment: 'node',
     include: [

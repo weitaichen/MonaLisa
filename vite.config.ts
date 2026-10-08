@@ -8,11 +8,56 @@ interface VercelHeaders {
   headers?: { source: string; headers: { key: string; value: string }[] }[];
 }
 
+function vercelHeaders(): NonNullable<VercelHeaders['headers']> {
+  return (JSON.parse(readFileSync(resolve(import.meta.dirname, 'vercel.json'), 'utf8')) as VercelHeaders).headers ?? [];
+}
+
 /** The site-wide security headers from vercel.json (CSP etc.), so `vite preview` and the e2e suite run under the production policy. */
 function siteHeaders(): Record<string, string> {
-  const cfg = JSON.parse(readFileSync(resolve(import.meta.dirname, 'vercel.json'), 'utf8')) as VercelHeaders;
-  const all = cfg.headers?.find((h) => h.source === '/(.*)');
+  const all = vercelHeaders().find((h) => h.source === '/(.*)');
   return Object.fromEntries((all?.headers ?? []).map((h) => [h.key, h.value]));
+}
+
+/** vercel.json's single-file rules (/sw.js, /version.json: no-cache) applied by `vite preview` too. */
+function previewFileHeaders(): Plugin {
+  const exact = new Map(vercelHeaders().filter((h) => !/[()*:\\]/.test(h.source)).map((h) => [h.source, h.headers]));
+  return {
+    name: 'meiyan-preview-file-headers',
+    configurePreviewServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const path = (req.url ?? '').split('?')[0];
+        for (const h of exact.get(path) ?? []) res.setHeader(h.key, h.value);
+        next();
+      });
+    },
+  };
+}
+
+/**
+ * The app version, single source: package.json. MEIYAN_VERSION overrides it only for the update e2e
+ * (tests/e2e/update.spec.ts builds a "newer" copy of the app); a Vercel build never honours it.
+ */
+function appVersion(): string {
+  const pkg = JSON.parse(readFileSync(resolve(import.meta.dirname, 'package.json'), 'utf8')) as { version: string };
+  const override = process.env.VERCEL ? undefined : process.env.MEIYAN_VERSION;
+  const v = override || pkg.version;
+  if (!/^\d+\.\d+\.\d+$/.test(v)) throw new Error(`app version must be x.y.z, got "${v}"`);
+  return v;
+}
+const APP_VERSION = appVersion();
+
+/**
+ * /version.json: the deployed version, read by a page whose service worker found an update so the banner can
+ * say which one (src/ui/update.ts). Not precached (workbox globPatterns has no json) and served no-cache.
+ */
+function emitVersion(): Plugin {
+  return {
+    name: 'meiyan-emit-version',
+    apply: 'build',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'version.json', source: `${JSON.stringify({ version: APP_VERSION })}\n` });
+    },
+  };
 }
 
 /**
@@ -36,8 +81,11 @@ export default defineConfig({
   plugins: [
     preact(),
     emitLicenses(),
+    emitVersion(),
+    previewFileHeaders(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // 'prompt': a new version waits until the user taps 更新 in the 有新版本 banner (src/ui/update.ts)
+      registerType: 'prompt',
       injectRegister: false,
       manifest: {
         id: '/',
@@ -65,10 +113,9 @@ export default defineConfig({
         navigateFallback: '/index.html',
         // /licenses/*.txt must reach the network, not the app shell
         navigateFallbackDenylist: [/^\/bench/, /^\/licenses\//],
-        // injectRegister:false means vite-plugin-pwa does not set this for 'autoUpdate': without it the first
-        // session (incl. a fresh Home Screen install) stays uncontrolled and the engine download skips the
-        // CacheFirst route. skipWaiting stays off on purpose: an update applies on the next cold launch and
-        // never reloads the page mid-capture.
+        // without it the first session (incl. a fresh Home Screen install) stays uncontrolled and the engine
+        // download skips the CacheFirst route. skipWaiting stays off on purpose: a new version waits until the
+        // user taps 更新 (only offered on 首頁 / 設定) or the next cold launch, and never reloads mid-capture.
         clientsClaim: true,
         runtimeCaching: [
           {
@@ -88,6 +135,7 @@ export default defineConfig({
       input: { main: resolve(import.meta.dirname, 'index.html'), bench: resolve(import.meta.dirname, 'bench.html') },
     },
   },
+  define: { __APP_VERSION__: JSON.stringify(APP_VERSION) },
   server: { host: true },
   preview: { headers: siteHeaders() },
 });

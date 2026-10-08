@@ -2,11 +2,13 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Prefs } from '../../types';
 import { IconButton, Segmented, ToggleRow } from '../components/Controls';
+import { UpdateBanner } from '../components/UpdateBanner';
 import { reportError } from '../debug';
 import { Icon } from '../icons';
 import { restartTracker } from '../services';
 import { app, setPrefs } from '../state';
 import { useStore } from '../store';
+import { APP_VERSION, displayVersion } from '../../version';
 
 const TIER_OPTIONS = [
   { value: 'auto', label: '自動' },
@@ -86,6 +88,7 @@ export function SettingsSheet() {
 function SettingsBody({ prefs }: { prefs: Prefs }) {
   return (
     <>
+      <UpdateBanner place="settings" />
       <div class="group-label">拍攝</div>
       <div class="group">
         <ToggleRow
@@ -155,7 +158,7 @@ function SettingsBody({ prefs }: { prefs: Prefs }) {
           </span>
         </div>
       </div>
-      <div class="sheet-foot">MonaLisa 美顏 · v0.1</div>
+      <div class="sheet-foot">MonaLisa 美顏 · {displayVersion(APP_VERSION)}</div>
     </>
   );
 }

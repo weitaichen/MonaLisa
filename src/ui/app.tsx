@@ -1,6 +1,7 @@
 // Root component: one screen at a time (no router), plus global overlays.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Status } from './components/Status';
+import { UpdateBanner } from './components/UpdateBanner';
 import { Icon } from './icons';
 import { Camera } from './screens/Camera';
 import { Editor } from './screens/Editor';
@@ -53,6 +54,7 @@ export function App() {
       {screen.name === 'camera' && <Camera />}
       {screen.name === 'review' && <Review key={screen.shot.image} shot={screen.shot} />}
       {screen.name === 'editor' && <Editor key={screen.source.bitmap} source={screen.source} />}
+      <UpdateBanner place="home" />
       <SettingsSheet />
       <Busy />
       <Toast />

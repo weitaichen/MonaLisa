@@ -125,7 +125,11 @@ async function warmLoader(stash: boolean): Promise<void> {
 
 /** Entries of older engine versions (versioned paths) are never requested again: free the space. */
 function isCurrent(path: string): boolean {
-  return path === ENGINE_PATHS.model || path.startsWith(`${ENGINE_PATHS.wasmBase}/`);
+  return (
+    path === ENGINE_PATHS.model ||
+    path.startsWith(`${ENGINE_PATHS.wasmBase}/`) ||
+    (Object.values(POSE_MODELS) as string[]).includes(path)
+  );
 }
 
 async function pruneStale(): Promise<void> {
@@ -147,6 +151,7 @@ async function fetchWithProgress(
   phase: 'model' | 'wasm',
   keep: boolean,
   stash: boolean,
+  report: (p: EngineAssetsProgress) => void = emit,
 ): Promise<Fetched> {
   const ac = new AbortController();
   let stall: ReturnType<typeof setTimeout> | undefined;
@@ -161,14 +166,14 @@ async function fetchWithProgress(
     // A missing asset behind an SPA fallback answers 200 with index.html.
     if ((res.headers.get('content-type') ?? '').includes('text/html')) throw new Error(`${url}: got HTML, asset missing`);
     let total = declaredLength(res);
-    emit({ phase, loaded: 0, total });
+    report({ phase, loaded: 0, total });
     // the copy for Cache Storage must be taken before the body is read; it is stored only once validated
     const copy = stash ? res.clone() : null;
 
     if (!res.body) {
       const bytes = new Uint8Array(await res.arrayBuffer());
       if (bytes.byteLength === 0) throw new Error(`${url}: empty response`);
-      emit({ phase, loaded: bytes.byteLength, total: bytes.byteLength });
+      report({ phase, loaded: bytes.byteLength, total: bytes.byteLength });
       if (copy) stashResponse(url, copy);
       return { loaded: bytes.byteLength, bytes };
     }
@@ -187,12 +192,12 @@ async function fetchWithProgress(
       const now = Date.now();
       if (now - lastEmit >= PROGRESS_INTERVAL_MS) {
         lastEmit = now;
-        emit({ phase, loaded, total });
+        report({ phase, loaded, total });
       }
     }
     if (total && loaded !== total) throw new Error(`${url}: truncated (${loaded}/${total} B)`);
     if (loaded === 0) throw new Error(`${url}: empty response`);
-    emit({ phase, loaded, total: loaded });
+    report({ phase, loaded, total: loaded });
     if (copy) stashResponse(url, copy);
     return { loaded, bytes: keep ? concat(chunks, loaded) : new Uint8Array(0) };
   } finally {
@@ -243,4 +248,59 @@ function requestPersistence(): void {
   } catch {
     // storage APIs can throw in locked-down contexts; persistence is only a hint
   }
+}
+
+// ───────────── 美體: pose models (OWNER: body-tracker agent) ─────────────
+
+/** Self-hosted PoseLandmarker models (versioned paths → CacheFirst / immutable). */
+export const POSE_MODELS = {
+  full: '/models/pose_landmarker/full-float16-1/pose_landmarker_full.task',
+  lite: '/models/pose_landmarker/lite-float16-1/pose_landmarker_lite.task',
+} as const;
+
+/**
+ * Fetch a pose model with progress (phase 'model', then 'done'), memoised per variant; a failure clears the memo so a
+ * later call retries. Downloaded on demand the first time 美體 is used (not part of the engine prefetch). Like the
+ * engine binaries, a validated model is stashed in ENGINE_CACHE when no service worker controls the page, so the
+ * SW's CacheFirst route serves it offline later. A caller joining late immediately receives the latest event.
+ */
+export function loadPoseModel(
+  variant: keyof typeof POSE_MODELS,
+  onProgress?: (p: EngineAssetsProgress) => void,
+): Promise<Uint8Array> {
+  const job = (poseJobs[variant] ??= { memo: null, listeners: new Set(), last: null });
+  if (onProgress) {
+    job.listeners.add(onProgress);
+    if (job.last) deliver(onProgress, job.last);
+  }
+  if (!job.memo) {
+    const run = downloadPose(variant, job);
+    job.memo = run;
+    run.catch(() => {
+      if (job.memo === run) {
+        job.memo = null;
+        job.last = null;
+      }
+    });
+  }
+  if (!onProgress) return job.memo;
+  return job.memo.finally(() => job.listeners.delete(onProgress));
+}
+
+interface PoseJob {
+  memo: Promise<Uint8Array> | null;
+  listeners: Set<Listener>;
+  last: EngineAssetsProgress | null;
+}
+
+const poseJobs: Partial<Record<keyof typeof POSE_MODELS, PoseJob>> = {};
+
+async function downloadPose(variant: keyof typeof POSE_MODELS, job: PoseJob): Promise<Uint8Array> {
+  const report = (p: EngineAssetsProgress) => {
+    job.last = p;
+    for (const cb of [...job.listeners]) deliver(cb, p);
+  };
+  const model = await fetchWithProgress(POSE_MODELS[variant], 'model', true, stashTarget(), report);
+  report({ phase: 'done', loaded: model.loaded, total: model.loaded });
+  return model.bytes;
 }

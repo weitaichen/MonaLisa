@@ -6,7 +6,7 @@
 // against a timeout, a failed transaction is retried once on a fresh connection, and in the end
 // every op resolves to a harmless fallback (no-op / empty list / undefined) instead of rejecting.
 import { sanitizeParams } from '../engine/params';
-import type { HistoryEntry } from '../types';
+import type { BodyDetection, HistoryEntry, PersonMask } from '../types';
 
 export const HISTORY_LIMIT = 12;
 
@@ -38,6 +38,8 @@ export async function addEntry(e: NewHistoryEntry): Promise<string> {
       width: e.width,
       height: e.height,
     };
+    // typed arrays survive IDB's structured clone, so the cached detection is stored as is
+    if (e.body !== undefined) entry.body = e.body;
     store.put(entry);
     // Requests in one transaction run in order, so the count already includes the new entry.
     const index = store.index(UPDATED_INDEX);
@@ -62,16 +64,23 @@ export async function addEntry(e: NewHistoryEntry): Promise<string> {
   return id;
 }
 
-/** Patches params / thumb and bumps updatedAt (moves the entry to the front). Missing id → no-op. */
-export function updateEntry(id: string, patch: Partial<Pick<HistoryEntry, 'params' | 'thumb'>>): Promise<void> {
+/**
+ * Patches params / thumb and bumps updatedAt (moves the entry to the front). A body-only patch (caching the
+ * 美體 detection) is not an edit: it keeps updatedAt, so merely looking at an entry does not reorder 最近編輯.
+ * Missing id → no-op.
+ */
+export function updateEntry(id: string, patch: Partial<Pick<HistoryEntry, 'params' | 'thumb' | 'body'>>): Promise<void> {
   return withStore('readwrite', undefined, (store) => {
     const req = store.get(id);
     req.onsuccess = () => {
       const cur: unknown = req.result;
       if (!cur || typeof cur !== 'object') return;
-      const next = { ...(cur as HistoryEntry), updatedAt: stamp() };
+      const edit = patch.params !== undefined || patch.thumb !== undefined;
+      const next = { ...(cur as HistoryEntry) };
+      if (edit) next.updatedAt = stamp();
       if (patch.params !== undefined) next.params = patch.params;
       if (patch.thumb !== undefined) next.thumb = patch.thumb;
+      if (patch.body !== undefined) next.body = patch.body;
       store.put(next);
     };
     return () => undefined;
@@ -147,7 +156,42 @@ export function normalizeEntry(raw: unknown): HistoryEntry | null {
   if (typeof id !== 'string' || !isBlob(original) || !isBlob(thumb)) return null;
   if (!isFiniteNumber(createdAt) || !isFiniteNumber(updatedAt)) return null;
   if (!isFiniteNumber(width) || !isFiniteNumber(height) || width <= 0 || height <= 0) return null;
-  return { id, createdAt, updatedAt, original, thumb, params: sanitizeParams(r.params), width, height };
+  const entry: HistoryEntry = { id, createdAt, updatedAt, original, thumb, params: sanitizeParams(r.params), width, height };
+  // a corrupt cached detection only costs a re-detect: drop it (undefined), keep the entry
+  if (r.body === null) entry.body = null;
+  else {
+    const body = normalizeBody(r.body);
+    if (body) entry.body = body;
+  }
+  return entry;
+}
+
+/** Untrusted stored 美體 detection → a valid one, or null when anything is off. */
+export function normalizeBody(raw: unknown): BodyDetection | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const { pose, mask, people, width, height } = r;
+  if (!isFiniteNumber(width) || !isFiniteNumber(height) || width <= 0 || height <= 0) return null;
+  if (!isFiniteNumber(people) || people < 1) return null;
+  if (!pose || typeof pose !== 'object') return null;
+  const points = (pose as Record<string, unknown>).points;
+  if (!(points instanceof Float32Array) || points.length !== 33 * 4 || !points.every(Number.isFinite)) return null;
+  let m: PersonMask | null = null;
+  if (mask !== null) {
+    m = normalizeMask(mask);
+    if (!m) return null;
+  }
+  return { pose: { points }, mask: m, people: Math.floor(people), width, height };
+}
+
+function normalizeMask(raw: unknown): PersonMask | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const { width, height, data } = raw as Record<string, unknown>;
+  if (!Number.isInteger(width) || !Number.isInteger(height)) return null;
+  const w = width as number;
+  const h = height as number;
+  if (w <= 0 || h <= 0 || !(data instanceof Uint8Array) || data.length !== w * h) return null;
+  return { width: w, height: h, data };
 }
 
 // ───────────────────────── internals ─────────────────────────

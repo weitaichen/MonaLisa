@@ -15,15 +15,24 @@ function maxImportEdge(): number {
 /** Decode a photo (file or history original) and open it in the editor. */
 export async function openInEditor(
   blob: Blob,
-  opts: { params?: BeautyParams; historyId?: string | null; returnTo: EditorSource['returnTo'] },
+  opts: {
+    params?: BeautyParams;
+    historyId?: string | null;
+    body?: EditorSource['body'];
+    returnTo: EditorSource['returnTo'];
+  },
 ): Promise<void> {
   app.set({ busy: '正在開啟照片…' });
   try {
     const bitmap = await deps.importPhoto(blob, maxImportEdge());
-    go({
-      name: 'editor',
-      source: { bitmap, params: opts.params ?? app.get().params, historyId: opts.historyId ?? null, returnTo: opts.returnTo },
-    });
+    const source: EditorSource = {
+      bitmap,
+      params: opts.params ?? app.get().params,
+      historyId: opts.historyId ?? null,
+      returnTo: opts.returnTo,
+    };
+    if (opts.body !== undefined) source.body = opts.body;
+    go({ name: 'editor', source });
   } catch (e) {
     toast(`無法開啟照片：${reportError(e, 'importPhoto')}`, 4000);
   } finally {

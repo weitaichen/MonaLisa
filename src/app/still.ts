@@ -1,6 +1,6 @@
 // OWNER: app-glue agent. Editor session for one still image: detect once, render on demand (rAF-coalesced).
 import { adapt } from '../tracking/adapter111';
-import type { BeautyParams, Engine, Face, RenderInput, Tracker } from '../types';
+import type { BeautyParams, BodyField, Engine, Face, RenderInput, Tracker } from '../types';
 import { debugState, reportError } from './debug';
 
 export interface StillSession {
@@ -18,6 +18,13 @@ export interface StillSession {
   /** show the original while held */
   setCompare(on: boolean): void;
   /**
+   * 美體 displacement field (null = none), applied to every later render and export so the file matches the
+   * preview. Pass the same object again after the builder refilled its buffer (new `version`): it redraws.
+   */
+  setBody(field: BodyField | null): void;
+  /** the field set last (a replacement session is seeded with it) */
+  readonly body: BodyField | null;
+  /**
    * Resolves once what an export of `params` needs is resident (the filter LUT may still be downloading:
    * no SW, Lockdown Mode, slow network). Never rejects: a LUT that fails to load is skipped by the preview
    * too, so the export then matches it without the filter.
@@ -28,8 +35,12 @@ export interface StillSession {
    * LUT have settled (loaded or failed) on the current context. false → prepareExport first.
    */
   exportReady(params: BeautyParams): boolean;
-  /** full-resolution export, never mirrored (synchronous; call prepareExport first so it matches the preview) */
-  exportImageData(params: BeautyParams): ImageData;
+  /**
+   * full-resolution export, never mirrored (synchronous; call prepareExport first so it matches the preview).
+   * `body`: the 美體 field to export with, captured when the export was asked for (a 美體 edit while it waits
+   * for a filter LUT must not leak into it); omitted → the field set last.
+   */
+  exportImageData(params: BeautyParams, body?: BodyField | null): ImageData;
   /**
    * The screen is closing but an export is still pending: stop drawing to the shared display canvas (another
    * screen owns it now). prepareExport / exportImageData keep working until dispose.
@@ -46,6 +57,8 @@ export interface StillSessionOptions {
    * swap): used as is, without detecting again. undefined → detect.
    */
   face?: Face | null;
+  /** 美體 field to start with (a replacement session keeps the edit on its first frame) */
+  body?: BodyField | null;
 }
 
 /** prepareExport re-waits after a loss + restore during its wait at most this often (repeated cycles cannot loop) */
@@ -76,11 +89,20 @@ export function createStillSession(
   let displayOff = false;
 
   let params: BeautyParams | null = null;
+  let body: BodyField | null = opts.body ?? null;
   let compare = false;
   let raf = 0;
   let disposed = false;
 
-  const input = (p: BeautyParams): RenderInput => ({ source: bitmap, width, height, face, faceWeight, params: p });
+  const input = (p: BeautyParams, b: BodyField | null = body): RenderInput => ({
+    source: bitmap,
+    width,
+    height,
+    face,
+    faceWeight,
+    params: p,
+    body: b,
+  });
 
   function schedule(): void {
     if (disposed || displayOff || raf || !params) return;
@@ -206,6 +228,14 @@ export function createStillSession(
       compare = on;
       schedule();
     },
+    get body() {
+      return body;
+    },
+    setBody(field) {
+      if (disposed) return;
+      body = field;
+      schedule();
+    },
     prepareExport(p) {
       return prepare(p, PREPARE_RETRIES);
     },
@@ -213,10 +243,10 @@ export function createStillSession(
       if (disposed || engine.lost || !staticsSettled) return false;
       return p.filterId === 'none' || settledFilters.has(p.filterId);
     },
-    exportImageData(p) {
+    exportImageData(p, b) {
       if (disposed) throw new Error('StillSession: disposed');
       ensureFilter(p.filterId);
-      const img = engine.renderToImageData(input(p), { mirror: false });
+      const img = engine.renderToImageData(input(p, b === undefined ? body : b), { mirror: false });
       // the display keeps showing the last params; redraw in case the offscreen render disturbed it
       schedule();
       return img;

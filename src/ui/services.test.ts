@@ -1,7 +1,7 @@
 // services.ts engine/tracker lifecycle: retry after a failed engine, one tracker build at a time,
 // and delegate toggles that land while a build is in flight.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Engine, Prefs, Tracker, TrackerOptions } from '../types';
+import type { BodyTracker, BodyTrackerOptions, Engine, EngineAssetsProgress, Prefs, Tracker, TrackerOptions } from '../types';
 
 type Services = typeof import('./services');
 type Deps = typeof import('./deps').deps;
@@ -440,5 +440,121 @@ describe('services: recoverEngine', () => {
     await flush();
     expect(svc.svc.get().engine.state).toBe('ready');
     expect(svc.svc.get().tracker).toBe('lost');
+  });
+});
+
+describe('services: 美體 body tracker', () => {
+  let prefs: { current: Prefs };
+  beforeEach(() => {
+    prefs = { current: { ...PREFS } };
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function setup() {
+    const { svc, deps } = await load(prefs);
+    deps.createEngine = (() => fakeEngine(Promise.resolve())) as unknown as Deps['createEngine'];
+    const order: string[] = [];
+    const faceGate = deferred<void>();
+    deps.createTracker = (async () => {
+      order.push('face:start');
+      await faceGate.promise;
+      order.push('face:done');
+      return { delegate: 'GPU', close: vi.fn() } as unknown as Tracker;
+    }) as unknown as Deps['createTracker'];
+    const modelGate = deferred<Uint8Array>();
+    const loadPoseModel = vi.fn((variant: string, onProgress?: (p: EngineAssetsProgress) => void) => {
+      order.push(`pose-model:${variant}`);
+      onProgress?.({ loaded: 50, total: 100, phase: 'model' });
+      return modelGate.promise;
+    });
+    deps.loadPoseModel = loadPoseModel as unknown as Deps['loadPoseModel'];
+    const created: BodyTrackerOptions[] = [];
+    const createBodyTracker = vi.fn(async (o: BodyTrackerOptions) => {
+      order.push('pose-tracker');
+      created.push(o);
+      return { variant: o.variant, delegate: o.delegate ?? 'CPU', detect: vi.fn(), detectVideo: vi.fn(), close: vi.fn() } as unknown as BodyTracker;
+    });
+    deps.createBodyTracker = createBodyTracker as unknown as Deps['createBodyTracker'];
+    return { svc, deps, order, faceGate, modelGate, loadPoseModel, createBodyTracker, created };
+  }
+
+  it('starts only after the face tracker build settled (never alongside it), full + CPU + IMAGE', async () => {
+    const t = await setup();
+    const engineP = t.svc.ensureEngine();
+    await flush();
+    const bodyP = t.svc.ensureBodyTracker();
+    await flush();
+    expect(t.order).toEqual(['face:start']); // waiting for the face tracker
+    expect(t.svc.svc.get().body).toEqual({ state: 'loading', step: 'tracker', progress: null });
+    t.faceGate.resolve();
+    await engineP;
+    await flush();
+    expect(t.order).toEqual(['face:start', 'face:done', 'pose-model:full']);
+    expect(t.svc.svc.get().body).toEqual({ state: 'loading', step: 'model', progress: 0.5 });
+    t.modelGate.resolve(new Uint8Array(8));
+    const tracker = await bodyP;
+    expect(t.order.at(-1)).toBe('pose-tracker');
+    expect(t.created[0]).toMatchObject({ variant: 'full', delegate: 'CPU', runningMode: 'IMAGE', wasmBase: t.deps.wasmBase });
+    expect(t.created[0].modelBuffer).toHaveLength(8);
+    expect(t.svc.svc.get().body).toEqual({ state: 'ready' });
+    expect(tracker.variant).toBe('full');
+  });
+
+  it('once per session: concurrent and later calls share one model load and one tracker', async () => {
+    const t = await setup();
+    t.faceGate.resolve();
+    await t.svc.ensureEngine();
+    const seen: number[] = [];
+    const a = t.svc.ensureBodyTracker((p) => seen.push(p.loaded));
+    const b = t.svc.ensureBodyTracker();
+    t.modelGate.resolve(new Uint8Array(4));
+    expect(await a).toBe(await b);
+    expect(await t.svc.ensureBodyTracker()).toBe(await a);
+    expect(t.loadPoseModel).toHaveBeenCalledTimes(1);
+    expect(t.createBodyTracker).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([50]);
+  });
+
+  it('a failed download is a retryable error; the retry starts over', async () => {
+    const t = await setup();
+    t.faceGate.resolve();
+    await t.svc.ensureEngine();
+    t.loadPoseModel.mockImplementationOnce(() => Promise.reject(new TypeError('Failed to fetch')));
+    await expect(t.svc.ensureBodyTracker()).rejects.toThrow('Failed to fetch');
+    const st = t.svc.svc.get().body;
+    expect(st.state).toBe('error');
+    expect(st.state === 'error' && st.hint).toBe('網路連線不穩，請確認網路後重試');
+    const retry = t.svc.ensureBodyTracker();
+    t.modelGate.resolve(new Uint8Array(4));
+    await expect(retry).resolves.toBeTruthy();
+    expect(t.loadPoseModel).toHaveBeenCalledTimes(2);
+    expect(t.svc.svc.get().body.state).toBe('ready');
+  });
+
+  it('a graph that fails to start is retryable too (the downloaded model is fetched from the memo)', async () => {
+    const t = await setup();
+    t.faceGate.resolve();
+    await t.svc.ensureEngine();
+    t.modelGate.resolve(new Uint8Array(4));
+    t.createBodyTracker.mockImplementationOnce(async () => {
+      throw new Error('wasm OOM');
+    });
+    await expect(t.svc.ensureBodyTracker()).rejects.toThrow('wasm OOM');
+    expect(t.svc.svc.get().body.state).toBe('error');
+    await expect(t.svc.ensureBodyTracker()).resolves.toBeTruthy();
+    expect(t.createBodyTracker).toHaveBeenCalledTimes(2);
+    expect(t.svc.svc.get().body.state).toBe('ready');
+  });
+
+  it('works without any face tracker (基本模式)', async () => {
+    const t = await setup();
+    await t.svc.ensureEngine(true);
+    const p = t.svc.ensureBodyTracker();
+    t.modelGate.resolve(new Uint8Array(4));
+    await expect(p).resolves.toBeTruthy();
+    expect(t.order).not.toContain('face:start');
   });
 });

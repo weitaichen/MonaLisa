@@ -1,5 +1,6 @@
 // Camera 拍攝 (spec §7.2.2): gate → live beautified preview framed to 3:4 / 1:1 / 9:16,
 // BeautyPanel + floating slider, timer, flip, hold-to-compare, shutter → Review.
+// 美體 is photo-only for now (body research report P1): the tab is shown with every item off and a note.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { LiveLoop, LiveStats } from '../../app/live';
 import type { CameraController, CameraSnapshot } from '../../types';
@@ -15,7 +16,7 @@ import { deps } from '../deps';
 import { openInEditor, pickPhoto } from '../flows';
 import { Icon } from '../icons';
 import { cropImageData, grabOriginalFrame } from '../imaging';
-import { INITIAL_SELECTION, sliderFor, type PanelSelection } from '../panelModel';
+import { CAMERA_BODY, INITIAL_SELECTION, sliderFor, type BodyContext, type PanelSelection } from '../panelModel';
 import { haptic, isStandalone } from '../platform';
 import { ensureEngine, getCamera, stopCamera, svc } from '../services';
 import { app, go, RATIO_VALUE, RATIOS, setParams, TIMERS, toast } from '../state';
@@ -23,6 +24,11 @@ import { useStore } from '../store';
 import { useFilterLoader, useHold } from './hooks';
 
 let lastSel: PanelSelection = INITIAL_SELECTION;
+/** 美體 is photo-only: its note offers the import right where the user looked for it */
+const cameraBody: BodyContext = {
+  ...CAMERA_BODY,
+  action: { label: '匯入照片', run: () => pickPhoto((f) => void openInEditor(f, { returnTo: 'camera' })) },
+};
 /** basic-mode notes are announced once per engine bundle, not on every visit */
 let notedBundle: unknown = null;
 
@@ -257,7 +263,7 @@ export function Camera() {
     setCollapsed((c) => !c);
   };
 
-  const binding = sliderFor(params, sel);
+  const binding = sliderFor(params, sel, cameraBody);
   const state = snap?.state ?? 'idle';
   const ready = !!loop && live && !lost;
   // basic mode only: the live no-face state comes and goes (the badge covers it), the panel must not flicker
@@ -390,6 +396,7 @@ export function Camera() {
         onParams={setParams}
         collapsed={collapsed}
         faceNote={faceNote}
+        body={cameraBody}
       />
 
       <div class="cam-controls">

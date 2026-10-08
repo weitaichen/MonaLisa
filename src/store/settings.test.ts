@@ -87,7 +87,7 @@ describe('loadParams / saveParams', () => {
     const p = { ...defaultParams(), extra: 'junk', values: { ...defaultParams().values, 'bogus.param': 3 } };
     saveParams(p);
     const stored = JSON.parse(store.getItem(PARAMS_KEY)!) as Record<string, unknown>;
-    expect(Object.keys(stored).sort()).toEqual(['blushShade', 'filterId', 'lipShade', 'presetAmount', 'presetId', 'values']);
+    expect(Object.keys(stored).sort()).toEqual(['blushShade', 'bodyProtect', 'filterId', 'heightBand', 'lipShade', 'presetAmount', 'presetId', 'values']);
     expect(Object.keys(stored.values as object).sort()).toEqual(PARAM_DEFS.map((d) => d.id).sort());
   });
 

@@ -1,6 +1,7 @@
 // Vendors runtime assets into public/ (idempotent; safe to run on every build).
 //  - MediaPipe tasks-vision 0.10.35 SIMD wasm (copied from node_modules)
 //  - face_landmarker.task (downloaded once, md5-verified)
+//  - pose_landmarker_{full,lite}.task for 美體 (downloaded once, md5-verified)
 //  - GPUPixel resource PNGs at a pinned commit, re-encoded without colour chunks
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -42,6 +43,28 @@ if (!existsSync(modelDst)) {
 const md5 = createHash('md5').update(readFileSync(modelDst)).digest('base64');
 if (md5 !== MODEL_MD5_B64) throw new Error(`face_landmarker.task md5 mismatch: ${md5}`);
 console.log('face_landmarker.task ok');
+
+// 2b. 美體 pose models (on-demand in the app, never precached). Versioned GCS paths (float16/1), not `latest`:
+//     `latest` of the full model is a different binary with the same size. md5 = GCS x-goog-hash.
+const POSE_MODELS = {
+  full: { md5: 'g4eWidNz0UO+CUyXI1Xkjg==' }, // 9,398,198 B
+  lite: { md5: 'BKdd33yBGsehpFIyZt19iA==' }, // 5,777,746 B
+};
+for (const [variant, { md5: want }] of Object.entries(POSE_MODELS)) {
+  const name = `pose_landmarker_${variant}.task`;
+  const dst = pub('models', 'pose_landmarker', `${variant}-float16-1`, name);
+  const md5Of = (buf) => createHash('md5').update(buf).digest('base64');
+  if (!existsSync(dst) || md5Of(readFileSync(dst)) !== want) {
+    const buf = await download(
+      `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${variant}/float16/1/${name}`,
+    );
+    // verify before writing, so a bad download never leaves a corrupt model behind
+    if (md5Of(buf) !== want) throw new Error(`${name} md5 mismatch: ${md5Of(buf)}`);
+    ensureDir(dst);
+    writeFileSync(dst, buf);
+  }
+  console.log(`${name} ok`);
+}
 
 // 3. GPUPixel PNGs (Apache-2.0). Re-encoding through pngjs drops sRGB/cHRM/iCCP/iDOT and the
 //    ancillary chunks, so browsers cannot colour-manage LUT / makeup data (RB §2.1). pngjs does
@@ -91,6 +114,23 @@ const fixture = join(root, 'tests', 'fixtures', 'sample_face.png');
 if (!existsSync(fixture)) {
   ensureDir(fixture);
   writeFileSync(fixture, await download(`https://raw.githubusercontent.com/pixpark/gpupixel/${GP_COMMIT}/demo/ios/demo/sample_face.png`));
+}
+
+// 4b. 美體 test fixtures (MediaPipe tasks testdata, Apache-2.0 repo google-ai-edge/mediapipe; the binaries are
+//     hosted in its mediapipe-assets bucket, see third_party/external_files.bzl) — tests only, never shipped.
+const MP_TESTDATA = 'https://storage.googleapis.com/mediapipe-assets/tasks/testdata/vision';
+const BODY_FIXTURES = {
+  'fullbody.jpg': ['male_full_height_hands.jpg?generation=1782184892683350', '8a7fe5be8b90d6078b09913ca28f7e5d342f8d3cde856ab4e3327d2970b887f8'],
+  'fullbody_yoga.jpg': ['pose.jpg?generation=1782185208547605', 'c8a830ed683c0276d713dd5aeda28f415f10cd6291972084a40d0d8b934ed62b'],
+};
+for (const [name, [src, sha]] of Object.entries(BODY_FIXTURES)) {
+  const out = join(root, 'tests', 'fixtures', name);
+  if (existsSync(out)) continue;
+  const buf = await download(`${MP_TESTDATA}/${src}`);
+  const got = createHash('sha256').update(buf).digest('hex');
+  if (got !== sha) throw new Error(`${name} sha256 mismatch: ${got}`);
+  ensureDir(out);
+  writeFileSync(out, buf);
 }
 
 // 5. Licence texts.

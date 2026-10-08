@@ -1,6 +1,9 @@
 // Test doubles for the app-glue unit tests (never imported by app code).
 import { vi } from 'vitest';
 import type {
+  BodyDetection,
+  BodyField,
+  BodyTracker,
   CameraController,
   CameraSnapshot,
   CameraState,
@@ -205,6 +208,51 @@ export function fakeTracker(clock?: { work(ms: number): void }, face = true): Fa
     close: vi.fn(),
   };
   return t as unknown as FakeTracker;
+}
+
+/** A tiny 美體 field (4×2 RG texels, constant `dx`). */
+export function makeBodyField(dx = 0.01, version = 1): BodyField {
+  const data = new Float32Array(4 * 2 * 2);
+  for (let i = 0; i < data.length; i += 2) data[i] = dx;
+  return { width: 4, height: 2, data, version };
+}
+
+/** A centred standing person (BlazePose 33 layout, all visible), a 4×8 mask, `people` detected. */
+export function makeBodyDetection(people = 1, width = 1536, height = 2048): BodyDetection {
+  // [y, |x − 0.5|] per landmark: face 0–10, shoulders 11/12, elbows, wrists + hands, hips, knees, ankles, feet
+  const Y = [0.1, 0.09, 0.09, 0.09, 0.09, 0.09, 0.09, 0.1, 0.1, 0.12, 0.12, 0.22, 0.22, 0.36, 0.36, 0.48, 0.48,
+    0.5, 0.5, 0.5, 0.5, 0.49, 0.49, 0.52, 0.52, 0.72, 0.72, 0.9, 0.9, 0.92, 0.92, 0.93, 0.93];
+  const X = [0, 0.01, 0.015, 0.02, 0.01, 0.015, 0.02, 0.03, 0.03, 0.01, 0.01, 0.09, 0.09, 0.11, 0.11, 0.12, 0.12,
+    0.125, 0.125, 0.12, 0.12, 0.115, 0.115, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.06, 0.06];
+  const points = new Float32Array(33 * 4);
+  for (let i = 0; i < 33; i++) {
+    // odd indices are the person's left side = image right (unmirrored)
+    const side = i === 0 ? 0 : i % 2 === 1 ? 1 : -1;
+    points[i * 4] = 0.5 + side * X[i];
+    points[i * 4 + 1] = Y[i];
+    points[i * 4 + 3] = 0.99;
+  }
+  return { pose: { points }, mask: { width: 4, height: 8, data: new Uint8Array(32).fill(255) }, people, width, height };
+}
+
+export interface FakeBodyTracker extends BodyTracker {
+  /** what detect() returns next (null = no person) */
+  result: BodyDetection | null;
+  detect: ReturnType<typeof vi.fn<BodyTracker['detect']>>;
+  detectVideo: ReturnType<typeof vi.fn<BodyTracker['detectVideo']>>;
+  close: ReturnType<typeof vi.fn<() => void>>;
+}
+
+export function fakeBodyTracker(result: BodyDetection | null = makeBodyDetection()): FakeBodyTracker {
+  const t = {
+    variant: 'full' as const,
+    delegate: 'CPU' as const,
+    result,
+    detect: vi.fn(() => t.result),
+    detectVideo: vi.fn(() => t.result),
+    close: vi.fn(),
+  };
+  return t as unknown as FakeBodyTracker;
 }
 
 export function prefs(over: Partial<Prefs> = {}): Prefs {

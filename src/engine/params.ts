@@ -1,5 +1,5 @@
 // Parameter schema, presets, filters and shades (spec §7.4, RB §5). Pure data + pure functions.
-import type { BeautyParams, FilterDef, ParamDef, ParamGroup, ParamId, PresetDef, PresetId, ShadeDef } from '../types';
+import type { BeautyParams, FilterDef, HeightBand, ParamDef, ParamGroup, ParamId, PresetDef, PresetId, ShadeDef } from '../types';
 
 export const PARAM_DEFS: readonly ParamDef[] = [
   // 美膚
@@ -17,6 +17,18 @@ export const PARAM_DEFS: readonly ParamDef[] = [
   { id: 'shape.noseSlim', label: '瘦鼻', group: 'shape', bidirectional: false, default: 0.1, icon: 'nose' },
   { id: 'shape.mouthSize', label: '嘴型', group: 'shape', bidirectional: true, default: 0.5, icon: 'mouth' },
   { id: 'shape.eyeDistance', label: '眼距', group: 'shape', bidirectional: true, default: 0.5, icon: 'eyeDistance' },
+  // 美體 — all neutral by default and never part of a preset (body research report §參數).
+  // Order follows the recommended adjustment sequence: length first, then body/limbs, shoulders/neck last.
+  { id: 'body.legs', label: '長腿', group: 'body', bidirectional: false, default: 0, icon: 'legs' },
+  { id: 'body.slim', label: '瘦身', group: 'body', bidirectional: false, default: 0, icon: 'bodySlim' },
+  { id: 'body.waist', label: '細腰', group: 'body', bidirectional: false, default: 0, icon: 'waist' },
+  { id: 'body.whr', label: '腰臀比', group: 'body', bidirectional: false, default: 0, icon: 'whr' },
+  { id: 'body.hip', label: '美臀', group: 'body', bidirectional: true, default: 0.5, icon: 'hip' },
+  { id: 'body.legSlim', label: '瘦腿', group: 'body', bidirectional: false, default: 0, icon: 'legSlim' },
+  { id: 'body.arms', label: '瘦手臂', group: 'body', bidirectional: false, default: 0, icon: 'arms' },
+  { id: 'body.shoulder', label: '直角肩', group: 'body', bidirectional: false, default: 0, icon: 'shoulder' },
+  { id: 'body.neck', label: '天鵝頸', group: 'body', bidirectional: false, default: 0, icon: 'neck' },
+  { id: 'body.head', label: '小頭', group: 'body', bidirectional: false, default: 0, icon: 'head' },
   // 濾鏡
   { id: 'filter.amount', label: '濾鏡強度', group: 'filter', bidirectional: false, default: 0.5, icon: 'filter' },
   // 美妝
@@ -139,16 +151,33 @@ export function presetDef(id: PresetId): PresetDef {
 // NaN → 0; ±Infinity clamp to the nearest end like any other out-of-range number
 const clamp01 = (v: number) => (Number.isNaN(v) ? 0 : Math.min(1, Math.max(0, v)));
 
-/** Preset values with every param's distance from neutral scaled by `amount` (程度). */
-export function applyPreset(id: PresetId, amount = 1): BeautyParams {
+export function isBodyParam(id: ParamId): boolean {
+  return paramDef(id).group === 'body';
+}
+
+/**
+ * Preset values with every param's distance from neutral scaled by `amount` (程度).
+ * 美體 is not part of any preset: body values, 背景保護 and the 增高 band are carried over from `keep`
+ * (neutral / protect on / no band without it).
+ */
+export function applyPreset(id: PresetId, amount = 1, keep?: BeautyParams): BeautyParams {
   const p = presetDef(id);
   const a = clamp01(amount);
   const values = {} as Record<ParamId, number>;
   for (const d of PARAM_DEFS) {
     const n = neutralValue(d);
-    values[d.id] = clamp01(n + (p.values[d.id] - n) * a);
+    values[d.id] = d.group === 'body' ? (keep ? keep.values[d.id] : n) : clamp01(n + (p.values[d.id] - n) * a);
   }
-  return { values, filterId: p.filterId, lipShade: p.lipShade, blushShade: p.blushShade, presetId: id, presetAmount: a };
+  return {
+    values,
+    filterId: p.filterId,
+    lipShade: p.lipShade,
+    blushShade: p.blushShade,
+    presetId: id,
+    presetAmount: a,
+    bodyProtect: keep ? keep.bodyProtect : true,
+    heightBand: keep ? keep.heightBand : null,
+  };
 }
 
 export function defaultParams(): BeautyParams {
@@ -158,11 +187,32 @@ export function defaultParams(): BeautyParams {
 /** 程度 slider: only meaningful while a preset is active; custom params are returned unchanged. */
 export function setPresetAmount(params: BeautyParams, amount: number): BeautyParams {
   if (params.presetId === 'custom') return params;
-  return applyPreset(params.presetId, amount);
+  return applyPreset(params.presetId, amount, params);
 }
 
+/** Body params are outside the presets, so editing one keeps the active preset (and its 程度). */
 export function setParam(params: BeautyParams, id: ParamId, value: number): BeautyParams {
-  return { ...params, values: { ...params.values, [id]: clamp01(value) }, presetId: 'custom' };
+  return {
+    ...params,
+    values: { ...params.values, [id]: clamp01(value) },
+    presetId: isBodyParam(id) ? params.presetId : 'custom',
+  };
+}
+
+/** Manual 增高 band; null turns it off. Normalized and clamped; a band thinner than 2% of the height is dropped. */
+export function setHeightBand(params: BeautyParams, band: HeightBand | null): BeautyParams {
+  return { ...params, heightBand: band ? cleanBand(band) : null };
+}
+
+export function setBodyProtect(params: BeautyParams, on: boolean): BeautyParams {
+  return { ...params, bodyProtect: on };
+}
+
+function cleanBand(b: HeightBand): HeightBand | null {
+  const top = clamp01(Math.min(b.top, b.bottom));
+  const bottom = clamp01(Math.max(b.top, b.bottom));
+  if (!(bottom - top >= 0.02)) return null;
+  return { top, bottom, amount: clamp01(b.amount) };
 }
 
 export function setFilter(params: BeautyParams, filterId: string): BeautyParams {
@@ -190,8 +240,10 @@ export function setShade(params: BeautyParams, part: 'lip' | 'blush', shade: str
 export function resetGroup(params: BeautyParams, group: ParamGroup): BeautyParams {
   const values = { ...params.values };
   for (const d of paramsInGroup(group)) values[d.id] = neutralValue(d);
-  const next: BeautyParams = { ...params, values, presetId: 'custom' };
+  // body is outside the presets, so resetting it keeps the active preset
+  const next: BeautyParams = { ...params, values, presetId: group === 'body' ? params.presetId : 'custom' };
   if (group === 'filter') next.filterId = 'none';
+  if (group === 'body') next.heightBand = null;
   if (group === 'makeup') {
     next.lipShade = null;
     next.blushShade = null;
@@ -243,6 +295,8 @@ export function sanitizeParams(raw: unknown): BeautyParams {
     blushShade: BLUSH_SHADES.some((s) => s.id === r.blushShade) ? (r.blushShade as string) : null,
     presetId: presetIds.includes(r.presetId as string) ? (r.presetId as BeautyParams['presetId']) : base.presetId,
     presetAmount: typeof r.presetAmount === 'number' ? clamp01(r.presetAmount) : 1,
+    bodyProtect: typeof r.bodyProtect === 'boolean' ? r.bodyProtect : true,
+    heightBand: sanitizeBand(r.heightBand),
   };
   // A preset id only stands if the values still are that preset; otherwise the 一鍵 tab would
   // highlight a preset whose look differs (and 程度 would silently replace the stored values).
@@ -251,7 +305,14 @@ export function sanitizeParams(raw: unknown): BeautyParams {
 }
 
 function matchesPreset(p: BeautyParams, id: PresetId): boolean {
-  const ref = applyPreset(id, p.presetAmount);
+  const ref = applyPreset(id, p.presetAmount, p);
   if (p.filterId !== ref.filterId || p.lipShade !== ref.lipShade || p.blushShade !== ref.blushShade) return false;
   return PARAM_DEFS.every((d) => Math.abs(p.values[d.id] - ref.values[d.id]) < 1e-6);
+}
+
+function sanitizeBand(raw: unknown): HeightBand | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const b = raw as Partial<HeightBand>;
+  if (![b.top, b.bottom, b.amount].every((v) => typeof v === 'number' && Number.isFinite(v))) return null;
+  return cleanBand(b as HeightBand);
 }

@@ -1,7 +1,7 @@
 // App-level UI state. No router, no history.pushState, no hash (RB §1 #9): the screen is plain state.
 import { defaultParams } from '../engine/params';
 import { DEFAULT_PREFS } from '../store/settings';
-import type { BeautyParams, Prefs } from '../types';
+import type { BeautyParams, BodyDetection, Prefs } from '../types';
 import { deps } from './deps';
 import { debug, reportError } from './debug';
 import { createStore } from './store';
@@ -30,6 +30,8 @@ export interface EditorSource {
   params: BeautyParams;
   /** existing history entry being re-edited, or null for a new photo */
   historyId: string | null;
+  /** the entry's cached 美體 detection (null = checked, nobody in the photo; undefined = never checked / unknown) */
+  body?: BodyDetection | null;
   returnTo: 'home' | 'camera';
 }
 

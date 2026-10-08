@@ -8,10 +8,11 @@
 // modified: GLSL ES 3.00; vec2 uPts[111] instead of float facePoints[212]; curveWarp / enlargeEye kept,
 // new scaleAround / shiftAround primitives and V-face, narrow, chin, forehead, nose, mouth and
 // eye-distance warps (RB §2.4); big-eye radius from eye width instead of lid distance; yaw
-// attenuation; uniform early-outs (zero deltas, face bounding box).
+// attenuation; uniform early-outs (zero deltas, face bounding box); 美體 backward displacement texture as
+// the outermost map (body research report §管線).
 import type { Face, ParamId } from '../../types';
 import { signed } from '../params';
-import { createProgram, drawFullscreen, bindTarget, bindTexture, FULLSCREEN_VS } from '../gl/gl';
+import { createProgram, createTexture, deleteTexture, drawFullscreen, bindTarget, bindTexture, FULLSCREEN_VS } from '../gl/gl';
 import type { Framebuffer, GL, Program, Texture } from '../gl/gl';
 import { FACE_TEMPLATE } from './faceMesh';
 
@@ -174,6 +175,9 @@ export function reshapeGeometry(face: Face, aspect: number, u: ReshapeUniforms):
   return { vTargets, narrowTargets, chinTarget, mouthR, eyeR, eyeDisp, box };
 }
 
+/** texture unit of uBodyDisp (unit 0 = uSrc) */
+export const BODY_UNIT = 1;
+
 const RESHAPE_FS = /* glsl */ `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -189,6 +193,8 @@ uniform vec2 uChinT;
 uniform float uMouthR;
 uniform vec2 uEyeR;
 uniform vec2 uEyeDisp;
+uniform sampler2D uBodyDisp; // RG16F backward displacement in UV units, row 0 = image top
+uniform float uBodyOn;
 out vec4 outColor;
 
 vec2 iso(vec2 p) { return vec2(p.x, p.y / uAspect); }
@@ -229,6 +235,9 @@ const ivec2 NOSE[4] = ivec2[4](ivec2(80,46), ivec2(81,46), ivec2(82,49), ivec2(8
 
 void main() {
   vec2 tc = vUv;
+  // Body first as a backward map = face first in forward terms: the face chain below still sees
+  // detected-landmark coordinates, and it is the identity outside uBox, so pose anchors are untouched.
+  if (uBodyOn != 0.0) tc += uBodyOn * texture(uBodyDisp, vUv).xy;
   if (all(greaterThanEqual(tc, uBox.xy)) && all(lessThanEqual(tc, uBox.zw))) {
     if (uSlim != 0.0) {
       for (int i = 0; i < 9; i++) tc = curveWarp(tc, uPts[SLIM[i].x], uPts[SLIM[i].y], uSlim);
@@ -257,13 +266,25 @@ void main() {
   outColor = texture(uSrc, tc);
 }`;
 
+/** uBox that no coordinate falls in: the face chain is skipped entirely (no face / all face deltas 0). */
+export const EMPTY_BOX = [1e9, 1e9, -1e9, -1e9] as const;
+
 export interface ReshapePass {
   /**
    * Sample `src` (any size, by UV) and write the warped image into `dst` (processing size).
    * `aspect` (W/H of the processing size) defaults to dst's; pass it when dst is a scaled buffer
    * (the ¼-res mask) so the map is exactly the image's.
+   * `face` / `u` null = no face warp (body only). `body` = RG16F backward displacement texture (UV
+   * units), applied before the face chain; null = none. Yaw attenuation scales the face deltas only.
    */
-  draw(src: Texture, dst: Framebuffer, face: Face, u: ReshapeUniforms, aspect?: number): void;
+  draw(
+    src: Texture,
+    dst: Framebuffer,
+    face: Face | null,
+    u: ReshapeUniforms | null,
+    aspect?: number,
+    body?: Texture | null,
+  ): void;
   dispose(): void;
 }
 
@@ -271,41 +292,60 @@ export function createReshapePass(gl: GL): ReshapePass {
   const prog: Program = createProgram(gl, FULLSCREEN_VS, RESHAPE_FS, 'reshape');
   prog.use();
   gl.uniform1i(prog.u('uSrc'), 0);
+  gl.uniform1i(prog.u('uBodyDisp'), BODY_UNIT);
+  // Bound on the body unit when there is no field, so the sampler never reads an empty unit.
+  const zero = createTexture(gl, 1, 1);
 
   return {
-    draw(src, dst, face, uIn, aspectIn) {
-      const att = yawAttenuation(face.yaw);
-      const u: ReshapeUniforms = { ...uIn };
-      for (const key of Object.keys(u) as (keyof ReshapeUniforms)[]) u[key] *= att;
+    draw(src, dst, faceIn, uIn, aspectIn, body) {
       const aspect = aspectIn ?? dst.width / dst.height;
-      const g = reshapeGeometry(face, aspect, u);
+      let face: Face | null = null;
+      let u: ReshapeUniforms | null = null;
+      if (faceIn && uIn) {
+        const att = yawAttenuation(faceIn.yaw);
+        u = { ...uIn };
+        for (const key of Object.keys(u) as (keyof ReshapeUniforms)[]) u[key] *= att;
+        // Any non-zero delta (not reshapeActive's 1e-4): keeps the face-only output bit-identical to
+        // the pre-body pass, which warped whenever it ran.
+        if (Object.values(u).some((v) => v !== 0)) face = faceIn;
+      }
 
       bindTarget(gl, dst);
       gl.disable(gl.BLEND);
       prog.use();
       bindTexture(gl, 0, src);
-      gl.uniform2fv(prog.u('uPts'), face.pts111);
-      gl.uniform2fv(prog.u('uExt'), face.ext);
+      bindTexture(gl, BODY_UNIT, body ?? zero);
+      gl.uniform1f(prog.u('uBodyOn'), body ? 1 : 0);
       gl.uniform1f(prog.u('uAspect'), aspect);
-      gl.uniform4f(prog.u('uBox'), g.box[0], g.box[1], g.box[2], g.box[3]);
-      gl.uniform1f(prog.u('uSlim'), u.faceSlim);
-      gl.uniform1f(prog.u('uV'), u.faceV);
-      gl.uniform1f(prog.u('uNarrow'), u.faceNarrow);
-      gl.uniform1f(prog.u('uChin'), u.chin);
-      gl.uniform1f(prog.u('uForehead'), u.forehead);
-      gl.uniform1f(prog.u('uNose'), u.noseSlim);
-      gl.uniform1f(prog.u('uMouth'), u.mouthSize);
-      gl.uniform1f(prog.u('uEye'), u.eyeEnlarge);
-      gl.uniform2fv(prog.u('uVT'), g.vTargets);
-      gl.uniform2fv(prog.u('uNT'), g.narrowTargets);
-      gl.uniform2f(prog.u('uChinT'), g.chinTarget[0], g.chinTarget[1]);
-      gl.uniform1f(prog.u('uMouthR'), g.mouthR);
-      gl.uniform2f(prog.u('uEyeR'), g.eyeR[0], g.eyeR[1]);
-      gl.uniform2f(prog.u('uEyeDisp'), g.eyeDisp[0], g.eyeDisp[1]);
+      if (face && u) {
+        const g = reshapeGeometry(face, aspect, u);
+        gl.uniform2fv(prog.u('uPts'), face.pts111);
+        gl.uniform2fv(prog.u('uExt'), face.ext);
+        gl.uniform4f(prog.u('uBox'), g.box[0], g.box[1], g.box[2], g.box[3]);
+        gl.uniform1f(prog.u('uSlim'), u.faceSlim);
+        gl.uniform1f(prog.u('uV'), u.faceV);
+        gl.uniform1f(prog.u('uNarrow'), u.faceNarrow);
+        gl.uniform1f(prog.u('uChin'), u.chin);
+        gl.uniform1f(prog.u('uForehead'), u.forehead);
+        gl.uniform1f(prog.u('uNose'), u.noseSlim);
+        gl.uniform1f(prog.u('uMouth'), u.mouthSize);
+        gl.uniform1f(prog.u('uEye'), u.eyeEnlarge);
+        gl.uniform2fv(prog.u('uVT'), g.vTargets);
+        gl.uniform2fv(prog.u('uNT'), g.narrowTargets);
+        gl.uniform2f(prog.u('uChinT'), g.chinTarget[0], g.chinTarget[1]);
+        gl.uniform1f(prog.u('uMouthR'), g.mouthR);
+        gl.uniform2f(prog.u('uEyeR'), g.eyeR[0], g.eyeR[1]);
+        gl.uniform2f(prog.u('uEyeDisp'), g.eyeDisp[0], g.eyeDisp[1]);
+      } else {
+        gl.uniform4f(prog.u('uBox'), EMPTY_BOX[0], EMPTY_BOX[1], EMPTY_BOX[2], EMPTY_BOX[3]);
+      }
       drawFullscreen(gl);
+      bindTexture(gl, BODY_UNIT, null);
+      gl.activeTexture(gl.TEXTURE0);
     },
     dispose() {
       prog.dispose();
+      deleteTexture(gl, zero);
     },
   };
 }

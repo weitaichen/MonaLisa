@@ -43,7 +43,9 @@
 
 **In v1:** everything in §6–§8.
 
-**Out of v1** (deliberately): video recording; stickers; body reshaping; green screen; 亮眼/祛法令紋/祛黑眼圈/白牙/AI 祛瑕疵; eye-shadow/brow/liner makeup; the deferred PixelFree reshape list (RB §5 "out of scope"); landscape layout; multi-face; Web Worker pipeline; WebGPU; accounts/cloud sync.
+**Added 2026-10-07 — 美體 P1 (photo editor only):** a 美體 tab (一鍵 · 美膚 · 美型 · 美體 · 濾鏡 · 美妝) with ⊘ 原圖, 10 sliders (長腿, 瘦身, 細腰, 腰臀比, 美臀 ±, 瘦腿, 瘦手臂, 直角肩, 天鵝頸, 小頭), a manual 增高 band (two draggable lines, works without detection) and a 背景保護 toggle (default on). A PoseLandmarker (full, float16/1, with person mask; the GPU graph in 0.10.35, see `src/types.ts` BodyTrackerOptions) loads on the first use of the tab, after the face tracker; its detection is cached in `HistoryEntry.body`, so reopening never loads the model. Widths come from the mask; sliders a photo cannot support are disabled with a 繁體中文 reason. The geometry (`src/body/`) builds a ≈256-long-edge RG16F backward displacement field that the P2 reshape pass applies as its outermost mapping (preview = export). Body sliders stay out of 一鍵 presets and 程度; every default is neutral; no chest. The camera tab shows 「美體目前僅支援照片編輯」. Design: `reports/全身美體修圖 PWA 實作.md` §「MonaLisa 的落地設計」; plan: `docs/superpowers/plans/2026-10-07-body-retouch-plan.md`; bench: the 美體偵測 section of `bench.html`. Live-camera body (BR P2) and liquify / line protection (BR P3) remain out.
+
+**Out of v1** (deliberately): video recording; stickers; live-camera body reshaping (photo-editor 美體 is in, above); green screen; 亮眼/祛法令紋/祛黑眼圈/白牙/AI 祛瑕疵; eye-shadow/brow/liner makeup; the deferred PixelFree reshape list (RB §5 "out of scope"); landscape layout; multi-face; Web Worker pipeline; WebGPU; accounts/cloud sync.
 
 ## 4. Architecture
 

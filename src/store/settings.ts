@@ -80,3 +80,34 @@ function writeJson(key: string, value: unknown): void {
     // quota / disabled storage: persistence is a convenience, never an error
   }
 }
+
+// ───────────── the version that last ran here (src/ui/update.ts announceUpdate) ─────────────
+
+export const VERSION_KEY = 'meiyan.version.v1';
+
+/** As stored (untrusted); undefined when never recorded — a fresh install, or 0.1.x which did not record it. */
+export function loadSeenVersion(): unknown {
+  return readJson(VERSION_KEY);
+}
+
+/** false when storage is unavailable (then a launch can not be told from the next one). */
+export function saveSeenVersion(v: string): boolean {
+  try {
+    const s = storage();
+    if (!s) return false;
+    s.setItem(VERSION_KEY, JSON.stringify(v));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** true when an earlier session left the camera look or settings behind */
+export function hasSavedSettings(): boolean {
+  try {
+    const s = storage();
+    return !!s && (s.getItem(PARAMS_KEY) !== null || s.getItem(PREFS_KEY) !== null);
+  } catch {
+    return false;
+  }
+}

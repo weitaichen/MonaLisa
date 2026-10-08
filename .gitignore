@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# the update e2e builds its own two versions of the app and serves them here (tests/e2e/update.spec.ts)
+dist-e2e-update*/
 dev-dist/
 .superpowers/
 .vercel/

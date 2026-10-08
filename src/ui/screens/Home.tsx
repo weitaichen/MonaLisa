@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'preact/hooks';
 import type { HistoryEntry } from '../../types';
 import { EngineChip } from '../components/EngineChip';
 import { IconButton } from '../components/Controls';
+import { useUpdatePlace } from '../components/UpdateBanner';
 import { reportError } from '../debug';
 import { deps } from '../deps';
 import { openInEditor, pickPhoto } from '../flows';
@@ -108,9 +109,11 @@ export function Home() {
   };
 
   const showHint = isIOS() && !isStandalone() && !prefs.installHintDismissed;
+  // room to scroll the page clear of the floating 有新版本 card
+  const updateShown = useUpdatePlace() === 'home';
 
   return (
-    <div class="screen home">
+    <div class={`screen home${updateShown ? ' has-update' : ''}`}>
       <header class="home-head">
         <div class="wordmark">
           MonaLisa<em>美顏</em>

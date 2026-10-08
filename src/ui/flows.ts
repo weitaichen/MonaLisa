@@ -19,6 +19,8 @@ export async function openInEditor(
     params?: BeautyParams;
     historyId?: string | null;
     body?: EditorSource['body'];
+    faceProtect?: EditorSource['faceProtect'];
+    faceMask?: EditorSource['faceMask'];
     returnTo: EditorSource['returnTo'];
   },
 ): Promise<void> {
@@ -32,6 +34,8 @@ export async function openInEditor(
       returnTo: opts.returnTo,
     };
     if (opts.body !== undefined) source.body = opts.body;
+    if (opts.faceProtect === true) source.faceProtect = true;
+    if (opts.faceMask) source.faceMask = opts.faceMask;
     go({ name: 'editor', source });
   } catch (e) {
     toast(`無法開啟照片：${reportError(e, 'importPhoto')}`, 4000);

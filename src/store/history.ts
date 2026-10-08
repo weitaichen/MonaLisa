@@ -40,6 +40,8 @@ export async function addEntry(e: NewHistoryEntry): Promise<string> {
     };
     // typed arrays survive IDB's structured clone, so the cached detection is stored as is
     if (e.body !== undefined) entry.body = e.body;
+    if (e.faceProtect === true) entry.faceProtect = true;
+    if (e.faceMask) entry.faceMask = e.faceMask;
     store.put(entry);
     // Requests in one transaction run in order, so the count already includes the new entry.
     const index = store.index(UPDATED_INDEX);
@@ -67,9 +69,13 @@ export async function addEntry(e: NewHistoryEntry): Promise<string> {
 /**
  * Patches params / thumb and bumps updatedAt (moves the entry to the front). A body-only patch (caching the
  * 美體 detection) is not an edit: it keeps updatedAt, so merely looking at an entry does not reorder 最近編輯.
- * Missing id → no-op.
+ * Missing id → no-op. faceProtect / faceMask ride along with an edit (faceProtect false removes the flag); on their
+ * own they do not reorder either.
  */
-export function updateEntry(id: string, patch: Partial<Pick<HistoryEntry, 'params' | 'thumb' | 'body'>>): Promise<void> {
+export function updateEntry(
+  id: string,
+  patch: Partial<Pick<HistoryEntry, 'params' | 'thumb' | 'body' | 'faceProtect' | 'faceMask'>>,
+): Promise<void> {
   return withStore('readwrite', undefined, (store) => {
     const req = store.get(id);
     req.onsuccess = () => {
@@ -81,6 +87,9 @@ export function updateEntry(id: string, patch: Partial<Pick<HistoryEntry, 'param
       if (patch.params !== undefined) next.params = patch.params;
       if (patch.thumb !== undefined) next.thumb = patch.thumb;
       if (patch.body !== undefined) next.body = patch.body;
+      if (patch.faceProtect === true) next.faceProtect = true;
+      else if (patch.faceProtect === false) delete next.faceProtect;
+      if (patch.faceMask) next.faceMask = patch.faceMask;
       store.put(next);
     };
     return () => undefined;
@@ -163,6 +172,10 @@ export function normalizeEntry(raw: unknown): HistoryEntry | null {
     const body = normalizeBody(r.body);
     if (body) entry.body = body;
   }
+  // a corrupt mask only costs a segmentation on the next contour edit / reopen
+  if (r.faceProtect === true) entry.faceProtect = true;
+  const faceMask = normalizeMask(r.faceMask);
+  if (faceMask) entry.faceMask = faceMask;
   return entry;
 }
 

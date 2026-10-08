@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import type { BodyField } from '../types';
-import { bodyFieldValid, bodyUploadNeeded, MAX_BODY_FIELD_EDGE, planPasses, type BodyUploadKey, type PassPlanInput } from './pipeline';
+import type { BodyField, FaceProtect } from '../types';
+import {
+  bodyFieldValid,
+  bodyUploadNeeded,
+  faceProtectValid,
+  MAX_BODY_FIELD_EDGE,
+  planPasses,
+  protectUploadNeeded,
+  type BodyUploadKey,
+  type PassPlanInput,
+  type ProtectUploadKey,
+} from './pipeline';
 
 const skinOn = { smooth: 0.55, sharpen: 0.4, whiten: 0.125, rosy: 0.0875, filterAmount: 0 };
 const skinOff = { smooth: 0, sharpen: 0, whiten: 0, rosy: 0, filterAmount: 0 };
@@ -96,5 +106,29 @@ describe('bodyUploadNeeded', () => {
     const g = field(8, 6, 3);
     expect(bodyUploadNeeded(keyOf(f), { ...f, data: g.data })).toBe(true);
     expect(bodyUploadNeeded(keyOf(f), { ...f, width: 6, height: 8 })).toBe(true);
+  });
+});
+
+describe('faceProtectValid / protectUploadNeeded (瘦臉 background limit)', () => {
+  const prot = (w: number, h: number): FaceProtect => ({ width: w, height: h, data: new Float32Array(w * h), version: 1 });
+  it('accepts a positive integer size within the cap with enough floats', () => {
+    expect(faceProtectValid(prot(192, 256))).toBe(true);
+    expect(faceProtectValid({ ...prot(4, 4), data: new Float32Array(20) })).toBe(true);
+    expect(faceProtectValid(prot(0, 4))).toBe(false);
+    expect(faceProtectValid({ ...prot(4, 4), height: 4.5 })).toBe(false);
+    expect(faceProtectValid(prot(MAX_BODY_FIELD_EDGE + 1, 1))).toBe(false);
+    expect(faceProtectValid({ ...prot(4, 4), data: new Float32Array(15) })).toBe(false);
+    expect(faceProtectValid({ ...prot(4, 4), data: new Uint8Array(16) as unknown as Float32Array })).toBe(false);
+  });
+  it('re-uploads only when the object, buffer, version or size changes', () => {
+    const p = prot(4, 4);
+    const keyOf = (q: FaceProtect): ProtectUploadKey => ({ protect: q, data: q.data, version: q.version, width: q.width, height: q.height, usable: true });
+    expect(protectUploadNeeded(null, p)).toBe(true);
+    expect(protectUploadNeeded(keyOf(p), p)).toBe(false);
+    expect(protectUploadNeeded(keyOf(p), { ...p })).toBe(true);
+    expect(protectUploadNeeded(keyOf(p), { ...p, version: 2 })).toBe(true);
+    const k = keyOf(p);
+    p.version++;
+    expect(protectUploadNeeded(k, p)).toBe(true);
   });
 });

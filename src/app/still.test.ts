@@ -438,4 +438,44 @@ describe('createStillSession', () => {
     vi.advanceTimersByTime(16);
     expect(engine.render).not.toHaveBeenCalled();
   });
+
+  it('setFaceProtect: the 瘦臉 limit reaches every render and export (preview = export); null removes it', () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, fakeTracker(), bitmap());
+    expect(s.faceProtect).toBeNull();
+    s.render(natural);
+    vi.advanceTimersByTime(16);
+    expect(engine.lastInput()!.faceProtect).toBeNull();
+    const prot = { width: 2, height: 2, data: new Float32Array(4), version: 1 };
+    s.setFaceProtect(prot);
+    expect(s.faceProtect).toBe(prot);
+    vi.advanceTimersByTime(16); // setFaceProtect alone redraws
+    expect(engine.render).toHaveBeenCalledTimes(2);
+    expect(engine.lastInput()!.faceProtect).toBe(prot);
+    s.exportImageData(natural);
+    expect(engine.renderToImageData.mock.calls[0][0].faceProtect).toBe(prot);
+    vi.advanceTimersByTime(16); // (an export redraws the display)
+    const renders = engine.render.mock.calls.length;
+    s.setFaceProtect(prot); // the same object: nothing to redraw
+    vi.advanceTimersByTime(16);
+    expect(engine.render).toHaveBeenCalledTimes(renders);
+    s.setFaceProtect(null);
+    vi.advanceTimersByTime(16);
+    expect(engine.lastInput()!.faceProtect).toBeNull();
+    s.exportImageData(natural);
+    expect(engine.renderToImageData.mock.calls[1][0].faceProtect).toBeNull();
+  });
+
+  it('a replacement session keeps the limit only together with the face it was built for', () => {
+    const prot = { width: 2, height: 2, data: new Float32Array(4), version: 1 };
+    const e1 = fakeEngine();
+    const withFace = createStillSession(e1, fakeTracker(), bitmap(), { face: makeFace(3), faceProtect: prot });
+    expect(withFace.faceProtect).toBe(prot);
+    withFace.render(natural);
+    vi.advanceTimersByTime(16);
+    expect(e1.lastInput()!.faceProtect).toBe(prot);
+    // detecting anew: the limit belonged to another detection
+    const e2 = fakeEngine();
+    expect(createStillSession(e2, fakeTracker(), bitmap(), { faceProtect: prot }).faceProtect).toBeNull();
+  });
 });

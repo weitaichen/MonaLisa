@@ -1,6 +1,7 @@
 // Session-wide singletons: the display canvas, one Engine, one Tracker, one CameraController,
-// the engine-asset download and (美體, on demand) one BodyTracker. Exposed as an observable store so screens can show
-// loading / error states instead of failing silently.
+// the engine-asset download, (美體, on demand) one BodyTracker and (瘦臉 background limit, on demand) one person
+// segmenter. Exposed as an observable store so screens can show loading / error states instead of failing silently.
+import type { PersonSegmenter } from '../tracking/segmenter';
 import type { BodyTracker, CameraController, Engine, EngineAssetsProgress, Prefs, Tracker, TrackerState } from '../types';
 import { debug, errorText, reportError } from './debug';
 import { deps } from './deps';
@@ -399,6 +400,13 @@ export function recoverEngine(): void {
 
 let bodyTracker: BodyTracker | null = null;
 let bodyP: Promise<BodyTracker> | null = null;
+/** the 瘦臉 segmenter's ensure call in flight (model download + graph creation) */
+let segmenterP: Promise<PersonSegmenter | null> | null = null;
+/**
+ * only the segmenter's graph creation in flight (declared here: the body tracker waits for it). Not the download: a
+ * stalled 250 KB fetch adds nothing to the wasm memory peak the build ordering guards against, so it must not hold 美體.
+ */
+let segmenterCreateP: Promise<unknown> | null = null;
 const bodyProgress = new Set<(p: EngineAssetsProgress) => void>();
 
 /**
@@ -425,8 +433,9 @@ export function ensureBodyTracker(onProgress?: (p: EngineAssetsProgress) => void
   };
   const run = (async () => {
     svc.set({ body: { state: 'loading', step: 'tracker', progress: null } });
-    const pending = trackerP ?? engineP;
-    if (pending) await pending.catch(() => undefined);
+    // nor alongside the 瘦臉 segmenter's graph creation (not its download: see segmenterCreateP). No cycle: the
+    // segmenter waits for this build before it creates its graph, and never once it has started creating
+    for (const pending of [trackerP ?? engineP, segmenterCreateP]) if (pending) await pending.catch(() => undefined);
     svc.set({ body: { state: 'loading', step: 'model', progress: null } });
     const modelBuffer = await deps.loadPoseModel('full', progress);
     svc.set({ body: { state: 'loading', step: 'tracker', progress: 1 } });
@@ -455,6 +464,76 @@ export function ensureBodyTracker(onProgress?: (p: EngineAssetsProgress) => void
     },
   );
   bodyP = p;
+  return p;
+}
+
+// ───────────── 瘦臉 person segmenter ─────────────
+
+let segmenter: PersonSegmenter | null = null;
+/** creating the graph failed (or a live one died): not retried this session, the unlimited 瘦臉 stays */
+let segmenterBroken = false;
+/** segmenters rebuilt this session after a lost WebGL context (iOS backgrounding); one at most */
+let lostRecreates = 0;
+const MAX_LOST_RECREATES = 1;
+
+/**
+ * The 瘦臉 background limit's person segmenter (selfie_segmenter, CPU, IMAGE mode; src/tracking/segmenter.ts), for a
+ * photo without a cached 美體 person mask. Asked for the first time the user moves a contour slider in the editor
+ * (FaceProtectSource: never for preset / default values), created then, and the same instance for the rest of the
+ * session: one extra (small) wasm heap at most. The model downloads right away; like ensureBodyTracker the graph is
+ * created only once no face-tracker / engine / body-tracker build is in flight (a 美體 build started meanwhile waits
+ * for that creation only, never for the download). Never rejects: null = unavailable, and the caller keeps today's
+ * unlimited contour warps. A failed download is retried by the next call; a failed graph creation or a segmenter that
+ * died (a throw inside segment, e.g. OOM or an abort) is not (every create leaks on WebKit, and OOM repeats). The one
+ * exception: a segmenter whose WebGL context was lost (`lost`, e.g. iOS backgrounding; nothing wrong with the module)
+ * is rebuilt once per session; a second loss leaves the unlimited 瘦臉 for the rest of it.
+ */
+export function ensureFaceSegmenter(): Promise<PersonSegmenter | null> {
+  if (segmenter?.dead) {
+    const lost = segmenter.lost;
+    segmenter.close();
+    segmenter = null;
+    if (lost && lostRecreates < MAX_LOST_RECREATES) lostRecreates++;
+    else segmenterBroken = true;
+  }
+  if (segmenter) return Promise.resolve(segmenter);
+  if (segmenterBroken) return Promise.resolve(null);
+  if (segmenterP) return segmenterP;
+  const p = (async (): Promise<PersonSegmenter | null> => {
+    let modelBuffer: Uint8Array;
+    try {
+      modelBuffer = await deps.loadSegmenterModel();
+    } catch (e) {
+      // offline / blocked: an expected degradation (the unlimited warp stays), not an error to surface
+      console.warn('[meiyan] 瘦臉 background limit: segmenter model unavailable', e);
+      return null;
+    }
+    // until a synchronous check finds no build in flight (one may have started during the download or the wait)
+    for (;;) {
+      const pending = [trackerP ?? engineP, bodyP].filter((q) => q !== null);
+      if (!pending.length) break;
+      for (const q of pending) await q.catch(() => undefined);
+    }
+    // (no await between that check and this: a 美體 build starting from now on waits for segmenterCreateP)
+    let create: Promise<PersonSegmenter> | null = null;
+    try {
+      create = deps.createPersonSegmenter({ modelBuffer, wasmBase: deps.wasmBase });
+      segmenterCreateP = create;
+      segmenter = await create;
+      return segmenter;
+    } catch (e) {
+      segmenterBroken = true;
+      console.warn('[meiyan] 瘦臉 background limit: segmenter unavailable', e);
+      return null;
+    } finally {
+      if (create && segmenterCreateP === create) segmenterCreateP = null;
+    }
+  })();
+  segmenterP = p;
+  const clear = () => {
+    if (segmenterP === p) segmenterP = null;
+  };
+  p.then(clear, clear);
   return p;
 }
 

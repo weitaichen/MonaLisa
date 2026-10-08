@@ -4,12 +4,20 @@
 // 美體 (body research report §落地設計): the pose model loads the first time the 美體 tab opens; the detection is
 // cached in the history entry, and the displacement field is rebuilt only when the body params change (a drag
 // previews a draft field, at most one build per frame; the commit and every export use the full one).
+// 瘦臉 background limit (faceProtectModel.ts): the face contour warps are bounded by the person mask, the cached 美體
+// one or else the selfie segmenter's, once the limit is requested: the user moved a contour slider in this editor
+// (contourEdited), or the reopened entry was saved with the request (source.faceProtect). Every params write records
+// the request plus the segmenter mask (HistoryEntry.faceProtect / faceMask; limitRecord / writeParams), also while the
+// limit cannot act yet (contour neutral, no face found, 基本模式), so a reopen rebuilds the same limit before its first
+// frame (no model) and shows / exports what was saved. Preview and export draw with the same limit. New photo: not
+// requested until a contour edit; undo / redo / 重置 never withdraw the request, in this editor or a later one.
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { StillSession } from '../../app/still';
 import { heightBandStretch } from '../../body/bands';
 import { buildBodyField } from '../../body/field';
 import { measureBody, paramAvailability } from '../../body/measure';
 import { applyPreset, setHeightBand } from '../../engine/params';
+import { buildFaceProtect } from '../../tracking/faceProtect';
 import type { BeautyParams, BodyDetection, BodyField, Engine, Face } from '../../types';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
 import { HeightBandOverlay } from '../components/HeightBandOverlay';
@@ -37,10 +45,11 @@ import {
   type BodyDet,
   type OutputStamp,
 } from '../editorModel';
+import { contourActive, FaceProtectSource, isContourEdit, maskCoversFace, paramsPatch, type FaceProtectRecord } from '../faceProtectModel';
 import { Icon } from '../icons';
-import { bandOrSuggested, INITIAL_SELECTION, showsHeightBand, sliderFor, type PanelSelection } from '../panelModel';
+import { bandOrSuggested, INITIAL_SELECTION, showsHeightBand, sliderFor, type PanelSelection, type SliderBinding } from '../panelModel';
 import { haptic } from '../platform';
-import { ensureBodyTracker, ensureEngine, svc } from '../services';
+import { ensureBodyTracker, ensureEngine, ensureFaceSegmenter, svc } from '../services';
 import { go, setPendingHistory, showSaveFallback, toast, type EditorSource } from '../state';
 import { useStore } from '../store';
 import { useFilterLoader, useHold } from './hooks';
@@ -92,6 +101,8 @@ export function Editor({ source }: { source: EditorSource }) {
   /** what was last queued to history (a reopened entry starts saved: viewing it writes nothing) */
   const saved = useRef<OutputStamp | null>(source.historyId ? { key: keyOf(source.params), field: ANY_FIELD } : null);
   const historyChain = useRef<Promise<unknown>>(Promise.resolve());
+  /** the entry holds this photo's segmenter mask (HistoryEntry.faceMask) already */
+  const faceMaskStored = useRef(!!source.faceMask);
   const originalBlob = useRef<Promise<Blob> | null>(null);
   const setupDone = useRef(false);
   const faceToastDone = useRef(false);
@@ -214,7 +225,14 @@ export function Editor({ source }: { source: EditorSource }) {
         const { s, unsure } = detectSession(
           !!tracker,
           () => svc.get().tracker === 'ok',
-          () => deps.createStillSession(target, tracker, source.bitmap, { ownsBitmap: false, face, body: fieldMemo.field }),
+          () =>
+            deps.createStillSession(target, tracker, source.bitmap, {
+              ownsBitmap: false,
+              face,
+              body: fieldMemo.field,
+              // built for this same face (the session keeps it only together with `face`)
+              faceProtect: protectSrc.protect,
+            }),
         );
         if (tracker && !unsure) {
           if (s.face && knownFace.current === undefined && replacing) {
@@ -247,28 +265,56 @@ export function Editor({ source }: { source: EditorSource }) {
    * Queue the history write for `p` rendered with field generation `gen` (thumb + update, or a new entry) and
    * publish it for Home. Returns what it marked as saved.
    */
-  const queueHistory = (p: BeautyParams, gen: number, img: ImageData, size: { width: number; height: number }) => {
+  const queueHistory = (p: BeautyParams, gen: number, img: ImageData, s: StillSession) => {
     const stamp: OutputStamp = { key: keyOf(p), field: gen };
     saved.current = stamp;
+    // the limit `img` was drawn with (a limit change since the export re-arms its own write: see the encode effect)
+    const limit = limitRecord(s);
     historyChain.current = historyChain.current
-      .then(() => writeHistory(p, img, size))
+      .then(() => writeHistory(p, img, s, limit))
       .catch((e: unknown) => reportError(e, 'history autosave'));
     setPendingHistory(historyChain.current);
     return stamp;
   };
 
-  /** thumb + update, or a new entry (one step of historyChain) */
-  const writeHistory = async (p: BeautyParams, img: ImageData, size: { width: number; height: number }) => {
+  /**
+   * The 瘦臉 limit record of a history write from `s` now (HistoryEntry.faceProtect / faceMask): the request for this
+   * photo, and the segmenter mask the limit `s` draws with was built from. Every params write carries one.
+   */
+  const limitRecord = (s: StillSession): FaceProtectRecord => protectSrc.record(s.faceProtect);
+
+  /**
+   * The params write of an existing entry, the only one there is (writeHistory and the lost-engine flush): always with
+   * the limit record (paramsPatch), so params and flag never disagree; the segmenter mask once.
+   */
+  const writeParams = async (id: string, p: BeautyParams, limit: FaceProtectRecord, thumb?: Blob) => {
+    await deps.updateEntry(id, paramsPatch(p, limit, faceMaskStored.current, thumb));
+    if (limit.faceMask) faceMaskStored.current = true;
+  };
+
+  /**
+   * thumb + update, or a new entry (one step of historyChain). `limit`: the limit record (limitRecord) taken when
+   * `img` was exported, so a reopen draws the same.
+   */
+  const writeHistory = async (p: BeautyParams, img: ImageData, size: { width: number; height: number }, limit: FaceProtectRecord) => {
     const { width, height } = size;
     const thumb = await deps.toJpegBlob(img, THUMB_EDGE, 0.82);
     if (historyId.current) {
-      await deps.updateEntry(historyId.current, { params: p, thumb });
-    } else {
-      const original = await (originalBlob.current ?? deps.toJpegBlob(img, ORIGINAL_EDGE, 0.9));
-      const body = bodyToPersist(bodyDetRef.current, bodyStored.current);
-      historyId.current = await deps.addEntry({ original, thumb, params: p, width, height, ...(body !== undefined ? { body } : {}) });
-      if (body !== undefined) bodyStored.current = true;
+      await writeParams(historyId.current, p, limit, thumb);
+      return;
     }
+    const original = await (originalBlob.current ?? deps.toJpegBlob(img, ORIGINAL_EDGE, 0.9));
+    const body = bodyToPersist(bodyDetRef.current, bodyStored.current);
+    historyId.current = await deps.addEntry({
+      original,
+      width,
+      height,
+      ...(body !== undefined ? { body } : {}),
+      ...paramsPatch(p, limit, faceMaskStored.current),
+      thumb,
+    });
+    if (body !== undefined) bodyStored.current = true;
+    if (limit.faceMask) faceMaskStored.current = true;
   };
 
   /**
@@ -302,12 +348,14 @@ export function Editor({ source }: { source: EditorSource }) {
     const gen = settleField();
     if (stampIs(saved.current, key, gen)) return;
     if (sessionEngine.current?.lost) {
-      // no GL to render a thumbnail: keep at least the params of an existing entry
+      // no GL to render a thumbnail: keep at least the params of an existing entry (with their limit record, like
+      // every params write: what the user saw them drawn with)
       const id = historyId.current;
       if (!id) return;
       saved.current = { key, field: gen };
+      const limit = limitRecord(s);
       historyChain.current = historyChain.current
-        .then(() => deps.updateEntry(id, { params: p }))
+        .then(() => writeParams(id, p, limit))
         .catch((e: unknown) => reportError(e, 'history flush'));
       setPendingHistory(historyChain.current);
       return;
@@ -329,7 +377,7 @@ export function Editor({ source }: { source: EditorSource }) {
       .then(() => Promise.race([s.prepareExport(p), new Promise((r) => window.setTimeout(r, FLUSH_LUT_WAIT_MS))]))
       .then(async () => {
         if (saved.current !== stamp || !s.exportReady(p)) return;
-        await writeHistory(p, s.exportImageData(p, field), s);
+        await writeHistory(p, s.exportImageData(p, field), s, limitRecord(s));
       })
       .catch((e: unknown) => reportError(e, 'history flush'));
     setPendingHistory(historyChain.current);
@@ -485,6 +533,7 @@ export function Editor({ source }: { source: EditorSource }) {
   /**
    * A copy of the session's field for an export asked for now: the builder refills its buffer in place, so a 美體
    * edit while the export waits (a filter LUT still loading) would otherwise leak into it. Call settleField first.
+   * (Only the user's own state is snapshotted: the 瘦臉 limit is the session's at export time, see save.)
    */
   const snapshotField = (): BodyField | null => {
     const f = fieldMemo.field;
@@ -504,6 +553,50 @@ export function Editor({ source }: { source: EditorSource }) {
   }, [measure, params]);
   useEffect(() => cancelDraft, []);
 
+  // ── 瘦臉 background limit ──
+  const [protectTick, setProtectTick] = useState(0);
+  /**
+   * the user moved a contour slider in this editor: with a reopened entry saved limited, the only thing that requests
+   * the limit (the 自然 default already draws 瘦臉 / V臉, and a model download plus a warp that changes by itself must
+   * never follow a mere import, preset, undo or 美體 detection)
+   */
+  const [contourEdited, setContourEdited] = useState(false);
+  const limitRequested = contourEdited || source.faceProtect === true;
+  const [protectSrc] = useState(
+    () =>
+      new FaceProtectSource(
+        {
+          build: (face, mask) => buildFaceProtect(face, mask, photo.width, photo.height),
+          covers: (face, mask) => maskCoversFace(face, mask),
+          segmenter: () => ensureFaceSegmenter().then((sg) => (sg ? { segment: () => sg.segment(source.bitmap) } : null)),
+          pause: () => new Promise((r) => window.setTimeout(r, BODY_PAINT_MS)),
+          now: () => performance.now(),
+          cancelled: () => unmounted.current,
+          report: (e, where) => reportError(e, where),
+        },
+        () => setProtectTick((n) => n + 1),
+        // a reopened entry's saved segmentation: the same limit at once, no model
+        source.faceMask ?? null,
+        // a reopened entry saved with the request: requested again, for good
+        source.faceProtect === true,
+      ),
+  );
+  useEffect(() => {
+    if (!session) return;
+    const bodyMask = bodyDet.phase === 'done' ? (bodyDet.det?.mask ?? null) : null;
+    const p = protectSrc.update(session.face, contourActive(params), bodyMask, limitRequested);
+    if (session.faceProtect === p) return;
+    try {
+      session.setFaceProtect(p);
+    } catch (e) {
+      reportError(e, 'session.setFaceProtect');
+      return;
+    }
+    // what an export is made from changed: re-arm the encode / autosave like a new 美體 field
+    fieldGen.current++;
+    setFieldTick((n) => n + 1);
+  }, [session, bodyDet, params, protectTick, limitRequested]);
+
   useFilterLoader(bundle?.engine ?? null, params.filterId);
 
   useEffect(() => {
@@ -515,7 +608,10 @@ export function Editor({ source }: { source: EditorSource }) {
     }
   }, [session, params]);
 
-  /** Export + encode with the field captured when it was asked for; waits for the filter LUT so the file matches the preview. */
+  /**
+   * Export + encode with the user's state captured when it was asked for (`p`, the 美體 `field`); waits for the filter
+   * LUT so the file matches the settled preview, and draws with the session's 瘦臉 limit at export time (see save).
+   */
   const encode = async (s: StillSession, p: BeautyParams, field: BodyField | null) => {
     await s.prepareExport(p);
     if (unmounted.current) throw new Error('editor closed');
@@ -524,12 +620,15 @@ export function Editor({ source }: { source: EditorSource }) {
   };
 
   // debounced re-encode (share cache) + autosave to history; paused while the context is lost (nothing to
-  // read back) and re-armed once it is restored
+  // read back) and re-armed once it is restored. While a 瘦臉 limit is still being computed it waits for it (at
+  // most PROTECT_WAIT_MS from the segmenter's start; protectTick re-arms this once it settles, also when it brings
+  // no limit), so the limit landing does not redo a full-resolution export + history write right after this one
   useEffect(() => {
     if (!session || lost) return;
     const s = session;
     const key = keyOf(params);
     if (stampIs(fresh.current, key, fieldGen.current) && stampIs(saved.current, key, fieldGen.current)) return;
+    const delay = Math.max(ENCODE_DEBOUNCE_MS, protectSrc.outputHoldMs());
     const t = window.setTimeout(async () => {
       if (unmounted.current || sessionRef.current !== s || keyOf(paramsRef.current) !== key) return;
       // (a drag held still past the debounce: export the full field, not its draft)
@@ -565,9 +664,9 @@ export function Editor({ source }: { source: EditorSource }) {
       // an edit (or a new field) during the await re-armed this effect: its own timer writes history
       if (!current()) return;
       queueHistory(params, gen, img, s);
-    }, ENCODE_DEBOUNCE_MS);
+    }, delay);
     return () => clearTimeout(t);
-  }, [session, params, lost, fieldTick]);
+  }, [session, params, lost, fieldTick, protectTick]);
 
   const hold = useHold((on) => {
     try {
@@ -607,7 +706,11 @@ export function Editor({ source }: { source: EditorSource }) {
       share(f.file); // synchronous inside the tap
       return;
     }
-    // what the screen shows at the tap: a 美體 edit while this waits for a filter LUT does not leak into it
+    // the user's state at the tap is what is exported: these params and this 美體 field (snapshotField), so a 美體
+    // edit while this waits for a filter LUT does not leak into it. Inputs the system settles by itself are not
+    // snapshotted: they are included as the settled preview shows them (the filter LUT finishing loading, the 瘦臉
+    // limit landing: it is no user edit, it only ever appears or improves, and the autosave / thumbnail the same
+    // wait produces carries it too)
     const field = snapshotField();
     setPreparing(true);
     // a re-detect or an engine recovery may replace (and dispose) the session while this waits for the filter
@@ -663,6 +766,15 @@ export function Editor({ source }: { source: EditorSource }) {
     }
     setConfirmReset(false);
     update(applyPreset('natural', 1), true);
+  };
+
+  /** a slider step (commit=false) or its commit: the only edit that counts as the user's own contour edit */
+  const slide = (b: SliderBinding, v: number, commit: boolean) => {
+    if (!contourEdited && isContourEdit(b.key, b.value, v)) {
+      protectSrc.request(); // at once: a history write before the protect effect runs records it already
+      setContourEdited(true);
+    }
+    update(b.apply(paramsRef.current, v), commit);
   };
 
   const close = () => {
@@ -751,8 +863,8 @@ export function Editor({ source }: { source: EditorSource }) {
       <div class="editor-panel">
         <SliderRow
           binding={session && !faceOff ? binding : null}
-          onChange={(v) => binding && update(binding.apply(paramsRef.current, v), false)}
-          onCommit={(v) => binding && update(binding.apply(paramsRef.current, v), true)}
+          onChange={(v) => binding && slide(binding, v, false)}
+          onCommit={(v) => binding && slide(binding, v, true)}
         />
         <BeautyPanel
           params={params}

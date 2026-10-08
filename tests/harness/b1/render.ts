@@ -7,9 +7,11 @@ import { defaultParams, setBodyProtect, setHeightBand, setParam } from '../../..
 import { buildBodyField, fieldMinJacobian } from '../../../src/body/field';
 import { measureBody, paramAvailability, type BodyMeasure } from '../../../src/body/measure';
 import { warpImage, fieldAt } from '../../../src/body/cpuWarp';
-import { syntheticFigure } from '../../../src/body/synthetic';
+import { syntheticFigure, type BackgroundKind } from '../../../src/body/synthetic';
+import { analysisGrid, bodyMetrics, draftJumpPx, maskInside, type Analysis } from '../../../src/body/straightness';
 
-const OUT = new URL('./out/', import.meta.url);
+/** output folder (B1_OUT: another folder under b1/, e.g. to keep a before / after pair of runs side by side) */
+const OUT = new URL(`./${process.env.B1_OUT ?? 'out'}/`, import.meta.url);
 
 interface Scene {
   name: string;
@@ -18,6 +20,13 @@ interface Scene {
   h: number;
   det: BodyDetection | null;
   face: Face | null;
+  /** straightness analysis grid (synthetic: the exact figure at w×h; fixtures: the recorded mask at a 900 px long edge) */
+  analysis: () => Analysis | null;
+}
+
+function lazy<T>(f: () => T): () => T {
+  let v: { x: T } | null = null;
+  return () => (v ??= { x: f() }).x;
 }
 
 function readPng(path: string): { rgba: Uint8Array; w: number; h: number } {
@@ -31,7 +40,7 @@ function writePng(name: string, rgba: Uint8Array | Uint8ClampedArray, w: number,
   writeFileSync(new URL(name, OUT), PNG.sync.write(p));
 }
 
-function synthScene(bg: 'room' | 'stripes' | 'checker', opts: Parameters<typeof syntheticFigure>[0] = {}): Scene {
+function synthScene(bg: BackgroundKind, opts: Parameters<typeof syntheticFigure>[0] = {}): Scene {
   const f = syntheticFigure(opts);
   const { width: w, height: h } = f;
   const rgba = new Uint8Array(w * h * 4);
@@ -40,7 +49,7 @@ function synthScene(bg: 'room' | 'stripes' | 'checker', opts: Parameters<typeof 
       const c = f.paint((x + 0.5) / w, (y + 0.5) / h, bg);
       rgba.set([c[0], c[1], c[2], 255], (y * w + x) * 4);
     }
-  return { name: `synth_${bg}${opts.armsDown ? '_armsdown' : ''}`, rgba, w, h, det: f.det, face: f.face };
+  return { name: `synth_${bg}${opts.armsDown ? '_armsdown' : ''}`, rgba, w, h, det: f.det, face: f.face, analysis: lazy(() => analysisGrid(f.inside, w, h)) };
 }
 
 /** Grid lines warped by the field, drawn over the warped image (shows the displacement field's shape). */
@@ -105,6 +114,18 @@ export interface Row {
   farBgDispPx: number;
   available: boolean;
   ms: number;
+  // straightness (src/body/straightness.ts, px at a 4032 long edge; stretch in %)
+  bendV: number;
+  bendH: number;
+  bendD45: number;
+  bendD30: number;
+  stretchMax: number;
+  stretchP99: number;
+  gapStretch: number;
+  ringPx: number;
+  farMovePx: number;
+  /** draft (128) vs commit (256) background jump */
+  draftJumpPx: number;
 }
 
 type Roi = [number, number, number, number]; // u0, v0, u1, v1
@@ -183,7 +204,16 @@ const CASES: { name: string; set: (p: BeautyParams) => BeautyParams; ids?: Param
 
 export function render(only?: string[]): Row[] {
   mkdirSync(OUT, { recursive: true });
-  const scenes: Scene[] = [synthScene('room'), synthScene('stripes'), synthScene('room', { armsDown: true })];
+  const scenes: Scene[] = [
+    synthScene('room'),
+    synthScene('stripes'),
+    synthScene('room', { armsDown: true }),
+    // the straightness scenes (reports/美體修圖 背景扭曲 抑制技術.md, stage 0)
+    synthScene('doorClose'),
+    synthScene('tiles30'),
+    synthScene('blinds'),
+    synthScene('brick'),
+  ];
   const fb = new URL('./out/fullbody.png', import.meta.url);
   const poseJson = new URL('../../fixtures/pose_fullbody.json', import.meta.url);
   if (existsSync(fb) && existsSync(poseJson)) scenes.push(fixtureScene('fullbody', fb, poseJson));
@@ -218,6 +248,8 @@ export function render(only?: string[]): Row[] {
       }
       let maxD = 0;
       if (field) for (let i = 0; i < field.data.length; i += 2) maxD = Math.max(maxD, Math.hypot(field.data[i] * sc.w, field.data[i + 1] * sc.h));
+      const an = sc.analysis();
+      const sm = an ? bodyMetrics(an, field) : null;
       rows.push({
         scene: sc.name,
         case: c.name,
@@ -226,6 +258,16 @@ export function render(only?: string[]): Row[] {
         farBgDispPx: +(farBackgroundMax(field, m) * sc.h).toFixed(2),
         available: (c.ids ?? []).every((id) => paramAvailability(m, id).ok),
         ms: +ms.toFixed(1),
+        bendV: sm?.bendV ?? 0,
+        bendH: sm?.bendH ?? 0,
+        bendD45: sm?.bendD45 ?? 0,
+        bendD30: sm?.bendD30 ?? 0,
+        stretchMax: sm?.stretchMax ?? 0,
+        stretchP99: sm?.stretchP99 ?? 0,
+        gapStretch: sm?.gapStretch ?? 0,
+        ringPx: sm?.ringPx ?? 0,
+        farMovePx: sm?.farMovePx ?? 0,
+        draftJumpPx: an ? draftJumpPx(an, buildBodyField(m, p, sc.w / sc.h, null, 128), field) : 0,
       });
     }
   }
@@ -261,7 +303,9 @@ function fixtureScene(name: string, png: URL, json: URL): Scene {
     width: j.width,
     height: j.height,
   };
-  return { name, rgba: img.rgba, w: img.w, h: img.h, det, face: null };
+  const s = 900 / Math.max(img.w, img.h);
+  const analysis = lazy(() => (det.mask ? analysisGrid(maskInside(det.mask), Math.round(img.w * s), Math.round(img.h * s)) : null));
+  return { name, rgba: img.rgba, w: img.w, h: img.h, det, face: null, analysis };
 }
 
 /** Field + image for the GL parity check (gl.mjs): fixture photo at all sliders max. */

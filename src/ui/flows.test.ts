@@ -37,3 +37,30 @@ describe('openInEditor import size', () => {
     expect(app.get().screen.name).toBe('editor');
   });
 });
+
+describe('openInEditor of a history entry', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('hands the saved 瘦臉 limit (flag + segmenter mask) to the editor, so the reopen draws what was saved', async () => {
+    const { flows, app } = await load('auto', 'H');
+    const faceMask = { width: 2, height: 2, data: new Uint8Array([0, 255, 255, 0]) };
+    await flows.openInEditor(new Blob([]), { historyId: 'e1', faceProtect: true, faceMask, returnTo: 'home' });
+    const screen = app.get().screen;
+    expect(screen.name).toBe('editor');
+    if (screen.name !== 'editor') return;
+    expect(screen.source.faceProtect).toBe(true);
+    expect(screen.source.faceMask).toBe(faceMask);
+  });
+
+  it('an entry saved unlimited carries neither', async () => {
+    const { flows, app } = await load('auto', 'H');
+    await flows.openInEditor(new Blob([]), { historyId: 'e2', faceProtect: undefined, returnTo: 'home' });
+    const screen = app.get().screen;
+    if (screen.name !== 'editor') throw new Error('not the editor');
+    expect('faceProtect' in screen.source).toBe(false);
+    expect('faceMask' in screen.source).toBe(false);
+  });
+});

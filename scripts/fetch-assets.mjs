@@ -2,6 +2,7 @@
 //  - MediaPipe tasks-vision 0.10.35 SIMD wasm (copied from node_modules)
 //  - face_landmarker.task (downloaded once, md5-verified)
 //  - pose_landmarker_{full,lite}.task for 美體 (downloaded once, md5-verified)
+//  - selfie_segmenter.tflite for the 瘦臉 background limit (downloaded once, md5-verified)
 //  - GPUPixel resource PNGs at a pinned commit, re-encoded without colour chunks
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -59,6 +60,22 @@ for (const [variant, { md5: want }] of Object.entries(POSE_MODELS)) {
       `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${variant}/float16/1/${name}`,
     );
     // verify before writing, so a bad download never leaves a corrupt model behind
+    if (md5Of(buf) !== want) throw new Error(`${name} md5 mismatch: ${md5Of(buf)}`);
+    ensureDir(dst);
+    writeFileSync(dst, buf);
+  }
+  console.log(`${name} ok`);
+}
+
+// 2c. 瘦臉 person segmenter (on-demand in the photo editor when no 美體 person mask is cached, never precached).
+//     ImageSegmenter selfie_segmenter, versioned GCS path (float16/1). md5 = GCS x-goog-hash.
+{
+  const name = 'selfie_segmenter.tflite';
+  const want = 'Oy4+HPx9MVOMrwD/Tg+6jA=='; // 249,537 B
+  const dst = pub('models', 'image_segmenter', 'selfie-float16-1', name);
+  const md5Of = (buf) => createHash('md5').update(buf).digest('base64');
+  if (!existsSync(dst) || md5Of(readFileSync(dst)) !== want) {
+    const buf = await download(`https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/${name}`);
     if (md5Of(buf) !== want) throw new Error(`${name} md5 mismatch: ${md5Of(buf)}`);
     ensureDir(dst);
     writeFileSync(dst, buf);

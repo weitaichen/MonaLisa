@@ -350,6 +350,60 @@ describe('美體 detection cache (HistoryEntry.body)', () => {
   });
 });
 
+describe('瘦臉 background limit (HistoryEntry.faceProtect / faceMask)', () => {
+  const faceMask = () => ({ width: 4, height: 3, data: new Uint8Array(12).map((_, i) => i * 20) });
+
+  it('is stored with the entry, mask typed array intact; older entries have neither', async () => {
+    const id = await addEntry({ ...entry('a'), faceProtect: true, faceMask: faceMask() });
+    const got = (await getEntry(id))!;
+    expect(got.faceProtect).toBe(true);
+    expect(got.faceMask!.data).toBeInstanceOf(Uint8Array);
+    expect(got.faceMask).toEqual(faceMask());
+    const old = (await getEntry(await addEntry(entry('o'))))!;
+    expect('faceProtect' in old).toBe(false);
+    expect('faceMask' in old).toBe(false);
+    const unlimited = (await getEntry(await addEntry({ ...entry('u'), faceProtect: false })))!;
+    expect('faceProtect' in unlimited).toBe(false);
+  });
+
+  it('an edit sets or clears the flag; the stored mask stays; a body-only update keeps both', async () => {
+    const id = await addEntry(entry('a'));
+    await updateEntry(id, { params: applyPreset('glow'), thumb: jpeg('t2'), faceProtect: true, faceMask: faceMask() });
+    expect((await getEntry(id))!.faceProtect).toBe(true);
+    await updateEntry(id, { params: applyPreset('glow', 0.5), thumb: jpeg('t3'), faceProtect: true });
+    expect((await getEntry(id))!.faceMask).toEqual(faceMask());
+    await updateEntry(id, { body: body() });
+    const kept = (await getEntry(id))!;
+    expect(kept.faceProtect).toBe(true);
+    expect(kept.faceMask).toEqual(faceMask());
+    await updateEntry(id, { params: applyPreset('glow', 0.4), thumb: jpeg('t4'), faceProtect: false });
+    const cleared = (await getEntry(id))!;
+    expect('faceProtect' in cleared).toBe(false);
+    expect(cleared.faceMask).toEqual(faceMask()); // the photo's segmentation is still valid
+  });
+
+  it('a flag / mask-only patch does not reorder 最近編輯', async () => {
+    const a = await addEntry(entry('a'));
+    await addEntry(entry('b'));
+    const before = (await getEntry(a))!;
+    await updateEntry(a, { faceProtect: true, faceMask: faceMask() });
+    expect((await getEntry(a))!.updatedAt).toBe(before.updatedAt);
+  });
+
+  it('a corrupt mask or a non-true flag is dropped, the entry survives', async () => {
+    await rawPut([
+      { ...validRecord('c', 5), faceProtect: 'yes', faceMask: { width: 4, height: 3, data: new Uint8Array(5) } },
+      { ...validRecord('d', 6), faceProtect: true, faceMask: { width: 4, height: 3, data: Array.from(faceMask().data) } },
+    ]);
+    const c = (await getEntry('c'))!;
+    expect('faceProtect' in c).toBe(false);
+    expect('faceMask' in c).toBe(false);
+    const d = (await getEntry('d'))!;
+    expect(d.faceProtect).toBe(true);
+    expect('faceMask' in d).toBe(false);
+  });
+});
+
 describe('deleteEntry', () => {
   it('removes the entry', async () => {
     const [a, b] = await addMany(2);

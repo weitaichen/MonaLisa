@@ -434,7 +434,14 @@ export function activate(item: PanelItem, params: BeautyParams, sel: PanelSelect
       return done(params, sel.body === 'height' ? sel : { ...sel, body: 'height' });
     case 'protect': {
       const on = !params.bodyProtect;
-      return done(setBodyProtect(params, on), sel, on ? '背景保護已開啟' : '背景保護已關閉：輪廓更圓滑，但背景可能彎曲');
+      // the measured trade (src/body/straightness.test.ts BODY, slim+waist vs slim+waist_noprotect): on keeps the
+      // background deformation in a narrower ring beside the person; off spreads it wider and gentler. Line bend
+      // is about the same either way, so neither notice promises straight lines or a smoother outline
+      return done(
+        setBodyProtect(params, on),
+        sel,
+        on ? '背景保護已開啟：背景變形範圍較小' : '背景保護已關閉：背景變形範圍較大但較平緩',
+      );
     }
     case 'filter':
       if (params.filterId === a.id) return done(params);

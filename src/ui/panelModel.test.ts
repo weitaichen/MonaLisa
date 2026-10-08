@@ -302,7 +302,9 @@ describe('美體 tab', () => {
     const off = activate(byKey(itemsFor(p, s, ready()), 'protect'), p, s);
     expect(off.changed).toBe(true);
     expect(off.params.bodyProtect).toBe(false);
-    expect(off.notice).toContain('背景可能彎曲');
+    // the measured trade only: a wider, gentler background deformation (no "smoother outline", no straight-line promise)
+    expect(off.notice).toBe('背景保護已關閉：背景變形範圍較大但較平緩');
+    expect(activate(byKey(itemsFor(off.params, s, ready()), 'protect'), off.params, s).notice).toBe('背景保護已開啟：背景變形範圍較小');
     const item = byKey(itemsFor(off.params, s, ready()), 'protect');
     expect(item).toMatchObject({ pressed: false, visual: { kind: 'icon', icon: 'protectOff' } });
     expect(activate(item, off.params, s).params.bodyProtect).toBe(true);

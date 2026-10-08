@@ -1,6 +1,6 @@
 // OWNER: app-glue agent. Editor session for one still image: detect once, render on demand (rAF-coalesced).
 import { adapt } from '../tracking/adapter111';
-import type { BeautyParams, BodyField, Engine, Face, RenderInput, Tracker } from '../types';
+import type { BeautyParams, BodyField, Engine, Face, FaceProtect, RenderInput, Tracker } from '../types';
 import { debugState, reportError } from './debug';
 
 export interface StillSession {
@@ -25,6 +25,12 @@ export interface StillSession {
   /** the field set last (a replacement session is seeded with it) */
   readonly body: BodyField | null;
   /**
+   * 瘦臉 background limit for this photo's face (src/tracking/faceProtect.ts; null = the unlimited contour warps),
+   * applied to every later render and export like the body field. Immutable: pass a new object to change it.
+   */
+  setFaceProtect(protect: FaceProtect | null): void;
+  readonly faceProtect: FaceProtect | null;
+  /**
    * Resolves once what an export of `params` needs is resident (the filter LUT may still be downloading:
    * no SW, Lockdown Mode, slow network). Never rejects: a LUT that fails to load is skipped by the preview
    * too, so the export then matches it without the filter.
@@ -37,8 +43,10 @@ export interface StillSession {
   exportReady(params: BeautyParams): boolean;
   /**
    * full-resolution export, never mirrored (synchronous; call prepareExport first so it matches the preview).
-   * `body`: the 美體 field to export with, captured when the export was asked for (a 美體 edit while it waits
-   * for a filter LUT must not leak into it); omitted → the field set last.
+   * `params` and `body` are the user's state captured when the export was asked for (a 美體 edit while it waits for
+   * a filter LUT must not leak into it); `body` omitted → the field set last. What the system settles by itself is
+   * not part of that snapshot: the filter LUT and the 瘦臉 limit (setFaceProtect) are the session's at export time,
+   * as the settled preview draws them.
    */
   exportImageData(params: BeautyParams, body?: BodyField | null): ImageData;
   /**
@@ -59,6 +67,8 @@ export interface StillSessionOptions {
   face?: Face | null;
   /** 美體 field to start with (a replacement session keeps the edit on its first frame) */
   body?: BodyField | null;
+  /** 瘦臉 background limit to start with; only meaningful together with `face` (it was built for that face) */
+  faceProtect?: FaceProtect | null;
 }
 
 /** prepareExport re-waits after a loss + restore during its wait at most this often (repeated cycles cannot loop) */
@@ -90,6 +100,8 @@ export function createStillSession(
 
   let params: BeautyParams | null = null;
   let body: BodyField | null = opts.body ?? null;
+  // a limit built for another face would bound the wrong contour: only kept with the face it came with
+  let faceProtect: FaceProtect | null = opts.face !== undefined ? (opts.faceProtect ?? null) : null;
   let compare = false;
   let raf = 0;
   let disposed = false;
@@ -102,6 +114,7 @@ export function createStillSession(
     faceWeight,
     params: p,
     body: b,
+    faceProtect,
   });
 
   function schedule(): void {
@@ -234,6 +247,14 @@ export function createStillSession(
     setBody(field) {
       if (disposed) return;
       body = field;
+      schedule();
+    },
+    get faceProtect() {
+      return faceProtect;
+    },
+    setFaceProtect(p) {
+      if (disposed || p === faceProtect) return;
+      faceProtect = p;
       schedule();
     },
     prepareExport(p) {

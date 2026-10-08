@@ -207,9 +207,9 @@ export const CREDITS: readonly Credit[] = [
     text: 'GPUPixel-Apache-2.0.txt',
   },
   {
-    name: 'MediaPipe Tasks Vision · Face / Pose Landmarker',
+    name: 'MediaPipe Tasks Vision · Face / Pose Landmarker · Image Segmenter',
     license: 'Apache-2.0',
-    body: '© Google LLC。臉部特徵點偵測與美體的人體姿勢、人像輪廓偵測，使用 0.10.35 版、Face Mesh V2 模型與 Pose Landmarker（BlazePose GHUM 3D，full／lite）模型，全部在裝置上執行；美體模型僅在第一次使用美體時下載。程式庫的美體測試照片（fullbody.jpg、fullbody_yoga.jpg）取自 MediaPipe 測試資料，不隨 App 發佈。',
+    body: '© Google LLC。臉部特徵點偵測、美體的人體姿勢與人像輪廓偵測，以及瘦臉時限制背景變形用的人像分割，使用 0.10.35 版、Face Mesh V2 模型、Pose Landmarker（BlazePose GHUM 3D，full／lite）模型與 Image Segmenter 的 selfie_segmenter 模型，全部在裝置上執行；美體模型僅在第一次使用美體時下載，selfie_segmenter 僅在修圖時動手調整臉型滑桿（瘦臉、V臉、窄臉、下巴、額頭）且尚無美體人像輪廓時下載。程式庫的美體測試照片（fullbody.jpg、fullbody_yoga.jpg）取自 MediaPipe 測試資料，不隨 App 發佈。',
     text: 'MediaPipe-Apache-2.0.txt',
   },
   {

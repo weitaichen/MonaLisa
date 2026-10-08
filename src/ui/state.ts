@@ -1,7 +1,7 @@
 // App-level UI state. No router, no history.pushState, no hash (RB §1 #9): the screen is plain state.
 import { defaultParams } from '../engine/params';
 import { DEFAULT_PREFS } from '../store/settings';
-import type { BeautyParams, BodyDetection, Prefs } from '../types';
+import type { BeautyParams, BodyDetection, PersonMask, Prefs } from '../types';
 import { deps } from './deps';
 import { debug, reportError } from './debug';
 import { createStore } from './store';
@@ -32,6 +32,10 @@ export interface EditorSource {
   historyId: string | null;
   /** the entry's cached 美體 detection (null = checked, nobody in the photo; undefined = never checked / unknown) */
   body?: BodyDetection | null;
+  /** the entry was saved with the 瘦臉 background limit requested (HistoryEntry.faceProtect): reopening requests it again */
+  faceProtect?: boolean;
+  /** the entry's cached segmenter mask for that limit (HistoryEntry.faceMask) */
+  faceMask?: PersonMask;
   returnTo: 'home' | 'camera';
 }
 

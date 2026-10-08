@@ -169,7 +169,7 @@ const steps = {
     await item(page, '背景保護').click();
     await page.waitForTimeout(250);
     const t = await page.locator('.toast').innerText();
-    check('背景保護 off → explanatory toast', t.includes('背景可能彎曲'), t);
+    check('背景保護 off → explanatory toast', t.includes('範圍較大'), t);
     check('背景保護 off state', (await page.evaluate(() => window.__h.params.bodyProtect)) === false);
     await shot(page, 'b15-protect-off');
     await close();

@@ -192,7 +192,7 @@ const P: Record<string, JSX.Element> = {
       <path d="M12 7.6v8.8m-2.2-6.6L12 7.6l2.2 2.2M9.8 14.2l2.2 2.2 2.2-2.2" />
     </>
   ),
-  /** 背景保護 on: the background lines stay straight beside the person */
+  /** 背景保護 on: the background deformation is confined to a narrow ring beside the person (drawn as lines left clear) */
   protect: (
     <>
       <circle cx="12" cy="7.4" r="2.6" />
@@ -200,7 +200,7 @@ const P: Record<string, JSX.Element> = {
       <path d="M3.8 3.6v16.8M20.2 3.6v16.8" />
     </>
   ),
-  /** 背景保護 off: the background bends with the body */
+  /** 背景保護 off: the background deformation spreads wider (and gentler) around the body */
   protectOff: (
     <>
       <circle cx="12" cy="7.4" r="2.6" />

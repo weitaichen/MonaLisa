@@ -4,8 +4,9 @@
 // D(uv) = (0, g(y) − y) + L(x, g(y)): the full-width vertical bands g (長腿, 增高; bands.ts) are the outermost
 // backward map and the local fields L (capsules, shoulder / hip shifts, head scale, neck lift; prims.ts) are
 // defined on the source anatomy. det J = det J_L · g′ > 0 whenever both are. L is summed (相芯's 線性疊加), capped by
-// a summed-k·a bound, multiplied by the 背景保護 weight, and finally checked numerically (fieldMinJacobian) with
-// the local part scaled back if anything still came out below MIN_DET.
+// a summed-k·a bound, each part multiplied by its own 背景保護 weight, its background re-solved as a screened membrane
+// (relax.ts: the ring's stretch spread evenly, person texels untouched), and finally checked numerically
+// (fieldMinJacobian) with the local part scaled back if anything still came out below MIN_DET.
 import type { BeautyParams, BodyField, ParamId, PersonMask } from '../types';
 import { neutralValue, paramsInGroup, signed } from '../engine/params';
 import { backwardY, forwardY, heightBand, legsBand, type Band } from './bands';
@@ -23,6 +24,7 @@ import {
   type LimbMeasure,
   type TrunkMeasure,
 } from './measure';
+import { relaxBackground, type RelaxOptions, type RelaxStats } from './relax';
 import { bump, capsuleAt, ellipseWeight, kForWidth, makeCapsule, phi, widthForK, type Capsule } from './prims';
 
 /** long edge of the displacement field in texels (report: ≈256, e.g. 192×256) */
@@ -197,7 +199,61 @@ interface LocalGrid {
   y: Float32Array;
 }
 
-type Eval = (q: V2, capScale: number, out: { x: number; y: number; ka: number }) => void;
+/** A local primitive at q, added into `out`; `capped` terms (the capsules) scale linearly with the SUM_KA cap. */
+type Eval = ((q: V2, capScale: number, out: { x: number; y: number; ka: number }) => void) & { capped?: boolean };
+
+const capped = (f: Eval): Eval => Object.assign(f, { capped: true });
+
+/**
+ * 背景保護 band of each part (term), from its own silhouette displacement Δ: 1 on the person dilated by Δ, falling
+ * to 0 over 4Δ (BR: keeps that part's ring stretch ≤ 25 % before the relaxation). Per part rather than one band from
+ * the figure's largest Δ, so a slimmed waist no longer widens the band around the arms and legs.
+ */
+const PROTECT_DILATE = 1;
+const PROTECT_FEATHER = 4;
+
+/**
+ * Background relaxation (relax.ts) with 背景保護 on: the ring may grow by `margin`, but never past `maxReach` from the
+ * person (the far background stays bit-identical). α 0.05 per texel² ≈ a 4.5-texel (≈ 70 px at 4032) screening
+ * length. Narrow gaps up to 0.03 (≈ 120 px at 4032) keep the original field.
+ */
+const RELAX_PROTECT: Readonly<RelaxOptions> = {
+  alpha: 0.05,
+  margin: 0.03,
+  moveEps: 0.25 / 4032,
+  maxReach: 0.07,
+  gapMax: 0.03,
+  repairFloor: 0.7,
+  repairFactor: 8,
+  repairRounds: 4,
+  tol: 1e-5,
+  maxIter: 400,
+};
+/** 背景保護 off: no band, and the relaxation may spread further (a wider, gentler ring) */
+const RELAX_FREE: Readonly<RelaxOptions> = { ...RELAX_PROTECT, margin: 0.08, maxReach: 0.12 };
+
+/** One term's non-zero displacements in texel order (sparse: most parts touch a small share of the grid). */
+class TermBuf {
+  idx = new Int32Array(1024);
+  xy = new Float32Array(2048);
+  n = 0;
+  push(i: number, x: number, y: number): void {
+    if (this.n === this.idx.length) {
+      const idx = new Int32Array(2 * this.n);
+      idx.set(this.idx);
+      this.idx = idx;
+      const xy = new Float32Array(4 * this.n);
+      xy.set(this.xy);
+      this.xy = xy;
+    }
+    this.idx[this.n] = i;
+    this.xy[2 * this.n] = x;
+    this.xy[2 * this.n + 1] = y;
+    this.n++;
+  }
+}
+/** reused across builds (a drag rebuilds the field every frame) */
+const termBufs: TermBuf[] = [];
 
 function localField(m: BodyMeasure, params: BeautyParams, w: number, h: number, bands: readonly Band[]): LocalGrid | null {
   const terms = localTerms(m, params);
@@ -205,51 +261,63 @@ function localField(m: BodyMeasure, params: BeautyParams, w: number, h: number, 
   if (handBand) terms.push(handBand);
   if (!terms.length) return null;
   const A = m.aspect;
-  const gx = new Float32Array(w * h);
-  const gyy = new Float32Array(w * h);
+  const N = w * h;
+  const T = terms.length;
+  const grid = m.mask ? maskGrid(m, m.mask, w, h) : null;
+  const protect = params.bodyProtect && grid;
+  // every term separately (背景保護 bands each part by its own Δ = its largest displacement on the silhouette)
+  while (termBufs.length < T) termBufs.push(new TermBuf());
+  const own = termBufs.slice(0, T);
+  for (const b of own) b.n = 0;
+  const delta = new Float64Array(T);
+  const edge = protect ? grid.edge : null;
   const acc = { x: 0, y: 0, ka: 0 };
-  const run = (capScale: number): number => {
-    let maxKa = 0;
-    for (let y = 0; y < h; y++) {
-      const qy = (y + 0.5) / h;
-      for (let x = 0; x < w; x++) {
-        const q: V2 = [((x + 0.5) / w) * A, qy];
+  let maxKa = 0;
+  for (let y = 0; y < h; y++) {
+    const qy = (y + 0.5) / h;
+    for (let x = 0; x < w; x++) {
+      const q: V2 = [((x + 0.5) / w) * A, qy];
+      const i = y * w + x;
+      let ka = 0;
+      for (let t = 0; t < T; t++) {
         acc.x = 0;
         acc.y = 0;
         acc.ka = 0;
-        for (const t of terms) t(q, capScale, acc);
-        gx[y * w + x] = acc.x;
-        gyy[y * w + x] = acc.y;
-        if (acc.ka > maxKa) maxKa = acc.ka;
+        terms[t](q, 1, acc);
+        ka += acc.ka;
+        if (acc.x === 0 && acc.y === 0) continue;
+        own[t].push(i, acc.x, acc.y);
+        if (edge?.[i]) delta[t] = Math.max(delta[t], Math.hypot(acc.x, acc.y));
       }
+      if (ka > maxKa) maxKa = ka;
     }
-    return maxKa;
-  };
-  const maxKa = run(1);
-  if (maxKa > SUM_KA_MAX) run(SUM_KA_MAX / maxKa);
+  }
+  // the summed-k·a cap: the capsule terms are linear in their capScale
+  const capScale = maxKa > SUM_KA_MAX ? SUM_KA_MAX / maxKa : 1;
 
-  if (params.bodyProtect && m.mask) {
-    const grid = maskGrid(m, m.mask, w, h);
-    const inside = grid.inside;
-    // Δ = how far the silhouette moves; the protect band must be ≥ 4Δ wide (BR: keeps the ring stretch ≤ 25 %)
-    let delta = 0;
-    for (let y = 1; y + 1 < h; y++) {
-      for (let x = 1; x + 1 < w; x++) {
-        const i = y * w + x;
-        if (!inside[i] || (inside[i - 1] && inside[i + 1] && inside[i - w] && inside[i + w])) continue;
-        delta = Math.max(delta, Math.hypot(gx[i], gyy[i]));
-      }
+  const gx = new Float32Array(N);
+  const gyy = new Float32Array(N);
+  const texel = 1 / h;
+  for (let t = 0; t < T; t++) {
+    const s = terms[t].capped ? capScale : 1;
+    const d = delta[t] * s;
+    const M = protect ? grid.weights(Math.max(PROTECT_DILATE * d, 2 * texel), Math.max(PROTECT_FEATHER * d, 3 * texel)) : null;
+    const { idx, xy, n } = own[t];
+    for (let k = 0; k < n; k++) {
+      const i = idx[k];
+      const f = M ? M[i] * s : s;
+      gx[i] += f * xy[2 * k];
+      gyy[i] += f * xy[2 * k + 1];
     }
-    const texel = 1 / h;
-    const M = grid.weights(Math.max(delta, 2 * texel), Math.max(4 * delta, 3 * texel));
-    for (let i = 0; i < w * h; i++) {
-      gx[i] *= M[i];
-      gyy[i] *= M[i];
-    }
+  }
+  if (grid) {
+    // the draft grid is coarser: α per texel² scales with the texel area, so both solve the same continuous problem
+    const alphaScale = (BODY_FIELD_LONG_EDGE / Math.max(w, h)) ** 2;
+    bodyFieldCacheStats.relax = relaxBackground(gx, gyy, grid.inside, grid.dist(), w, h, texel, protect ? RELAX_PROTECT : RELAX_FREE, alphaScale);
   }
   keepInFrame(gx, gyy, w, h, A);
   let any = false;
-  for (let i = 0; i < w * h && !any; i++) any = Math.abs(gx[i]) > 1e-9 || Math.abs(gyy[i]) > 1e-9;
+  for (let i = 0; i < N && !any; i++) any = Math.abs(gx[i]) > 1e-9 || Math.abs(gyy[i]) > 1e-9;
   return any ? { x: gx, y: gyy } : null;
 }
 
@@ -257,8 +325,12 @@ function localField(m: BodyMeasure, params: BeautyParams, w: number, h: number, 
 interface MaskGrid {
   /** the person mask on the grid (maskOnGrid) */
   inside: Uint8Array;
-  /** protectWeights for (dilate, feather), memoised for the last pair asked */
+  /** 1 on person texels with a background 4-neighbour (the silhouette), excluding the grid's outer ring */
+  edge: Uint8Array;
+  /** protectWeights for (dilate, feather), memoised for the last few pairs asked (one per part) */
   weights(dilate: number, feather: number): Float32Array;
+  /** distanceOutside(inside), in texels */
+  dist(): Float32Array;
 }
 
 /**
@@ -269,9 +341,11 @@ interface MaskGrid {
 const maskGrids = new WeakMap<BodyMeasure, Map<string, MaskGrid>>();
 /** grids per measure kept (a draft and a full size, plus slack for an aspect change) */
 const MASK_GRIDS_PER_MEASURE = 4;
+/** protect weights kept per grid: one per part of the last build */
+const WEIGHTS_PER_GRID = 16;
 
-/** Debug / tests: how many mask grids were built (cache misses). */
-export const bodyFieldCacheStats = { maskGrids: 0 };
+/** Debug / tests: how many mask grids were built (cache misses), and the last background relaxation's size. */
+export const bodyFieldCacheStats: { maskGrids: number; relax: RelaxStats } = { maskGrids: 0, relax: { unknowns: 0, iters: 0, rounds: 0 } };
 
 function maskGrid(m: BodyMeasure, mask: PersonMask, w: number, h: number): MaskGrid {
   let bySize = maskGrids.get(m);
@@ -281,16 +355,27 @@ function maskGrid(m: BodyMeasure, mask: PersonMask, w: number, h: number): MaskG
   if (hit) return hit;
   bodyFieldCacheStats.maskGrids++;
   const inside = maskOnGrid(new MaskSampler(mask, m.aspect), w, h, m.aspect);
+  const edge = new Uint8Array(w * h);
+  for (let y = 1; y + 1 < h; y++)
+    for (let x = 1; x + 1 < w; x++) {
+      const i = y * w + x;
+      if (inside[i] && !(inside[i - 1] && inside[i + 1] && inside[i - w] && inside[i + w])) edge[i] = 1;
+    }
   let dist: Float32Array | null = null;
-  let last: { dilate: number; feather: number; M: Float32Array } | null = null;
+  const memo = new Map<string, Float32Array>();
   const grid: MaskGrid = {
     inside,
+    edge,
     weights(dilate, feather) {
-      if (last && last.dilate === dilate && last.feather === feather) return last.M;
-      dist ??= distanceOutside(inside, w, h);
-      last = { dilate, feather, M: protectWeights(inside, w, h, dilate, feather, dist) };
-      return last.M;
+      const k = `${dilate}/${feather}`;
+      let M = memo.get(k);
+      if (M) return M;
+      M = protectWeights(inside, w, h, dilate, feather, grid.dist());
+      if (memo.size >= WEIGHTS_PER_GRID) memo.delete(memo.keys().next().value!);
+      memo.set(k, M);
+      return M;
     },
+    dist: () => (dist ??= distanceOutside(inside, w, h)),
   };
   if (bySize.size >= MASK_GRIDS_PER_MEASURE) bySize.delete(bySize.keys().next().value!);
   bySize.set(key, grid);
@@ -412,7 +497,7 @@ function localTerms(m: BodyMeasure, params: BeautyParams): Eval[] {
     // (r < 0.45, a hand on the belly) both factors of the last term have the same sign, so it adds to det J; a
     // carried hand sits near r ≈ 0.45 where D barely varies across (measure.ts trunkReach).
     const rigid = m.hands.map((hd) => ({ hd, d: trunkAt(handCentre(hd)).dd }));
-    terms.push((q, capScale, out) => {
+    terms.push(capped((q, capScale, out) => {
       const { dd: d0, k } = trunkAt(q);
       let dd = d0;
       for (const { hd, d } of rigid) {
@@ -424,7 +509,7 @@ function localTerms(m: BodyMeasure, params: BeautyParams): Eval[] {
       out.x += trunk.n[0] * dd;
       out.y += trunk.n[1] * dd;
       out.ka += Math.abs(k) * capScale;
-    });
+    }));
     // 提臀: only for side / back views (a frontal photo shows no buttocks to lift)
     if (hip > EPS && m.facing !== 'front') {
       const lift = GAINS.hipLift * hip * trunk.len * g;
@@ -451,7 +536,7 @@ function localTerms(m: BodyMeasure, params: BeautyParams): Eval[] {
     const caps = limbCapsule(l, { slim, legSlim, arms }, l.vis * widthGain);
     if (!caps) continue;
     const isArm = l.kind === 'upperArm' || l.kind === 'forearm';
-    terms.push((q, capScale, out) => {
+    terms.push(capped((q, capScale, out) => {
       const { d, ka } = capsuleAt(caps, q[0], q[1]);
       if (d === 0) return;
       const ex = isArm ? 1 - wCore(q) : 1 - wHand(q);
@@ -459,7 +544,7 @@ function localTerms(m: BodyMeasure, params: BeautyParams): Eval[] {
       out.x += caps.n[0] * dd;
       out.y += caps.n[1] * dd;
       out.ka += ka * capScale;
-    });
+    }));
   }
 
   // ── 直角肩: lift the outer shoulder contour so the neck → shoulder slope flattens ──

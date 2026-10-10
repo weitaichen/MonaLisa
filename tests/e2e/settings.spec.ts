@@ -68,12 +68,14 @@ test('credits list GPUPixel and MediaPipe; privacy statement shown', async ({ pa
   await mediapipe.getByText('授權條款全文').click();
   await expect(mediapipe.locator('pre')).toContainText(/Apache License\s+Version 2\.0/);
   await expect(mediapipe.locator('.credit-body')).toContainText('Pose Landmarker');
+  await expect(mediapipe.locator('.credit-body')).toContainText('selfie_segmenter');
   for (const [file, needle] of [
     ['GPUPixel-Apache-2.0.txt', 'Apache License'],
     ['GPUImage-BSD-3-Clause.txt', 'THIS SOFTWARE IS PROVIDED'],
     ['Preact-MIT.txt', 'Permission is hereby granted'],
     ['NOTICE.txt', 'lip_mask.png'],
     ['NOTICE.txt', '/models/pose_landmarker/'],
+    ['NOTICE.txt', '/models/image_segmenter/selfie-float16-1/'],
   ]) {
     const res = await page.request.get(`/licenses/${file}`);
     expect(res.status(), file).toBe(200);

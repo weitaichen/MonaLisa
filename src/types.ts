@@ -85,7 +85,10 @@ export interface BeautyParams {
   presetId: PresetId | 'custom';
   /** 程度: scales each param's distance from neutral, 0..1 */
   presetAmount: number;
-  /** 背景保護: constrain body displacement to the feathered person mask (default true) */
+  /**
+   * 背景保護: constrain body displacement to the feathered person mask (default true). Measured effect: a narrower
+   * background deformation ring beside the person; line bend about the same as off (src/body/straightness.test.ts)
+   */
   bodyProtect: boolean;
   /** manual 增高 band (works without pose detection); null = off */
   heightBand: HeightBand | null;
@@ -171,6 +174,19 @@ export interface BodyField {
   width: number;
   height: number;
   /** width*height*2 floats, row 0 = image top */
+  data: Float32Array;
+  /** increment whenever data changes (engine re-uploads on change) */
+  version: number;
+}
+
+/**
+ * 瘦臉 background limit (src/tracking/faceProtect.ts): signed distance from each texel centre to the person (mask ∪ face
+ * oval), in iso units (fractions of the image width), negative inside. The reshape pass turns it into a displacement budget for the face CONTOUR warps only. Immutable once built (a new one gets a new version).
+ */
+export interface FaceProtect {
+  width: number;
+  height: number;
+  /** width*height floats, row 0 = image top */
   data: Float32Array;
   /** increment whenever data changes (engine re-uploads on change) */
   version: number;
@@ -268,6 +284,11 @@ export interface RenderInput {
   params: BeautyParams;
   /** body displacement field (美體); null/undefined = none */
   body?: BodyField | null;
+  /**
+   * 瘦臉 background limit of the face contour warps (photo editor); null/undefined = unlimited (today's warp, and
+   * the live camera). Only read when a face is drawn.
+   */
+  faceProtect?: FaceProtect | null;
 }
 
 export interface RenderStats {
@@ -371,6 +392,16 @@ export interface HistoryEntry {
    * entries too). A body-only updateEntry leaves updatedAt alone, so caching it does not reorder 最近編輯.
    */
   body?: BodyDetection | null;
+  /**
+   * the 瘦臉 background limit is requested for this photo (src/ui/faceProtectModel.ts): reopening requests it again,
+   * so the same entry renders and exports the same. Sticky: kept also by an edit made while the limit cannot act
+   * (contour sliders neutral, no face found, 基本模式, a segmentation in flight). Absent / false = never requested,
+   * or the limit settled as impossible for this photo (no segmenter, nobody found): drawn without it (older entries
+   * too). Written with every params write; a body-only updateEntry leaves it alone.
+   */
+  faceProtect?: boolean;
+  /** the selfie segmenter's person mask the limit was built from (reopening needs no model); absent = none / 美體's */
+  faceMask?: PersonMask;
 }
 
 // ───────────────────────── Debug ─────────────────────────

@@ -9,7 +9,8 @@
 // new scaleAround / shiftAround primitives and V-face, narrow, chin, forehead, nose, mouth and
 // eye-distance warps (RB §2.4); big-eye radius from eye width instead of lid distance; yaw
 // attenuation; uniform early-outs (zero deltas, face bounding box); 美體 backward displacement texture as
-// the outermost map (body research report §管線).
+// the outermost map (body research report §管線); a person-distance budget on the contour warps (瘦臉 background
+// limit, reports/美體修圖 背景扭曲 抑制技術.md stage 1 ②).
 import type { Face, ParamId } from '../../types';
 import { signed } from '../params';
 import { createProgram, createTexture, deleteTexture, drawFullscreen, bindTarget, bindTexture, FULLSCREEN_VS } from '../gl/gl';
@@ -88,12 +89,13 @@ export const EYE_RADIUS_K = (() => {
   return (left + right) / 2;
 })();
 
-const SLIM: readonly (readonly [number, number])[] = [
+/** contour / nose warp tables, shared with the GLSL below and the CPU port (reshapeCpu.ts) */
+export const SLIM: readonly (readonly [number, number])[] = [
   [3, 44], [29, 44], [7, 45], [25, 45], [10, 46], [22, 46], [14, 49], [18, 49], [16, 49],
 ];
-const V_JAW = [8, 10, 12, 24, 22, 20] as const;
-const NARROW = [2, 4, 30, 28] as const;
-const NOSE: readonly (readonly [number, number])[] = [[80, 46], [81, 46], [82, 49], [83, 49]];
+export const V_JAW = [8, 10, 12, 24, 22, 20] as const;
+export const NARROW = [2, 4, 30, 28] as const;
+export const NOSE: readonly (readonly [number, number])[] = [[80, 46], [81, 46], [82, 49], [83, 49]];
 
 /** Anchors derived on the CPU once per frame (cheaper than per fragment). All in UV space. */
 export interface ReshapeGeometry {
@@ -177,8 +179,39 @@ export function reshapeGeometry(face: Face, aspect: number, u: ReshapeUniforms):
 
 /** texture unit of uBodyDisp (unit 0 = uSrc) */
 export const BODY_UNIT = 1;
+/** texture unit of uFaceProt */
+export const PROTECT_UNIT = 2;
 
-const RESHAPE_FS = /* glsl */ `#version 300 es
+/**
+ * 瘦臉 background limit (stage 1 ②). The contour warps' displacement g (瘦臉 / V臉 / 窄臉 / 下巴 / 額頭 together) is held
+ * within a budget B(sd) that depends on the signed distance sd to the person (FaceProtect, sampled where the face chain
+ * samples: after the body map) and is 0 from R = PROTECT_REACH face widths outside the person on: so nothing farther out
+ * moves. B rises inward at slope PROTECT_SLOPE, which bounds what the limit adds to the map's Jacobian (stretch ≤
+ * 1/(1 − slope) where it binds; a short fall-off folds the background next to a cheek moved by more than its length),
+ * and it starts with a smooth ramp over the outer PROTECT_RAMP·R (its slope eases in from 0, C²), so the wall lines get
+ * no crease where the budget begins. |g| is replaced by a polynomial smooth minimum of |g| and B (width PROTECT_SMOOTH
+ * face widths, C¹), so there is no crease where the budget starts to bind either; where |g| ≤ B − PROTECT_SMOOTH (the face
+ * interior: B grows inward) the warp is today's exactly (eyes / nose / mouth: faceProtect.test.ts and the e2e).
+ * In the tc = tc₀ + (tc_face − tc₀)·P form of the report, P = smin(|g|, B)/|g|, read where the face chain samples (tc₀,
+ * after the body map: the landmarks and the person mask are both in source space), which is vUv without a body field.
+ * The trade (measured at 瘦臉 + V臉 + 窄臉 max, faceProtect.test.ts): with a full-strength cheek moved by Δ, a fold-free,
+ * bounded-stretch fall-off needs R ≳ Δ/slope, so the reach is about 0.6× today's (27–30 % FW) rather than the 15 % FW
+ * the report estimated: a 15 % budget stretches the wall beside the cheek 2.5× (or folds it) and weakens the V臉 jaw.
+ * The eye / nose / mouth warps run after the limit and are never limited; the live camera passes no FaceProtect.
+ */
+export const PROTECT_REACH = 0.3;
+export const PROTECT_SLOPE = 0.45;
+export const PROTECT_RAMP = 0.3;
+export const PROTECT_SMOOTH = 0.025;
+
+/** face width (contour 0 → 32) in iso units (fractions of the image width) */
+export function faceWidthIso(face: Face, aspect: number): number {
+  const P = face.pts111;
+  return Math.hypot(P[0] - P[64], (P[1] - P[65]) / aspect);
+}
+
+/** exported for the CPU port's sync check (reshapeCpu.test.ts) */
+export const RESHAPE_FS = /* glsl */ `#version 300 es
 precision highp float;
 in vec2 vUv;
 uniform sampler2D uSrc;
@@ -195,6 +228,9 @@ uniform vec2 uEyeR;
 uniform vec2 uEyeDisp;
 uniform sampler2D uBodyDisp; // RG16F backward displacement in UV units, row 0 = image top
 uniform float uBodyOn;
+uniform sampler2D uFaceProt; // R16F signed distance to the person (iso units), row 0 = image top
+uniform float uProtOn;
+uniform vec4 uProt;          // reach R (iso), slope, ramp (× R), smooth-min width (iso): the contour budget (reshape.ts)
 out vec4 outColor;
 
 vec2 iso(vec2 p) { return vec2(p.x, p.y / uAspect); }
@@ -227,6 +263,20 @@ vec2 shiftAround(vec2 tc, vec2 c, float R, vec2 disp) {
   return tc - disp * k * k;
 }
 
+// 瘦臉 background limit: the contour chain moved tc0 to tc; keep |tc − tc0| within the person-distance budget.
+vec2 protectContour(vec2 tc0, vec2 tc) {
+  vec2 g = tc - tc0;
+  float L = length(iso(g));
+  float t = uProt.x - texture(uFaceProt, tc0).r;
+  float l = uProt.z * uProt.x;
+  float x = t / max(l, 1e-6);
+  float B = t <= 0.0 ? 0.0 : (t < l ? uProt.y * l * x * x * x * (1.0 - 0.5 * x) : uProt.y * (t - 0.5 * l));
+  float h = max(uProt.w - abs(L - B), 0.0) / uProt.w;
+  float Ln = max(min(L, B) - 0.25 * h * h * uProt.w, 0.0);
+  if (Ln >= L) return tc;
+  return tc0 + g * (Ln / L);
+}
+
 const ivec2 SLIM[9] = ivec2[9](ivec2(3,44), ivec2(29,44), ivec2(7,45), ivec2(25,45),
                                ivec2(10,46), ivec2(22,46), ivec2(14,49), ivec2(18,49), ivec2(16,49));
 const int V_JAW[6] = int[6](8, 10, 12, 24, 22, 20);
@@ -239,6 +289,7 @@ void main() {
   // detected-landmark coordinates, and it is the identity outside uBox, so pose anchors are untouched.
   if (uBodyOn != 0.0) tc += uBodyOn * texture(uBodyDisp, vUv).xy;
   if (all(greaterThanEqual(tc, uBox.xy)) && all(lessThanEqual(tc, uBox.zw))) {
+    vec2 tc0 = tc;
     if (uSlim != 0.0) {
       for (int i = 0; i < 9; i++) tc = curveWarp(tc, uPts[SLIM[i].x], uPts[SLIM[i].y], uSlim);
     }
@@ -250,6 +301,7 @@ void main() {
     }
     if (uChin != 0.0) tc = curveWarp(tc, uPts[16], uChinT, uChin);
     if (uForehead != 0.0) tc = curveWarp(tc, uExt[0], uExt[3], uForehead);
+    if (uProtOn != 0.0) tc = protectContour(tc0, tc);
     if (uNose != 0.0) {
       for (int i = 0; i < 4; i++) tc = curveWarp(tc, uPts[NOSE[i].x], uPts[NOSE[i].y], uNose);
     }
@@ -276,6 +328,7 @@ export interface ReshapePass {
    * (the ¼-res mask) so the map is exactly the image's.
    * `face` / `u` null = no face warp (body only). `body` = RG16F backward displacement texture (UV
    * units), applied before the face chain; null = none. Yaw attenuation scales the face deltas only.
+   * `protect` = R16F FaceProtect distance texture: limits the contour warps (PROTECT_REACH); null = unlimited.
    */
   draw(
     src: Texture,
@@ -284,6 +337,7 @@ export interface ReshapePass {
     u: ReshapeUniforms | null,
     aspect?: number,
     body?: Texture | null,
+    protect?: Texture | null,
   ): void;
   dispose(): void;
 }
@@ -293,11 +347,12 @@ export function createReshapePass(gl: GL): ReshapePass {
   prog.use();
   gl.uniform1i(prog.u('uSrc'), 0);
   gl.uniform1i(prog.u('uBodyDisp'), BODY_UNIT);
-  // Bound on the body unit when there is no field, so the sampler never reads an empty unit.
+  gl.uniform1i(prog.u('uFaceProt'), PROTECT_UNIT);
+  // Bound on the body / protect units when there is no texture, so a sampler never reads an empty unit.
   const zero = createTexture(gl, 1, 1);
 
   return {
-    draw(src, dst, faceIn, uIn, aspectIn, body) {
+    draw(src, dst, faceIn, uIn, aspectIn, body, protect) {
       const aspect = aspectIn ?? dst.width / dst.height;
       let face: Face | null = null;
       let u: ReshapeUniforms | null = null;
@@ -316,6 +371,9 @@ export function createReshapePass(gl: GL): ReshapePass {
       bindTexture(gl, 0, src);
       bindTexture(gl, BODY_UNIT, body ?? zero);
       gl.uniform1f(prog.u('uBodyOn'), body ? 1 : 0);
+      const prot = face && protect ? protect : null;
+      bindTexture(gl, PROTECT_UNIT, prot ?? zero);
+      gl.uniform1f(prog.u('uProtOn'), prot ? 1 : 0);
       gl.uniform1f(prog.u('uAspect'), aspect);
       if (face && u) {
         const g = reshapeGeometry(face, aspect, u);
@@ -336,11 +394,14 @@ export function createReshapePass(gl: GL): ReshapePass {
         gl.uniform1f(prog.u('uMouthR'), g.mouthR);
         gl.uniform2f(prog.u('uEyeR'), g.eyeR[0], g.eyeR[1]);
         gl.uniform2f(prog.u('uEyeDisp'), g.eyeDisp[0], g.eyeDisp[1]);
+        const fw = faceWidthIso(face, aspect);
+        gl.uniform4f(prog.u('uProt'), PROTECT_REACH * fw, PROTECT_SLOPE, PROTECT_RAMP, PROTECT_SMOOTH * fw);
       } else {
         gl.uniform4f(prog.u('uBox'), EMPTY_BOX[0], EMPTY_BOX[1], EMPTY_BOX[2], EMPTY_BOX[3]);
       }
       drawFullscreen(gl);
       bindTexture(gl, BODY_UNIT, null);
+      bindTexture(gl, PROTECT_UNIT, null);
       gl.activeTexture(gl.TEXTURE0);
     },
     dispose() {

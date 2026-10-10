@@ -3,7 +3,7 @@
 // before / independently of the engine, tracker and camera modules.
 import { autoTierSession, startLiveLoop } from '../app/live';
 import { createStillSession } from '../app/still';
-import { ENGINE_PATHS, loadEngineAssets, loadPoseModel } from '../engine/assets';
+import { ENGINE_PATHS, loadEngineAssets, loadPoseModel, loadSegmenterModel } from '../engine/assets';
 import { createEngine, isWebGL2Supported } from '../engine/index';
 import { createCamera } from '../media/camera';
 import { encodeJpeg, saveFile, toJpegBlob } from '../media/exporter';
@@ -11,6 +11,7 @@ import { importPhoto } from '../media/importer';
 import { addEntry, deleteEntry, getEntry, listEntries, updateEntry } from '../store/history';
 import { loadParams, loadPrefs, saveParams, savePrefs } from '../store/settings';
 import { UndoStack } from '../store/undo';
+import type { PersonSegmenter, PersonSegmenterOptions } from '../tracking/segmenter';
 import type { BodyTracker, BodyTrackerOptions, Tracker, TrackerOptions } from '../types';
 
 /** tasks-vision is ~200 kB: fetch it alongside the model download instead of before first paint. */
@@ -20,6 +21,10 @@ const createTracker = (opts: TrackerOptions): Promise<Tracker> =>
 /** 美體 only: the pose wrapper is loaded the first time the 美體 tab is used. */
 const createBodyTracker = (opts: BodyTrackerOptions): Promise<BodyTracker> =>
   import('../tracking/bodyTracker').then((m) => m.createBodyTracker(opts));
+
+/** 瘦臉 background limit only: the segmenter wrapper loads the first time a photo needs a person mask it lacks. */
+const createPersonSegmenter = (opts: PersonSegmenterOptions): Promise<PersonSegmenter> =>
+  import('../tracking/segmenter').then((m) => m.createPersonSegmenter(opts));
 
 /** public surface of store/undo's UndoStack (so fakes need not be the class) */
 export interface UndoLike<T> {
@@ -40,6 +45,8 @@ export const deps = {
   createTracker,
   loadPoseModel,
   createBodyTracker,
+  loadSegmenterModel,
+  createPersonSegmenter,
   createCamera,
   importPhoto,
   encodeJpeg,

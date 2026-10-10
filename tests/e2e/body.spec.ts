@@ -10,6 +10,8 @@ import { PNG } from 'pngjs';
 import { dragSlider, expect, grab, mad, SAMPLE_FACE, settled, shot, test, type Pixels, type Rect } from './fixtures';
 
 const FULLBODY = resolve(import.meta.dirname, '../fixtures/fullbody.jpg');
+// (its fullbody_lines.json, the drawn lines' geometry, is metadata kept for the stage-2 per-line bend check: unused yet)
+const FULLBODY_LINES = resolve(import.meta.dirname, '../fixtures/fullbody_lines.jpg');
 const LEGS_REASON = '拍攝全身照可使用長腿／瘦腿';
 const TORSO_REASON = '需要拍到肩膀到臀部，才能使用瘦身／細腰／腰臀比／美臀';
 const ARMS_REASON = '手臂不完整或被遮擋，無法使用瘦手臂';
@@ -242,6 +244,51 @@ test('full-body photo: 美體 progress → sliders; 細腰 / 長腿 / 腰臀比 
   expect(mad(reopened, edited, clear)).toBeLessThan(2);
   expect(mad(reopened, edited, whrRect)).toBeLessThan(2);
   expect(poseRequests.filter((r) => r.phase === 'reopen'), 'pose-model requests after reopening').toEqual([]);
+});
+
+// The drawn-lines fixture (reports/美體修圖 背景扭曲 抑制技術.md stage 0: fullbody.jpg with straight lines drawn on the
+// background only, scripts/gen-lines-fixture.mjs) through the real app: 瘦身 + 細腰 and 瘦手臂 at max (the stage-1
+// background relaxation is on the commit path) change the person, never the far background, and the frames are kept
+// for the before / after review of the door lines.
+test('drawn-lines photo: 瘦身 + 細腰 and 瘦手臂 at max keep the far background still', async ({ page }) => {
+  test.setTimeout(300_000);
+  await importPhoto(page, FULLBODY_LINES);
+  const frame = page.locator('.editor-stage .frame');
+  const before = await settled(frame);
+  await grab(frame, 'b40-lines-original');
+  await page.getByRole('tab', { name: '美體' }).click();
+  await bodyReady(page);
+  await expect(option(page, '背景保護')).toHaveAttribute('aria-pressed', 'true');
+  const torso = frac(before, { x: 0.3, y: 0.3, w: 0.4, h: 0.25 });
+  // the photo's top corners (x < 0.1 or > 0.9, y < 0.2), 2.4 W and more outside the torso: background holding only
+  // the ends of the two 45° diagonals. The door verticals and the neck / waist horizontals are NOT asserted here:
+  // they are reviewed by hand from the b40–b42 grabs (measuring their bend with fullbody_lines.json is the stage-2
+  // acceptance; stage 1's bend / stretch limits are the CPU ratchet in src/body/straightness.test.ts)
+  const corners = [frac(before, { x: 0, y: 0, w: 0.1, h: 0.2 }), frac(before, { x: 0.9, y: 0, w: 0.1, h: 0.2 })];
+  for (const n of ['瘦身', '細腰']) {
+    await pick(page, n);
+    await sliderToMax(page);
+  }
+  const slim = await settled(frame);
+  await grab(frame, 'b41-lines-slim-waist-max');
+  const slimCorner = Math.max(...corners.map((c) => maxDiff(before, slim, c)));
+  console.log(`lines: 瘦身+細腰 torso mad ${mad(before, slim, torso).toFixed(2)}, far-corner max |Δ| ${slimCorner}`);
+  expect(mad(before, slim, torso)).toBeGreaterThan(0.5);
+  expect(slimCorner).toBe(0);
+
+  const undo = page.getByRole('button', { name: '復原' });
+  await undo.click();
+  await undo.click();
+  expect(mad(before, await settled(frame))).toBeLessThan(0.3);
+  await pick(page, '瘦手臂');
+  await sliderToMax(page);
+  const arms = await settled(frame);
+  await grab(frame, 'b42-lines-arms-max');
+  const arm = frac(before, { x: 0.12, y: 0.3, w: 0.3, h: 0.25 });
+  const armsCorner = Math.max(...corners.map((c) => maxDiff(before, arms, c)));
+  console.log(`lines: 瘦手臂 arm mad ${mad(before, arms, arm).toFixed(2)}, far-corner max |Δ| ${armsCorner}`);
+  expect(mad(before, arms, arm)).toBeGreaterThan(0.3);
+  expect(armsCorner).toBe(0);
 });
 
 test('portrait: torso / arm / leg sliders are disabled with their reasons; tapping shows it', async ({ page }) => {

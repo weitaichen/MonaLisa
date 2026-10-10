@@ -128,7 +128,8 @@ function isCurrent(path: string): boolean {
   return (
     path === ENGINE_PATHS.model ||
     path.startsWith(`${ENGINE_PATHS.wasmBase}/`) ||
-    (Object.values(POSE_MODELS) as string[]).includes(path)
+    (Object.values(POSE_MODELS) as string[]).includes(path) ||
+    path === SEGMENTER_MODEL
   );
 }
 
@@ -303,4 +304,28 @@ async function downloadPose(variant: keyof typeof POSE_MODELS, job: PoseJob): Pr
   const model = await fetchWithProgress(POSE_MODELS[variant], 'model', true, stashTarget(), report);
   report({ phase: 'done', loaded: model.loaded, total: model.loaded });
   return model.bytes;
+}
+
+// ───────────── 瘦臉 background limit: person segmenter (on demand, photo editor only) ─────────────
+
+/** Self-hosted ImageSegmenter selfie model, 249,537 B (versioned path → CacheFirst / immutable). */
+export const SEGMENTER_MODEL = '/models/image_segmenter/selfie-float16-1/selfie_segmenter.tflite';
+
+let segmenterMemo: Promise<Uint8Array> | null = null;
+
+/**
+ * Fetch the selfie segmenter model, memoised; a failure clears the memo so a later call retries. Downloaded the first
+ * time the user moves a contour slider (瘦臉 / V臉 / 窄臉 / 下巴 / 額頭) on a photo without a cached 美體 person mask
+ * (never for preset / default values: FaceProtectSource; not part of the engine prefetch); stashed in ENGINE_CACHE
+ * like the pose models. No progress: it is small and nothing waits on it (the unlimited warp shows meanwhile).
+ */
+export function loadSegmenterModel(): Promise<Uint8Array> {
+  if (!segmenterMemo) {
+    const run = fetchWithProgress(SEGMENTER_MODEL, 'model', true, stashTarget(), () => {}).then((m) => m.bytes);
+    segmenterMemo = run;
+    run.catch(() => {
+      if (segmenterMemo === run) segmenterMemo = null;
+    });
+  }
+  return segmenterMemo;
 }

@@ -15,6 +15,7 @@ import type {
   CameraSnapshot,
   Engine,
   EngineAssetsProgress,
+  FaceProtect,
   HistoryEntry,
   Prefs,
   RenderInput,
@@ -221,6 +222,7 @@ function fakeStill(
   let last: BeautyParams | null = null;
   let compare = false;
   let body = opts.body ?? null;
+  let faceProtect: FaceProtect | null = null;
   const input = (p: BeautyParams) => ({ source: bitmap, width: bitmap.width, height: bitmap.height, face: null, faceWeight: 1, params: p });
   const paint = () => {
     raf = 0;
@@ -251,6 +253,12 @@ function fakeStill(
     setBody(f) {
       body = f; // the 2D fake engine cannot warp: the field is only recorded
       if (!raf) raf = requestAnimationFrame(paint);
+    },
+    get faceProtect() {
+      return faceProtect;
+    },
+    setFaceProtect(p) {
+      faceProtect = p; // recorded only, like the body field
     },
     prepareExport: (p) => (p.filterId === 'none' ? Promise.resolve() : engine.loadFilter(p.filterId).catch(() => undefined)),
     exportReady: () => true,

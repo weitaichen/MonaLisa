@@ -558,3 +558,250 @@ describe('services: 美體 body tracker', () => {
     expect(t.order).not.toContain('face:start');
   });
 });
+
+describe('services: 瘦臉 person segmenter', () => {
+  let prefs: { current: Prefs };
+  beforeEach(() => {
+    prefs = { current: { ...PREFS } };
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function setup() {
+    const { svc, deps } = await load(prefs);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    deps.createEngine = (() => fakeEngine(Promise.resolve())) as unknown as Deps['createEngine'];
+    const order: string[] = [];
+    const faceGate = deferred<void>();
+    deps.createTracker = (async () => {
+      order.push('face:start');
+      await faceGate.promise;
+      order.push('face:done');
+      return { delegate: 'GPU', close: vi.fn() } as unknown as Tracker;
+    }) as unknown as Deps['createTracker'];
+    const loadSegmenterModel = vi.fn(async () => {
+      order.push('seg-model');
+      return new Uint8Array(3);
+    });
+    deps.loadSegmenterModel = loadSegmenterModel as unknown as Deps['loadSegmenterModel'];
+    const made: { dead: boolean; lost: boolean; close: ReturnType<typeof vi.fn> }[] = [];
+    const createPersonSegmenter = vi.fn(async (o: { modelBuffer: Uint8Array; wasmBase: string }) => {
+      order.push(`seg:${o.modelBuffer.length}:${o.wasmBase}`);
+      const s = { dead: false, lost: false, close: vi.fn(), segment: vi.fn(() => null) };
+      made.push(s);
+      return s;
+    });
+    deps.createPersonSegmenter = createPersonSegmenter as unknown as Deps['createPersonSegmenter'];
+    return { svc, deps, order, faceGate, loadSegmenterModel, createPersonSegmenter, made };
+  }
+
+  it('creates its graph after the face tracker build settled (the download may overlap), then one instance for the session', async () => {
+    const t = await setup();
+    const engineP = t.svc.ensureEngine();
+    await flush();
+    const a = t.svc.ensureFaceSegmenter();
+    const b = t.svc.ensureFaceSegmenter();
+    await flush();
+    expect(t.order).toEqual(['face:start', 'seg-model']);
+    t.faceGate.resolve();
+    await engineP;
+    const sa = await a;
+    expect(sa).not.toBeNull();
+    expect(await b).toBe(sa);
+    expect(await t.svc.ensureFaceSegmenter()).toBe(sa);
+    expect(t.order).toEqual(['face:start', 'seg-model', 'face:done', `seg:3:${t.deps.wasmBase}`]);
+    expect(t.createPersonSegmenter).toHaveBeenCalledTimes(1);
+  });
+
+  it('the 美體 tracker never initialises alongside its graph creation: a body build started meanwhile waits for it', async () => {
+    const t = await setup();
+    t.faceGate.resolve();
+    await t.svc.ensureEngine();
+    const createGate = deferred<void>();
+    const create = t.createPersonSegmenter.getMockImplementation()!;
+    t.createPersonSegmenter.mockImplementationOnce(async (o) => {
+      t.order.push('seg:create');
+      await createGate.promise;
+      return create(o);
+    });
+    const seg = t.svc.ensureFaceSegmenter();
+    await flush();
+    expect(t.order).toContain('seg:create');
+    const loadPoseModel = vi.fn(async () => {
+      t.order.push('pose-model');
+      return new Uint8Array(2);
+    });
+    t.deps.loadPoseModel = loadPoseModel as unknown as Deps['loadPoseModel'];
+    t.deps.createBodyTracker = (async () => ({ close: vi.fn() })) as unknown as Deps['createBodyTracker'];
+    const body = t.svc.ensureBodyTracker();
+    await flush();
+    expect(loadPoseModel).not.toHaveBeenCalled();
+    createGate.resolve();
+    await seg;
+    await body;
+    expect(t.order.indexOf('pose-model')).toBeGreaterThan(t.order.findIndex((o) => o.startsWith('seg:3:')));
+  });
+
+  it("a stalled segmenter download never holds the 美體 tracker (it is not a graph build)", async () => {
+    const t = await setup();
+    t.faceGate.resolve();
+    await t.svc.ensureEngine();
+    const segGate = deferred<Uint8Array<ArrayBuffer>>();
+    t.loadSegmenterModel.mockImplementationOnce(() => segGate.promise); // lie-fi: never settles in this test
+    void t.svc.ensureFaceSegmenter();
+    await flush();
+    t.deps.loadPoseModel = (async () => new Uint8Array(2)) as unknown as Deps['loadPoseModel'];
+    t.deps.createBodyTracker = (async () => ({ close: vi.fn() })) as unknown as Deps['createBodyTracker'];
+    await t.svc.ensureBodyTracker();
+    expect(t.svc.svc.get().body.state).toBe('ready');
+    expect(t.createPersonSegmenter).not.toHaveBeenCalled();
+  });
+
+  it('a download that lands while a 美體 build is in flight creates the graph only after that build settled', async () => {
+    const t = await setup();
+    t.faceGate.resolve();
+    await t.svc.ensureEngine();
+    const segGate = deferred<Uint8Array<ArrayBuffer>>();
+    t.loadSegmenterModel.mockImplementationOnce(() => segGate.promise);
+    const seg = t.svc.ensureFaceSegmenter();
+    await flush();
+    const bodyGate = deferred<void>();
+    t.deps.loadPoseModel = (async () => new Uint8Array(2)) as unknown as Deps['loadPoseModel'];
+    t.deps.createBodyTracker = (async () => {
+      t.order.push('pose-tracker:start');
+      await bodyGate.promise;
+      t.order.push('pose-tracker:done');
+      return { close: vi.fn() };
+    }) as unknown as Deps['createBodyTracker'];
+    const body = t.svc.ensureBodyTracker();
+    await flush();
+    expect(t.order).toContain('pose-tracker:start');
+    segGate.resolve(new Uint8Array(3));
+    await flush();
+    expect(t.createPersonSegmenter).not.toHaveBeenCalled();
+    bodyGate.resolve();
+    await body;
+    expect(await seg).not.toBeNull();
+    expect(t.order.findIndex((o) => o.startsWith('seg:3:'))).toBeGreaterThan(t.order.indexOf('pose-tracker:done'));
+  });
+
+  it('never rejects: a failed download gives null and the next call retries it', async () => {
+    const t = await setup();
+    t.faceGate.resolve();
+    await t.svc.ensureEngine();
+    t.loadSegmenterModel.mockImplementationOnce(() => Promise.reject(new TypeError('Failed to fetch')));
+    expect(await t.svc.ensureFaceSegmenter()).toBeNull();
+    expect(await t.svc.ensureFaceSegmenter()).not.toBeNull();
+    expect(t.loadSegmenterModel).toHaveBeenCalledTimes(2);
+    expect(console.error).not.toHaveBeenCalled(); // an expected degradation, not an error
+  });
+
+  it('a graph that fails to start is not retried this session (heap / OOM), nor is a segmenter that died', async () => {
+    const t = await setup();
+    t.faceGate.resolve();
+    await t.svc.ensureEngine();
+    t.createPersonSegmenter.mockImplementationOnce(async () => {
+      throw new Error('wasm OOM');
+    });
+    expect(await t.svc.ensureFaceSegmenter()).toBeNull();
+    expect(await t.svc.ensureFaceSegmenter()).toBeNull();
+    expect(t.createPersonSegmenter).toHaveBeenCalledTimes(1);
+
+    const u = await setup();
+    u.faceGate.resolve();
+    await u.svc.ensureEngine();
+    const s = await u.svc.ensureFaceSegmenter();
+    expect(s).not.toBeNull();
+    u.made[0].dead = true; // a segment() threw (not a lost context): broken at once
+    expect(await u.svc.ensureFaceSegmenter()).toBeNull();
+    expect(u.made[0].close).toHaveBeenCalledTimes(1);
+    expect(u.createPersonSegmenter).toHaveBeenCalledTimes(1);
+    expect(await u.svc.ensureFaceSegmenter()).toBeNull();
+    expect(u.createPersonSegmenter).toHaveBeenCalledTimes(1);
+  });
+
+  it('a segmenter that lost its WebGL context is rebuilt once per session; a second loss leaves it broken', async () => {
+    const t = await setup();
+    t.faceGate.resolve();
+    await t.svc.ensureEngine();
+    const first = await t.svc.ensureFaceSegmenter();
+    expect(first).not.toBeNull();
+    Object.assign(t.made[0], { dead: true, lost: true }); // iOS took the context on backgrounding
+    const second = await t.svc.ensureFaceSegmenter();
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first);
+    expect(t.made[0].close).toHaveBeenCalledTimes(1);
+    expect(t.createPersonSegmenter).toHaveBeenCalledTimes(2);
+    expect(await t.svc.ensureFaceSegmenter()).toBe(second);
+
+    Object.assign(t.made[1], { dead: true, lost: true }); // and again
+    expect(await t.svc.ensureFaceSegmenter()).toBeNull();
+    expect(t.made[1].close).toHaveBeenCalledTimes(1);
+    expect(await t.svc.ensureFaceSegmenter()).toBeNull();
+    expect(t.createPersonSegmenter).toHaveBeenCalledTimes(2);
+  });
+  it('a loss seen only by polling (no event, no segment() throw) is found by the next ensure: rebuilt once, then broken', async () => {
+    const t = await setup();
+    t.faceGate.resolve();
+    await t.svc.ensureEngine();
+    // like createPersonSegmenter: dead / lost are getters over gl.isContextLost(), polled on every read, and the
+    // cause is decided when the instance dies (close() never turns a live one "lost")
+    /** per instance: take its WebGL context away (WEBGL_lose_context), and how often its getters polled it */
+    const lose: (() => void)[] = [];
+    const reads: number[] = [];
+    t.createPersonSegmenter.mockImplementation(async () => {
+      let flag = false;
+      const gl = { isContextLost: () => flag };
+      const i = lose.length;
+      lose.push(() => {
+        flag = true;
+      });
+      reads.push(0);
+      let closed = false;
+      let lost = false;
+      const poll = () => {
+        reads[i]++;
+        if (!closed && gl.isContextLost()) lost = true;
+        return lost;
+      };
+      const close = vi.fn(() => {
+        closed = true;
+      });
+      const sg = {
+        get dead() {
+          return poll() || closed;
+        },
+        get lost() {
+          return poll();
+        },
+        close,
+        segment: vi.fn(() => null),
+      };
+      t.made.push(sg as unknown as (typeof t.made)[number]);
+      return sg as unknown as Awaited<ReturnType<typeof t.createPersonSegmenter>>;
+    });
+
+    const first = await t.svc.ensureFaceSegmenter();
+    expect(first).not.toBeNull();
+    expect(first!.dead).toBe(false); // not preset: the flag is flipped only after the first ensure
+    const polled = reads[0];
+    expect(await t.svc.ensureFaceSegmenter()).toBe(first); // still alive: the same instance, polled, not rebuilt
+    expect(reads[0]).toBeGreaterThan(polled);
+
+    lose[0](); // iOS took the context while backgrounded: no webglcontextlost event, no segment() call since
+    const second = await t.svc.ensureFaceSegmenter();
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first);
+    expect(t.made[0].close).toHaveBeenCalledTimes(1);
+    expect(t.createPersonSegmenter).toHaveBeenCalledTimes(2);
+    expect(await t.svc.ensureFaceSegmenter()).toBe(second);
+
+    lose[1](); // and again: the single recreate is used up
+    expect(await t.svc.ensureFaceSegmenter()).toBeNull();
+    expect(t.made[1].close).toHaveBeenCalledTimes(1);
+    expect(await t.svc.ensureFaceSegmenter()).toBeNull();
+    expect(t.createPersonSegmenter).toHaveBeenCalledTimes(2);
+  });
+});

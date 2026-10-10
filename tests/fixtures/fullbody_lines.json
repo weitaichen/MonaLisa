@@ -1,0 +1,210 @@
+{
+ "source": "tests/fixtures/fullbody.jpg",
+ "generator": "scripts/gen-lines-fixture.mjs",
+ "width": 638,
+ "height": 1000,
+ "note": "Lines in image px (top-left origin), drawn dark (~1.5–2 px) only where the bilinearly upsampled pose_fullbody.json mask is < 0.1; drawnPx = pixels with coverage ≥ 0.5. waist = narrowest torso row, W = its half-width.",
+ "waist": {
+  "y": 419,
+  "left": 249,
+  "right": 396,
+  "halfWidthPx": 74
+ },
+ "lines": [
+  {
+   "tag": "door+0.25W L",
+   "angleDeg": 90,
+   "a": [
+    230,
+    0
+   ],
+   "b": [
+    230,
+    1000
+   ],
+   "drawnPx": 1059
+  },
+  {
+   "tag": "door+0.25W R",
+   "angleDeg": 90,
+   "a": [
+    415,
+    0
+   ],
+   "b": [
+    415,
+    1000
+   ],
+   "drawnPx": 1644
+  },
+  {
+   "tag": "door+0.5W L",
+   "angleDeg": 90,
+   "a": [
+    211.5,
+    0
+   ],
+   "b": [
+    211.5,
+    1000
+   ],
+   "drawnPx": 838
+  },
+  {
+   "tag": "door+0.5W R",
+   "angleDeg": 90,
+   "a": [
+    433.5,
+    0
+   ],
+   "b": [
+    433.5,
+    1000
+   ],
+   "drawnPx": 841
+  },
+  {
+   "tag": "door+1W L",
+   "angleDeg": 90,
+   "a": [
+    174.5,
+    0
+   ],
+   "b": [
+    174.5,
+    1000
+   ],
+   "drawnPx": 932
+  },
+  {
+   "tag": "door+1W R",
+   "angleDeg": 90,
+   "a": [
+    470.5,
+    0
+   ],
+   "b": [
+    470.5,
+    1000
+   ],
+   "drawnPx": 949
+  },
+  {
+   "tag": "door+2W L",
+   "angleDeg": 90,
+   "a": [
+    100.5,
+    0
+   ],
+   "b": [
+    100.5,
+    1000
+   ],
+   "drawnPx": 966
+  },
+  {
+   "tag": "door+2W R",
+   "angleDeg": 90,
+   "a": [
+    544.5,
+    0
+   ],
+   "b": [
+    544.5,
+    1000
+   ],
+   "drawnPx": 1000
+  },
+  {
+   "tag": "h neck",
+   "angleDeg": 0,
+   "a": [
+    0,
+    212
+   ],
+   "b": [
+    638,
+    212
+   ],
+   "drawnPx": 1153
+  },
+  {
+   "tag": "h waist",
+   "angleDeg": 0,
+   "a": [
+    0,
+    419
+   ],
+   "b": [
+    638,
+    419
+   ],
+   "drawnPx": 743
+  },
+  {
+   "tag": "h knee",
+   "angleDeg": 0,
+   "a": [
+    0,
+    685
+   ],
+   "b": [
+    638,
+    685
+   ],
+   "drawnPx": 1032
+  },
+  {
+   "tag": "d30 R",
+   "angleDeg": -30,
+   "a": [
+    0,
+    690.35
+   ],
+   "b": [
+    638,
+    322.01
+   ],
+   "drawnPx": 973
+  },
+  {
+   "tag": "d30 L",
+   "angleDeg": 30,
+   "a": [
+    0,
+    317.96
+   ],
+   "b": [
+    638,
+    686.31
+   ],
+   "drawnPx": 898
+  },
+  {
+   "tag": "d45 R",
+   "angleDeg": 45,
+   "a": [
+    0,
+    72.95
+   ],
+   "b": [
+    638,
+    710.95
+   ],
+   "drawnPx": 1377
+  },
+  {
+   "tag": "d45 L",
+   "angleDeg": -45,
+   "a": [
+    0,
+    717.95
+   ],
+   "b": [
+    638,
+    79.95
+   ],
+   "drawnPx": 1292
+  }
+ ]
+}

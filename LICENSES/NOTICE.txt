@@ -29,12 +29,16 @@ CainCamera — Copyright (c) 2018 cain.huang — Apache License 2.0
   - Lineage only (GPUPixel derives from them); no code or assets of theirs are used directly.
     Same Apache-2.0 text as GPUPixel-Apache-2.0.txt.
 
-MediaPipe Tasks Vision 0.10.35, the Face Landmarker model (Face Mesh V2) and the Pose Landmarker models
-  (BlazePose GHUM 3D, full and lite, float16 version 1) — Copyright Google LLC — Apache License 2.0
-  (MediaPipe-Apache-2.0.txt)
-  - Self-hosted unmodified under /mediapipe/0.10.35/, /models/face_landmarker/float16-1/ and
-    /models/pose_landmarker/{full,lite}-float16-1/ (the pose models are downloaded on demand for 美體 and the
-    bench; never precached). Source: storage.googleapis.com/mediapipe-models/pose_landmarker/, md5-pinned in
+MediaPipe Tasks Vision 0.10.35, the Face Landmarker model (Face Mesh V2), the Pose Landmarker models
+  (BlazePose GHUM 3D, full and lite, float16 version 1) and the Image Segmenter selfie_segmenter model
+  (float16 version 1) — Copyright Google LLC — Apache License 2.0 (MediaPipe-Apache-2.0.txt)
+  - Self-hosted unmodified under /mediapipe/0.10.35/, /models/face_landmarker/float16-1/,
+    /models/pose_landmarker/{full,lite}-float16-1/ and /models/image_segmenter/selfie-float16-1/ (the pose
+    models are downloaded on demand for 美體 and the bench; selfie_segmenter.tflite on demand the first time the user
+    moves a face-contour slider (瘦臉 / V臉 / 窄臉 / 下巴 / 額頭) in the photo editor without a 美體 person mask, never
+    for preset or default values; never precached).
+    Source: storage.googleapis.com/mediapipe-models/pose_landmarker/ and
+    storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/, md5-pinned in
     scripts/fetch-assets.mjs.
 
 Preact 10.29.8 — Copyright (c) 2015-present Jason Miller — MIT (Preact-MIT.txt)
@@ -49,6 +53,8 @@ Test data in the repository only (not part of the deployed app):
     Apache License 2.0 — MediaPipe-Apache-2.0.txt), downloaded unmodified from the mediapipe-assets bucket and
     sha256-checked against third_party/external_files.bzl. tests/fixtures/pose_fullbody.json and
     fullbody_yoga.pose.json are this project's recorded Pose Landmarker results on them.
+  - tests/fixtures/fullbody_lines.jpg: modified derivative of fullbody.jpg (Apache-2.0 §4(b) change notice):
+    straight 1-2 px lines drawn on the background by scripts/gen-lines-fixture.mjs; fullbody_lines.json lists them.
   - tests/fixtures/sample_face.png: GPUPixel demo image (Apache-2.0, see GPUPixel above).
     tests/fixtures/sample_face.pose.json is this project's recorded Pose Landmarker result on it.
 

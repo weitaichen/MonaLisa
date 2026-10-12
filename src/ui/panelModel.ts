@@ -1,7 +1,8 @@
 // BeautyPanel logic (spec §7.3), kept pure so it can be unit-tested without a DOM.
 import { BLUSH_SHADES, FILTERS, hasValue, LIP_SHADES, MAKEUP_PICK_DEFAULT, paramDef, paramsInGroup, PRESETS } from '../engine/params';
 import { NO_BODY_NOTE, NO_FACE_NOTE, type Lens } from '../edit/lens';
-import type { EditState, HeightBand, ParamId, PersonId, PresetId, RegionStatus } from '../types';
+import { personOf } from '../edit/state';
+import type { EditState, HeightBand, ParamDef, ParamId, PersonId, PersonParamId, PresetId, RegionStatus } from '../types';
 
 export type TabId = 'preset' | 'skin' | 'shape' | 'body' | 'filter' | 'makeup';
 export type MakeupPart = 'lip' | 'blush';
@@ -314,6 +315,23 @@ function makeupKey(part: MakeupPart): ParamId {
   return part === 'lip' ? 'makeup.lip' : 'makeup.blush';
 }
 
+/**
+ * Item dot (S §2.4 Dots): with a person selected, that person's value (or the photo's); under 全部, any applicable
+ * person's, not only the one the slider shows (lens.get reads the primary, or the first applicable person).
+ */
+function itemDot(lens: Lens, d: ParamDef): boolean {
+  if (d.scope === 'photo' || lens.sel.kind !== 'all') return hasValue(d, lens.get(d.id).value);
+  const t = lens.targets(d.id);
+  return t.length ? t.some((pid) => hasValue(d, personOf(lens.edit, pid).values[d.id as PersonParamId])) : hasValue(d, lens.get(d.id).value);
+}
+
+/** The 美妝 part chip's dot (口紅 / 腮紅): the selected person's, or under 全部 any face person's (S §2.4 Dots). */
+export function partHasValue(lens: Lens, part: MakeupPart): boolean {
+  if (lens.sel.kind !== 'all') return lens.shade(part).on;
+  const key = makeupKey(part) as PersonParamId;
+  return lens.faceTargets().some((pid) => personOf(lens.edit, pid).values[key] > 0.01);
+}
+
 function gated(item: PanelItem, gate: RegionStatus): PanelItem {
   return gate.ok ? item : { ...item, selected: false, disabled: true, reason: gate.reason };
 }
@@ -341,7 +359,7 @@ function bodyItems(lens: Lens, sel: PanelSelection, body: BodyContext | undefine
         label: d.label,
         visual: { kind: 'icon', icon: d.icon },
         selected: sel.body === d.id,
-        hasValue: hasValue(d, lens.get(d.id).value),
+        hasValue: itemDot(lens, d),
         action: { type: 'param', id: d.id },
         ...ENABLED,
       },
@@ -404,7 +422,7 @@ export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext): P
             label: d.label,
             visual: { kind: 'icon', icon: d.icon },
             selected: sel[sel.tab as 'skin' | 'shape'] === d.id,
-            hasValue: hasValue(d, lens.get(d.id).value),
+            hasValue: itemDot(lens, d),
             action: { type: 'param', id: d.id },
             ...ENABLED,
           };

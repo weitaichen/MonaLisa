@@ -9,6 +9,7 @@ import {
   bodyNoteFor,
   itemsFor,
   MAKEUP_PARTS,
+  partHasValue,
   personNote,
   tabHasValue,
   TABS,
@@ -104,7 +105,7 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
           {sel.tab === 'makeup' && (
             <>
               {MAKEUP_PARTS.map((p) => {
-                const on = lens.shade(p.id).on;
+                const on = partHasValue(lens, p.id);
                 const active = sel.makeupPart === p.id;
                 return (
                   <button

@@ -31,6 +31,7 @@ import {
   INITIAL_SELECTION,
   itemsFor,
   legsAnchorNote,
+  partHasValue,
   personNote,
   photoScoped,
   photoTouchToast,
@@ -611,5 +612,27 @@ describe('persons in the panel (S §2.4, A9, A11)', () => {
     expect(photoTouchToast(h, one('f0'), seen)).toBe('增高套用於整張照片');
     const solo = lensFor(editFromLegacy(defaultParams()), { kind: 'person', id: 'p0' }, P0_INFO, 'p0');
     expect(photoTouchToast(sliderFor(solo, sel({ tab: 'skin', skin: 'skin.whiten' }))!, solo, new Set())).toBeNull();
+  });
+  it('item dots (S §2.4 Dots): the selected person\'s value; under 全部 any applicable person\'s, not only the shown one', () => {
+    const setV = (e: EditState, id: 'f0' | 'f1' | 'b1', k: 'shape.eyeEnlarge' | 'makeup.lip' | 'body.waist', v: number) =>
+      withPersons(e, [id], (p) => ({ ...p, values: { ...p.values, [k]: v } }));
+    // the primary f0 is shown under 全部; only f1 has 大眼 and 口紅, only b1 has 腰
+    let e = setV(setV(base, 'f0', 'shape.eyeEnlarge', 0), 'f1', 'shape.eyeEnlarge', 0.6);
+    e = setV(setV(e, 'f0', 'makeup.lip', 0), 'f1', 'makeup.lip', 0.6);
+    e = setV(setV(e, 'f0', 'body.waist', 0), 'b1', 'body.waist', 0.6);
+    const shape = sel({ tab: 'shape', shape: 'shape.eyeEnlarge' });
+    const dot = (s: Selection) => byKey(itemsFor(at(s, e), shape), 'shape.eyeEnlarge').hasValue;
+    expect(tabHasValue(at(ALL, e), 'shape')).toBe(true);
+    expect(dot(ALL)).toBe(true);
+    expect(dot({ kind: 'person', id: 'f0' })).toBe(false);
+    expect(dot({ kind: 'person', id: 'f1' })).toBe(true);
+    expect(partHasValue(at(ALL, e), 'lip')).toBe(true);
+    expect(partHasValue(at({ kind: 'person', id: 'f0' }, e), 'lip')).toBe(false);
+    expect(partHasValue(at({ kind: 'person', id: 'f1' }, e), 'lip')).toBe(true);
+    const ctx = ready({ people: 2 });
+    const waist = (s: Selection) => byKey(itemsFor(at(s, e), bodySel('body.waist'), ctx), 'body.waist').hasValue;
+    expect(waist(ALL)).toBe(true);
+    expect(waist({ kind: 'person', id: 'f0' })).toBe(false);
+    expect(waist({ kind: 'person', id: 'b1' })).toBe(true);
   });
 });

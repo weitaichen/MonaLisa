@@ -574,6 +574,8 @@ describe('persons in the panel (S §2.4, A9, A11)', () => {
     const l = lensFor(e, { kind: 'person', id: 'b1' }, bodies, 'b0');
     expect(sliderFor(l, sel({ tab: 'skin', skin: 'skin.smooth' }))).toMatchObject({ label: '磨皮 · 整張照片', aria: '磨皮，整張照片' });
     expect(byKey(itemsFor(l, sel({ tab: 'skin' })), 'skin.rosy')).toMatchObject({ disabled: false, badge: '整張' });
+    // no person note: 美膚 / 一鍵 stay usable on all skin; 美型 / 美妝 keep the Editor's photo-level note
+    for (const tab of ['skin', 'preset', 'shape', 'makeup'] as const) expect(personNote(tab, l)).toBeNull();
   });
   it('A11: the chips dim on 濾鏡 and while 美白 / 銳化 / 增高 / 長腿 is the active item', () => {
     expect(photoScoped(sel({ tab: 'filter' }))).toBe(true);

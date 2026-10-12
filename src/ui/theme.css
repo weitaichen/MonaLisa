@@ -2102,6 +2102,11 @@ button.row:active {
   background: var(--elevated);
   color: var(--text-2);
 }
+/* 背景保護 keeps its on/off switch in the bottom corner: its badge goes to the top */
+.item.switchable .item-badge {
+  top: 2px;
+  bottom: auto;
+}
 .slider-mixed {
   margin-left: 6px;
   font-size: 11px;

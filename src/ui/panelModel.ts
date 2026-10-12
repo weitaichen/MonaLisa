@@ -149,9 +149,13 @@ export interface PersonNote {
   dim: boolean;
 }
 
-/** S §2.4: a body-only person on a face tab. 美體 has bodyNoteFor; 濾鏡 is photo-level; 全部 has no person note. */
+/**
+ * S §2.4: a body-only person on a face tab. 美體 has bodyNoteFor; 濾鏡 is photo-level; 全部 has no person note.
+ * A photo without a face has none either: the all-skin exception wins on 美膚 / 一鍵, and 美型 / 美妝 show the
+ * Editor's photo-level faceNote.
+ */
 export function personNote(tab: TabId, lens: Lens): PersonNote | null {
-  if (!multiPerson(lens) || lens.sel.kind !== 'person' || tab === 'body' || tab === 'filter') return null;
+  if (!multiPerson(lens) || lens.noFace || lens.sel.kind !== 'person' || tab === 'body' || tab === 'filter') return null;
   const id = lens.sel.id;
   const me = lens.persons.find((p) => p.id === id);
   if (!me || me.face) return null;

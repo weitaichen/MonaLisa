@@ -33,7 +33,7 @@ describe('createStillSession', () => {
     const bmp = bitmap();
     const s = createStillSession(engine, tracker, bmp);
     expect(tracker.detectImage).toHaveBeenCalledTimes(1);
-    expect(tracker.detectImage).toHaveBeenCalledWith(bmp);
+    expect(tracker.detectImage).toHaveBeenCalledWith(bmp, { maxFaces: 1 });
     expect(tracker.detectVideo).not.toHaveBeenCalled();
     expect(adapt).toHaveBeenCalledWith(expect.anything(), 1536, 2048);
     expect(s.face).not.toBeNull();

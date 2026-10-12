@@ -17,6 +17,7 @@
 //     row (an error that survives fresh instances too is reported as 'failed'). Replacing only on
 //     these rare events keeps to the single-instance rule.
 import { FaceLandmarker, FilesetResolver, type FaceLandmarkerOptions } from '@mediapipe/tasks-vision';
+import { EDIT_DETECT_FACES, LIVE_DETECT_FACES } from '../config/limits';
 import type { Delegate, Landmarks478, Tracker, TrackerOptions, TrackerState } from '../types';
 
 const N_POINTS = 478;
@@ -43,17 +44,26 @@ const MAX_LOGGED = 8;
 type ImageInput = ImageBitmap | HTMLCanvasElement | HTMLImageElement;
 type Fileset = Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>;
 
-function toLandmarks(faces: { x: number; y: number; z: number }[][]): Landmarks478 | null {
-  const face = faces[0];
-  if (!face || face.length < N_POINTS) return null;
-  const points = new Float32Array(N_POINTS * 3);
-  for (let i = 0; i < N_POINTS; i++) {
-    const q = face[i];
-    points[i * 3] = q.x;
-    points[i * 3 + 1] = q.y;
-    points[i * 3 + 2] = q.z;
+/** Every face with a full 478-point set, in MediaPipe's result order; [] for none. */
+function toLandmarksAll(faces: { x: number; y: number; z: number }[][]): Landmarks478[] {
+  const out: Landmarks478[] = [];
+  for (const face of faces) {
+    if (!face || face.length < N_POINTS) continue;
+    const points = new Float32Array(N_POINTS * 3);
+    for (let i = 0; i < N_POINTS; i++) {
+      const q = face[i];
+      points[i * 3] = q.x;
+      points[i * 3 + 1] = q.y;
+      points[i * 3 + 2] = q.z;
+    }
+    out.push({ points });
   }
-  return { points };
+  return out;
+}
+
+/** maxFaces → numFaces: 1…EDIT_DETECT_FACES (NaN → 1) */
+export function clampFaces(n: number): number {
+  return Number.isFinite(n) ? Math.min(EDIT_DETECT_FACES, Math.max(1, Math.floor(n))) : 1;
 }
 
 function imageSize(img: ImageInput): [number, number] {
@@ -110,13 +120,14 @@ async function createInstance(
   modelBuffer: Uint8Array,
   delegate: Delegate,
   onLost: (inst: Instance) => void,
+  numFaces: number,
 ): Promise<Instance> {
   const options: FaceLandmarkerOptions = {
     // Kept by reference (not copied) and re-read on every setOptions graph rebuild, so the caller
     // must not mutate it afterwards.
     baseOptions: { modelAssetBuffer: modelBuffer, delegate },
     runningMode: 'VIDEO',
-    numFaces: 1,
+    numFaces,
     outputFaceBlendshapes: false,
     outputFacialTransformationMatrixes: false,
   };
@@ -148,11 +159,12 @@ async function createFirst(
   order: readonly Delegate[],
   onLost: (inst: Instance) => void,
   onFail: (d: Delegate, e: unknown, next: Delegate | undefined) => void,
+  numFaces: number,
 ): Promise<Instance> {
   let err: unknown = new Error('no delegate to try');
   for (let i = 0; i < order.length; i++) {
     try {
-      return await createInstance(fileset, modelBuffer, order[i], onLost);
+      return await createInstance(fileset, modelBuffer, order[i], onLost, numFaces);
     } catch (e) {
       err = e;
       onFail(order[i], e, order[i + 1]);
@@ -190,9 +202,18 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
     if (i === inst) retire();
     else i.dead = true;
   };
-  inst = await createFirst(fileset, modelBuffer, opts.delegate === 'auto' ? ['GPU', 'CPU'] : [opts.delegate], onLost, (d, e, next) => {
-    if (next) console.warn(`[tracker] ${d} delegate failed, retrying on ${next}:`, e);
-  });
+  /** numFaces of the current graph; every instance (the first and each replacement) is built with the last requested count */
+  let faces = LIVE_DETECT_FACES;
+  inst = await createFirst(
+    fileset,
+    modelBuffer,
+    opts.delegate === 'auto' ? ['GPU', 'CPU'] : [opts.delegate],
+    onLost,
+    (d, e, next) => {
+      if (next) console.warn(`[tracker] ${d} delegate failed, retrying on ${next}:`, e);
+    },
+    faces,
+  );
 
   let frameCopy = inst.delegate === 'CPU' ? createFrameCopy() : null;
   let lastTs = -Infinity;
@@ -239,7 +260,7 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
     release(inst, note);
     let next: Instance | null = null;
     try {
-      next = await createFirst(fileset, modelBuffer, replacementOrder(), onLost, (d, e) => note(`recreate (${d})`, e));
+      next = await createFirst(fileset, modelBuffer, replacementOrder(), onLost, (d, e) => note(`recreate (${d})`, e), faces);
     } catch {
       next = null; // each failure already noted
     }
@@ -253,7 +274,8 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
       else requestReplace();
       return;
     }
-    // The new graph starts in VIDEO; lastTs is kept so timestamps stay strictly increasing.
+    // The new graph starts in VIDEO with the last requested count (`faces` is unchanged); lastTs is kept so
+    // timestamps stay strictly increasing.
     inst = next;
     mode = 'VIDEO';
     needsRebuild = false;
@@ -301,7 +323,7 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
   };
   if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
 
-  const succeeded = (r: Landmarks478 | null): Landmarks478 | null => {
+  const succeeded = <T>(r: T): T => {
     failures = 0;
     escalations = 0;
     attempts = 0;
@@ -331,21 +353,23 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
     return e;
   };
 
-  // Every mode change rebuilds the graph, and the first inference after a rebuild is slow on the
+  // Every mode or count change rebuilds the graph, and the first inference after a rebuild is slow on the
   // GPU delegate (~1 s in desktop Chromium). Switching back to VIDEO lazily, on the next
   // detectVideo, keeps back-to-back photo detections from paying that twice. After a failure the
   // same-mode setOptions is the rebuild that clears the poisoned graph.
-  const setMode = (m: 'VIDEO' | 'IMAGE') => {
-    if (mode === m && !needsRebuild) return;
-    // Mode first: on a poisoned graph setOptions applies the new options and starts the new graph,
-    // then throws while closing the old one, so the graph is in `m` either way.
+  const setMode = (m: 'VIDEO' | 'IMAGE', n: number) => {
+    if (mode === m && faces === n && !needsRebuild) return;
+    // Mode and count first: on a poisoned graph setOptions applies the new options and starts the new graph,
+    // then throws while closing the old one, so the graph is in (m, n) either way. Both keys every time: the
+    // bundle writes numFaces only when the key is present, and options are sticky.
     mode = m;
+    faces = n;
     if (needsRebuild) {
       needsRebuild = false;
       lastRebuildAt = performance.now();
     }
     try {
-      Promise.resolve(inst.landmarker.setOptions({ runningMode: m })).catch((e: unknown) => note('rebuild', e));
+      Promise.resolve(inst.landmarker.setOptions({ runningMode: m, numFaces: n })).catch((e: unknown) => note('rebuild', e));
     } catch (e) {
       note('rebuild', e);
     }
@@ -356,7 +380,7 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
       return inst.delegate;
     },
 
-    detectVideo(video: HTMLVideoElement, tsMs: number): Landmarks478 | null {
+    detectVideo(video: HTMLVideoElement, tsMs: number, o: { maxFaces: number }): Landmarks478[] | null {
       // MPI 5152: an empty frame gives "ROI width and height must be > 0" and poisons the graph.
       if (closed || video.readyState < 2 || video.videoWidth <= 0 || video.videoHeight <= 0) return null;
       // VIDEO mode requires strictly increasing timestamps (rVFC can repeat a mediaTime).
@@ -366,23 +390,23 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
       // a persistent error must not rebuild the graph every frame
       if (needsRebuild && performance.now() - lastRebuildAt < REBUILD_INTERVAL_MS) return null;
       try {
-        setMode('VIDEO');
+        setMode('VIDEO', clampFaces(o.maxFaces));
         const frame = inst.delegate === 'CPU' && frameCopy ? copyFrame(frameCopy, video) : video;
-        return succeeded(toLandmarks(inst.landmarker.detectForVideo(frame, ts).faceLandmarks));
+        return succeeded(toLandmarksAll(inst.landmarker.detectForVideo(frame, ts).faceLandmarks));
       } catch (e) {
         throw failed('detectVideo', e);
       }
     },
 
-    detectImage(image: ImageInput): Landmarks478 | null {
-      if (closed) return null;
+    detectImage(image: ImageInput, o: { maxFaces: number }): Landmarks478[] {
+      if (closed) return [];
       const [w, h] = imageSize(image);
-      if (w <= 0 || h <= 0) return null;
-      if (!usable()) return null;
+      if (w <= 0 || h <= 0) return [];
+      if (!usable()) return [];
       // one-shot and user-initiated: rebuild right away, no throttle
       try {
-        setMode('IMAGE');
-        return succeeded(toLandmarks(inst.landmarker.detect(image).faceLandmarks));
+        setMode('IMAGE', clampFaces(o.maxFaces));
+        return succeeded(toLandmarksAll(inst.landmarker.detect(image).faceLandmarks));
       } catch (e) {
         throw failed('detectImage', e);
       }

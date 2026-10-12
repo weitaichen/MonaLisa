@@ -2,11 +2,18 @@
 // Served by vite (port 5183) and driven by tests/harness/t3/run.mjs.
 import { adapt } from '../../../src/tracking/adapter111';
 import { createTracker } from '../../../src/tracking/tracker';
-import type { Delegate, Landmarks478 } from '../../../src/types';
+import type { Delegate, Landmarks478, Tracker } from '../../../src/types';
 import fixture from '../../fixtures/landmarks_sample_face.json';
 import { GPUPIXEL_TEMPLATE } from './gpupixelTemplate';
 
 const N = 111;
+
+/** one face, v0.3 shape: null for no face (or no answer) */
+const img1 = (t: Tracker, x: Parameters<Tracker['detectImage']>[0]) => t.detectImage(x, { maxFaces: 1 })[0] ?? null;
+const vid1 = (t: Tracker, v: HTMLVideoElement, ts: number) => {
+  const r = t.detectVideo(v, ts, { maxFaces: 1 });
+  return r === null ? null : (r[0] ?? null);
+};
 
 function loadImage(url: string): Promise<HTMLImageElement> {
   const img = new Image();
@@ -139,15 +146,15 @@ async function runTracker(delegate: 'auto' | Delegate) {
   const img = await loadImage('/tests/fixtures/sample_face.png');
   const bmp = await createImageBitmap(img);
   const t1 = performance.now();
-  const a = summarize(tracker.detectImage(img));
+  const a = summarize(img1(tracker, img));
   const imageMs = performance.now() - t1;
-  const b = summarize(tracker.detectImage(bmp));
+  const b = summarize(img1(tracker, bmp));
   const blank = document.createElement('canvas');
   blank.width = 320; blank.height = 240;
   blank.getContext('2d')!.fillRect(0, 0, 320, 240);
-  const none = tracker.detectImage(blank);
+  const none = img1(tracker, blank);
   tracker.close();
-  const afterClose = tracker.detectImage(img);
+  const afterClose = img1(tracker, img);
   return { delegate: tracker.delegate, createMs, imageMs, img: a, bitmap: b, blankIsNull: none === null, afterCloseIsNull: afterClose === null };
 }
 
@@ -156,7 +163,7 @@ async function runVideo(delegate: 'auto' | Delegate, frames: number) {
   const tracker = await createTracker({ modelBuffer: await modelBuffer(), wasmBase: '/mediapipe/0.10.35', delegate });
   const video = document.createElement('video');
   video.muted = true; video.playsInline = true;
-  const notReady = tracker.detectVideo(video, 1); // readyState 0 → must be null, no throw
+  const notReady = vid1(tracker, video, 1); // readyState 0 → must be null, no throw
   video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
   await video.play();
   await new Promise((r) => setTimeout(r, 300));
@@ -166,7 +173,7 @@ async function runVideo(delegate: 'auto' | Delegate, frames: number) {
     await new Promise((r) => requestAnimationFrame(r));
     const t = performance.now();
     // deliberately repeat a timestamp every 5th frame: the tracker must bump it, not throw
-    const l = tracker.detectVideo(video, i % 5 === 4 ? 1000 : 1000 + i * 33);
+    const l = vid1(tracker, video, i % 5 === 4 ? 1000 : 1000 + i * 33);
     ms += performance.now() - t;
     if (l) {
       hits++;
@@ -174,7 +181,7 @@ async function runVideo(delegate: 'auto' | Delegate, frames: number) {
     } else nulls++;
     if (i === Math.floor(frames / 2)) {
       const img = await loadImage('/tests/fixtures/sample_face.png');
-      const r = summarize(tracker.detectImage(img));
+      const r = summarize(img1(tracker, img));
       if (!r || r.maxDiffVsFixture > 0.02) throw new Error('detectImage mid-video failed: ' + JSON.stringify(r));
     }
   }
@@ -182,7 +189,7 @@ async function runVideo(delegate: 'auto' | Delegate, frames: number) {
   const snap = document.createElement('canvas');
   snap.width = video.videoWidth; snap.height = video.videoHeight;
   const sctx = snap.getContext('2d')!;
-  const last = tracker.detectVideo(video, 1e6);
+  const last = vid1(tracker, video, 1e6);
   sctx.drawImage(video, 0, 0);
   if (last) {
     const f = adapt(last, snap.width, snap.height);
@@ -195,7 +202,7 @@ async function runVideo(delegate: 'auto' | Delegate, frames: number) {
   const still = document.createElement('canvas');
   still.width = video.videoWidth; still.height = video.videoHeight;
   still.getContext('2d')!.drawImage(video, 0, 0);
-  const ref = tracker.detectImage(still);
+  const ref = img1(tracker, still);
   let videoVsImageMaxDiff = -1;
   if (last && ref) {
     videoVsImageMaxDiff = 0;
@@ -234,19 +241,19 @@ async function runContextLoss(delegate: 'auto' | Delegate) {
       onStateChange: (s) => states.push(s),
     });
     const img = await loadImage('/tests/fixtures/sample_face.png');
-    const before = summarize(tracker.detectImage(img));
+    const before = summarize(img1(tracker, img));
     const delegateBefore = tracker.delegate;
     const lost = ctxs.filter((c) => !c.isContextLost());
     for (const c of lost) c.getExtension('WEBGL_lose_context')?.loseContext();
     await new Promise((r) => setTimeout(r, 50));
-    const rightAfterHasFace = tracker.detectImage(img) !== null;
+    const rightAfterHasFace = img1(tracker, img) !== null;
     const t0 = performance.now();
     let after: ReturnType<typeof summarize> = null;
     let detectErrors = 0;
     while (!after && performance.now() - t0 < 10000) {
       await new Promise((r) => setTimeout(r, 100));
       try {
-        after = summarize(tracker.detectImage(img));
+        after = summarize(img1(tracker, img));
       } catch {
         detectErrors++;
       }

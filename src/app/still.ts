@@ -301,8 +301,10 @@ function detectOnce(
 ): { face: Face | null; known: boolean } {
   if (!tracker) return { face: null, known: true };
   try {
-    const lm = tracker.detectImage(bitmap);
-    return { face: lm ? adapt(lm, width, height) : null, known: true };
+    const lms = tracker.detectImage(bitmap, { maxFaces: 1 });
+    const dbg = debugState();
+    if (dbg) dbg.detectCalls++;
+    return { face: lms.length ? adapt(lms[0], width, height) : null, known: true };
   } catch (err) {
     reportError('still detect', err);
     return { face: null, known: false };

@@ -29,14 +29,23 @@ export function installWorkClock() {
   };
 }
 
-export function makeFace(tag = 0): Face {
+export function makeFace(tag = 0, cx = 0.5): Face {
   const pts111 = new Float32Array(222).fill(0.5);
   pts111[0] = tag;
-  return { pts111, ext: new Float32Array(16), oval: new Float32Array(72), yaw: 0 };
+  // a non-degenerate oval (radius 0.2 around (cx, 0.5)): prepareFaces keeps it
+  const oval = new Float32Array(72);
+  for (let i = 0; i < 36; i++) {
+    oval[i * 2] = cx + 0.2 * Math.cos((i / 36) * 2 * Math.PI);
+    oval[i * 2 + 1] = 0.5 + 0.2 * Math.sin((i / 36) * 2 * Math.PI);
+  }
+  return { pts111, ext: new Float32Array(16), oval, yaw: 0 };
 }
 
-export function makeLandmarks(): Landmarks478 {
-  return { points: new Float32Array(478 * 3).fill(0.5) };
+/** `tag` lands in the first coordinate (0.5 + tag/1000), so a mocked adapt can tell results apart */
+export function makeLandmarks(tag = 0): Landmarks478 {
+  const points = new Float32Array(478 * 3).fill(0.5);
+  points[0] = 0.5 + tag / 1000;
+  return { points };
 }
 
 type FrameCb = (now: number, md: VideoFrameCallbackMetadata) => void;
@@ -189,22 +198,30 @@ export function fakeCamera(video: FakeVideo, state: CameraState = 'live', facing
 
 export interface FakeTracker extends Tracker {
   face: boolean;
+  /** faces per detection */
+  count: number;
+  /** detectVideo answers null (no answer) while set */
+  unusable: boolean;
   /** simulated cost of each detect call, ms */
   cost: number;
   detectVideo: ReturnType<typeof vi.fn<Tracker['detectVideo']>>;
   detectImage: ReturnType<typeof vi.fn<Tracker['detectImage']>>;
 }
 
-export function fakeTracker(clock?: { work(ms: number): void }, face = true): FakeTracker {
+export function fakeTracker(clock?: { work(ms: number): void }, face = true, count = 1): FakeTracker {
+  const faces = () => Array.from({ length: t.count }, (_, i) => makeLandmarks(i));
   const t = {
     delegate: 'GPU' as const,
     face,
+    count,
+    unusable: false,
     cost: 0,
     detectVideo: vi.fn(() => {
       clock?.work(t.cost);
-      return t.face ? makeLandmarks() : null;
+      if (t.unusable) return null;
+      return t.face ? faces() : [];
     }),
-    detectImage: vi.fn(() => (t.face ? makeLandmarks() : null)),
+    detectImage: vi.fn(() => (t.face ? faces() : [])),
     close: vi.fn(),
   };
   return t as unknown as FakeTracker;

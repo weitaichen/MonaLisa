@@ -339,16 +339,17 @@ export interface Tracker {
   /** Delegate of the current graph; re-read it on onStateChange('ok'): a rebuild under 'auto' may fall back to CPU. */
   readonly delegate: Delegate;
   /**
-   * VIDEO mode; tsMs must be strictly increasing. Returns null when no face, and also while the
-   * tracker is recovering (lost GL context / rebuild throttle). Throws on inference failure: the
-   * tracker rebuilds its graph on the next call.
+   * VIDEO mode; tsMs must be strictly increasing. null = no answer (closed, frame not ready, tracker unusable, rebuild
+   * throttled); [] = a completed inference without a face (A5). `maxFaces` is required (clamped to 1…EDIT_DETECT_FACES)
+   * and travels with the mode in one setOptions: options are sticky, and every change rebuilds the graph. Throws on
+   * inference failure: the tracker rebuilds its graph on the next call.
    */
-  detectVideo(video: HTMLVideoElement, tsMs: number): Landmarks478 | null;
+  detectVideo(video: HTMLVideoElement, tsMs: number, opts: { maxFaces: number }): Landmarks478[] | null;
   /**
-   * IMAGE mode on the same instance; the next detectVideo call switches back to VIDEO (one graph
-   * rebuild per switch). Null / throw semantics as detectVideo.
+   * IMAGE mode on the same instance; the next detectVideo switches back. [] = no face, or not known (recovering /
+   * unusable): callers keep the health check (editorModel.ts detectSession). Throws as detectVideo.
    */
-  detectImage(image: ImageBitmap | HTMLCanvasElement | HTMLImageElement): Landmarks478 | null;
+  detectImage(image: ImageBitmap | HTMLCanvasElement | HTMLImageElement, opts: { maxFaces: number }): Landmarks478[];
   close(): void;
 }
 

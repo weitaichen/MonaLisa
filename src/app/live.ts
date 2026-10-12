@@ -1,4 +1,5 @@
 // OWNER: app-glue agent. Live camera loop: rVFC → detect → adapt → render, face easing, auto-tier, debug state.
+import { LIVE_DETECT_FACES } from '../config/limits';
 import { adapt } from '../tracking/adapter111';
 import type { BeautyParams, CameraController, Engine, EngineOptions, Face, Prefs, Tier, Tracker } from '../types';
 import { debugState, reportError } from './debug';
@@ -165,8 +166,8 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
 
   function detectFace(t: Tracker, w: number, h: number): Face | null {
     try {
-      const lm = t.detectVideo(video, performance.now());
-      return lm ? adapt(lm, w, h) : null;
+      const lms = t.detectVideo(video, performance.now(), { maxFaces: LIVE_DETECT_FACES });
+      return lms && lms.length ? adapt(lms[0], w, h) : null;
     } catch (err) {
       reportError('live detect', err);
       return null;

@@ -4419,7 +4419,7 @@ git commit -m "v0.4 step 1b: the editor edits an EditState, writes HistoryEntry 
   - `src/detect/faces.ts`: `interface PreparedFace { id: string; face: Face; box: Rect; lm: Float32Array }`; `interface PreparedFaces { faces: PreparedFace[]; obstacles: CachedObstacle[]; dropped: { tooSmall: number; overCap: number } }`; `boxIoU(a: Rect, b: Rect): number`; `prepareFaces(lms: readonly Landmarks478[], width: number, height: number, cap?: number): PreparedFaces`; `adaptCached(c: CachedFace, width: number, height: number): Face`; `EMPTY_PREPARED: PreparedFaces`.
   - `fakeTracker(clock?, face = true, count = 1)` with `count` and `unusable` fields; `makeLandmarks(tag = 0)`; `makeFace(tag = 0, cx = 0.5)` now has a circle oval of radius 0.2 around `(cx, 0.5)` (identity-only tests are unaffected).
 
-- [ ] **Step 1: Port the existing tracker tests and add the T1/T2 cases**
+- [x] **Step 1: Port the existing tracker tests and add the T1/T2 cases**
 
 In `src/tracking/tracker.test.ts`:
 1. Record the create options in the fake: add `opts: { numFaces?: number; runningMode?: string };` to `FakeLandmarkerT` and `opts: o,` to the object built in `createFromOptions` (type `o` as `{ canvas?: FakeCanvas; baseOptions: { delegate: string }; numFaces?: number; runningMode?: string }`).
@@ -4472,7 +4472,7 @@ describe('createTracker: multiple faces (S §3.4 T1, T2)', () => {
 Run: `npx vitest run src/tracking/tracker.test.ts`
 Expected: FAIL (extra arguments ignored; `toEqual([])` gets `null`; no `numFaces` key).
 
-- [ ] **Step 2: Tracker types and implementation**
+- [x] **Step 2: Tracker types and implementation**
 
 `src/types.ts` (CRLF), `Tracker` (`:228-243`):
 
@@ -4555,7 +4555,7 @@ export function clampFaces(n: number): number {
 Run: `npx vitest run src/tracking/tracker.test.ts`
 Expected: PASS.
 
-- [ ] **Step 3: Write the failing `prepareFaces` tests**
+- [x] **Step 3: Write the failing `prepareFaces` tests**
 
 ```ts
 // src/detect/faces.test.ts
@@ -4640,7 +4640,7 @@ describe('prepareFaces (S §3.4 T3)', () => {
 Run: `npx vitest run src/detect/faces.test.ts`
 Expected: FAIL (cannot resolve `./faces`).
 
-- [ ] **Step 4: Write `ovalBox` and `src/detect/faces.ts`**
+- [x] **Step 4: Write `ovalBox` and `src/detect/faces.ts`**
 
 `src/engine/passes/faceCap.ts` (new; Task 16 extends it):
 
@@ -4750,7 +4750,7 @@ export function prepareFaces(lms: readonly Landmarks478[], width: number, height
 }
 ```
 
-- [ ] **Step 5: Port the callers (behaviour unchanged until Task 18)**
+- [x] **Step 5: Port the callers (behaviour unchanged until Task 18)**
 
 - `src/app/still.ts` `detectOnce` (`:296-310`): `const lms = tracker.detectImage(bitmap, { maxFaces: 1 });` then `const dbg = debugState(); if (dbg) dbg.detectCalls++;` and `return { face: lms.length ? adapt(lms[0], width, height) : null, known: true };`. (Task 18 switches to `EDIT_DETECT_FACES` + `prepareFaces`.)
 - `src/app/still.test.ts:36`: `toHaveBeenCalledWith(bmp)` → `toHaveBeenCalledWith(bmp, { maxFaces: 1 })`.
@@ -4827,7 +4827,7 @@ const vid1 = (t: Tracker, v: HTMLVideoElement, ts: number) => {
 - `tests/harness/b3/tracker.ts:74`: `tracker.detectVideo(big as unknown as HTMLVideoElement, 1000 + i * 33)` — this is a BodyTracker call; leave it (Task 14 ports body calls).
 - `tests/harness/t7/fakes.ts:402`: `detectVideo: () => null, detectImage: () => null` → `detectVideo: () => null, detectImage: () => []`.
 
-- [ ] **Step 6: Run everything touched**
+- [x] **Step 6: Run everything touched**
 
 Run: `npx vitest run src/tracking src/detect src/app && npm run typecheck`
 Expected: PASS; `tsc` exits 0.
@@ -4835,7 +4835,7 @@ Expected: PASS; `tsc` exits 0.
 Run: `npm run build && npx playwright test tests/e2e/parity.spec.ts tests/e2e/editor.spec.ts tests/e2e/camera.spec.ts`
 Expected: PASS (`numFaces` 1 on both paths: v0.3 behaviour).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/types.ts src/tracking/tracker.ts src/tracking/tracker.test.ts src/app/testFakes.ts src/app/still.ts src/app/still.test.ts src/app/live.ts src/detect/faces.ts src/detect/faces.test.ts src/engine/passes/faceCap.ts tests/harness/t3/harness.ts tests/harness/t7/fakes.ts

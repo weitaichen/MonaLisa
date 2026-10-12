@@ -153,7 +153,13 @@ describe('N-face port (S §4.4)', () => {
   // warps carry the mouth about 0.1 FW, more than the cap budget holds 0.33 FW from the box centre at 1.2 FW spacing, so
   // the mean keeps 0.838 there (the mouth landmarks 0.61–0.71; the mouth slider and 下巴 alone keep ≥ 0.99) and ≥ 0.9 from
   // 1.3 FW on (0.918). 1.2 FW is pinned at ≥ 0.8 so the trade cannot get worse unnoticed; the fold bound is unchanged.
-  it('fold and strength sweep: min det J ≥ MIN_DET; eyes / nose / mouth keep ≥ 0.9 at ≥ 1.3 FW (≥ 0.8 at 1.2 FW)', () => {
+  // 下巴 and 額頭 (S §4.4: ≥ 0.9 at ≥ 2.0 FW), measured at the chin point pts111[16] and the forehead point ext[0] with
+  // the sweep's combined settings: 額頭 keeps ≥ 0.998 from 1.8 FW and is pinned at the spec's 0.9. 下巴 does not meet
+  // the spec with the approved radius cap: the contour items carry the chin point about 0.15 FW, more than the budget
+  // holds there, so it keeps 0.708 at 2.0 FW, 0.837 at 2.1 and 0.939 at 2.2 (end 0; the 下巴 slider alone keeps ≥ 0.995
+  // from 1.8 FW). Pinned at ≥ 0.7 below 2.2 FW and ≥ 0.9 from 2.2 FW. Both strength deviations wait for the user's
+  // decision (Task 16 review): accept the spacings, or change the cap (spec §11 Q5).
+  it('fold and strength sweep: min det J ≥ MIN_DET; eyes / nose / mouth keep ≥ 0.9 at ≥ 1.3 FW (≥ 0.8 at 1.2 FW); 額頭 ≥ 0.9 at ≥ 2.0 FW; 下巴 ≥ 0.9 at ≥ 2.2 FW (≥ 0.7 at 2.0 FW)', () => {
     const FW = 0.12;
     const oneWay: ParamId[] = ['shape.eyeEnlarge', 'shape.faceSlim', 'shape.faceV', 'shape.faceNarrow', 'shape.noseSlim'];
     const bi: ParamId[] = ['shape.chin', 'shape.forehead', 'shape.mouthSize', 'shape.eyeDistance'];
@@ -164,7 +170,13 @@ describe('N-face port (S §4.4)', () => {
       for (const k of [72, 73, 75, 76, 46, 47, 98, 102]) s += Math.hypot(...(map(P[k * 2], P[k * 2 + 1]).map((v, i) => v - P[k * 2 + i]) as [number, number]));
       return s / 8;
     };
+    const moved = (map: (x: number, y: number) => [number, number], x: number, y: number) => {
+      const s = map(x, y);
+      return Math.hypot(s[0] - x, s[1] - y);
+    };
     let worst = Infinity;
+    let chinWorst = Infinity;
+    let foreheadWorst = Infinity;
     for (const u of settings)
       for (const yaw of [0, 0.3])
         for (const deg of [0, 45, 90])
@@ -183,9 +195,19 @@ describe('N-face port (S §4.4)', () => {
               if (dFW >= 1.2 - 1e-9) {
                 const alone = reshapeMapMulti([tf(faces[0], u)], 1);
                 expect(featureMean(map, faces[0]) / featureMean(alone, faces[0]), `${count} faces ${dFW.toFixed(1)} FW ${deg}° yaw ${yaw}`).toBeGreaterThanOrEqual(dFW >= 1.3 - 1e-9 ? 0.9 : 0.8);
+                if (dFW >= 2.0 - 1e-9) {
+                  const P = faces[0].pts111;
+                  const E = faces[0].ext;
+                  const chin = moved(map, P[32], P[33]) / moved(alone, P[32], P[33]);
+                  const forehead = moved(map, E[0], E[1]) / moved(alone, E[0], E[1]);
+                  chinWorst = Math.min(chinWorst, chin);
+                  foreheadWorst = Math.min(foreheadWorst, forehead);
+                  expect(forehead, `額頭 ${count} faces ${dFW.toFixed(1)} FW ${deg}° yaw ${yaw}`).toBeGreaterThanOrEqual(0.9);
+                  expect(chin, `下巴 ${count} faces ${dFW.toFixed(1)} FW ${deg}° yaw ${yaw}`).toBeGreaterThanOrEqual(dFW >= 2.2 - 1e-9 ? 0.9 : 0.7);
+                }
               }
             }
-    console.log(`sweep worst min det J ${worst.toFixed(3)}`);
+    console.log(`sweep worst min det J ${worst.toFixed(3)}; at ≥ 2.0 FW 下巴 keeps ≥ ${chinWorst.toFixed(3)}, 額頭 ≥ ${foreheadWorst.toFixed(3)}`);
   }, 180_000);
   it('touching faces (0.3 and 0.5 FW apart) stay finite and fold-free (Review Focus #2)', () => {
     const u = reshapeUniforms(params(['shape.faceSlim', 'shape.faceV', 'shape.eyeEnlarge', 'shape.chin']), 1);

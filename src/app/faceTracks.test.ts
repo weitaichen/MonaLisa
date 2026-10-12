@@ -135,6 +135,32 @@ describe('FaceTracks (S §3.4 T4)', () => {
       expect(t.views()[0]?.weight ?? 0).toBe(want);
     });
   });
+  it.each([3, 1])(
+    'one face that comes back far from where it was (after no answer, after a [] gap, or in one jump) stays one track with v0.3’s weight (maxFaces %i, S §1.2 item 1)',
+    (maxFaces) => {
+      const far = [lmAt(0.6, 0.5, 0.2)];
+      const near = [lmAt(0.3, 0.5, 0.2)];
+      const seqs: (readonly Landmarks478[] | null)[][] = [
+        [...Array(10).fill(near), ...Array(60).fill(null), ...Array(20).fill(far)],
+        [...Array(10).fill(near), ...Array(10).fill([]), ...Array(20).fill(far)],
+        [...Array(10).fill(near), ...Array(20).fill(far)],
+      ];
+      for (const seq of seqs) {
+        const t = new FaceTracks({ maxFaces });
+        const e = new FaceWeightEaser();
+        seq.forEach((lms, i) => {
+          t.detect(lms, i * 33, W, H);
+          t.step(33, false, i * 33);
+          const want = e.update(lms !== null && lms.length > 0, 33);
+          expect(t.views()).toHaveLength(1);
+          expect(t.views()[0].weight).toBe(want);
+          expect(t.anyFace).toBe(want);
+        });
+        expect(t.views()[0].box.x).toBeGreaterThan(0.45);
+        expect(cameraTapAction(t.views()[0].id, t.views().length, t.selection(), false)).toEqual({ kind: 'collapse' });
+      }
+    },
+  );
   it('with maxFaces 1 the smoother is bypassed: the shown face is the raw one (v0.3)', () => {
     const t = new FaceTracks({ maxFaces: 1 });
     run(t, 3, (i) => [A(i * 0.01)]);

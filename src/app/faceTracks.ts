@@ -132,6 +132,14 @@ export class FaceTracks {
       used.add(best);
       pairs.push([t, best]);
     }
+    // one track, one face: the same track wherever the face went (after no answer, a [] gap or a brisk pan), as v0.3
+    // followed lms[0] (S §1.2 item 1); a new track would leave the held one the target, and the only face unbeautified
+    if (this.list.length === 1 && unique.length === 1 && pairs.length === 0) {
+      const t = this.list[0];
+      free.delete(t);
+      used.add(unique[0]);
+      pairs.push([t, unique[0]]);
+    }
     for (const [t, d] of pairs) this.feed(t, d, tsMs, w, h);
     for (const t of free) t.present = false;
     // unmatched detections start tracks, largest first, while there is room; ids count up per session

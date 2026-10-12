@@ -2,7 +2,8 @@
 import { defaultParams } from '../engine/params';
 import { splitLegacy } from '../edit/legacy';
 import { DEFAULT_PREFS } from '../store/settings';
-import type { BeautyParams, BodyDetection, CameraLook, PersonMask, Prefs } from '../types';
+import type { V1Bodies } from '../edit/migrate';
+import type { BodyDetection, CameraLook, DetectionCache, EditState, FaceSeed, PersonId, PersonMask, Prefs, Rect } from '../types';
 import { deps } from './deps';
 import { debug, reportError } from './debug';
 import { createStore } from './store';
@@ -29,10 +30,26 @@ export interface Shot {
 export interface EditorSource {
   /** owned by the editor session afterwards */
   bitmap: ImageBitmap;
-  params: BeautyParams;
+  /** the edit to open with: openState for an entry, importEdit / cameraShotEdit for a new photo */
+  edit: EditState;
   /** existing history entry being re-edited, or null for a new photo */
   historyId: string | null;
-  /** the entry's cached 美體 detection (null = checked, nobody in the photo; undefined = never checked / unknown) */
+  /** the entry's detection cache, trusted as is (openState checked cachedFits); null = none or dropped */
+  detect: DetectionCache | null;
+  /** one face detection is owed (a tracker permitting): no cache, a 基本模式 cache, or a dropped one */
+  needsFaceDetect: boolean;
+  /** a dropped cache: the old persons' face boxes (rematchByIoU, S §5.3) */
+  rematch: Record<PersonId, Rect> | null;
+  /** a v1 entry's cached bodies (b0), merged at the first face answer (A13) */
+  v1Body: V1Bodies | null;
+  /** the cache was dropped or lost persons: toast after the re-detect */
+  cacheDropped: boolean;
+  /** camera → editor: the beautified face (C2) */
+  faceSeed: FaceSeed;
+  /**
+   * sub-step 1b only (Task 21 removes it): the v1 body detection the 美體 tab starts from (null = checked, nobody in
+   * the photo; undefined = never checked / unknown)
+   */
   body?: BodyDetection | null;
   /** the entry was saved with the 瘦臉 background limit requested (HistoryEntry.faceProtect): reopening requests it again */
   faceProtect?: boolean;

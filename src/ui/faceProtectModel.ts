@@ -22,8 +22,11 @@
 // that settled as impossible for this photo (none built, and the segmenter unavailable, failing or finding nobody)
 // records "unlimited", which is what that output was. Every params write carries the record (paramsPatch). The limit
 // is built per face (a re-detected face gets a new one) and kept once built. The live camera never uses it.
+import { legacyProjection } from '../edit/legacy';
+import { sanitizeParams } from '../engine/params';
 import { reshapeUniforms } from '../engine/passes/reshape';
-import type { BeautyParams, Face, FaceProtect, ParamId, PersonMask } from '../types';
+import { stableKey } from '../store/undo';
+import type { BeautyParams, EditState, Face, FaceProtect, ParamId, PersonId, PersonMask } from '../types';
 
 /** the contour sliders (the only warps the limit acts on) and their reshape uniforms */
 const CONTOUR = {
@@ -128,19 +131,25 @@ export interface FaceProtectRecord {
 }
 
 /**
- * The params write of an existing history entry (an updateEntry patch). Every params write goes through it, so the
- * limit record always rides along: params and flag never disagree (a write without it would leave a stale flag, or
- * none, beside the new params). The segmenter mask is the same for the whole photo: written only while none is stored
- * yet (`maskStored`); a stored one is kept (updateEntry never removes it).
+ * The params write of an existing history entry (an updateEntry patch), and of addEntry. Every params write goes
+ * through it, so the v2 fields (RM §5.1: schema, edit, its legacy projection for a rollback to 0.3, paramsKey) and
+ * the limit record always ride along together: params and flag never disagree (a write without it would leave a stale
+ * flag, or none, beside the new params). The segmenter mask is the same for the whole photo: written only while none
+ * is stored yet (`maskStored`); a stored one is kept (updateEntry never removes it).
  */
 export function paramsPatch(
-  params: BeautyParams,
+  edit: EditState,
+  primary: PersonId,
   limit: FaceProtectRecord,
   maskStored: boolean,
   thumb?: Blob,
-): { params: BeautyParams; thumb?: Blob; faceProtect: boolean; faceMask?: PersonMask } {
+): { schema: 2; edit: EditState; params: BeautyParams; paramsKey: string; thumb?: Blob; faceProtect: boolean; faceMask?: PersonMask } {
+  const params = sanitizeParams(legacyProjection(edit, primary));
   return {
+    schema: 2,
+    edit,
     params,
+    paramsKey: stableKey(params),
     ...(thumb ? { thumb } : {}),
     faceProtect: limit.faceProtect,
     ...(limit.faceMask && !maskStored ? { faceMask: limit.faceMask } : {}),

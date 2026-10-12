@@ -1,7 +1,6 @@
 // Multi-step user flows shared by several screens.
-import { legacyProjection } from '../edit/legacy';
-import { cameraEdit, LIVE } from '../edit/state';
-import type { BeautyParams } from '../types';
+import { importEdit, openState } from '../edit/migrate';
+import type { EditState, FaceSeed, HistoryEntry } from '../types';
 import { reportError } from './debug';
 import { deps } from './deps';
 import { app, go, toast, type EditorSource } from './state';
@@ -14,30 +13,25 @@ function maxImportEdge(): number {
   return tier === 'L' ? 1440 : 2048;
 }
 
-/** Decode a photo (file or history original) and open it in the editor. */
-export async function openInEditor(
-  blob: Blob,
-  opts: {
-    params?: BeautyParams;
-    historyId?: string | null;
-    body?: EditorSource['body'];
-    faceProtect?: EditorSource['faceProtect'];
-    faceMask?: EditorSource['faceMask'];
-    returnTo: EditorSource['returnTo'];
-  },
-): Promise<void> {
+/** A new photo's editor source (an import or a camera shot): nothing cached, one detection owed. */
+export function freshSource(bitmap: ImageBitmap, edit: EditState, returnTo: EditorSource['returnTo'], faceSeed: FaceSeed = null): EditorSource {
+  return { bitmap, edit, historyId: null, detect: null, needsFaceDetect: true, rematch: null, v1Body: null, cacheDropped: false, faceSeed, returnTo };
+}
+
+/** Decode a photo (file or history original) and open it in the editor; an entry goes through openState (S §5.3). */
+export async function openInEditor(blob: Blob, opts: { entry?: HistoryEntry | null; returnTo: EditorSource['returnTo'] }): Promise<void> {
   app.set({ busy: '正在開啟照片…' });
   try {
     const bitmap = await deps.importPhoto(blob, maxImportEdge());
-    const source: EditorSource = {
-      bitmap,
-      params: opts.params ?? legacyProjection(cameraEdit(app.get().look), LIVE),
-      historyId: opts.historyId ?? null,
-      returnTo: opts.returnTo,
-    };
-    if (opts.body !== undefined) source.body = opts.body;
-    if (opts.faceProtect === true) source.faceProtect = true;
-    if (opts.faceMask) source.faceMask = opts.faceMask;
+    const entry = opts.entry ?? null;
+    let source: EditorSource;
+    if (entry) {
+      const o = openState(entry, { width: bitmap.width, height: bitmap.height });
+      source = { ...freshSource(bitmap, o.edit, opts.returnTo), historyId: entry.id, detect: o.detect, needsFaceDetect: o.needsFaceDetect, rematch: o.rematch, v1Body: o.v1Body, cacheDropped: o.cacheDropped };
+      if (entry.body !== undefined) source.body = entry.body;
+      if (entry.faceProtect === true) source.faceProtect = true;
+      if (entry.faceMask) source.faceMask = entry.faceMask;
+    } else source = freshSource(bitmap, importEdit(app.get().look), opts.returnTo);
     go({ name: 'editor', source });
   } catch (e) {
     toast(`無法開啟照片：${reportError(e, 'importPhoto')}`, 4000);

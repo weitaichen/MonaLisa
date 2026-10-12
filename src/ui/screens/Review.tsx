@@ -1,10 +1,10 @@
 // Review 預覽 (spec §7.2.3): the captured result; 重拍 · 編輯 · 儲存. The JPEG is encoded right after
 // capture so 儲存 can call the share sheet synchronously inside the tap (RB §1 #10).
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { legacyProjection } from '../../edit/legacy';
-import { cameraEdit, LIVE } from '../../edit/state';
+import { cameraShotEdit } from '../../edit/migrate';
 import { errorText, reportError } from '../debug';
 import { deps } from '../deps';
+import { freshSource } from '../flows';
 import { Icon } from '../icons';
 import { haptic } from '../platform';
 import { go, showSaveFallback, toast, type Shot } from '../state';
@@ -90,7 +90,7 @@ export function Review({ shot }: { shot: Shot }) {
       return;
     }
     handedOff.current = true;
-    go({ name: 'editor', source: { bitmap: shot.original, params: legacyProjection(cameraEdit(shot.look), LIVE), historyId: null, returnTo: 'camera' } });
+    go({ name: 'editor', source: freshSource(shot.original, cameraShotEdit(shot.look, null), 'camera') });
   };
 
   const busy = !file && !encodeErr;

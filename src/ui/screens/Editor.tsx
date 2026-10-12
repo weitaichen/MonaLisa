@@ -16,11 +16,11 @@ import type { StillSession } from '../../app/still';
 import { heightBandStretch } from '../../body/bands';
 import { buildBodyField } from '../../body/field';
 import { measureBody, paramAvailability } from '../../body/measure';
-import { applyPreset, setHeightBand } from '../../engine/params';
 import { buildFaceProtect } from '../../tracking/faceProtect';
-import type { BeautyParams, BodyDetection, BodyField, EditState, Engine, Face } from '../../types';
+import type { BeautyParams, BodyDetection, BodyField, EditState, Engine, Face, PersonId } from '../../types';
 import { lensFor, P0_INFO } from '../../edit/lens';
-import { editFromLegacy, legacyProjection } from '../../edit/legacy';
+import { legacyProjection } from '../../edit/legacy';
+import { editKey, P0 } from '../../edit/state';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
 import { HeightBandOverlay } from '../components/HeightBandOverlay';
 import { CanvasHost } from '../components/CanvasHost';
@@ -67,8 +67,6 @@ const BODY_PAINT_MS = 60;
 
 let lastSel: PanelSelection = INITIAL_SELECTION;
 
-const keyOf = (p: BeautyParams) => JSON.stringify(p);
-
 export function Editor({ source }: { source: EditorSource }) {
   const engine = useStore(svc, (s) => s.engine);
   const lost = useStore(svc, (s) => s.lost);
@@ -76,12 +74,16 @@ export function Editor({ source }: { source: EditorSource }) {
   const trackerHealth = useStore(svc, (s) => s.tracker);
   const bundle = engine.state === 'ready' ? engine.bundle : null;
 
-  const [params, setParamsState] = useState(source.params);
+  const [edit, setEditState] = useState<EditState>(source.edit);
+  const editRef = useRef(edit);
+  editRef.current = edit;
+  /** sub-step 1b: one implicit person until the detection cache lands (Task 21) */
+  const primary: PersonId = P0;
+  const lensOf = (e: EditState) => lensFor(e, { kind: 'person', id: primary }, P0_INFO, primary);
+  /** the engine, the 美體 field and the 瘦臉 limit draw the 0.3 view of the edit until Task 18 */
+  const params = useMemo(() => legacyProjection(edit, primary), [edit]);
   const paramsRef = useRef(params);
   paramsRef.current = params;
-  // Task 10 shim (removed by Task 12): the panel speaks EditState, the editor still holds BeautyParams
-  const lensOfParams = (p: BeautyParams) => lensFor(editFromLegacy(p), { kind: 'person', id: 'p0' }, P0_INFO, 'p0');
-  const back = (e: EditState) => legacyProjection(e, 'p0');
   const [sel, setSelState] = useState(lastSel);
   /**
    * the still session plus the engine it draws with (recoverEngine replaces the engine → a new session).
@@ -104,7 +106,7 @@ export function Editor({ source }: { source: EditorSource }) {
   const fresh = useRef<(OutputStamp & { file: File }) | null>(null);
   const historyId = useRef<string | null>(source.historyId);
   /** what was last queued to history (a reopened entry starts saved: viewing it writes nothing) */
-  const saved = useRef<OutputStamp | null>(source.historyId ? { key: keyOf(source.params), field: ANY_FIELD } : null);
+  const saved = useRef<OutputStamp | null>(source.historyId ? { key: editKey(source.edit), field: ANY_FIELD } : null);
   const historyChain = useRef<Promise<unknown>>(Promise.resolve());
   /** the entry holds this photo's segmenter mask (HistoryEntry.faceMask) already */
   const faceMaskStored = useRef(!!source.faceMask);
@@ -154,10 +156,10 @@ export function Editor({ source }: { source: EditorSource }) {
   // only a session bound to the current engine counts; while recoverEngine rebuilds there is none
   const session = bound && bundle && bound.engine === bundle.engine ? bound.s : null;
 
-  const undo = useMemo<UndoLike<BeautyParams> | null>(() => {
+  const undo = useMemo<UndoLike<EditState> | null>(() => {
     try {
-      const u = deps.createUndo<BeautyParams>(50);
-      u.reset(source.params);
+      const u = deps.createUndo<EditState>(50, { clone: false, key: editKey });
+      u.reset(source.edit);
       return u;
     } catch (e) {
       reportError(e, 'UndoStack');
@@ -171,12 +173,12 @@ export function Editor({ source }: { source: EditorSource }) {
   };
 
   /** commit=true records an undo step; commit=false is a drag step (the 美體 field previews a draft) */
-  const update = (p: BeautyParams, commit: boolean) => {
+  const update = (e: EditState, commit: boolean) => {
     fieldDraft.noteUpdate(commit);
-    setParamsState(p);
+    setEditState(e);
     if (commit && undo) {
       try {
-        undo.push(p);
+        undo.push(e);
       } catch (e) {
         reportError(e, 'undo.push');
       }
@@ -267,16 +269,16 @@ export function Editor({ source }: { source: EditorSource }) {
   }, [bound, trackerHealth, currentEngine]);
 
   /**
-   * Queue the history write for `p` rendered with field generation `gen` (thumb + update, or a new entry) and
+   * Queue the history write for `e` rendered with field generation `gen` (thumb + update, or a new entry) and
    * publish it for Home. Returns what it marked as saved.
    */
-  const queueHistory = (p: BeautyParams, gen: number, img: ImageData, s: StillSession) => {
-    const stamp: OutputStamp = { key: keyOf(p), field: gen };
+  const queueHistory = (e: EditState, gen: number, img: ImageData, s: StillSession) => {
+    const stamp: OutputStamp = { key: editKey(e), field: gen };
     saved.current = stamp;
     // the limit `img` was drawn with (a limit change since the export re-arms its own write: see the encode effect)
     const limit = limitRecord(s);
     historyChain.current = historyChain.current
-      .then(() => writeHistory(p, img, s, limit))
+      .then(() => writeHistory(e, img, s, limit))
       .catch((e: unknown) => reportError(e, 'history autosave'));
     setPendingHistory(historyChain.current);
     return stamp;
@@ -292,8 +294,8 @@ export function Editor({ source }: { source: EditorSource }) {
    * The params write of an existing entry, the only one there is (writeHistory and the lost-engine flush): always with
    * the limit record (paramsPatch), so params and flag never disagree; the segmenter mask once.
    */
-  const writeParams = async (id: string, p: BeautyParams, limit: FaceProtectRecord, thumb?: Blob) => {
-    await deps.updateEntry(id, paramsPatch(p, limit, faceMaskStored.current, thumb));
+  const writeParams = async (id: string, e: EditState, limit: FaceProtectRecord, thumb?: Blob) => {
+    await deps.updateEntry(id, paramsPatch(e, primary, limit, faceMaskStored.current, thumb));
     if (limit.faceMask) faceMaskStored.current = true;
   };
 
@@ -301,11 +303,11 @@ export function Editor({ source }: { source: EditorSource }) {
    * thumb + update, or a new entry (one step of historyChain). `limit`: the limit record (limitRecord) taken when
    * `img` was exported, so a reopen draws the same.
    */
-  const writeHistory = async (p: BeautyParams, img: ImageData, size: { width: number; height: number }, limit: FaceProtectRecord) => {
+  const writeHistory = async (e: EditState, img: ImageData, size: { width: number; height: number }, limit: FaceProtectRecord) => {
     const { width, height } = size;
     const thumb = await deps.toJpegBlob(img, THUMB_EDGE, 0.82);
     if (historyId.current) {
-      await writeParams(historyId.current, p, limit, thumb);
+      await writeParams(historyId.current, e, limit, thumb);
       return;
     }
     const original = await (originalBlob.current ?? deps.toJpegBlob(img, ORIGINAL_EDGE, 0.9));
@@ -315,7 +317,7 @@ export function Editor({ source }: { source: EditorSource }) {
       width,
       height,
       ...(body !== undefined ? { body } : {}),
-      ...paramsPatch(p, limit, faceMaskStored.current),
+      ...paramsPatch(e, primary, limit, faceMaskStored.current),
       thumb,
     });
     if (body !== undefined) bodyStored.current = true;
@@ -348,8 +350,9 @@ export function Editor({ source }: { source: EditorSource }) {
   const flushHistory = () => {
     const s = sessionRef.current;
     if (!s || fatalRef.current) return;
+    const e = editRef.current;
     const p = paramsRef.current;
-    const key = keyOf(p);
+    const key = editKey(e);
     const gen = settleField();
     if (stampIs(saved.current, key, gen)) return;
     if (sessionEngine.current?.lost) {
@@ -360,8 +363,8 @@ export function Editor({ source }: { source: EditorSource }) {
       saved.current = { key, field: gen };
       const limit = limitRecord(s);
       historyChain.current = historyChain.current
-        .then(() => writeParams(id, p, limit))
-        .catch((e: unknown) => reportError(e, 'history flush'));
+        .then(() => writeParams(id, e, limit))
+        .catch((err: unknown) => reportError(err, 'history flush'));
       setPendingHistory(historyChain.current);
       return;
     }
@@ -369,9 +372,9 @@ export function Editor({ source }: { source: EditorSource }) {
     const field = snapshotField();
     let stamp: OutputStamp;
     try {
-      stamp = queueHistory(p, gen, s.exportImageData(p, field), s);
-    } catch (e) {
-      reportError(e, 'history flush');
+      stamp = queueHistory(e, gen, s.exportImageData(p, field), s);
+    } catch (err) {
+      reportError(err, 'history flush');
       return;
     }
     if (ready) return;
@@ -382,9 +385,9 @@ export function Editor({ source }: { source: EditorSource }) {
       .then(() => Promise.race([s.prepareExport(p), new Promise((r) => window.setTimeout(r, FLUSH_LUT_WAIT_MS))]))
       .then(async () => {
         if (saved.current !== stamp || !s.exportReady(p)) return;
-        await writeHistory(p, s.exportImageData(p, field), s, limitRecord(s));
+        await writeHistory(e, s.exportImageData(p, field), s, limitRecord(s));
       })
-      .catch((e: unknown) => reportError(e, 'history flush'));
+      .catch((err: unknown) => reportError(err, 'history flush'));
     setPendingHistory(historyChain.current);
   };
 
@@ -631,16 +634,16 @@ export function Editor({ source }: { source: EditorSource }) {
   useEffect(() => {
     if (!session || lost) return;
     const s = session;
-    const key = keyOf(params);
+    const key = editKey(edit);
     if (stampIs(fresh.current, key, fieldGen.current) && stampIs(saved.current, key, fieldGen.current)) return;
     const delay = Math.max(ENCODE_DEBOUNCE_MS, protectSrc.outputHoldMs());
     const t = window.setTimeout(async () => {
-      if (unmounted.current || sessionRef.current !== s || keyOf(paramsRef.current) !== key) return;
+      if (unmounted.current || sessionRef.current !== s || editKey(editRef.current) !== key) return;
       // (a drag held still past the debounce: export the full field, not its draft)
       const gen = settleField();
       const field = snapshotField();
       /** nothing newer (params, 美體 field, session) replaced what this export was made from */
-      const current = () => keyOf(paramsRef.current) === key && sessionRef.current === s && fieldGen.current === gen;
+      const current = () => editKey(editRef.current) === key && sessionRef.current === s && fieldGen.current === gen;
       let img: ImageData | null = null;
       if (!stampIs(fresh.current, key, gen)) {
         try {
@@ -668,10 +671,10 @@ export function Editor({ source }: { source: EditorSource }) {
       }
       // an edit (or a new field) during the await re-armed this effect: its own timer writes history
       if (!current()) return;
-      queueHistory(params, gen, img, s);
+      queueHistory(edit, gen, img, s);
     }, delay);
     return () => clearTimeout(t);
-  }, [session, params, lost, fieldTick, protectTick]);
+  }, [session, edit, lost, fieldTick, protectTick]);
 
   const hold = useHold((on) => {
     try {
@@ -704,7 +707,7 @@ export function Editor({ source }: { source: EditorSource }) {
 
   const save = () => {
     if (!session || preparing || lost) return;
-    const key = keyOf(params);
+    const key = editKey(edit);
     const gen = settleField();
     const f = fresh.current;
     if (f && stampIs(f, key, gen)) {
@@ -728,7 +731,7 @@ export function Editor({ source }: { source: EditorSource }) {
       ({ s, result: r }) => {
         setPreparing(false);
         // cached only while it still matches what is on screen (not after a 美體 edit during 準備中)
-        if (sessionRef.current === s && keyOf(paramsRef.current) === key && fieldGen.current === gen) {
+        if (sessionRef.current === s && editKey(editRef.current) === key && fieldGen.current === gen) {
           fresh.current = { key, field: gen, file: r.file };
         }
         share(r.file);
@@ -744,17 +747,17 @@ export function Editor({ source }: { source: EditorSource }) {
   const doUndo = () => {
     if (!undo?.canUndo) return;
     haptic();
-    const p = undo.undo();
+    const e = undo.undo();
     fieldDraft.noteFull();
-    if (p) setParamsState(p);
+    if (e) setEditState(e);
     bump((n) => n + 1);
   };
   const doRedo = () => {
     if (!undo?.canRedo) return;
     haptic();
-    const p = undo.redo();
+    const e = undo.redo();
     fieldDraft.noteFull();
-    if (p) setParamsState(p);
+    if (e) setEditState(e);
     bump((n) => n + 1);
   };
 
@@ -770,7 +773,7 @@ export function Editor({ source }: { source: EditorSource }) {
       return;
     }
     setConfirmReset(false);
-    update(applyPreset('natural', 1), true);
+    update(lensOf(editRef.current).reset(), true);
   };
 
   /** a slider step (commit=false) or its commit: the only edit that counts as the user's own contour edit */
@@ -779,7 +782,7 @@ export function Editor({ source }: { source: EditorSource }) {
       protectSrc.request(); // at once: a history write before the protect effect runs records it already
       setContourEdited(true);
     }
-    update(back(b.apply(lensOfParams(paramsRef.current), v)), commit);
+    update(b.apply(lensOf(editRef.current), v), commit);
   };
 
   const close = () => {
@@ -788,7 +791,8 @@ export function Editor({ source }: { source: EditorSource }) {
   };
 
   const bodyCtx = bodyPanelContext(bodyDet, bodyTracker, measure, paramAvailability, retryBody);
-  const binding = sliderFor(lensOfParams(params), sel, bodyCtx);
+  const lens = lensOf(edit);
+  const binding = sliderFor(lens, sel, bodyCtx);
   // face effects cannot apply: 基本模式, or no face in this photo (null while analysing, so no flash)
   // (a tracker that could not answer gets a neutral note until the re-detect gives a real answer)
   let faceNote: string | null = null;
@@ -838,9 +842,9 @@ export function Editor({ source }: { source: EditorSource }) {
             <CanvasHost fit="contain" />
             {session && !fatal && !hold.held && showsHeightBand(sel, bodyCtx) && (
               <HeightBandOverlay
-                band={bandOrSuggested(editFromLegacy(params), bodyCtx)}
+                band={bandOrSuggested(edit, bodyCtx)}
                 stretch={heightBandStretch}
-                onChange={(b, commit) => update(setHeightBand(paramsRef.current, b), commit)}
+                onChange={(b, commit) => update(lensOf(editRef.current).setHeightBand(b), commit)}
               />
             )}
           </div>
@@ -872,10 +876,10 @@ export function Editor({ source }: { source: EditorSource }) {
           onCommit={(v) => binding && slide(binding, v, true)}
         />
         <BeautyPanel
-          lens={lensOfParams(params)}
+          lens={lens}
           sel={sel}
           onSel={setSel}
-          onEdit={(e) => update(back(e), true)}
+          onEdit={(e) => update(e, true)}
           faceNote={faceNote}
           body={bodyCtx}
         />

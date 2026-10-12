@@ -6,7 +6,9 @@ import { loadPoseFixture } from '../body/fixtures.node';
 import { addEntry, closeHistory, getEntry, updateEntry } from '../store/history';
 import { adapt } from '../tracking/adapter111';
 import { buildFaceProtect } from '../tracking/faceProtect';
-import { applyPreset, setParam } from '../engine/params';
+import { applyPreset, sanitizeParams, setParam } from '../engine/params';
+import { editFromLegacy, legacyProjection } from '../edit/legacy';
+import { stableKey } from '../store/undo';
 import { SegmenterContextLostError } from '../tracking/segmenter';
 import type { BeautyParams, Face, FaceProtect, PersonMask } from '../types';
 import {
@@ -644,7 +646,7 @@ describe('the request survives edits made while the limit cannot act (M1 / M3: L
       /** the autosave of an output drawn with `drawn` (writeHistory / the lost-engine flush) */
       save: async (p: BeautyParams, drawn: FaceProtect | null): Promise<string> => {
         const rec = h.src.record(drawn);
-        const patch = paramsPatch(p, rec, maskStored, blob);
+        const patch = paramsPatch(editFromLegacy(p), 'p0', rec, maskStored, blob);
         if (rec.faceMask) maskStored = true;
         if (id) {
           await updateEntry(id, patch);
@@ -757,16 +759,18 @@ describe('the request survives edits made while the limit cannot act (M1 / M3: L
     }));
 });
 
-describe('paramsPatch (M2: every params write carries the limit record)', () => {
-  const p = applyPreset('natural', 1);
-  it('the request rides along with the params, also without a thumbnail (the lost-engine flush)', () => {
-    expect(paramsPatch(p, { faceProtect: true }, true)).toEqual({ params: p, faceProtect: true });
-    expect(paramsPatch(p, { faceProtect: false }, true)).toEqual({ params: p, faceProtect: false });
+describe('paramsPatch (M2: every params write carries the limit record; RM §5.1 v2 fields)', () => {
+  const e = editFromLegacy(applyPreset('natural', 1));
+  const params = sanitizeParams(legacyProjection(e, 'p0'));
+  const v2 = { schema: 2, edit: e, params, paramsKey: stableKey(params) };
+  it('the request rides along with the edit and its legacy projection, also without a thumbnail', () => {
+    expect(paramsPatch(e, 'p0', { faceProtect: true }, true)).toEqual({ ...v2, faceProtect: true });
+    expect(paramsPatch(e, 'p0', { faceProtect: false }, true)).toEqual({ ...v2, faceProtect: false });
   });
   it('the segmenter mask only while none is stored; a thumbnail when given', () => {
     const m = mask();
     const t = new Blob(['t']);
-    expect(paramsPatch(p, { faceProtect: true, faceMask: m }, false, t)).toEqual({ params: p, thumb: t, faceProtect: true, faceMask: m });
-    expect(paramsPatch(p, { faceProtect: true, faceMask: m }, true, t)).toEqual({ params: p, thumb: t, faceProtect: true });
+    expect(paramsPatch(e, 'p0', { faceProtect: true, faceMask: m }, false, t)).toEqual({ ...v2, thumb: t, faceProtect: true, faceMask: m });
+    expect(paramsPatch(e, 'p0', { faceProtect: true, faceMask: m }, true, t)).toEqual({ ...v2, thumb: t, faceProtect: true });
   });
 });

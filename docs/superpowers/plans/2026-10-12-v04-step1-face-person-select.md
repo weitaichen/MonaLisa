@@ -4203,7 +4203,7 @@ git commit -m "v0.4 step 1b: camera look meiyan.look.v1 and the camera panel on 
   - `openInEditor(blob: Blob, opts: { entry?: HistoryEntry | null; returnTo: EditorSource['returnTo'] }): Promise<void>`.
   - `paramsPatch(edit: EditState, primary: PersonId, limit: FaceProtectRecord, maskStored: boolean, thumb?: Blob): { schema: 2; edit: EditState; params: BeautyParams; paramsKey: string; thumb?: Blob; faceProtect: boolean; faceMask?: PersonMask }`.
 
-- [ ] **Step 1: Port the failing tests first**
+- [x] **Step 1: Port the failing tests first**
 
 `src/ui/faceProtectModel.test.ts` (`:760-772`) becomes:
 
@@ -4240,7 +4240,7 @@ and at `:647` `paramsPatch(p, rec, maskStored, blob)` → `paramsPatch(editFromL
 Run: `npx vitest run src/ui/faceProtectModel.test.ts src/ui/flows.test.ts`
 Expected: FAIL (old signatures).
 
-- [ ] **Step 2: `paramsPatch` v2 (`src/ui/faceProtectModel.ts:130-148`)**
+- [x] **Step 2: `paramsPatch` v2 (`src/ui/faceProtectModel.ts:130-148`)**
 
 ```ts
 /**
@@ -4271,7 +4271,7 @@ export function paramsPatch(
 
 Imports: `sanitizeParams` (`../engine/params`), `legacyProjection` (`../edit/legacy`), `stableKey` (`../store/undo`), types `EditState, PersonId`.
 
-- [ ] **Step 3: EditorSource, flows, Home, Review**
+- [x] **Step 3: EditorSource, flows, Home, Review**
 
 `src/ui/state.ts` (CRLF): replace `EditorSource` (`:27-40`) with:
 
@@ -4344,7 +4344,7 @@ Imports: `openState, importEdit` (`../edit/migrate`), types `EditState, FaceSeed
 
 `src/ui/screens/Review.tsx` (CRLF) `edit()`: `go({ name: 'editor', source: freshSource(shot.original, cameraShotEdit(shot.look, null), 'camera') });` (imports `freshSource` from `../flows`, `cameraShotEdit` from `../../edit/migrate`; drop the Task 11 imports). Task 25 passes the real seed.
 
-- [ ] **Step 4: Editor on `EditState` (`src/ui/screens/Editor.tsx`, LF)**
+- [x] **Step 4: Editor on `EditState` (`src/ui/screens/Editor.tsx`, LF)**
 
 Make exactly these edits (line numbers are today's):
 
@@ -4383,7 +4383,7 @@ Make exactly these edits (line numbers are today's):
 
 Everything else (the 美體 detection reading `source.body`, `BodyFieldMemo`, `protectSrc`, `useFilterLoader(…, params.filterId)`, `session.render(params)`) keeps using `params`, the projection.
 
-- [ ] **Step 5: Full gate of sub-step 1b**
+- [x] **Step 5: Full gate of sub-step 1b**
 
 Run: `npm run typecheck && npm test && npm run build`
 Expected: all green.
@@ -4394,7 +4394,7 @@ Expected: PASS (parity max ≤ 1/255; the editor spec's autosave/reopen and 98-a
 Run: `npm run test:e2e`
 Expected: every spec passes.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/ui/state.ts src/ui/flows.ts src/ui/flows.test.ts src/ui/screens/Home.tsx src/ui/screens/Review.tsx src/ui/faceProtectModel.ts src/ui/faceProtectModel.test.ts src/ui/screens/Editor.tsx

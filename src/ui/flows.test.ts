@@ -1,6 +1,7 @@
 // flows.ts openInEditor: the import decode size follows the effective tier (RB §4: 1440 on tier L).
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Prefs, Tier } from '../types';
+import { defaultParams } from '../engine/params';
+import type { HistoryEntry, Prefs, Tier } from '../types';
 
 async function load(tier: Prefs['tier'], sessionTier: Tier) {
   vi.resetModules();
@@ -44,20 +45,25 @@ describe('openInEditor of a history entry', () => {
     vi.restoreAllMocks();
   });
 
+  const entry = (over: Partial<HistoryEntry>): HistoryEntry => ({
+    id: 'e1', createdAt: 1, updatedAt: 1, original: new Blob([]), thumb: new Blob([]), params: defaultParams(), width: 4, height: 3, ...over,
+  });
+
   it('hands the saved 瘦臉 limit (flag + segmenter mask) to the editor, so the reopen draws what was saved', async () => {
     const { flows, app } = await load('auto', 'H');
     const faceMask = { width: 2, height: 2, data: new Uint8Array([0, 255, 255, 0]) };
-    await flows.openInEditor(new Blob([]), { historyId: 'e1', faceProtect: true, faceMask, returnTo: 'home' });
+    await flows.openInEditor(new Blob([]), { entry: entry({ faceProtect: true, faceMask }), returnTo: 'home' });
     const screen = app.get().screen;
     expect(screen.name).toBe('editor');
     if (screen.name !== 'editor') return;
     expect(screen.source.faceProtect).toBe(true);
     expect(screen.source.faceMask).toBe(faceMask);
+    expect(screen.source.edit.persons.p0).toBeDefined();
   });
 
   it('an entry saved unlimited carries neither', async () => {
     const { flows, app } = await load('auto', 'H');
-    await flows.openInEditor(new Blob([]), { historyId: 'e2', faceProtect: undefined, returnTo: 'home' });
+    await flows.openInEditor(new Blob([]), { entry: entry({ id: 'e2' }), returnTo: 'home' });
     const screen = app.get().screen;
     if (screen.name !== 'editor') throw new Error('not the editor');
     expect('faceProtect' in screen.source).toBe(false);

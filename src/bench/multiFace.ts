@@ -146,11 +146,12 @@ async function fixtures(): Promise<{ faces: Blob; people: Blob }> {
 
 export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow[] } {
   const section = document.createElement('section');
-  // the 美體偵測 table's box: scrolls past 40vh, left-aligned, selectable
-  section.className = 'body-bench';
-  section.innerHTML = '<h3>多臉</h3><p class="note">D：多臉偵測（選 group_faces.png）　B：多人美體（選 group_people.jpg）　GL：GPU 上限</p>';
+  // own classes (styled in bench/main.ts STYLE like the 美體偵測 box): tests/harness/b3/bench.mjs locates '.body-bench'
+  // and tests/harness/t8/run-bench.mjs '.gate .note', and this section sits in .gate, so reusing either breaks them
+  section.className = 'multi-bench';
+  section.innerHTML = '<h3>多臉</h3><p class="multi-note">D：多臉偵測（選 group_faces.png）　B：多人美體（選 group_people.jpg）　GL：GPU 上限</p>';
   const note = document.createElement('pre');
-  note.className = 'note';
+  note.className = 'multi-note';
   const pick = (accept: string) =>
     new Promise<Blob | null>((resolve) => {
       const i = document.createElement('input');

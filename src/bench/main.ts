@@ -130,6 +130,9 @@ button.primary { background: #B8F02A; color: #000; border-color: #B8F02A; font-w
 .note { color: #B8F02A; font: 12px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
 .body-bench { max-width: 100%; max-height: 40vh; overflow: auto; text-align: left; -webkit-user-select: text; user-select: text; }
 .body-bench td:nth-child(-n+3), .body-bench th:nth-child(-n+3) { text-align: left; }
+/* 多臉 (bench/multiFace.ts): own classes so the harness locators .body-bench and .gate .note stay unique */
+.multi-bench { max-width: 100%; max-height: 40vh; overflow: auto; text-align: left; -webkit-user-select: text; user-select: text; }
+.multi-note { color: #B8F02A; font: 12px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
 table { border-collapse: collapse; width: 100%; font: 11px/1.3 ui-monospace, Menlo, monospace; margin-top: 6px; }
 td, th { padding: 1px 4px; text-align: right; color: #ddd; } th { color: #8E8E93; font-weight: 400; }
 textarea { width: 100%; height: 30vh; background: #1C1C1E; color: #fff; border: 1px solid #4A4A4C; border-radius: 8px;

@@ -209,15 +209,74 @@ describe('N-face port (S §4.4)', () => {
             }
     console.log(`sweep worst min det J ${worst.toFixed(3)}; at ≥ 2.0 FW 下巴 keeps ≥ ${chinWorst.toFixed(3)}, 額頭 ≥ ${foreheadWorst.toFixed(3)}`);
   }, 180_000);
-  it('touching faces (0.3 and 0.5 FW apart) stay finite and fold-free (Review Focus #2)', () => {
-    const u = reshapeUniforms(params(['shape.faceSlim', 'shape.faceV', 'shape.eyeEnlarge', 'shape.chin']), 1);
-    for (const d of [0.3, 0.5]) {
-      const faces = [placed(0.5 - (d * 0.12) / 2, 0.5, 0.12), placed(0.5 + (d * 0.12) / 2, 0.5, 0.12)];
-      const caps = capsFor(faces.map((f) => boxCentre(ovalBox(f))), [], 1);
-      const map = reshapeMapMulti(faces.map((f, i) => tf(f, u, { cap: caps[i] })), 1);
-      expect(minDet(map, [0.3, 0.3, 0.7, 0.7])).toBeGreaterThanOrEqual(MIN_DET);
-    }
-  });
+  // The fold bound alone does not need the cap here: with the cap off, the 4-item setting with 2 faces at 0° still keeps
+  // min det J 0.367 at 0.3 FW and 0.459 at 0.5 FW (≥ MIN_DET). What the cap is for is pinned on a fine grid: each face's
+  // displacement is exactly 0 outside its disc, the map is the identity outside every disc, and no output point samples
+  // the source across the line halfway to another face (nearest-centre cell). With the cap off, every case below has
+  // 51–1519 grid points crossing that line and 11 000–17 000 moving outside the discs; a budget reaching only 1.05 cap_f
+  // already moves points outside the disc while det J stays ≥ MIN_DET (measured at the Task 16 review).
+  it('touching faces (0.3 and 0.5 FW apart) stay finite and fold-free, and neither face is pulled into the other (Review Focus #1)', () => {
+    const FW = 0.12;
+    const oneWay: ParamId[] = ['shape.eyeEnlarge', 'shape.faceSlim', 'shape.faceV', 'shape.faceNarrow', 'shape.noseSlim'];
+    const bi: ParamId[] = ['shape.chin', 'shape.forehead', 'shape.mouthSize', 'shape.eyeDistance'];
+    const settings = [
+      reshapeUniforms(params(['shape.faceSlim', 'shape.faceV', 'shape.eyeEnlarge', 'shape.chin']), 1),
+      // the sweep's: every one-way item at max with each end of the bidirectional ones
+      ...[0, 1].map((end) => reshapeUniforms(bi.reduce((p, id) => setParam(p, id, end), oneWay.reduce((p, id) => setParam(p, id, 1), applyPreset('original', 1))).values, 1)),
+    ];
+    const iso = (x: number, y: number, c: readonly [number, number]) => Math.hypot(x - c[0], y - c[1]); // aspect 1
+    for (const [k, u] of settings.entries())
+      for (const deg of [0, 45, 90])
+        for (const count of [2, 3])
+          for (const d of [0.3, 0.5]) {
+            const tag = `setting ${k}, ${count} faces ${d} FW ${deg}°`;
+            const dx = Math.cos((deg * Math.PI) / 180) * d * FW;
+            const dy = Math.sin((deg * Math.PI) / 180) * d * FW;
+            const faces = Array.from({ length: count }, (_, i) => placed(0.5 + (i - (count - 1) / 2) * dx, 0.5 + (i - (count - 1) / 2) * dy, FW));
+            const centres = faces.map((f) => boxCentre(ovalBox(f)));
+            const caps = capsFor(centres, [], 1);
+            for (const c of caps) expect(c, tag).toBeCloseTo((d * FW) / 2, 3);
+            const map = reshapeMapMulti(faces.map((f, i) => tf(f, u, { cap: caps[i] })), 1);
+            const alone = faces.map((f, i) => reshapeMapMulti([tf(f, u, { cap: caps[i] })], 1));
+            expect(minDet(map, [0.3, 0.3, 0.7, 0.7]), tag).toBeGreaterThanOrEqual(MIN_DET);
+            const cell = (x: number, y: number) => {
+              let best = 0;
+              for (let f = 1; f < count; f++) if (iso(x, y, centres[f]) < iso(x, y, centres[best])) best = f;
+              return best;
+            };
+            let nonFinite = 0;
+            let crossed = 0;
+            let leaked = 0;
+            let outsideMoved = 0;
+            let insideMoved = 0;
+            for (let j = 0; j <= 200; j++)
+              for (let i = 0; i <= 200; i++) {
+                const x = 0.3 + i * 0.002;
+                const y = 0.3 + j * 0.002;
+                const s = map(x, y);
+                if (!Number.isFinite(s[0]) || !Number.isFinite(s[1])) nonFinite++;
+                if (cell(s[0], s[1]) !== cell(x, y)) crossed++;
+                let covered = false;
+                for (let f = 0; f < count; f++) {
+                  if (iso(x, y, centres[f]) < caps[f]) {
+                    covered = true;
+                    continue;
+                  }
+                  const a = alone[f](x, y);
+                  if (a[0] !== x || a[1] !== y) leaked++;
+                }
+                if (s[0] !== x || s[1] !== y) {
+                  if (covered) insideMoved++;
+                  else outsideMoved++;
+                }
+              }
+            expect(nonFinite, `${tag}: non-finite samples`).toBe(0);
+            expect(crossed, `${tag}: output points sampling across the halfway line`).toBe(0);
+            expect(leaked, `${tag}: a face displacing outside its own disc`).toBe(0);
+            expect(outsideMoved, `${tag}: points outside every disc that move`).toBe(0);
+            expect(insideMoved, `${tag}: the faces still warp`).toBeGreaterThan(0);
+          }
+  }, 60_000);
   it('an obstacle (a dropped face) that is the nearest neighbour sets the cap', () => {
     const A = placed(0.4, 0.5, 0.12);
     const caps = capsFor([boxCentre(ovalBox(A)), [0.9, 0.5]], [[0.47, 0.5]], 1);

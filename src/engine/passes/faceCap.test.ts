@@ -23,7 +23,7 @@ describe('capsFor (S §4.1)', () => {
     expect(capsFor([[0.2, 0.5], [0.6, 0.5]], [], 1, [1, 0.5])[0]).toBeCloseTo(0.4);
     expect(capsFor([[0.2, 0.5], [0.6, 0.5]], [], 1, [1, 0])[0]).toBe(-1);
   });
-  it('iso units: a 3:1 panorama and a 1:3 screenshot (Review Focus #3)', () => {
+  it('iso units: a 3:1 panorama and a 1:3 screenshot (Review Focus #5)', () => {
     expect(capsFor([[0.1, 0.5], [0.2, 0.5]], [], 3)[0]).toBeCloseTo(0.05);
     expect(capsFor([[0.5, 0.1], [0.5, 0.4]], [], 3)[0]).toBeCloseTo(0.05); // dy 0.3 UV = 0.1 iso
     expect(capsFor([[0.5, 0.1], [0.5, 0.4]], [], 1 / 3)[0]).toBeCloseTo(0.45);

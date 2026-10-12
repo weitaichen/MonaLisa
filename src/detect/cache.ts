@@ -1,6 +1,6 @@
 // The detection cache of one photo (RM §3.6, S §3.2, §5.4): faces, obstacles, bodies and the persons built from them,
 // all in normalized O-space, stored in HistoryEntry.detect so a reopen runs no detector. This file validates a stored
-// cache and answers questions about it; building and merging land in Task 15.
+// cache, answers questions about it, and builds and merges it (buildCache, withFaces, withBodies, rematchByIoU).
 import { MAX_EDIT_BODIES, MAX_OBSTACLES, MAX_RENDER_FACES } from '../config/limits';
 import { P0_INFO, type PersonInfo } from '../edit/lens';
 import type {
@@ -10,11 +10,15 @@ import type {
   CachedFace,
   CachedObstacle,
   DetectionCache,
+  Face,
   PersonId,
   PersonInfoCached,
   PersonMask,
+  Pose33,
   Rect,
 } from '../types';
+import { boxIoU, type PreparedFaces } from './faces';
+import { pairPersons, primaryOf } from './persons';
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -232,4 +236,181 @@ export function primaryBody(d: BodyDetections | null): BodyDetection | null {
   if (!d || !d.bodies.length) return null;
   const best = d.bodies.reduce((a, b) => (b.score > a.score ? b : a));
   return { pose: best.pose, mask: best.mask, people: d.bodies.length, width: d.width, height: d.height };
+}
+
+const centreX = (b: Rect) => b.x + b.w / 2;
+const centreY = (b: Rect) => b.y + b.h / 2;
+/** display order (S §2.1): box centre x, y breaking ties within 0.01 (as prepareFaces orders faces) */
+const byPosition = (a: Rect, b: Rect) => (Math.abs(centreX(a) - centreX(b)) > 0.01 ? centreX(a) - centreX(b) : centreY(a) - centreY(b));
+
+export function bodyBox(b: CachedBody): Rect {
+  return poseBox(b.pose.points);
+}
+
+/** The first cache of a photo: persons left to right by face box (body box for a body-only person), S §2.1 numbering. */
+export function buildCache(
+  size: { width: number; height: number },
+  prepared: PreparedFaces,
+  bodies: CachedBody[] | null,
+  opts: { faceScans: DetectionCache['faceScans']; bodiesComplete?: boolean },
+): DetectionCache {
+  const faces: CachedFace[] = prepared.faces.map((f) => ({ id: f.id, lm: f.lm, box: f.box }));
+  if (!faces.length && !bodies?.length) {
+    return { ...noFaceCache(size.width, size.height, opts.faceScans), bodies, obstacles: prepared.obstacles, dropped: prepared.dropped };
+  }
+  const aspect = size.width / size.height;
+  const pairs = bodies ? pairPersons(prepared.faces, bodies, aspect) : [];
+  const bodyOf = new Map(pairs);
+  const paired = new Set(pairs.map(([, b]) => b));
+  const entries: { info: PersonInfoCached; box: Rect }[] = [
+    ...prepared.faces.map((f) => ({ info: { id: f.id, face: f.id, body: bodyOf.get(f.id) ?? null }, box: f.box })),
+    ...(bodies ?? []).filter((b) => !paired.has(b.id)).map((b) => ({ info: { id: b.id, face: null, body: b.id }, box: bodyBox(b) })),
+  ];
+  entries.sort((a, b) => byPosition(a.box, b.box));
+  const persons = entries.map((e) => e.info);
+  return {
+    v: 1,
+    width: size.width,
+    height: size.height,
+    faceScans: opts.faceScans,
+    faces,
+    obstacles: prepared.obstacles,
+    bodies,
+    bodiesComplete: opts.bodiesComplete ?? true,
+    persons,
+    primary: primaryOf(persons, faces, bodies ?? []),
+    dropped: prepared.dropped,
+  };
+}
+
+/** A 基本模式 cache gains its faces once a tracker exists (A15): a face that pairs with a body person links to it (the
+ * person keeps its id and params); the other faces are appended. The primary is kept unless it was p0. */
+export function withFaces(cache: DetectionCache, prepared: PreparedFaces, faceScans: DetectionCache['faceScans']): DetectionCache {
+  if (!cache.bodies?.length) {
+    return buildCache({ width: cache.width, height: cache.height }, prepared, cache.bodies, { faceScans, bodiesComplete: cache.bodiesComplete });
+  }
+  const pairs = pairPersons(prepared.faces, cache.bodies, cache.width / cache.height);
+  const faceOfBody = new Map(pairs.map(([f, b]) => [b, f]));
+  const persons: PersonInfoCached[] = cache.persons.map((p) => (p.body && faceOfBody.has(p.body) ? { ...p, face: faceOfBody.get(p.body)! } : p));
+  const linked = new Set(persons.map((p) => p.face).filter((x): x is string => x !== null));
+  for (const f of prepared.faces) if (!linked.has(f.id)) persons.push({ id: f.id, face: f.id, body: null });
+  const faces = prepared.faces.map((f) => ({ id: f.id, lm: f.lm, box: f.box }));
+  return {
+    ...cache,
+    faceScans,
+    faces,
+    obstacles: prepared.obstacles,
+    persons,
+    dropped: prepared.dropped,
+    primary: cache.primary === 'p0' ? primaryOf(persons, faces, cache.bodies) : cache.primary,
+  };
+}
+
+/** mean distance of the keypoints visible in both poses (v1 b0 rematch, S §5.3) */
+function poseDistance(a: Pose33, b: Pose33): number {
+  let s = 0;
+  let n = 0;
+  for (let i = 0; i < 33; i++) {
+    if (a.points[i * 4 + 3] < 0.5 || b.points[i * 4 + 3] < 0.5) continue;
+    s += Math.hypot(a.points[i * 4] - b.points[i * 4], a.points[i * 4 + 1] - b.points[i * 4 + 1]);
+    n++;
+  }
+  return n ? s / n : Infinity;
+}
+
+/** body detection: ids by centre x (a v1 b0 keeps its id when its pose matches), pairing, body-only persons appended */
+export function withBodies(
+  cache: DetectionCache,
+  found: BodyDetections['bodies'],
+  faceOf: (faceId: string) => Face | null,
+): { cache: DetectionCache; renamed: Record<PersonId, PersonId | null> } {
+  const renamed: Record<PersonId, PersonId | null> = {};
+  // ids: an old body (a v1 b0, bodiesComplete false) keeps its id when its pose matches (< 0.05); the others get the
+  // lowest b<j> no old body used, by centre x. An unmatched old id is reused only to stay within b0…b3.
+  const old = cache.bodies ?? [];
+  const sorted = [...found].sort((a, b) => byPosition(poseBox(a.pose.points), poseBox(b.pose.points)));
+  const ids = new Map<(typeof found)[number], string>();
+  for (const o of old) {
+    let bestI = -1;
+    let bestD = 0.05;
+    sorted.forEach((b, i) => {
+      if (ids.has(b)) return;
+      const d = poseDistance(o.pose, b.pose);
+      if (d < bestD) {
+        bestD = d;
+        bestI = i;
+      }
+    });
+    if (bestI >= 0) ids.set(sorted[bestI], o.id);
+  }
+  const matched = new Set(ids.values());
+  const oldIds = new Set(old.map((o) => o.id));
+  const used = new Set(matched);
+  for (const b of sorted) {
+    if (ids.has(b)) continue;
+    let j = 0;
+    while (used.has(`b${j}`) || oldIds.has(`b${j}`)) j++;
+    if (j >= MAX_EDIT_BODIES) {
+      j = 0;
+      while (used.has(`b${j}`)) j++;
+    }
+    used.add(`b${j}`);
+    ids.set(b, `b${j}`);
+  }
+  const bodies: CachedBody[] = sorted.map((b) => ({ id: ids.get(b)!, pose: b.pose, mask: b.mask, score: b.score }));
+  // persons: a link survives only to a matched old body (a reused id is somebody else); a face person whose body
+  // vanished keeps its face, a body-only person whose body vanished hands over (renamed)
+  let persons: PersonInfoCached[] = [];
+  for (const p of cache.persons) {
+    if (p.id === 'p0') continue;
+    if (p.body && !matched.has(p.body)) {
+      if (p.face) persons.push({ ...p, body: null });
+      else renamed[p.id] = null;
+    } else persons.push(p);
+  }
+  const survivors = new Set(persons.map((p) => p.id));
+  // pair the faces without a body with the bodies without a person
+  const linkedBodies = new Set(persons.map((p) => p.body).filter((x): x is string => x !== null));
+  const freeFaces = persons
+    .filter((p) => p.face && !p.body)
+    .map((p) => {
+      const c = cache.faces.find((f) => f.id === p.face);
+      const face = c ? faceOf(c.id) : null;
+      return c && face ? { id: c.id, face, box: c.box } : null;
+    })
+    .filter((x): x is { id: string; face: Face; box: Rect } => x !== null);
+  const freeBodies = bodies.filter((b) => !linkedBodies.has(b.id));
+  for (const [f, b] of pairPersons(freeFaces, freeBodies, cache.width / cache.height)) {
+    persons = persons.map((p) => (p.face === f ? { ...p, body: b } : p));
+    linkedBodies.add(b);
+  }
+  for (const b of bodies) if (!linkedBodies.has(b.id)) persons.push({ id: b.id, face: null, body: b.id });
+  // nobody known (a no-face photo where 美體 found no body either): p0 stays (S §3.3)
+  if (!persons.length) persons.push({ id: 'p0', face: null, body: null });
+  const primary = survivors.has(cache.primary) ? cache.primary : primaryOf(persons, cache.faces, bodies);
+  for (const [from, to] of Object.entries(renamed)) if (to === null && from === cache.primary) renamed[from] = primary;
+  return { cache: { ...cache, bodies, bodiesComplete: true, persons, primary }, renamed };
+}
+
+/** old person → new person by face-box IoU ≥ 0.5, greedy (S §5.3); unmatched old → null */
+export function rematchByIoU(stale: Readonly<Record<PersonId, Rect>>, cache: DetectionCache): Record<PersonId, PersonId | null> {
+  const cands: { from: PersonId; to: PersonId; iou: number }[] = [];
+  for (const [from, box] of Object.entries(stale)) {
+    for (const p of cache.persons) {
+      const f = p.face ? cache.faces.find((x) => x.id === p.face) : undefined;
+      if (!f) continue;
+      const iou = boxIoU(box, f.box);
+      if (iou >= 0.5) cands.push({ from, to: p.id, iou });
+    }
+  }
+  cands.sort((a, b) => b.iou - a.iou);
+  const out: Record<PersonId, PersonId | null> = {};
+  const usedTo = new Set<PersonId>();
+  for (const c of cands) {
+    if (c.from in out || usedTo.has(c.to)) continue;
+    out[c.from] = c.to;
+    usedTo.add(c.to);
+  }
+  for (const from of Object.keys(stale)) if (!(from in out)) out[from] = null;
+  return out;
 }

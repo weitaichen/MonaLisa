@@ -5089,7 +5089,7 @@ export function rematchByIoU(stale: Readonly<Record<PersonId, Rect>>, cache: Det
 export function bodyBox(b: CachedBody): Rect;
 ```
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```ts
 // src/detect/persons.test.ts
@@ -5261,7 +5261,7 @@ with, in the same file, `function poseOnFace(face: Face): Pose33` identical to `
 Run: `npx vitest run src/detect`
 Expected: FAIL (cannot resolve `./persons`; `buildCache` not exported).
 
-- [ ] **Step 2: Write `src/detect/persons.ts`**
+- [x] **Step 2: Write `src/detect/persons.ts`**
 
 ```ts
 // Persons from faces and bodies (S §3.4 P4, §2.3): pairing, the primary, the camera seed and the photo hit test.
@@ -5447,7 +5447,7 @@ export function hitPerson(uv: readonly [number, number], ctx: HitCtx): PersonId 
 }
 ```
 
-- [ ] **Step 3: Append the builders to `src/detect/cache.ts`**
+- [x] **Step 3: Append the builders to `src/detect/cache.ts`**
 
 (Add imports: `import type { PreparedFaces } from './faces';` (type-only, no cycle at run time), `import { boxIoU } from './faces';`, `import { pairPersons, primaryOf } from './persons';`, and `BodyDetections, Face` types.)
 
@@ -5612,12 +5612,12 @@ export function rematchByIoU(stale: Readonly<Record<PersonId, Rect>>, cache: Det
 
 Note the v1 people ≥ 2 case of S §5.3 falls out of these rules: the old `b0` keeps its id when matched (its person keeps its params); when unmatched, a face person loses only the link, and a body-only person is renamed to the new primary (`renamed[b0] = primary`) so its params move there (Task 21 applies `renamed` through `renamePersons` before `assignPersons`).
 
-- [ ] **Step 4: Run**
+- [x] **Step 4: Run**
 
 Run: `npx vitest run src/detect && npm run typecheck`
 Expected: PASS; `tsc` exits 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/detect/persons.ts src/detect/persons.test.ts src/detect/cache.ts src/detect/cache.test.ts

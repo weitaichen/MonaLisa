@@ -300,6 +300,8 @@ export interface FaceProtect {
   data: Float32Array;
   /** increment whenever data changes (engine re-uploads on change) */
   version: number;
+  /** UV rect the grid covers (a per-face window with ≥ 2 faces, S §4.7); absent = the whole photo */
+  window?: Rect;
 }
 
 export interface BodyTracker {

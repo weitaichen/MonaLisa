@@ -5663,12 +5663,12 @@ export function packFaceTable(faces: readonly TableFace[], aspect: number, out: 
 
 - Produces (`reshapeCpu.ts`): `reshapeMapMulti(faces: readonly TableFace[], aspect: number, opts?: { body?: BodyField | null; protects?: readonly FaceProtect[] }): UvMap`; `reshapeMapCpu(face, uIn, aspect, body?, protect?)` kept as the one-face wrapper; `protectAt(p, u, v)` unchanged. `FaceProtect` gains `window?: Rect` (types.ts) — the UV rect its grid covers (absent = whole photo).
 
-- [ ] **Step 1: Freeze today's port**
+- [x] **Step 1: Freeze today's port**
 
 Run: `cp src/engine/passes/reshapeCpu.ts src/engine/passes/reshapeCpuV03.ts`
 Then edit the copy: first line becomes `// FROZEN v0.3 copy of reshapeCpu.ts (test-only anchor for the bit-exact single-face check of the N-face port). Never edit.`, and rename its exports `reshapeMapCpu` → `reshapeMapCpuV03`, `protectAt` → `protectAtV03`.
 
-- [ ] **Step 2: Failing tests**
+- [x] **Step 2: Failing tests**
 
 ```ts
 // src/engine/passes/faceCap.test.ts
@@ -5881,7 +5881,7 @@ describe('N-face port (S §4.4)', () => {
 Run: `npx vitest run src/engine/passes/faceCap.test.ts src/engine/passes/reshapeCpu.test.ts`
 Expected: FAIL (missing exports).
 
-- [ ] **Step 3: Write `src/engine/passes/faceTable.ts` and append to `src/engine/passes/faceCap.ts`**
+- [x] **Step 3: Write `src/engine/passes/faceTable.ts` and append to `src/engine/passes/faceCap.ts`**
 
 `src/engine/passes/faceTable.ts`:
 
@@ -5991,7 +5991,7 @@ export function packFaceTable(faces: readonly TableFace[], aspect: number, out: 
 }
 ```
 
-- [ ] **Step 4: Rewrite `src/engine/passes/reshapeCpu.ts` as the N-face port**
+- [x] **Step 4: Rewrite `src/engine/passes/reshapeCpu.ts` as the N-face port**
 
 ```ts
 // Test / harness-only CPU port of RESHAPE_FS (reshape.ts): the backward map vUv → tc the P2 reshape pass samples the
@@ -6159,12 +6159,12 @@ export function reshapeMapCpu(face: Face | null, uIn: ReshapeUniforms | null, as
 
 `src/types.ts` (CRLF), `FaceProtect`: add `/** UV rect the grid covers (a per-face window with ≥ 2 faces, S §4.7); absent = the whole photo */ window?: Rect;`.
 
-- [ ] **Step 5: Run**
+- [x] **Step 5: Run**
 
 Run: `npx vitest run src/engine src/tracking/faceProtect.test.ts src/body/straightness.test.ts && npm run typecheck`
 Expected: PASS (the hash pin `'ced9563c'` still holds: the shader is unchanged until Task 17); the sweep prints its worst `min det J`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/engine/passes/faceTable.ts src/engine/passes/faceCap.ts src/engine/passes/faceCap.test.ts src/engine/passes/reshapeCpu.ts src/engine/passes/reshapeCpuV03.ts src/engine/passes/reshapeCpu.test.ts src/types.ts

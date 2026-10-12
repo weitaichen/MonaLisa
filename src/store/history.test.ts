@@ -1,6 +1,8 @@
 import 'fake-indexeddb/auto';
 import { IDBDatabase as FDBDatabase, IDBFactory, IDBObjectStore as FDBObjectStore, forceCloseDatabase } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { makeCache } from '../detect/testCaches';
+import { editFromLegacy } from '../edit/legacy';
 import { applyPreset, defaultParams, setParam } from '../engine/params';
 import type { BodyDetection, HistoryEntry } from '../types';
 import {
@@ -696,5 +698,36 @@ describe('createId', () => {
     const ids = Array.from({ length: 200 }, createId);
     for (const id of ids) expect(id).toMatch(UUID_V4);
     expect(new Set(ids).size).toBe(200);
+  });
+});
+
+describe('HistoryEntry v2 (RM §5.1, S §5.2)', () => {
+  const v2 = () => {
+    const edit = editFromLegacy(applyPreset('refined', 1));
+    return { schema: 2 as const, edit, paramsKey: 'k', detect: makeCache() };
+  };
+  it('round-trips schema, edit, paramsKey and the detection cache with its typed arrays', async () => {
+    const id = await addEntry({ ...entry('v2'), ...v2() });
+    const got = await getEntry(id);
+    expect(got?.schema).toBe(2);
+    expect(got?.edit).toEqual(v2().edit);
+    expect(got?.paramsKey).toBe('k');
+    expect(got?.detect?.faces[0].lm).toBeInstanceOf(Float32Array);
+    expect(got?.detect).toEqual(makeCache());
+  });
+  it('an edit bumps updatedAt like params; touch: false never does, even with an edit and a thumbnail', async () => {
+    const id = await addEntry(entry('t'));
+    const t0 = (await getEntry(id))!.updatedAt;
+    await updateEntry(id, { detect: makeCache(), edit: v2().edit, thumb: new Blob(['t']) }, { touch: false });
+    expect((await getEntry(id))!.updatedAt).toBe(t0);
+    expect((await getEntry(id))!.detect).toEqual(makeCache());
+    await updateEntry(id, { edit: v2().edit });
+    expect((await getEntry(id))!.updatedAt).toBeGreaterThan(t0);
+  });
+  it('a corrupt edit is dropped (the entry opens as v1), a dropped cache leaves its stale boxes', async () => {
+    const e = normalizeEntry({ ...validRecord('x', 1), schema: 2, edit: { v: 9 }, detect: { ...makeCache(), v: 3 } });
+    expect(e?.edit).toBeUndefined();
+    expect(e?.detect).toBeUndefined();
+    expect(Object.keys(e?.staleBoxes ?? {})).toEqual(['f0', 'f1']);
   });
 });

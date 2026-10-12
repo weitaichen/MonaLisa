@@ -494,6 +494,7 @@ export interface HistoryEntry {
   original: Blob;
   /** small JPEG thumbnail of the edited result */
   thumb: Blob;
+  /** v2: the legacy projection (photo + primary person); v1: the only params */
   params: BeautyParams;
   width: number;
   height: number;
@@ -512,6 +513,18 @@ export interface HistoryEntry {
   faceProtect?: boolean;
   /** the selfie segmenter's person mask the limit was built from (reopening needs no model); absent = none / 美體's */
   faceMask?: PersonMask;
+  /** 2 for entries written by 0.4; absent = v1 (RM §5.1) */
+  schema?: 2;
+  /** v2 edit (RM §3.2) */
+  edit?: EditState;
+  /** v2: stableKey(params) as written by 0.4; a mismatch means 0.3 edited `params` after a rollback (S §5.3) */
+  paramsKey?: string;
+  /** v2 detection cache; written as soon as detection runs (no updatedAt bump) */
+  detect?: DetectionCache;
+  /** read side only (normalizeEntry), never written: face boxes of a dropped cache's persons, for the rematch */
+  staleBoxes?: Record<PersonId, Rect>;
+  /** read side only: normalization dropped persons from the cache (the cache-dropped toast) */
+  detectLost?: boolean;
 }
 
 // ───────────────────────── Debug ─────────────────────────

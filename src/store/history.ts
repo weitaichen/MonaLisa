@@ -5,6 +5,8 @@
 // backgrounded pages ("Connection to Indexed Database server lost"). So: the open is raced
 // against a timeout, a failed transaction is retried once on a fresh connection, and in the end
 // every op resolves to a harmless fallback (no-op / empty list / undefined) instead of rejecting.
+import { normalizeDetect, normalizeMask } from '../detect/cache';
+import { isEditStateRecord, sanitizeEditState } from '../edit/state';
 import { sanitizeParams } from '../engine/params';
 import type { BodyDetection, HistoryEntry, PersonMask } from '../types';
 
@@ -42,6 +44,10 @@ export async function addEntry(e: NewHistoryEntry): Promise<string> {
     if (e.body !== undefined) entry.body = e.body;
     if (e.faceProtect === true) entry.faceProtect = true;
     if (e.faceMask) entry.faceMask = e.faceMask;
+    if (e.schema === 2) entry.schema = 2;
+    if (e.edit) entry.edit = e.edit;
+    if (e.paramsKey !== undefined) entry.paramsKey = e.paramsKey;
+    if (e.detect) entry.detect = e.detect;
     store.put(entry);
     // Requests in one transaction run in order, so the count already includes the new entry.
     const index = store.index(UPDATED_INDEX);
@@ -67,29 +73,34 @@ export async function addEntry(e: NewHistoryEntry): Promise<string> {
 }
 
 /**
- * Patches params / thumb and bumps updatedAt (moves the entry to the front). A body-only patch (caching the
- * 美體 detection) is not an edit: it keeps updatedAt, so merely looking at an entry does not reorder 最近編輯.
- * Missing id → no-op. faceProtect / faceMask ride along with an edit (faceProtect false removes the flag); on their
- * own they do not reorder either.
+ * Patches an entry. Without `touch` an edit (params, edit or thumb) bumps updatedAt, moving the entry to the front; a
+ * cache-only patch (body, detect, faceProtect / faceMask alone) keeps it. `touch: false` never bumps (A17): a
+ * detection-driven rebase writes edit + params + thumb, and merely viewing an entry must not reorder 最近編輯.
+ * Missing id → no-op. faceProtect false removes the flag.
  */
 export function updateEntry(
   id: string,
-  patch: Partial<Pick<HistoryEntry, 'params' | 'thumb' | 'body' | 'faceProtect' | 'faceMask'>>,
+  patch: Partial<Pick<HistoryEntry, 'params' | 'thumb' | 'body' | 'faceProtect' | 'faceMask' | 'schema' | 'edit' | 'paramsKey' | 'detect'>>,
+  opts: { touch?: boolean } = {},
 ): Promise<void> {
   return withStore('readwrite', undefined, (store) => {
     const req = store.get(id);
     req.onsuccess = () => {
       const cur: unknown = req.result;
       if (!cur || typeof cur !== 'object') return;
-      const edit = patch.params !== undefined || patch.thumb !== undefined;
+      const edit = patch.params !== undefined || patch.thumb !== undefined || patch.edit !== undefined;
       const next = { ...(cur as HistoryEntry) };
-      if (edit) next.updatedAt = stamp();
+      if (edit && opts.touch !== false) next.updatedAt = stamp();
       if (patch.params !== undefined) next.params = patch.params;
       if (patch.thumb !== undefined) next.thumb = patch.thumb;
       if (patch.body !== undefined) next.body = patch.body;
       if (patch.faceProtect === true) next.faceProtect = true;
       else if (patch.faceProtect === false) delete next.faceProtect;
       if (patch.faceMask) next.faceMask = patch.faceMask;
+      if (patch.schema === 2) next.schema = 2;
+      if (patch.edit !== undefined) next.edit = patch.edit;
+      if (patch.paramsKey !== undefined) next.paramsKey = patch.paramsKey;
+      if (patch.detect !== undefined) next.detect = patch.detect;
       store.put(next);
     };
     return () => undefined;
@@ -176,6 +187,14 @@ export function normalizeEntry(raw: unknown): HistoryEntry | null {
   if (r.faceProtect === true) entry.faceProtect = true;
   const faceMask = normalizeMask(r.faceMask);
   if (faceMask) entry.faceMask = faceMask;
+  if (r.schema === 2) entry.schema = 2;
+  // persons unfiltered here: openState filters them against the cache (or keeps them all for a rematch)
+  if (isEditStateRecord(r.edit)) entry.edit = sanitizeEditState(r.edit, null);
+  if (typeof r.paramsKey === 'string') entry.paramsKey = r.paramsKey;
+  const d = normalizeDetect(r.detect);
+  if (d.cache) entry.detect = d.cache;
+  if (d.stale) entry.staleBoxes = d.stale;
+  if (d.lost) entry.detectLost = true;
   return entry;
 }
 
@@ -195,16 +214,6 @@ export function normalizeBody(raw: unknown): BodyDetection | null {
     if (!m) return null;
   }
   return { pose: { points }, mask: m, people: Math.floor(people), width, height };
-}
-
-function normalizeMask(raw: unknown): PersonMask | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const { width, height, data } = raw as Record<string, unknown>;
-  if (!Number.isInteger(width) || !Number.isInteger(height)) return null;
-  const w = width as number;
-  const h = height as number;
-  if (w <= 0 || h <= 0 || !(data instanceof Uint8Array) || data.length !== w * h) return null;
-  return { width: w, height: h, data };
 }
 
 // ───────────────────────── internals ─────────────────────────

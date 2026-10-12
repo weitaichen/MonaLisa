@@ -2845,7 +2845,7 @@ git commit -m "v0.4 step 1b: UndoStack {clone: false, key} and rebase"
   - `src/detect/cache.ts`: `normalizeMask(raw: unknown): PersonMask | null` (moved from `history.ts:200-208`); `normalizeDetect(raw: unknown): { cache: DetectionCache | null; stale: Record<PersonId, Rect> | null; lost: boolean }`; `cachedFits(cache: DetectionCache, width: number, height: number): boolean`; `personInfos(cache: DetectionCache | null): PersonInfo[]`; `noFaceCache(width: number, height: number, faceScans: DetectionCache['faceScans']): DetectionCache`; `boxScore(b: Rect): number`; `poseBox(points: Float32Array): Rect`; `scanned0(cache: DetectionCache): boolean`.
   - `src/detect/testCaches.ts` (test-only): `cacheFace(id: string, cx: number, w?: number): CachedFace`, `cacheBody(id: string, cx: number): CachedBody`, `makeCache(over?: Partial<DetectionCache>): DetectionCache`.
 
-- [ ] **Step 1: Write the test helpers `src/detect/testCaches.ts`**
+- [x] **Step 1: Write the test helpers `src/detect/testCaches.ts`**
 
 ```ts
 // Test doubles for detection caches (never imported by app code).
@@ -2895,7 +2895,7 @@ export function makeCache(over: Partial<DetectionCache> = {}): DetectionCache {
 }
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```ts
 // src/detect/cache.test.ts
@@ -3006,12 +3006,12 @@ describe('HistoryEntry v2 (RM §5.1, S §5.2)', () => {
 
 (`entry(tag)` and `validRecord(id, updatedAt)` are the file's existing builders, `history.test.ts:44, 79`.)
 
-- [ ] **Step 3: Run to verify failure**
+- [x] **Step 3: Run to verify failure**
 
 Run: `npx vitest run src/detect src/store/history.test.ts`
 Expected: FAIL (cannot resolve `./cache`; `getEntry(id).schema` undefined).
 
-- [ ] **Step 4: Write `src/detect/cache.ts` (normalization and helpers)**
+- [x] **Step 4: Write `src/detect/cache.ts` (normalization and helpers)**
 
 ```ts
 // The detection cache of one photo (RM §3.6, S §3.2, §5.4): faces, obstacles, bodies and the persons built from them,
@@ -3224,7 +3224,7 @@ export function poseBox(points: Float32Array): Rect {
 }
 ```
 
-- [ ] **Step 5: HistoryEntry v2 fields**
+- [x] **Step 5: HistoryEntry v2 fields**
 
 `src/types.ts` (CRLF), `HistoryEntry` (`:379-405`), after `faceMask?: PersonMask;` add:
 
@@ -3245,7 +3245,7 @@ export function poseBox(points: Float32Array): Rect {
 
 and change the `params` doc comment to `/** v2: the legacy projection (photo + primary person); v1: the only params */`.
 
-- [ ] **Step 6: Write and read the new fields in `src/store/history.ts`**
+- [x] **Step 6: Write and read the new fields in `src/store/history.ts`**
 
 1. Imports (`:8-9`): `import { normalizeDetect, normalizeMask } from '../detect/cache';`, `import { isEditStateRecord, sanitizeEditState } from '../edit/state';`; keep `sanitizeParams`; delete the local `normalizeMask` (`:200-208`).
 2. `addEntry`, after `if (e.faceMask) entry.faceMask = e.faceMask;` (`:44`):
@@ -3309,12 +3309,12 @@ export function updateEntry(
   if (d.lost) entry.detectLost = true;
 ```
 
-- [ ] **Step 7: Run tests and typecheck**
+- [x] **Step 7: Run tests and typecheck**
 
 Run: `npx vitest run src/detect src/store && npm run typecheck`
 Expected: PASS (the existing v1 history tests are unchanged); `tsc` exits 0.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/detect/cache.ts src/detect/cache.test.ts src/detect/testCaches.ts src/types.ts src/store/history.ts src/store/history.test.ts

@@ -10,11 +10,13 @@ import {
   loadPrefs,
   LOOK_KEY,
   PARAMS_KEY,
+  PERSONS_HINT_KEY,
   PREFS_KEY,
   sanitizePrefs,
   saveLook,
   saveParams,
   savePrefs,
+  takePersonsHint,
 } from './settings';
 
 /** Minimal Map-backed Storage. */
@@ -330,5 +332,16 @@ describe('camera look meiyan.look.v1 (RM §3.7, C3)', () => {
     expect(loadLook()).toEqual(splitLegacy(defaultParams()));
     expect(store.map.size).toBe(0);
     expect(hasSavedSettings()).toBe(false);
+  });
+});
+
+describe('first group photo hint (S §1.1 item 11)', () => {
+  it('is true exactly once per install and survives a failing storage as false', () => {
+    expect(takePersonsHint()).toBe(true);
+    expect(store.getItem(PERSONS_HINT_KEY)).not.toBeNull();
+    expect(takePersonsHint()).toBe(false);
+    // storage that cannot keep the flag would repeat the hint on every photo: never shown there
+    stubThrowingGetter();
+    expect(takePersonsHint()).toBe(false);
   });
 });

@@ -150,9 +150,13 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
   // own classes (styled in bench/main.ts STYLE like the 美體偵測 box): tests/harness/b3/bench.mjs locates '.body-bench'
   // and tests/harness/t8/run-bench.mjs '.gate .note', and this section sits in .gate, so reusing either breaks them
   section.className = 'multi-bench';
-  section.innerHTML = '<h3>多臉</h3><p class="multi-note">D：多臉偵測（選 group_faces.png）　B：多人美體（選 group_people.jpg）　GL：GPU 上限　R：多臉美型 GPU 時間　F：每張臉的瘦臉限制建構時間　BF：四人美體場建構時間（R、F、BF 需開發伺服器的 /tests/fixtures）</p>';
+  section.innerHTML = '<h3>多臉</h3><p class="multi-note">D：多臉偵測（選 group_faces.png）　B：多人美體（選 group_people.jpg）　GL：GPU 上限　R：多臉美型 GPU 時間　F：每張臉的瘦臉限制建構時間　BF：四人美體場建構時間　PE：多臉編輯每格時間　M：多人美體偵測記憶體（頁面被終止時，下次開啟會回報）（R、F、BF、PE、M 需開發伺服器的 /tests/fixtures）</p>';
+  // a page killed during M (out of memory) left its breadcrumb: report it first
+  const killed = staleKill();
+  if (killed) rows.push(killed);
   const note = document.createElement('pre');
   note.className = 'multi-note';
+  if (killed) note.textContent = formatMultiRows(rows);
   const pick = (accept: string) =>
     new Promise<Blob | null>((resolve) => {
       const i = document.createElement('input');
@@ -170,7 +174,7 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
   const run = async (id: string) => {
     note.textContent = `${id}…`;
     try {
-      // only D and B take a picked photo: GL measures the GPU alone, R, F, BF and later rows load their own fixtures
+      // only D and B take a picked photo: GL measures the GPU alone, R, F, BF, PE, M and later rows load their own fixtures
       const photo = id === 'D' || id === 'B' ? await pick('image/*') : null;
       const blob = photo ?? new Blob();
       const got = await RUNNERS[id]({ faces: blob, people: blob });
@@ -180,7 +184,7 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
       note.textContent = `${id}: ${e instanceof Error ? e.message : String(e)}`;
     }
   };
-  for (const id of ['D', 'B', 'GL', 'R', 'F', 'BF']) {
+  for (const id of ['D', 'B', 'GL', 'R', 'F', 'BF', 'PE', 'M']) {
     const b = document.createElement('button');
     b.textContent = id;
     b.addEventListener('click', () => void run(id));
@@ -353,3 +357,89 @@ export async function rowBF(): Promise<MultiRow[]> {
   return [{ row: 'BF', config: '4 persons', values: { full_ms: time(0.8), draft_ms: time(0.8, 128), drag_ms: time(0.7, 128) } }];
 }
 addRunner('BF', () => rowBF());
+
+/** PE: an editor-like drag on group6_faces.png at 2048 — every face item + 磨皮 on every person; p50 frame time */
+export async function rowPE(): Promise<MultiRow[]> {
+  const { prepareFaces } = await import('../detect/faces');
+  const { buildCache } = await import('../detect/cache');
+  const { createStillSession } = await import('../app/still');
+  const { createEngine } = await import('../engine/index');
+  const { createTracker } = await import('../tracking/tracker');
+  const { buildFrame } = await import('../edit/frame');
+  const { assignPersons } = await import('../edit/state');
+  const { editFromLegacy } = await import('../edit/legacy');
+  const { applyPreset, paramsInGroup, setParam } = await import('../engine/params');
+  const res = await fetch('/tests/fixtures/group6_faces.png');
+  if (!res.ok) throw new Error(`PE needs /tests/fixtures/group6_faces.png (the dev server): ${res.status}`);
+  const bmp = await decode(await res.blob(), 2048);
+  const { modelBuffer } = await loadEngineAssets();
+  const t = await createTracker({ modelBuffer, wasmBase: ENGINE_PATHS.wasmBase, delegate: 'auto' });
+  const prepared = prepareFaces(t.detectImage(bmp, { maxFaces: EDIT_DETECT_FACES }), bmp.width, bmp.height);
+  t.close();
+  const cache = buildCache({ width: bmp.width, height: bmp.height }, prepared, null, { faceScans: [{ quarter: 0, flipH: false }] });
+  const canvas = document.createElement('canvas');
+  const engine = createEngine(canvas, { mirror: false });
+  await engine.ready;
+  const s = createStillSession(engine, null, bmp, { faces: cache.faces, obstacles: cache.obstacles });
+  const faceItems = ['skin.smooth', ...paramsInGroup('shape').map((d) => d.id)];
+  const look = faceItems.reduce((p, id) => setParam(p, id as never, 0.7), applyPreset('natural', 1));
+  const ids = cache.persons.map((p) => p.id);
+  const gl = engine.canvas.getContext('webgl2')!;
+  const px = new Uint8Array(4);
+  const times: number[] = [];
+  for (let i = 0; i < 40; i++) {
+    // every person carries the look (template = the look), the drag moves 大眼 for everyone
+    const e0 = editFromLegacy(setParam(look, 'shape.eyeEnlarge', 0.5 + (i % 10) / 20), { primaryInit: true });
+    const edit = assignPersons({ ...e0, template: e0.persons.p0 }, ids, cache.primary);
+    const frame = buildFrame(edit, s.faces.map((f) => ({ id: f.id, face: f.face, person: f.id })), cache.obstacles, new Map(), cache.primary);
+    const t0 = now();
+    engine.render({ source: bmp, width: bmp.width, height: bmp.height, ...frame }, { still: true });
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); // wait for the GPU (iOS has no timer query)
+    times.push(now() - t0);
+  }
+  const faces = cache.faces.length;
+  s.dispose();
+  engine.dispose();
+  return [{ row: 'PE', config: `${faces} faces 2048`, values: { p50_ms: round(median(times)) } }];
+}
+addRunner('PE', () => rowPE());
+
+const M_KEY = 'meiyan.bench.m';
+/**
+ * M (kill test, S §6.2): open group_people.jpg, detect every body (numPoses 4) and measure, 3 times; a breadcrumb left
+ * behind by a killed page is reported on the next load (staleKill)
+ */
+export async function rowM(): Promise<MultiRow[]> {
+  const { createBodyTracker } = await import('../tracking/bodyTracker');
+  const { measureBody } = await import('../body/measure');
+  const res = await fetch('/tests/fixtures/group_people.jpg');
+  if (!res.ok) throw new Error(`M needs /tests/fixtures/group_people.jpg (the dev server): ${res.status}`);
+  const photo = await res.blob();
+  const out: MultiRow[] = [];
+  for (let run = 1; run <= 3; run++) {
+    localStorage.setItem(M_KEY, String(run));
+    const bmp = await decode(photo, 2048);
+    const bt = await createBodyTracker({ modelBuffer: await loadPoseModel('full'), wasmBase: ENGINE_PATHS.wasmBase, variant: 'full' });
+    const d = bt.detect(bmp);
+    for (const b of d?.bodies ?? []) measureBody({ pose: b.pose, mask: b.mask, people: 1, width: bmp.width, height: bmp.height }, null);
+    bt.close();
+    bmp.close();
+    localStorage.removeItem(M_KEY);
+    const heap = (performance as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0;
+    out.push({ row: 'M', config: `run ${run}`, values: { persons: d?.bodies.length ?? 0, heapMB: Math.round(heap / 1e6) } });
+  }
+  return out;
+}
+addRunner('M', () => rowM());
+
+/** a page killed during M leaves its breadcrumb: report it once (and clear it) */
+export function staleKill(): MultiRow | null {
+  let run: string | null = null;
+  try {
+    run = localStorage.getItem(M_KEY);
+    if (run !== null) localStorage.removeItem(M_KEY);
+  } catch {
+    return null;
+  }
+  return run === null ? null : { row: 'M', config: `killed during run ${run}`, values: { killed: 1 } };
+}

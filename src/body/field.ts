@@ -116,6 +116,20 @@ export interface BodyFieldInput {
   aspect: number;
 }
 
+/** the row bands of a field input (增高, then 長腿 measured on its anchor): the face boxes follow them (S §2.1) */
+export function fieldBands(input: BodyFieldInput): Band[] {
+  const bands: Band[] = [];
+  const hb = input.heightBand ? heightBand(input.heightBand.top, input.heightBand.bottom, input.heightBand.amount) : null;
+  if (hb) bands.push(hb);
+  const lm = input.legs.measure;
+  if (lm?.legs && input.legs.value > EPS) {
+    const L = lm.legs;
+    const lb = legsBand(L.hipY, L.kneeY, L.feetY, input.legs.value * L.vis, bands, L.ankleY);
+    if (lb) bands.push(lb);
+  }
+  return bands;
+}
+
 /**
  * Build one field for every person (S §4.6). Each edited person's local part is built on its own (its terms, its own
  * 背景保護 weights), limited in magnitude against the other persons' masks (a budget rising from 0 at the halfway line
@@ -133,15 +147,7 @@ export function buildBodyField(input: BodyFieldInput, prev?: BodyField | null, l
   const [w, h] = fieldSize(input.aspect, edge);
   const A = input.edited[0]?.measure.aspect ?? input.legs.measure?.aspect ?? (Number.isFinite(input.aspect) && input.aspect > 0 ? input.aspect : 1);
 
-  const bands: Band[] = [];
-  const hb = input.heightBand ? heightBand(input.heightBand.top, input.heightBand.bottom, input.heightBand.amount) : null;
-  if (hb) bands.push(hb);
-  const lm = input.legs.measure;
-  if (lm?.legs && input.legs.value > EPS) {
-    const L = lm.legs;
-    const lb = legsBand(L.hipY, L.kneeY, L.feetY, input.legs.value * L.vis, bands, L.ankleY);
-    if (lb) bands.push(lb);
-  }
+  const bands = fieldBands(input);
 
   let local: LocalGrid | null = null;
   // `edited` is trusted as given: the editor lists a person with a non-neutral local item, or any body person while a

@@ -3,8 +3,9 @@
 // re-encoded (debounced 400 ms) so 儲存 can share synchronously, and autosaved to 最近編輯.
 // Persons (S §3.3): the first definite face answer builds the detection cache (firstAnswer) and maps the edit onto
 // its persons (the current edit and every undo state); the cache is written with the entry, so a reopen runs no
-// detector. Every face is drawn with its person's params and its own 瘦臉 limit (buildFrame); sub-step 1c edits the
-// primary person.
+// detector. Every face is drawn with its person's params and its own 瘦臉 limit (buildFrame). With ≥ 2 persons the
+// person strip (全部 + one chip per person) and the drawn face boxes show (S §2.1); a chip or a photo tap selects a
+// person (hitPerson, S §2.3), and every panel write goes through the lens of that selection (or 全部).
 // 美體 (body research report §落地設計): the pose model loads the first time the 美體 tab opens; every body joins the
 // persons (withBodies) and is cached in the entry's detection, and the one multi-person displacement field is rebuilt
 // only when the 美體 inputs change (a drag previews a draft field, at most one build per frame; the commit and every
@@ -16,13 +17,15 @@
 // limit cannot act yet (contour neutral, no face found, 基本模式), so a reopen rebuilds the same limit before its first
 // frame (no model) and shows / exports what was saved. Preview and export draw with the same limit. New photo: not
 // requested until a contour edit; undo / redo / 重置 never withdraw the request, in this editor or a later one.
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { SessionFace, StillSession } from '../../app/still';
-import { heightBandStretch } from '../../body/bands';
-import { buildBodyField } from '../../body/field';
+import { forwardY, heightBandStretch } from '../../body/bands';
+import { bodyFieldCacheStats, buildBodyField, fieldBands } from '../../body/field';
 import { measureBody, paramAvailability } from '../../body/measure';
-import { personInfos, scanned0, withBodies } from '../../detect/cache';
+import { bodyBox, personInfos, scanned0, withBodies } from '../../detect/cache';
+import { hitPerson } from '../../detect/persons';
 import { sanitizeParams } from '../../engine/params';
+import { takePersonsHint } from '../../store/settings';
 import { stableKey } from '../../store/undo';
 import { buildFaceProtect } from '../../tracking/faceProtect';
 import type { BodyField, DetectionCache, EditState, Engine, FaceProtect, PersonId, Selection } from '../../types';
@@ -33,37 +36,57 @@ import { firstAnswer } from '../../edit/migrate';
 import { assignPersons, editKey, P0, renamePersons } from '../../edit/state';
 import { warpGuard } from '../../edit/warpGuard';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
+import { FaceBoxes, type FaceBoxItem } from '../components/FaceBoxes';
 import { HeightBandOverlay } from '../components/HeightBandOverlay';
 import { CanvasHost } from '../components/CanvasHost';
 import { IconButton } from '../components/Controls';
 import { EngineStatus } from '../components/EngineStatus';
+import { drawThumb, PersonStrip, type StripPerson } from '../components/PersonStrip';
 import { SliderRow } from '../components/Slider';
 import { Status } from '../components/Status';
 import { debug, reportError } from '../debug';
 import { deps, type UndoLike } from '../deps';
 import {
+  answerNotices,
   ANY_FIELD,
   BodyFieldMemo,
   bodyDetectionOf,
   bodyPanelContext,
+  changedPersons,
   detectBody,
   detectSession,
   exportOnLatest,
   FieldDraftGate,
   fieldInputOf,
   frameFacesOf,
+  hitCtxOf,
+  legsAnchorOf,
   measurePersons,
+  PERSON_TABS,
   protectRequests,
   rebaseStamp,
   RedetectBudget,
   shouldDetectBody,
   stampIs,
+  thumbRect,
+  undoToast,
   type BodyDet,
   type OutputStamp,
 } from '../editorModel';
 import { FaceProtectSource, isContourEdit, maskCoversFace, paramsPatch, type FaceProtectRecord } from '../faceProtectModel';
 import { Icon } from '../icons';
-import { bandOrSuggested, INITIAL_SELECTION, showsHeightBand, sliderFor, type PanelSelection, type SliderBinding } from '../panelModel';
+import {
+  bandOrSuggested,
+  INITIAL_SELECTION,
+  personNumber,
+  photoScoped,
+  photoTouchToast,
+  showsHeightBand,
+  sliderEmptyText,
+  sliderFor,
+  type PanelSelection,
+  type SliderBinding,
+} from '../panelModel';
 import { haptic } from '../platform';
 import { ensureBodyTracker, ensureEngine, ensureFaceSegmenter, svc } from '../services';
 import { go, setPendingHistory, showSaveFallback, toast, type EditorSource } from '../state';
@@ -102,11 +125,46 @@ export function Editor({ source }: { source: EditorSource }) {
   const answered = useRef(source.detect !== null);
   const primary: PersonId = detect?.primary ?? P0;
   const infos = useMemo(() => personInfos(detect), [detect]);
-  /** sub-step 1c: the selection is the primary (Task 23 adds the strip, the boxes and 全部) */
-  const selection: Selection = { kind: 'person', id: primary };
+  /** view state (S §2.2): never in the undo stack, never persisted; the primary once detection answers */
+  const [selection, setSelection] = useState<Selection>({ kind: 'person', id: primary });
+  const multi = infos.length >= 2;
+  /**
+   * a selected person that disappeared (p0 handed over, a rematch) falls back to the primary (S §2.2); 全部 only means
+   * something with ≥ 2 persons (one person edits exactly as in v0.3)
+   */
+  const selected: Selection = (selection.kind === 'person' ? !infos.some((p) => p.id === selection.id) : !multi) ? { kind: 'person', id: primary } : selection;
+  const selId = selected.kind === 'all' ? 'all' : selected.id;
+  /** a slider drag is in progress: chip and photo taps are ignored, the boxes hidden (S §2.1, §2.2) */
+  const [dragging, setDragging] = useState(false);
   /** the 0.3 view of the edit on the primary: only shouldDetectBody reads it (is some 美體 value set) */
   const params = useMemo(() => legacyProjection(edit, primary), [edit, primary]);
   const [sel, setSelState] = useState(lastSel);
+  /** boxes at full opacity for 1.5 s after a tab change, a selection change or a photo tap, then 30 % (S §2.1) */
+  const [boxesIdle, setBoxesIdle] = useState(false);
+  const idleTimer = useRef(0);
+  const wakeBoxes = () => {
+    setBoxesIdle(false);
+    clearTimeout(idleTimer.current);
+    idleTimer.current = window.setTimeout(() => setBoxesIdle(true), 1500);
+  };
+  useEffect(wakeBoxes, [sel.tab, selId]);
+  const choose = (s: Selection) => {
+    if (dragging) return; // a chip or photo tap during a slider drag is ignored (S §2.2)
+    setSelection(s);
+  };
+  /** the persons the last ↶ / ↷ changed: their chip and box carry .changed for 600 ms (S §1.1 item 8) */
+  const [changedIds, setChangedIds] = useState<readonly PersonId[]>([]);
+  const changedTimer = useRef(0);
+  useEffect(
+    () => () => {
+      clearTimeout(idleTimer.current);
+      clearTimeout(changedTimer.current);
+    },
+    [],
+  );
+  /** 「已套用到全部人物」 shows once per editor session; 「{label}套用於整張照片」 once per photo-level item */
+  const allToastDone = useRef(false);
+  const touchedPhoto = useRef(new Set<string>());
   /**
    * the still session plus the engine it draws with (recoverEngine replaces the engine → a new session).
    * unsure: its "no face" came from a tracker that could not answer (recovering, or the detect call threw).
@@ -178,10 +236,8 @@ export function Editor({ source }: { source: EditorSource }) {
   );
   const measuresRef = useRef(measures);
   measuresRef.current = measures;
-  /** the primary person's measure: what the 美體 panel shows (Task 23 follows the selection) */
-  const measure = measures.get(primary) ?? null;
   const lensOf = (e: EditState) =>
-    lensFor(e, selection, infos, primary, {
+    lensFor(e, selected, infos, primary, {
       available: (p, id) => {
         const m = measuresRef.current.get(p);
         return !m || paramAvailability(m, id).ok;
@@ -236,13 +292,23 @@ export function Editor({ source }: { source: EditorSource }) {
   const setSel = (s: PanelSelection) => {
     lastSel = s;
     setSelState(s);
+    // another item's slider: a drag of the old one can no longer commit (its row was replaced)
+    setDragging(false);
   };
 
-  /** commit=true records an undo step; commit=false is a drag step (the 美體 field previews a draft) */
-  const update = (e: EditState, commit: boolean) => {
+  /**
+   * commit=true records an undo step; commit=false is a drag step (the 美體 field previews a draft). `user`: a panel
+   * write through the selection (重置 resets everyone whatever is selected: no 全部 toast)
+   */
+  const update = (e: EditState, commit: boolean, user = true) => {
     fieldDraft.noteUpdate(commit);
     // a drag step draws the plain table; the commit checks it (S §4.4)
     warpScales.current = commit ? guardScales(e) : new Map();
+    // the first 全部 write of this editor session says so (S §2.4)
+    if (user && multi && selected.kind === 'all' && !allToastDone.current && changedPersons(editRef.current, e).length) {
+      allToastDone.current = true;
+      toast('已套用到全部人物');
+    }
     setEditState(e);
     if (commit && undo) {
       try {
@@ -287,12 +353,27 @@ export function Editor({ source }: { source: EditorSource }) {
    * primary; faces found by a re-detect after a faceless output): rewritten once, without reordering 最近編輯
    */
   const thumbOwed = useRef(false);
+  /** toasts share one slot (state.ts): the first now, each further one when the previous has had its time */
+  const showNotices = (notices: readonly string[]) =>
+    notices.forEach((text, i) => {
+      if (i === 0) toast(text, 3200);
+      else
+        window.setTimeout(() => {
+          if (!unmounted.current) toast(text, 3200);
+        }, i * 3400);
+    });
   const applyAnswer = (a: ReturnType<typeof firstAnswer>, first: boolean) => {
     rebaseOnDetect(a.rebase, a.detect);
+    // detection finished: the primary is selected (S §2.2)
+    setSelection({ kind: 'person', id: a.detect.primary });
     if (!first) return;
     // a v1 entry (primaryInit set by openState) with ≥ 2 faces: 0.3 drew faces[0], 0.4 draws the primary
     if (source.historyId && source.edit.primaryInit && a.detect.faces.length >= 2) thumbOwed.current = true;
-    if (a.dropped || source.cacheDropped) toast('已重新偵測臉部，部分人物的設定已重設', 3200);
+    const notices = a.dropped || source.cacheDropped ? ['已重新偵測臉部，部分人物的設定已重設'] : [];
+    const persons = a.detect.persons.length;
+    // over cap / too small only with the strip; the first group photo ever adds the hint (S §1.1 item 11, §2.6)
+    notices.push(...answerNotices(a.detect, persons, persons >= 2 && takePersonsHint()));
+    showNotices(notices);
   };
   // a fitting cache that lost persons in normalizeDetect gets no answer: its toast shows once, at mount (S §5.4)
   useEffect(() => {
@@ -548,6 +629,8 @@ export function Editor({ source }: { source: EditorSource }) {
         const ids = r.cache.persons.map((p) => p.id);
         rebaseOnDetect((e) => assignPersons(renamePersons(e, r.renamed), ids, r.cache.primary), r.cache);
         setBodyDet({ phase: 'done', det: null });
+        // body-only persons made this a group photo: the strip mounts now, with the notices of a group answer
+        if (cache.persons.length < 2 && ids.length >= 2) showNotices(answerNotices(r.cache, ids.length, takePersonsHint()));
       },
       (e: unknown) => {
         // a download / startup failure was reported by ensureBodyTracker and has a friendly hint; a failing
@@ -582,6 +665,8 @@ export function Editor({ source }: { source: EditorSource }) {
       return;
     }
     if (!r.changed) return;
+    // the global fold guard of the field just built (1 = untouched; S §8.4 reads it)
+    debug({ lambdaGlobal: bodyFieldCacheStats.lambdaGlobal });
     fieldGen.current++;
     try {
       sessionRef.current?.setBody(r.field);
@@ -689,8 +774,12 @@ export function Editor({ source }: { source: EditorSource }) {
     } catch (e) {
       setFatal(reportError(e, 'session.render'));
     }
-    debug({ persons: infos.length, faces: session.faces.length, selected: primary });
   }, [session, edit, protects, detect]);
+  // (a layout effect: a tap's selection is readable by the time the event's task ends)
+  useLayoutEffect(() => {
+    if (!session) return;
+    debug({ persons: infos.length, faces: session.faces.length, selected: selId, boxes: (detect?.faces ?? []).map((f) => ({ id: f.id, ...f.box })) });
+  }, [session, detect, infos, selId]);
 
   /**
    * Export + encode with the user's state captured when it was asked for (`e`, the 美體 `field`); waits for the filter
@@ -771,8 +860,6 @@ export function Editor({ source }: { source: EditorSource }) {
     }
   });
 
-  useZoomPan(stageRef, layerRef, !!session);
-
   const share = (file: File) => {
     let p: Promise<string>;
     try {
@@ -831,26 +918,41 @@ export function Editor({ source }: { source: EditorSource }) {
     );
   };
 
+  /** ↶ ↷ never change the selection; they flag the persons they changed and name them when none is selected (S §1.1 item 8) */
+  const afterHistoryStep = (kind: 'undo' | 'redo', before: EditState, after: EditState) => {
+    const ids = changedPersons(before, after);
+    setChangedIds(ids);
+    clearTimeout(changedTimer.current);
+    changedTimer.current = window.setTimeout(() => setChangedIds([]), 600);
+    if (!multi) return;
+    const l = lensOf(after);
+    const t = undoToast(kind, ids, selected, (id) => personNumber(l, id));
+    if (t) toast(t, 2600);
+  };
   const doUndo = () => {
     if (!undo?.canUndo) return;
     haptic();
+    const before = editRef.current;
     const e = undo.undo();
     fieldDraft.noteFull();
     if (e) {
       // an undo lands on another committed state: the safety net checks it (S §4.4)
       warpScales.current = guardScales(e);
       setEditState(e);
+      afterHistoryStep('undo', before, e);
     }
     bump((n) => n + 1);
   };
   const doRedo = () => {
     if (!undo?.canRedo) return;
     haptic();
+    const before = editRef.current;
     const e = undo.redo();
     fieldDraft.noteFull();
     if (e) {
       warpScales.current = guardScales(e);
       setEditState(e);
+      afterHistoryStep('redo', before, e);
     }
     bump((n) => n + 1);
   };
@@ -867,11 +969,14 @@ export function Editor({ source }: { source: EditorSource }) {
       return;
     }
     setConfirmReset(false);
-    update(lensOf(editRef.current).reset(), true);
+    update(lensOf(editRef.current).reset(), true, false);
   };
 
   /** a slider step (commit=false) or its commit: the only edit that counts as the user's own contour edit */
   const slide = (b: SliderBinding, v: number, commit: boolean) => {
+    setDragging(!commit);
+    const t = photoTouchToast(b, lensOf(editRef.current), touchedPhoto.current);
+    if (t) toast(t);
     if (!contourEdited && isContourEdit(b.param ?? b.key, b.value, v)) {
       protectSrc.request(); // at once: a history write before the protect effect runs records it already
       setContourEdited(true);
@@ -884,17 +989,81 @@ export function Editor({ source }: { source: EditorSource }) {
     go(source.returnTo === 'camera' ? { name: 'camera' } : { name: 'home' });
   };
 
-  // the 美體 panel shows the primary person's body (else the first body: Task 23 follows the selection)
-  const personBody = detect?.persons.find((p) => p.id === primary)?.body ?? detect?.bodies?.[0]?.id ?? null;
-  const bodyCtx = bodyPanelContext(
-    bodyDet.phase === 'done' ? { phase: 'done', det: detect && personBody ? bodyDetectionOf(detect, personBody) : null } : bodyDet,
-    bodyTracker,
-    measure,
-    paramAvailability,
-    retryBody,
-  );
+  // the 美體 measure shown: the selected person's body, else the primary's, else the first body person's (S §2.4)
+  const bodyOwner =
+    (selected.kind === 'person' && measures.has(selected.id) ? selected.id : null) ??
+    (measures.has(primary) ? primary : null) ??
+    ([...measures.keys()][0] ?? null);
+  // (no measure yet: the primary's body, else the first body, as the detection status reads it)
+  const ownerBody = bodyOwner
+    ? (detect?.persons.find((p) => p.id === bodyOwner)?.body ?? null)
+    : (detect?.persons.find((p) => p.id === primary)?.body ?? detect?.bodies?.[0]?.id ?? null);
+  const bodyCtx = {
+    ...bodyPanelContext(
+      bodyDet.phase === 'done' ? { phase: 'done', det: detect && ownerBody ? bodyDetectionOf(detect, ownerBody) : null } : bodyDet,
+      bodyTracker,
+      bodyOwner ? (measures.get(bodyOwner) ?? null) : null,
+      paramAvailability,
+      retryBody,
+    ),
+    legsAnchor: detect ? legsAnchorOf(edit, detect, measures) : null,
+  };
   const lens = lensOf(edit);
   const binding = sliderFor(lens, sel, bodyCtx);
+
+  // ── persons UI (S §2): photo taps, the strip, the face boxes ──
+  const tapsOn = !!session && multi && PERSON_TABS.has(sel.tab) && !showsHeightBand(sel, bodyCtx);
+  useZoomPan(stageRef, layerRef, !!session, {
+    onTap: tapsOn
+      ? (uv, rect) => {
+          wakeBoxes();
+          const d = detectRef.current;
+          if (!d || dragging) return;
+          const hit = hitPerson(uv, hitCtxOf(d, sel.tab === 'body', fieldMemo.field, rect));
+          if (hit) choose({ kind: 'person', id: hit });
+        }
+      : undefined,
+  });
+  /** chip thumbnails, drawn once per person from the working bitmap */
+  const [thumbs, setThumbs] = useState<Readonly<Record<PersonId, string | null>>>({});
+  useEffect(() => {
+    if (!detect || detect.persons.length < 2) return;
+    const missing = detect.persons.filter((p) => !(p.id in thumbs));
+    if (!missing.length) return;
+    const next = { ...thumbs };
+    for (const p of missing) {
+      try {
+        next[p.id] = drawThumb(source.bitmap, thumbRect(detect, p));
+      } catch (e) {
+        reportError(e, 'person thumb');
+        next[p.id] = null;
+      }
+    }
+    setThumbs(next);
+  }, [detect]);
+  const scope = multi && photoScoped(sel);
+  const stripPersons: StripPerson[] = infos.map((p, i) => ({
+    id: p.id,
+    n: i + 1,
+    label: `人物 ${i + 1}${!p.face ? '（未偵測到臉部）' : !p.body && detect?.bodies ? '（未偵測到身體）' : ''}`,
+    thumb: thumbs[p.id] ?? null,
+    changed: changedIds.includes(p.id),
+    ruler: sel.tab === 'body' && sel.body === 'body.legs' && bodyCtx.legsAnchor === p.id,
+  }));
+  // 增高 / 長腿 stretch whole rows on every tab, so the boxes follow the bands wherever they show (S §2.1 Position)
+  const bands = detect && multi ? fieldBands(fieldInputOf(edit, detect, measures, bodyAspect)) : [];
+  const layerW = layerRef.current?.getBoundingClientRect().width ?? 0;
+  const boxItems: FaceBoxItem[] =
+    detect && multi && PERSON_TABS.has(sel.tab)
+      ? detect.persons.flatMap((p, i): FaceBoxItem[] => {
+          const f = p.face ? detect.faces.find((x) => x.id === p.face) : undefined;
+          const b = !f && sel.tab === 'body' && p.body ? detect.bodies?.find((x) => x.id === p.body) : undefined;
+          const box = f?.box ?? (b ? bodyBox(b) : null);
+          if (!box) return [];
+          return [{ person: p.id, n: i + 1, box, selected: selected.kind === 'all' || selected.id === p.id, changed: changedIds.includes(p.id), dashed: !f, narrow: box.w * layerW < 24 }];
+        })
+      : [];
+  const showBoxes = !!session && !fatal && !dragging && !hold.held && !showsHeightBand(sel, bodyCtx);
   // face effects cannot apply: 基本模式, or no face in this photo (null while analysing, so no flash)
   // (a tracker that could not answer gets a neutral note until the re-detect gives a real answer)
   let faceNote: string | null = null;
@@ -942,6 +1111,7 @@ export function Editor({ source }: { source: EditorSource }) {
         <div class="frame" style={{ '--r': String(ratio) }}>
           <div class="zoom-layer" ref={layerRef}>
             <CanvasHost fit="contain" />
+            {showBoxes && <FaceBoxes items={boxItems} dim={scope} idle={boxesIdle} mapY={bands.length ? (y) => forwardY(bands, y) : undefined} />}
             {session && !fatal && !hold.held && showsHeightBand(sel, bodyCtx) && (
               <HeightBandOverlay
                 band={bandOrSuggested(edit, bodyCtx)}
@@ -956,7 +1126,7 @@ export function Editor({ source }: { source: EditorSource }) {
               <button type="button" class={`float-btn${confirmReset ? ' confirm' : ''}`} onClick={reset}>
                 <span>
                   <Icon name="reset" size={16} stroke={2} />
-                  {confirmReset ? '確定重置？' : '重置'}
+                  {confirmReset ? (multi ? '確定重置全部？' : '確定重置？') : '重置'}
                 </span>
               </button>
               <button type="button" class={`float-btn${hold.held ? ' held' : ''}`} aria-label="按住對比" {...hold.props}>
@@ -972,10 +1142,12 @@ export function Editor({ source }: { source: EditorSource }) {
       </div>
 
       <div class="editor-panel">
+        {session && multi && <PersonStrip persons={stripPersons} selection={selected} photoScope={scope} onSelect={choose} />}
         <SliderRow
           binding={session && !faceOff ? binding : null}
           onChange={(v) => binding && slide(binding, v, false)}
           onCommit={(v) => binding && slide(binding, v, true)}
+          emptyText={session && !faceOff ? sliderEmptyText(lens, sel) : null}
         />
         <BeautyPanel
           lens={lens}

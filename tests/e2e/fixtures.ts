@@ -1,7 +1,7 @@
 // Shared e2e fixtures: every test fails on console errors / uncaught exceptions and on any request
 // to a non-localhost origin (the privacy guarantee: no photo, telemetry or CDN fetch leaves the
 // device). Plus pixel helpers for "did the image actually change" assertions.
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, test as base, type Locator, type Page } from '@playwright/test';
 import { PNG } from 'pngjs';
@@ -191,28 +191,91 @@ export async function importFixture(page: Page, path: string): Promise<void> {
 }
 
 /**
- * Write a raw record straight into IndexedDB `meiyan` / `edits` (store/history.ts DB_NAME, STORE_NAME; v0.3-shaped or
- * v2), then reload. Call after `page.goto('/')` (same origin). `original` / `thumb` are fixture URLs fetched in the page.
+ * Write a raw record into IndexedDB `meiyan` / `edits` (store/history.ts DB_NAME, STORE_NAME; v0.3-shaped or v2), then
+ * reload. Call after `page.goto('/')`. `files.original` / `files.thumb` are local paths read in Node (the production
+ * preview does not serve tests/fixtures); typed arrays inside `record` are passed as plain arrays under
+ * `typed: { path: 'f32' | 'u8' }` and rebuilt in the page.
  */
-export async function seedHistory(page: Page, record: Record<string, unknown>): Promise<void> {
-  await page.evaluate(async (r) => {
+export async function seedHistory(page: Page, record: Record<string, unknown>, files: { original: string; thumb?: string }, typed: Record<string, 'f32' | 'u8'> = {}): Promise<void> {
+  const b64 = (p: string) => readFileSync(p).toString('base64');
+  await page.evaluate(
+    async ({ r, original, thumb, typed }) => {
+      const blob = (s: string) => new Blob([Uint8Array.from(atob(s), (c) => c.charCodeAt(0))]);
+      const rec = structuredClone(r) as Record<string, unknown>;
+      for (const [path, kind] of Object.entries(typed)) {
+        const keys = path.split('.');
+        let o = rec as Record<string, unknown>;
+        for (const k of keys.slice(0, -1)) o = o[k] as Record<string, unknown>;
+        const last = keys[keys.length - 1];
+        o[last] = kind === 'f32' ? new Float32Array(o[last] as number[]) : new Uint8Array(o[last] as number[]);
+      }
+      rec.original = blob(original);
+      rec.thumb = blob(thumb);
+      const db = await new Promise<IDBDatabase>((res, rej) => {
+        const q = indexedDB.open('meiyan', 1);
+        q.onupgradeneeded = () => q.result.createObjectStore('edits', { keyPath: 'id' }).createIndex('updatedAt', 'updatedAt');
+        q.onsuccess = () => res(q.result);
+        q.onerror = () => rej(q.error);
+      });
+      await new Promise<void>((res, rej) => {
+        const tx = db.transaction('edits', 'readwrite');
+        tx.objectStore('edits').put(rec);
+        tx.oncomplete = () => res();
+        tx.onerror = () => rej(tx.error);
+      });
+      db.close();
+    },
+    { r: record, original: b64(files.original), thumb: b64(files.thumb ?? files.original), typed },
+  );
+  await page.reload();
+}
+
+/** `updatedAt` of every history record, by id */
+export async function historyStamps(page: Page): Promise<Record<string, number>> {
+  return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((res, rej) => {
       const q = indexedDB.open('meiyan', 1);
-      q.onupgradeneeded = () => q.result.createObjectStore('edits', { keyPath: 'id' }).createIndex('updatedAt', 'updatedAt');
       q.onsuccess = () => res(q.result);
       q.onerror = () => rej(q.error);
     });
-    const blob = async (u: string) => (await fetch(u)).blob();
-    const rec = { ...r, original: await blob(r.original as string), thumb: await blob(r.thumb as string) };
-    await new Promise<void>((res, rej) => {
-      const tx = db.transaction('edits', 'readwrite');
-      tx.objectStore('edits').put(rec);
-      tx.oncomplete = () => res();
-      tx.onerror = () => rej(tx.error);
+    const all = await new Promise<{ id: string; updatedAt: number }[]>((res, rej) => {
+      const q = db.transaction('edits').objectStore('edits').getAll();
+      q.onsuccess = () => res(q.result as { id: string; updatedAt: number }[]);
+      q.onerror = () => rej(q.error);
     });
     db.close();
-  }, record);
-  await page.reload();
+    return Object.fromEntries(all.map((e) => [e.id, e.updatedAt]));
+  });
+}
+
+/** click a strip chip: n = 0 is 全部 */
+export async function selectPerson(page: Page, n: number): Promise<void> {
+  await page.getByRole('radio', { name: n === 0 ? '全部' : new RegExp(`^人物 ${n}`) }).click();
+}
+
+/** the screen point of a normalized source point on the editor's (unmirrored, zoom 1) layer */
+export async function layerPoint(page: Page, u: number, v: number): Promise<{ x: number; y: number }> {
+  const r = (await page.locator('.editor-stage .zoom-layer').boundingBox())!;
+  return { x: r.x + u * r.width, y: r.y + v * r.height };
+}
+
+/** the centre of a debug face box (`__meiyan.boxes`) on screen */
+export async function boxCentre(page: Page, id: string): Promise<{ x: number; y: number }> {
+  const b = (await debugState(page)).boxes.find((x) => x.id === id)!;
+  return layerPoint(page, b.x + b.w / 2, b.y + b.h / 2);
+}
+
+/** two-finger pinch about `c` from `d0` to `d1` px apart (CDP touch: Chromium turns it into pointer events) */
+export async function pinch(page: Page, c: { x: number; y: number }, d0: number, d1: number): Promise<void> {
+  const cdp = await page.context().newCDPSession(page);
+  const pts = (d: number) => [
+    { x: c.x - d / 2, y: c.y, id: 0 },
+    { x: c.x + d / 2, y: c.y, id: 1 },
+  ];
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: pts(d0) });
+  for (let i = 1; i <= 8; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: pts(d0 + ((d1 - d0) * i) / 8) });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await cdp.detach();
 }
 
 /** mean |a − b| inside `r` (fractions of the image) and the max outside it */

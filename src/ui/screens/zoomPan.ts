@@ -30,12 +30,24 @@ export function pinchView(start: View, m0: { x: number; y: number }, m1: { x: nu
   return { s, x: m1.x - s * px, y: m1.y - s * py };
 }
 
+export interface ZoomPanOptions {
+  /**
+   * One pointer, ≤ 8 px, not started on a button / .slider-row / .status (S §2.3). Fires on the pointer-up, before a
+   * double tap's fit, with the UV of the transformed layer (right at any zoom) and that rect.
+   */
+  onTap?(uv: [number, number], layer: DOMRect): void;
+}
+
 export function useZoomPan(
   stageRef: { current: HTMLElement | null },
   layerRef: { current: HTMLElement | null },
   enabled: boolean,
+  opts: ZoomPanOptions = {},
 ): void {
   const view = useRef<View>({ s: 1, x: 0, y: 0 });
+  // read through a ref: the effect depends on [enabled] only and must not call a stale callback
+  const optsRef = useRef(opts);
+  optsRef.current = opts;
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -54,6 +66,8 @@ export function useZoomPan(
       layer.style.transition = animate ? 'transform 240ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none';
       const { s, x, y } = view.current;
       layer.style.transform = s === 1 && x === 0 && y === 0 ? '' : `translate(${x}px, ${y}px) scale(${s})`;
+      // the face boxes keep 2 px strokes and an unscaled badge at any zoom (FaceBoxes, theme.css)
+      layer.style.setProperty('--zs', String(s));
     };
     const centre = () => {
       const r = stage.getBoundingClientRect();
@@ -103,6 +117,12 @@ export function useZoomPan(
     const up = (e: PointerEvent) => {
       if (!pts.delete(e.pointerId)) return;
       if (pts.size === 0 && !moved) {
+        const onTap = optsRef.current.onTap;
+        // a pointercancel (the browser took the gesture over) is no tap
+        if (onTap && e.type === 'pointerup') {
+          const r = layer.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) onTap([(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height], r);
+        }
         const now = performance.now();
         if (now - lastTap < DOUBLE_TAP_MS) {
           lastTap = 0;

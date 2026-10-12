@@ -575,6 +575,8 @@ export interface DebugState {
   detectCalls: number;
   /** face boxes, normalized and unmirrored (editor: cache faces; camera: shown tracks) */
   boxes: { id: string; x: number; y: number; w: number; h: number }[];
+  /** the last 美體 field's global fold-guard λ (1 = untouched; e2e) */
+  lambdaGlobal?: number;
   /** Phase 0: GL limits (always) and probes (bench and dev builds only) */
   gl?: Record<string, number | boolean>;
   screen: string;

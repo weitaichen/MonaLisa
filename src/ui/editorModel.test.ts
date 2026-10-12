@@ -9,8 +9,9 @@ import { applyPreset, setBodyProtect, setFilter, setHeightBand, setParam } from 
 import type { BeautyParams, BodyField, EditState, Face, ParamId, RegionStatus, TrackerState } from '../types';
 import { lensFor, P0_INFO } from '../edit/lens';
 import { editFromLegacy } from '../edit/legacy';
-import { assignPersons } from '../edit/state';
+import { assignPersons, withPersons } from '../edit/state';
 import {
+  answerNotices,
   ANY_FIELD,
   BODY_DRAFT_LONG_EDGE,
   BODY_NONE_REASON,
@@ -22,12 +23,14 @@ import {
   bodyParamsKey,
   bodyToPersist,
   cachedBodyFits,
+  changedPersons,
   detectBody,
   detectSession,
   exportOnLatest,
   FieldDraftGate,
   fieldInputOf,
   frameFacesOf,
+  hitCtxOf,
   MAX_REDETECTS,
   measurePersons,
   measureSafe,
@@ -38,6 +41,8 @@ import {
   shouldDetectBody,
   stampIs,
   suggestedBand,
+  thumbRect,
+  undoToast,
   type BodyDet,
 } from './editorModel';
 import { BODY_ERROR_NOTE, bodyNote, INITIAL_SELECTION, itemsFor } from './panelModel';
@@ -580,5 +585,47 @@ describe('persons in the editor model (S §3.3)', () => {
     expect(stampIs(rebaseStamp(saved, 'a', 'b', 3), 'b', 7)).toBe(true);
     expect(rebaseStamp({ key: 'x', field: 2 }, 'a', 'b', 2)).toEqual({ key: 'x', field: 2 });
     expect(rebaseStamp(null, 'a', 'b', 0)).toBeNull();
+  });
+});
+
+describe('editor persons UI helpers (S §1.1 item 8, §2.6)', () => {
+  const base = assignPersons(editFromLegacy(applyPreset('natural', 1)), ['f0', 'f1', 'b1'], 'f0');
+  const bump = (e: EditState, id: string) => withPersons(e, [id], (p) => ({ ...p, values: { ...p.values, 'shape.eyeEnlarge': 0.9 } }));
+  it('changedPersons compares each person by key', () => {
+    expect(changedPersons(base, bump(base, 'f1'))).toEqual(['f1']);
+    expect(changedPersons(base, bump(bump(base, 'f1'), 'f0')).sort()).toEqual(['f0', 'f1']);
+    expect(changedPersons(base, base)).toEqual([]);
+  });
+  it('undo / redo toast only when the step touched persons other than the selected one', () => {
+    const n = (id: string) => ({ f0: 1, f1: 2, b1: 3 })[id] ?? 0;
+    expect(undoToast('undo', ['f1'], { kind: 'person', id: 'f0' }, n)).toBe('已復原人物 2 的變更');
+    expect(undoToast('redo', ['f1', 'b1'], { kind: 'person', id: 'f0' }, n)).toBe('已重做人物 2、3 的變更');
+    expect(undoToast('undo', ['f0', 'f1'], { kind: 'person', id: 'f0' }, n)).toBeNull();
+    expect(undoToast('undo', ['f1'], { kind: 'all' }, n)).toBeNull();
+    expect(undoToast('undo', [], { kind: 'person', id: 'f0' }, n)).toBeNull();
+  });
+  it('answer notices: over cap wins over too small, both only with the strip; the first group photo ever adds the hint', () => {
+    const c = makeCache({ dropped: { tooSmall: 1, overCap: 2 } });
+    expect(answerNotices(c, 3, true)).toEqual(['偵測到超過 6 張臉，只會美化最大的 6 張', '點選臉部或下方人物，可個別調整']);
+    expect(answerNotices({ ...c, dropped: { tooSmall: 1, overCap: 0 } }, 3, false)).toEqual(['有些臉太小，不會套用臉部效果']);
+    expect(answerNotices(c, 1, true)).toEqual([]);
+  });
+  it('thumbRect: the face box padded 30 %, square in pixels; a body-only person uses its head points', () => {
+    const c = makeCache({ bodies: [cacheBody('b0', 0.8)], persons: [{ id: 'f0', face: 'f0', body: null }, { id: 'f1', face: 'f1', body: null }, { id: 'b0', face: null, body: 'b0' }] });
+    const r = thumbRect(c, c.persons[0]);
+    expect(r.w * c.width).toBeCloseTo(r.h * c.height, 6);
+    expect(r.x + r.w / 2).toBeCloseTo(0.3, 6);
+    const b = thumbRect(c, c.persons[2]);
+    expect(b.x + b.w / 2).toBeCloseTo(0.8, 1);
+    expect(b.y).toBeLessThan(0.4);
+  });
+  it('hitCtxOf: faces with their persons; bodies only on 美體; 44 pt in UV of the layer', () => {
+    const c = makeCache();
+    const ctx = hitCtxOf(c, false, null, { width: 440, height: 330 });
+    expect(ctx.faces.map((f) => f.person)).toEqual(['f0', 'f1']);
+    expect(ctx.bodies).toBeUndefined();
+    expect([ctx.minW, ctx.minH]).toEqual([0.1, 44 / 330]);
+    const withBody = makeCache({ bodies: [cacheBody('b0', 0.8)], persons: [{ id: 'f0', face: 'f0', body: null }, { id: 'f1', face: 'f1', body: null }, { id: 'b0', face: null, body: 'b0' }] });
+    expect(hitCtxOf(withBody, true, null, { width: 440, height: 330 }).bodies?.map((b) => b.person)).toEqual(['b0']);
   });
 });

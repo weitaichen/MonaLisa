@@ -4,10 +4,11 @@
 // 腰臀比; manual 增高 overlay; reopening from 最近編輯 uses the cached detection (no pose-model request). Plus the
 // portrait gating, manual 增高 without a person, and the camera's note. The shared guard fails every test on
 // console errors and non-localhost requests.
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Locator, Page } from '@playwright/test';
 import { PNG } from 'pngjs';
-import { dragSlider, expect, grab, mad, SAMPLE_FACE, settled, shot, test, type Pixels, type Rect } from './fixtures';
+import { debugState, dragSlider, expect, grab, GROUP_PEOPLE, importFixture, mad, regionDiff, SAMPLE_FACE, settled, shot, test, type Pixels, type Rect } from './fixtures';
 
 const FULLBODY = resolve(import.meta.dirname, '../fixtures/fullbody.jpg');
 // (its fullbody_lines.json, the drawn lines' geometry, is metadata kept for the stage-2 per-line bend check: unused yet)
@@ -364,4 +365,36 @@ test('camera: the 美體 tab says photo editing only and offers 匯入照片', a
   await expect(option(page, '增高')).toHaveAttribute('aria-disabled', 'true');
   await shot(page, 'b11-camera-body-note');
   expect(poseRequests).toEqual([]);
+});
+
+test.describe('two persons on group_people.jpg (S §8.4)', () => {
+  test('a tap on the right body selects person 2; 細腰 on 2 leaves person 1 untouched with λ = 1; bands note only for 增高 / 長腿', async ({ page }) => {
+    await importFixture(page, GROUP_PEOPLE);
+    await page.getByRole('tab', { name: '美體' }).click();
+    await expect.poll(async () => (await debugState(page)).persons, { timeout: 120_000 }).toBeGreaterThanOrEqual(2);
+    // the bodies are in the cache once the detection finished (a body tap needs them): 細腰 turns usable
+    await expect(page.getByRole('option', { name: '細腰', exact: true })).not.toHaveAttribute('aria-disabled', 'true', { timeout: 120_000 });
+    // the right person's hip centre (pose 23 / 24 of the recorded fixture, Task 1): inside its mask, far from any face box
+    const pj = JSON.parse(readFileSync(resolve(import.meta.dirname, '../fixtures/group_people.pose.json'), 'utf8')) as { poses: { points: number[] }[] };
+    const hips = pj.poses.map((p) => [(p.points[23 * 4] + p.points[24 * 4]) / 2, (p.points[23 * 4 + 1] + p.points[24 * 4 + 1]) / 2]);
+    const [hx, hy] = hips.sort((a, b) => b[0] - a[0])[0];
+    const layer = (await page.locator('.editor-stage .zoom-layer').boundingBox())!;
+    await page.mouse.click(layer.x + layer.width * hx, layer.y + layer.height * hy);
+    await expect(page.getByRole('radio', { name: /^人物 2/ })).toHaveAttribute('aria-checked', 'true');
+    await page.addStyleTag({ content: '.face-boxes, .toast { display: none !important; }' });
+    const before = await grab(page.locator('.editor-stage .frame'));
+    await page.getByRole('option', { name: '細腰', exact: true }).click();
+    const s = page.getByRole('slider');
+    await s.focus();
+    for (let i = 0; i < 60; i++) await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(800);
+    const after = await grab(page.locator('.editor-stage .frame'));
+    // person 1 stands in the left half: its left 40 % (outside the rect) must not move at all
+    expect(regionDiff(before, after, { x: 0.4, y: 0, w: 0.6, h: 1 }).outsideMax).toBeLessThanOrEqual(1);
+    expect((await debugState(page)).lambdaGlobal).toBe(1);
+    await expect(page.getByText('偵測到多人')).toHaveCount(0);
+    await expect(page.getByText('增高、長腿會拉伸整排畫面')).toHaveCount(0);
+    await page.getByRole('option', { name: '增高', exact: true }).click();
+    await expect(page.getByText('增高、長腿會拉伸整排畫面，套用於整張照片')).toBeVisible();
+  });
 });

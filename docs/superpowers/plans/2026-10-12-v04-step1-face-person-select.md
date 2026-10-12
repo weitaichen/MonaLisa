@@ -10157,7 +10157,7 @@ export function FaceBoxes(p: { items: FaceBoxItem[]; dim: boolean; idle: boolean
 // DebugState gains   lambdaGlobal?: number
 ```
 
-- [ ] **Step 1: Failing unit tests**
+- [x] **Step 1: Failing unit tests**
 
 Append to `src/ui/editorModel.test.ts` (imports: `answerNotices, changedPersons, hitCtxOf, thumbRect, undoToast` from `./editorModel`; `withPersons` from `../edit/state`):
 
@@ -10220,7 +10220,7 @@ describe('first group photo hint (S §1.1 item 11)', () => {
 Run: `npx vitest run src/ui/editorModel.test.ts src/store/settings.test.ts`
 Expected: FAIL (missing exports).
 
-- [ ] **Step 2: Pure helpers**
+- [x] **Step 2: Pure helpers**
 
 `src/store/settings.ts`, append:
 
@@ -10341,7 +10341,7 @@ and in `buildBodyField` replace those lines with `const bands = fieldBands(input
 Run: `npx vitest run src/ui/editorModel.test.ts src/store/settings.test.ts src/body/field.test.ts`
 Expected: PASS.
 
-- [ ] **Step 3: Taps and `--zs` in `zoomPan.ts` (CRLF)**
+- [x] **Step 3: Taps and `--zs` in `zoomPan.ts` (CRLF)**
 
 Replace the signature and add the options ref:
 
@@ -10386,7 +10386,7 @@ In `apply`, after the transform line: `layer.style.setProperty('--zs', String(s)
 
 Then run the CRLF normalizer of Task 22 Step 5 on `src/ui/screens/zoomPan.ts`.
 
-- [ ] **Step 4: `PersonStrip` and `FaceBoxes`**
+- [x] **Step 4: `PersonStrip` and `FaceBoxes`**
 
 `src/ui/components/PersonStrip.tsx`:
 
@@ -10634,7 +10634,7 @@ export function FaceBoxes({ items, dim, idle, mapY }: { items: FaceBoxItem[]; di
 }
 ```
 
-- [ ] **Step 5: The editor (`src/ui/screens/Editor.tsx`)**
+- [x] **Step 5: The editor (`src/ui/screens/Editor.tsx`)**
 
 1. Imports: `FaceBoxes, type FaceBoxItem` (`../components/FaceBoxes`), `PersonStrip, drawThumb, type StripPerson` (`../components/PersonStrip`); `answerNotices, changedPersons, hitCtxOf, legsAnchorOf, PERSON_TABS, thumbRect, undoToast` (`../editorModel`); `personNumber, photoScoped, photoTouchToast, sliderEmptyText` (`../panelModel`); `hitPerson` (`../../detect/persons`); `bodyBox` (`../../detect/cache`); `fieldBands, bodyFieldCacheStats` (`../../body/field`); `forwardY` (`../../body/bands`); `takePersonsHint` (`../../store/settings`); `debug` (`../debug`, if not imported).
 2. Selection (replacing Task 21's `const selection: Selection = …`):
@@ -10793,7 +10793,7 @@ export function FaceBoxes({ items, dim, idle, mapY }: { items: FaceBoxItem[]; di
 
 `src/types.ts` (CRLF), `DebugState`: after `boxes` add `/** the last 美體 field's global fold-guard λ (1 = untouched; e2e) */ lambdaGlobal?: number;`.
 
-- [ ] **Step 6: E2E helpers and the persons cases**
+- [x] **Step 6: E2E helpers and the persons cases**
 
 Append to `tests/e2e/fixtures.ts` (`readFileSync` from `node:fs`):
 
@@ -11161,7 +11161,7 @@ test.describe('two persons on group_people.jpg (S §8.4)', () => {
 });
 ```
 
-- [ ] **Step 7: Bench rows PE and M (`src/bench/multiFace.ts`, append)**
+- [x] **Step 7: Bench rows PE and M (`src/bench/multiFace.ts`, append)**
 
 ```ts
 /** PE: an editor-like drag on group6_faces.png at 2048 — every face item + 磨皮 on every person; p50 frame time */
@@ -11240,7 +11240,7 @@ export function staleKill(): MultiRow | null {
 
 In `mountMultiFace`: add `'PE', 'M'` to the buttons list, and at its start `const killed = staleKill(); if (killed) rows.push(killed);`. (`BodyTrackerOptions`, `types.ts:211-226`: `modelBuffer`, `wasmBase`, `variant`; masks default on. The `/tests/fixtures/` URLs resolve on the dev server, where the bench runs.)
 
-- [ ] **Step 8: Sub-step 1d gate**
+- [x] **Step 8: Sub-step 1d gate**
 
 Run: `npm run typecheck && npm test && npm run build`
 Expected: all green.
@@ -11248,7 +11248,7 @@ Expected: all green.
 Run: `npm run test:e2e`
 Expected: every spec passes, including `parity.spec.ts`, `persons.spec.ts` and the new `body.spec.ts` case.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add src tests/e2e

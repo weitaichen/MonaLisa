@@ -139,3 +139,15 @@ export function hasSavedSettings(): boolean {
     return false;
   }
 }
+
+// ───────────── one-time hints ─────────────
+
+export const PERSONS_HINT_KEY = 'meiyan.hint.persons.v1';
+
+/** The first group photo ever shows 「點選臉部或下方人物，可個別調整」 once (S §1.1 item 11): true once, then false. */
+export function takePersonsHint(): boolean {
+  if (readJson(PERSONS_HINT_KEY) !== undefined) return false;
+  writeJson(PERSONS_HINT_KEY, 1);
+  // storage that silently drops writes (private mode) would repeat the hint on every photo: show it only if it stuck
+  return readJson(PERSONS_HINT_KEY) !== undefined;
+}

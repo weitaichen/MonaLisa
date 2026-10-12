@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { BeautyParams, BodyDetection, Face, ParamId } from '../types';
 import { applyPreset, defaultParams, paramDef, paramsInGroup, resetGroup, setBodyProtect, setHeightBand, setParam } from '../engine/params';
 import { warpImage, fieldAt } from './cpuWarp';
-import { bodyActive, BODY_FIELD_LONG_EDGE, bodyFieldCacheStats, buildBodyField, buildBodyFieldV1, fieldInputV1, fieldMinJacobian, MIN_DET, type BodyFieldInput } from './field';
+import { heightBand } from './bands';
+import { bodyActive, BODY_FIELD_LONG_EDGE, bodyFieldCacheStats, buildBodyField, buildBodyFieldV1, fieldBands, fieldInputV1, fieldMinJacobian, MIN_DET, type BodyFieldInput } from './field';
 import { fieldSize } from './geom';
 import { loadPoseFixture } from './fixtures.node';
 import { MaskSampler, maskOnGrid } from './mask';
@@ -709,6 +710,16 @@ describe('multi-person field (S §4.6)', () => {
     const n = bodyFieldCacheStats.personBuilds;
     buildBodyField(two(0.6), null, 128);
     expect(bodyFieldCacheStats.personBuilds).toBe(n + 1);
+  });
+  it('fieldBands: 增高 first, then 長腿 measured on its anchor; none without either (the face boxes follow them)', () => {
+    const fig = syntheticFigure();
+    const m = measureBody(fig.det, fig.face);
+    const i = fieldInputV1(m, setParam(setHeightBand(defaultParams(), { top: 0.3, bottom: 0.5, amount: 0.5 }), 'body.legs', 0.4), 0.75);
+    const bands = fieldBands(i);
+    expect(bands).toHaveLength(2);
+    expect(bands[0]).toEqual(heightBand(0.3, 0.5, 0.5));
+    expect(fieldBands({ ...i, legs: { value: 0.4, measure: null } })).toHaveLength(1);
+    expect(fieldBands({ ...i, heightBand: null, legs: { value: 0, measure: m } })).toEqual([]);
   });
   it('fieldInputV1: one person, its mask the only mask, 長腿 on it', () => {
     const fig = syntheticFigure();

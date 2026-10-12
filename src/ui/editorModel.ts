@@ -2,9 +2,13 @@
 // it can be unit-tested without a DOM.
 import type { SessionFace } from '../app/still';
 import type { BodyFieldInput, BodyPersonInput } from '../body/field';
+import { MAX_EDIT_FACES } from '../config/limits';
+import { bodyBox } from '../detect/cache';
+import type { HitCtx } from '../detect/persons';
 import type { FrameFaceIn } from '../edit/frame';
 import { personOf } from '../edit/state';
 import { hasValue, paramsInGroup } from '../engine/params';
+import { stableKey } from '../store/undo';
 import { protectWindow } from '../tracking/faceProtect';
 import type { BodyMeasure } from '../body/measure';
 import type {
@@ -18,12 +22,14 @@ import type {
   Face,
   ParamId,
   PersonId,
+  PersonInfoCached,
   Rect,
   RegionStatus,
+  Selection,
   TrackerState,
 } from '../types';
 import { contourActiveValues, type ProtectRequest } from './faceProtectModel';
-import { BODY_NONE_NOTE, BODY_WAIT_REASON, type BodyContext } from './panelModel';
+import { BODY_NONE_NOTE, BODY_WAIT_REASON, type BodyContext, type TabId } from './panelModel';
 import type { BodyTrackerState } from './services';
 
 /**
@@ -438,7 +444,7 @@ export function measurePersons(
 }
 
 /** the 長腿 anchor (S §4.6): legsAnchor with a body, else the primary with a body, else the best-scoring body person */
-function legsAnchorOf(edit: EditState, cache: DetectionCache, measures: ReadonlyMap<PersonId, BodyMeasure>): PersonId | null {
+export function legsAnchorOf(edit: EditState, cache: DetectionCache, measures: ReadonlyMap<PersonId, BodyMeasure>): PersonId | null {
   const a = edit.photo.legsAnchor;
   if (a && measures.has(a)) return a;
   if (measures.has(cache.primary)) return cache.primary;
@@ -515,4 +521,82 @@ export function protectRequests(cache: DetectionCache, faces: readonly SessionFa
  */
 export function rebaseStamp(saved: OutputStamp | null, prevKey: string, nextKey: string, field: number): OutputStamp | null {
   return saved && stampIs(saved, prevKey, field) ? { key: nextKey, field: saved.field } : saved;
+}
+
+// ───────────────────────── the persons UI (S §2) ─────────────────────────
+
+/** the persons whose params differ between two states (↶ ↷ highlight, S §1.1 item 8) */
+export function changedPersons(a: EditState, b: EditState): PersonId[] {
+  const ids = new Set([...Object.keys(a.persons), ...Object.keys(b.persons)]);
+  return [...ids].filter((id) => stableKey(a.persons[id] ?? null) !== stableKey(b.persons[id] ?? null));
+}
+
+/** 「已復原人物 {n} 的變更」 when the step touched only persons other than the selected one (several: 「人物 2、3」) */
+export function undoToast(kind: 'undo' | 'redo', changed: readonly PersonId[], sel: Selection, numberOf: (id: PersonId) => number): string | null {
+  if (sel.kind !== 'person' || !changed.length || changed.includes(sel.id)) return null;
+  const nums = changed.map(numberOf).filter((n) => n > 0).sort((x, y) => x - y);
+  if (!nums.length) return null;
+  return `${kind === 'undo' ? '已復原' : '已重做'}人物 ${nums.join('、')} 的變更`;
+}
+
+/** toasts after the first answer, in order (one slot, state.ts:146-151: the editor shows them one after another) */
+export function answerNotices(cache: DetectionCache, persons: number, firstGroupEver: boolean): string[] {
+  if (persons < 2) return [];
+  const out: string[] = [];
+  if (cache.dropped.overCap > 0) out.push(`偵測到超過 ${MAX_EDIT_FACES} 張臉，只會美化最大的 ${MAX_EDIT_FACES} 張`);
+  else if (cache.dropped.tooSmall > 0) out.push('有些臉太小，不會套用臉部效果');
+  if (firstGroupEver) out.push('點選臉部或下方人物，可個別調整');
+  return out;
+}
+
+const squareAround = (cx: number, cy: number, sidePx: number, W: number, H: number): Rect => {
+  const w = sidePx / W;
+  const h = sidePx / H;
+  return { x: cx - w / 2, y: cy - h / 2, w, h };
+};
+
+/** the strip thumbnail's source rect (S §2.1): face box + 30 %; body-only: head points 0–10 + 60 %, else the top 30 % */
+export function thumbRect(cache: DetectionCache, person: PersonInfoCached): Rect {
+  const W = cache.width;
+  const H = cache.height;
+  const face = person.face ? cache.faces.find((f) => f.id === person.face) : undefined;
+  if (face) {
+    const b = face.box;
+    return squareAround(b.x + b.w / 2, b.y + b.h / 2, Math.max(b.w * W, b.h * H) * 1.3, W, H);
+  }
+  const body = person.body ? cache.bodies?.find((x) => x.id === person.body) : undefined;
+  if (!body) return { x: 0, y: 0, w: 1, h: 1 };
+  const P = body.pose.points;
+  const head: [number, number][] = [];
+  for (let i = 0; i <= 10; i++) if (P[i * 4 + 3] >= 0.5) head.push([P[i * 4], P[i * 4 + 1]]);
+  if (head.length >= 3) {
+    const xs = head.map((p) => p[0]);
+    const ys = head.map((p) => p[1]);
+    const x0 = Math.min(...xs);
+    const x1 = Math.max(...xs);
+    const y0 = Math.min(...ys);
+    const y1 = Math.max(...ys);
+    return squareAround((x0 + x1) / 2, (y0 + y1) / 2, Math.max((x1 - x0) * W, (y1 - y0) * H) * 1.6, W, H);
+  }
+  const bb = bodyBox(body);
+  const top = { x: bb.x, y: bb.y, w: bb.w, h: bb.h * 0.3 };
+  return squareAround(top.x + top.w / 2, top.y + top.h / 2, Math.max(top.w * W, top.h * H), W, H);
+}
+
+/** the tabs whose items are person-level (boxes, taps, strip selection apply) */
+export const PERSON_TABS: ReadonlySet<TabId> = new Set<TabId>(['preset', 'skin', 'shape', 'body', 'makeup']);
+
+/** hitPerson's context (S §2.3): face boxes per person, bodies on 美體, the body field, 44 pt in UV of the layer rect */
+export function hitCtxOf(cache: DetectionCache, bodies: boolean, field: BodyField | null, layer: { width: number; height: number }): HitCtx {
+  const faces = cache.persons.flatMap((p) => {
+    const f = p.face ? cache.faces.find((x) => x.id === p.face) : undefined;
+    return f ? [{ person: p.id, box: f.box }] : [];
+  });
+  const bodyList = bodies
+    ? cache.persons.flatMap((p) => {
+        const b = p.body ? cache.bodies?.find((x) => x.id === p.body) : undefined;
+        return b ? [{ person: p.id, mask: b.mask, box: bodyBox(b) }] : [];
+      })
+    : undefined;
+  return { faces, ...(bodyList ? { bodies: bodyList } : {}), field, minW: 44 / Math.max(1, layer.width), minH: 44 / Math.max(1, layer.height) };
 }

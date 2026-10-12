@@ -1,7 +1,7 @@
 // Reading a stored entry (lazy migration at open, RM §5.2, S §5.3): HistoryEntry → the edit to open with, the cache to
 // trust, and what detection is still owed. Nothing is rewritten in bulk; the first write after an open writes v2.
 // The answer-time half (pairing, the p0 hand-over, A13) is firstAnswer (Task 21).
-import { boxScore, cachedFits, poseBox, scanned0 } from '../detect/cache';
+import { aspectFits, boxScore, cachedFits, poseBox, scanned0 } from '../detect/cache';
 import { stableKey } from '../store/undo';
 import type { CachedBody, CameraLook, DetectionCache, EditState, FaceSeed, HistoryEntry, PersonId, Rect } from '../types';
 import { editFromLegacy, splitLegacy } from './legacy';
@@ -26,10 +26,14 @@ export interface OpenedState {
   cacheDropped: boolean;
 }
 
-/** the v1 `body` cache as the bodies a first answer merges (b0 = the body 0.3 edited) */
-function v1BodiesOf(entry: HistoryEntry): V1Bodies | null {
+/**
+ * the v1 `body` cache as the bodies a first answer merges (b0 = the body 0.3 edited). A body taken at another aspect
+ * is not this photo's (0.3's cachedBodyFits): null, so 美體 re-detects. Nothing re-checks it after the open.
+ */
+function v1BodiesOf(entry: HistoryEntry, size: { width: number; height: number }): V1Bodies | null {
   if (entry.body === undefined) return null;
   if (entry.body === null) return { bodies: [], complete: true };
+  if (!aspectFits(entry.body.width, entry.body.height, size.width, size.height)) return null;
   const { pose, mask, people } = entry.body;
   return { bodies: [{ id: 'b0', pose, mask, score: boxScore(poseBox(pose.points)) }], complete: people <= 1 };
 }
@@ -54,7 +58,7 @@ export function openState(entry: HistoryEntry, size: { width: number; height: nu
       const ids = d.persons.map((p) => p.id);
       return { edit: assignPersons(edit, ids, d.primary), detect: d, needsFaceDetect: !scanned0(d), rematch: null, v1Body: null, cacheDropped: false };
     }
-    return { edit, detect: null, needsFaceDetect: true, rematch: null, v1Body: v1BodiesOf(entry), cacheDropped: false };
+    return { edit, detect: null, needsFaceDetect: true, rematch: null, v1Body: v1BodiesOf(entry, size), cacheDropped: false };
   }
   let edit = v2Edit;
   if (entry.paramsKey !== undefined && entry.paramsKey !== stableKey(entry.params)) {
@@ -77,7 +81,7 @@ export function openState(entry: HistoryEntry, size: { width: number; height: nu
   if (d || entry.staleBoxes) {
     return { edit, detect: null, needsFaceDetect: true, rematch: d ? boxesOf(d) : (entry.staleBoxes ?? {}), v1Body: null, cacheDropped: true };
   }
-  return { edit, detect: null, needsFaceDetect: true, rematch: null, v1Body: v1BodiesOf(entry), cacheDropped: false };
+  return { edit, detect: null, needsFaceDetect: true, rematch: null, v1Body: v1BodiesOf(entry, size), cacheDropped: false };
 }
 
 /** An imported photo starts from the camera look for everyone (RM §3.7, §12 Q2). */

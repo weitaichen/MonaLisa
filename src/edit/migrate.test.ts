@@ -36,9 +36,18 @@ describe('openState (S §5.3)', () => {
     expect(legacyProjection(o.edit, 'p0')).toEqual(applyPreset('refined', 1));
   });
   it('v1 with a body: b0, complete for people = 1 and not for ≥ 2; body null = nobody, complete', () => {
-    expect(openState(v1({ body: makeBodyDetection(1) }), SIZE).v1Body).toMatchObject({ complete: true, bodies: [{ id: 'b0' }] });
-    expect(openState(v1({ body: makeBodyDetection(3) }), SIZE).v1Body?.complete).toBe(false);
+    expect(openState(v1({ body: makeBodyDetection(1, 2048, 1536) }), SIZE).v1Body).toMatchObject({ complete: true, bodies: [{ id: 'b0' }] });
+    expect(openState(v1({ body: makeBodyDetection(3, 2048, 1536) }), SIZE).v1Body?.complete).toBe(false);
     expect(openState(v1({ body: null }), SIZE).v1Body).toEqual({ bodies: [], complete: true });
+  });
+  it('v1 with a body taken at another aspect: not trusted (美體 re-detects, as cachedBodyFits did in 0.3)', () => {
+    expect(openState(v1({ body: makeBodyDetection(1, 1536, 2048) }), SIZE).v1Body).toBeNull();
+    expect(openState(v1({ body: makeBodyDetection(1, 1440, 1080) }), SIZE).v1Body).toMatchObject({ bodies: [{ id: 'b0' }] });
+    expect(openState(v1({ body: makeBodyDetection(1, 2048, 1536) }), { width: 0, height: 0 }).v1Body).toBeNull();
+    expect(openState(v1({ body: null }), { width: 1536, height: 2048 }).v1Body).toEqual({ bodies: [], complete: true });
+    const edit = editFromLegacy(applyPreset('refined', 1), { primaryInit: true });
+    const closed = v1({ schema: 2, edit, params: legacyProjection(edit, 'p0'), body: makeBodyDetection(1, 1536, 2048) });
+    expect(openState(closed, SIZE).v1Body).toBeNull();
   });
   it('v1 with a cache (defensive): p0 goes to the cache primary at once, no detection', () => {
     const o = openState(v1({ detect: makeCache({ primary: 'f1' }) }), SIZE);

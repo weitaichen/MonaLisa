@@ -1,6 +1,6 @@
 // src/detect/cache.test.ts
 import { describe, expect, it } from 'vitest';
-import { boxScore, cachedFits, noFaceCache, normalizeDetect, personInfos, poseBox } from './cache';
+import { aspectFits, boxScore, cachedFits, noFaceCache, normalizeDetect, personInfos, poseBox } from './cache';
 import { cacheBody, cacheFace, makeCache } from './testCaches';
 
 describe('normalizeDetect (S §5.4)', () => {
@@ -72,6 +72,13 @@ describe('cache helpers', () => {
     expect(cachedFits(c, 2048, 1536)).toBe(true);
     expect(cachedFits(c, 1440, 1080)).toBe(true);
     expect(cachedFits(c, 1536, 2048)).toBe(false);
+    expect(cachedFits(c, 0, 0)).toBe(false);
+  });
+  it('aspectFits: within 1 %, never for an empty photo', () => {
+    expect(aspectFits(2048, 1536, 1440, 1080)).toBe(true);
+    expect(aspectFits(2048, 1536, 2048, 1556)).toBe(false);
+    expect(aspectFits(1536, 2048, 2048, 1536)).toBe(false);
+    expect(aspectFits(2048, 1536, 0, 1536)).toBe(false);
   });
   it('personInfos: cache links, or the implicit person before any cache', () => {
     expect(personInfos(makeCache({ bodies: [cacheBody('b0', 0.3)], persons: [{ id: 'f0', face: 'f0', body: 'b0' }] }))).toEqual([{ id: 'f0', face: true, body: true }]);

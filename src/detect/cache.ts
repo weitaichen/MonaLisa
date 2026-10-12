@@ -154,10 +154,15 @@ export function normalizeDetect(raw: unknown): { cache: DetectionCache | null; s
   return { cache: { ...base, persons, primary }, stale: null, lost };
 }
 
+/** a detection taken at takenW × takenH belongs to a width × height photo: same aspect within 1 % (editorModel.ts:148-152) */
+export function aspectFits(takenW: number, takenH: number, width: number, height: number): boolean {
+  if (!(width > 0 && height > 0)) return false;
+  return Math.abs(takenW / takenH / (width / height) - 1) < 0.01;
+}
+
 /** the cache was taken at this photo's aspect (normalized coordinates fit any decode size; RM §5.2) */
 export function cachedFits(cache: DetectionCache, width: number, height: number): boolean {
-  if (!(width > 0 && height > 0)) return false;
-  return Math.abs(cache.width / cache.height / (width / height) - 1) < 0.01;
+  return aspectFits(cache.width, cache.height, width, height);
 }
 
 /** a definite upright face answer exists (faceScans holds {0, false}; [] = 基本模式) */

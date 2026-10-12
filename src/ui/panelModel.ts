@@ -182,10 +182,14 @@ export function bodyNoteFor(body: BodyContext | undefined, lens: Lens, sel: Pane
   return null;
 }
 
-/** A11: the chips and boxes dim while the tab or its active item is photo-level */
-export function photoScoped(sel: PanelSelection): boolean {
+/**
+ * A11: the chips and boxes dim while the tab or its active item is photo-level as the user sees it (the 整張 badge and
+ * 「· 整張照片」 label: photoLike). So in a photo without a face 磨皮 / 紅潤 dim them too: they act on all skin through
+ * the primary whoever is selected (S §2.4 美膚), and a chip tap would change nothing they do.
+ */
+export function photoScoped(sel: PanelSelection, lens: Lens): boolean {
   if (sel.tab === 'filter') return true;
-  if (sel.tab === 'skin') return sel.skin === 'skin.whiten' || sel.skin === 'skin.sharpen';
+  if (sel.tab === 'skin') return photoLike(lens, sel.skin);
   if (sel.tab === 'body') return sel.body === 'height' || sel.body === 'body.legs';
   return false;
 }

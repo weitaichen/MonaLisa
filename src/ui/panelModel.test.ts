@@ -595,12 +595,24 @@ describe('persons in the panel (S §2.4, A9, A11)', () => {
     for (const tab of ['skin', 'preset', 'shape', 'makeup'] as const) expect(personNote(tab, l)).toBeNull();
   });
   it('A11: the chips dim on 濾鏡 and while 美白 / 銳化 / 增高 / 長腿 is the active item', () => {
-    expect(photoScoped(sel({ tab: 'filter' }))).toBe(true);
-    expect(photoScoped(sel({ tab: 'skin', skin: 'skin.whiten' }))).toBe(true);
-    expect(photoScoped(sel({ tab: 'skin', skin: 'skin.smooth' }))).toBe(false);
-    expect(photoScoped(bodySel('height'))).toBe(true);
-    expect(photoScoped(bodySel('body.legs'))).toBe(true);
-    expect(photoScoped(bodySel('body.waist'))).toBe(false);
+    const l = one('f1');
+    expect(photoScoped(sel({ tab: 'filter' }), l)).toBe(true);
+    expect(photoScoped(sel({ tab: 'skin', skin: 'skin.whiten' }), l)).toBe(true);
+    expect(photoScoped(sel({ tab: 'skin', skin: 'skin.smooth' }), l)).toBe(false);
+    expect(photoScoped(bodySel('height'), l)).toBe(true);
+    expect(photoScoped(bodySel('body.legs'), l)).toBe(true);
+    expect(photoScoped(bodySel('body.waist'), l)).toBe(false);
+  });
+  it('A11 in a photo without a face: 磨皮 / 紅潤 act on all skin whoever is selected (「整張照片」), so the chips dim there too', () => {
+    const bodies: PersonInfo[] = [
+      { id: 'b0', face: false, body: true },
+      { id: 'b1', face: false, body: true },
+    ];
+    const l = lensFor(assignPersons(editFromLegacy(defaultParams()), ['b0', 'b1'], 'b0'), { kind: 'person', id: 'b1' }, bodies, 'b0');
+    expect(photoScoped(sel({ tab: 'skin', skin: 'skin.smooth' }), l)).toBe(true);
+    expect(photoScoped(sel({ tab: 'skin', skin: 'skin.rosy' }), l)).toBe(true);
+    // the chips still pick whose local 美體 items move
+    expect(photoScoped(bodySel('body.waist'), l)).toBe(false);
   });
   it('the first touch of each photo-level item says so once; person items and one person never', () => {
     const seen = new Set<string>();

@@ -1038,7 +1038,7 @@ export function Editor({ source }: { source: EditorSource }) {
     }
     setThumbs(next);
   }, [detect]);
-  const scope = multi && photoScoped(sel);
+  const scope = multi && photoScoped(sel, lens);
   const stripPersons: StripPerson[] = infos.map((p, i) => ({
     id: p.id,
     n: i + 1,

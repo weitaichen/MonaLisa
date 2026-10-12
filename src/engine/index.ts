@@ -1,5 +1,6 @@
 // Public entry of the GPU engine (spec §5, RB §2): context lifecycle, static/filter LUT textures,
 // tiers, and the render / capture / compare entry points. Pass logic lives in pipeline.ts.
+import { debugState } from '../app/debug';
 import type { Engine, EngineOptions, RenderInput, RenderStats, Tier } from '../types';
 import {
   createTexture,
@@ -10,6 +11,7 @@ import {
   type Texture,
   uploadSource,
 } from './gl/gl';
+import { probeFaceTable, probeR16FArray, readGlLimits } from './glProbe';
 import { createPipeline, type FrameJob, type Pipeline, type StaticLuts } from './pipeline';
 import { processingSize, type Size, skinUniforms } from './uniforms';
 
@@ -60,6 +62,23 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number,
       ...(gl.getParameter(gl.MAX_VIEWPORT_DIMS) as Int32Array),
     );
+    // Phase 0 (S §6.2): GL limits once per page, probes only in dev builds; never fatal (a fake or odd context in
+    // tests, a driver that refuses a probe shader)
+    const dbg = debugState();
+    if (dbg && !dbg.gl) {
+      try {
+        const limits = readGlLimits(gl);
+        console.info('[engine] GL limits', limits);
+        const probes = import.meta.env.DEV ? probeFaceTable(gl) : null;
+        dbg.gl = {
+          ...limits,
+          ...(probes ? { PG1_texture: probes.texture, PG1_ubo: probes.ubo, ...(probes.float32 === null ? {} : { PG1_float32: probes.float32 }) } : {}),
+          ...(import.meta.env.DEV ? { PG2: probeR16FArray(gl) } : {}),
+        };
+      } catch (e) {
+        console.warn('[engine] GL limits / probes unavailable', e);
+      }
+    }
   }
 
   async function loadStaticLuts(): Promise<void> {

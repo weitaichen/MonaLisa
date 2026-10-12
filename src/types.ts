@@ -413,6 +413,17 @@ export interface DebugState {
   tier: Tier;
   delegate: Delegate | null;
   face: boolean;
+  /** selectable faces (editor) / shown tracks (camera) */
+  faces: number;
+  persons: number;
+  /** selected person id, 'all', or null (no persons / camera) */
+  selected: string | null;
+  /** face detectImage calls in this page session */
+  detectCalls: number;
+  /** face boxes, normalized and unmirrored (editor: cache faces; camera: shown tracks) */
+  boxes: { id: string; x: number; y: number; w: number; h: number }[];
+  /** Phase 0: GL limits (always) and probes (bench and dev builds only) */
+  gl?: Record<string, number | boolean>;
   screen: string;
   cameraState: CameraState;
   lastError: string | null;

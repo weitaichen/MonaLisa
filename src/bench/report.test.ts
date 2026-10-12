@@ -4,6 +4,7 @@ import {
   type BodyBenchRow,
   formatBodyReport,
   formatElapsed,
+  formatMultiRows,
   formatReport,
   maskCoverage,
   median,
@@ -116,5 +117,19 @@ describe('美體偵測 report', () => {
     expect(median([])).toBe(0);
     expect(median([5, 1, 3])).toBe(3);
     expect(median([4, 1, 3, 2])).toBe(2.5);
+  });
+});
+
+describe('bench 多臉 report', () => {
+  it('formats rows as a tab-separated section with a header per row id', () => {
+    const text = formatMultiRows([
+      { row: 'D', config: 'GPU 2048 n8', values: { first_ms: 812.4, median_ms: 120, faces: 3 } },
+      { row: 'D', config: 'CPU 1440 n1', values: { first_ms: 300, median_ms: 90, faces: 1 } },
+      { row: 'GL', config: 'limits', values: { MAX_TEXTURE_SIZE: 16384 } },
+    ]);
+    expect(text).toContain('# 多臉 D');
+    expect(text).toContain('config\tfirst_ms\tmedian_ms\tfaces');
+    expect(text).toContain('GPU 2048 n8\t812.4\t120\t3');
+    expect(text).toContain('# 多臉 GL');
   });
 });

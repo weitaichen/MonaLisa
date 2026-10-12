@@ -946,6 +946,41 @@ Each row is applied to the **slowest iPhone measured**. A change is one line in 
 
 Sub-step 1a appends a dated table to this section, with device, OS, browser, row ID, value and the decision taken. The `limits.ts` change and the one-line update of RM §6.2 go in the same commit. Later iPhone runs append rows the same way.
 
+#### Results
+
+First run, `node scripts/bench-multiface.mjs D B GL` (the workspace desktop: Windows 11 Pro 10.0.22631, Chrome 154.0.8037.57 headed with the GPU, `npm run dev` build of `/bench.html?fixtures=1`). `group_faces.png` is 1800 × 1200, so the D rows labelled 2048 run on the undecoded 1800 × 1200 (`decode` column). B's `numPoses 2` time is the first PoseLandmarker detection on the page (wasm graph start-up included; `numPoses 4` ran second, warm).
+
+#### 2026-10-12 desktop Chrome (GPU) — ANGLE (Intel, Intel(R) UHD Graphics 770 (0x0000A780) Direct3D11 vs_5_0 ps_5_0, D3D11)
+
+| Row | Config | Values |
+|---|---|---|
+| D | GPU 2048 n1 | decode 1800x1200, first_ms 232.3, median_ms 21, faces 1, centres 0.22 |
+| D | GPU 2048 n4 | decode 1800x1200, first_ms 153.3, median_ms 34.3, faces 3, centres 0.22 0.55 0.82 |
+| D | GPU 2048 n6 | decode 1800x1200, first_ms 156.7, median_ms 33.6, faces 3, centres 0.22 0.55 0.82 |
+| D | GPU 2048 n8 | decode 1800x1200, first_ms 155.9, median_ms 34.6, faces 3, centres 0.22 0.55 0.82 |
+| D | GPU 1440 n1 | decode 1440x960, first_ms 135, median_ms 15.5, faces 1, centres 0.22 |
+| D | GPU 1440 n4 | decode 1440x960, first_ms 152.8, median_ms 32.1, faces 3, centres 0.22 0.55 0.82 |
+| D | GPU 1440 n6 | decode 1440x960, first_ms 142, median_ms 28.4, faces 3, centres 0.22 0.55 0.82 |
+| D | GPU 1440 n8 | decode 1440x960, first_ms 140.5, median_ms 29.9, faces 3, centres 0.22 0.55 0.82 |
+| D | GPU order 2048 vs 1440 (n8) | same true |
+| D | CPU 2048 n1 | decode 1800x1200, first_ms 42.1, median_ms 20.2, faces 1, centres 0.22 |
+| D | CPU 2048 n4 | decode 1800x1200, first_ms 46.3, median_ms 39.6, faces 3, centres 0.22 0.55 0.82 |
+| D | CPU 2048 n6 | decode 1800x1200, first_ms 50.8, median_ms 40.6, faces 3, centres 0.22 0.55 0.82 |
+| D | CPU 2048 n8 | decode 1800x1200, first_ms 49.2, median_ms 39.2, faces 3, centres 0.22 0.55 0.82 |
+| D | CPU 1440 n1 | decode 1440x960, first_ms 34.1, median_ms 18.2, faces 1, centres 0.22 |
+| D | CPU 1440 n4 | decode 1440x960, first_ms 46.1, median_ms 37.1, faces 3, centres 0.22 0.55 0.82 |
+| D | CPU 1440 n6 | decode 1440x960, first_ms 44.3, median_ms 38.5, faces 3, centres 0.22 0.55 0.82 |
+| D | CPU 1440 n8 | decode 1440x960, first_ms 44.1, median_ms 35.7, faces 3, centres 0.22 0.55 0.82 |
+| D | CPU order 2048 vs 1440 (n8) | same true |
+| B | numPoses 2 | detect_ms 2511.7, readback_ms_per_person 10.4, persons 2, peak_heap_mb 59.9 |
+| B | numPoses 4 | detect_ms 279.2, readback_ms_per_person 7.3, persons 2, peak_heap_mb 84.6 |
+| GL | limits | MAX_FRAGMENT_UNIFORM_VECTORS 1024, MAX_UNIFORM_BLOCK_SIZE 65536, MAX_TEXTURE_SIZE 16384, MAX_TEXTURE_IMAGE_UNITS 16, MAX_ARRAY_TEXTURE_LAYERS 2048, EXT_color_buffer_float true, OES_texture_float_linear true |
+| GL | probes | PG1_texture true, PG1_ubo true, PG1_float32 true, PG2 true |
+
+Decisions: none taken (desktop only; the §3.5 defaults ship until iPhone rows exist, RM §12). PG1/PG2 on desktop: `PG1_texture true, PG1_ubo true, PG1_float32 true, PG2 true` (`FACE_TABLE_CARRIER` stays `'texture'`). PD2 on desktop Chromium: A, B and C are found at both decodes (centres 0.22 / 0.55 / 0.82), D is not returned. The same four probes also pass inside the engine context of a dev build (`window.__meiyan.gl` on `tests/e2e/pages/engine.html`, headless Chrome SwiftShader), with `getError()` 0 afterwards.
+
+ONE_EURO: LandmarksSmoothingCalculator is compiled into `node_modules/@mediapipe/tasks-vision/wasm/vision_wasm_internal.wasm` (0.10.35) and its graph options are not stored as text, but the code holds them as constants. At two sites (most likely the face and the pose landmarker graphs; the binary has no symbols to tell which is which) one `i64.store` writes the adjacent OneEuroFilter fields `min_cutoff` 0.05 and `beta` 80 (`i64.const 0x42A000003D4CCCCD`), and the next `i32.store` writes `derivate_cutoff` 1.0 (`0x3F800000`), at consecutive field offsets (212 / 216 / 220 and 56 / 60 / 64). The §3.5 values {minCutoff 0.05, beta 80, dCutoff 1.0} therefore match the 0.10.35 binary. This was not checked against the C++ source, and neither was the graph's `numFaces` 1 condition for smoothing.
+
 ---
 
 ## 7. Error and edge cases

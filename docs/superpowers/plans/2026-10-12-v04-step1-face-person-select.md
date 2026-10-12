@@ -865,7 +865,7 @@ git commit -m "v0.4 step 1a: v0.3 parity goldens and parity.spec"
   - In `src/bench/report.ts` (pure, node-testable): `MultiRow = { row: string; config: string; values: Record<string, string | number> }` and `formatMultiRows(rows: readonly MultiRow[]): string` (its existing `median` is reused).
   - In `src/bench/multiFace.ts` (browser only, imports tasks-vision): `rowD(photo)`, `rowB(photo)`, `rowGL()`, `addRunner(id, run)`, `mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow[] }`; `window.__benchMulti = { run(ids: string[]): Promise<MultiRow[]> }` (only with `?fixtures=1`).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // src/config/limits.test.ts
@@ -912,12 +912,12 @@ describe('bench 多臉 report', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run src/config/limits.test.ts src/bench/report.test.ts`
 Expected: FAIL (cannot resolve `./limits`; `formatMultiRows` is not exported).
 
-- [ ] **Step 2b: Add the report formatter**
+- [x] **Step 2b: Add the report formatter**
 
 Append to `src/bench/report.ts`:
 
@@ -943,7 +943,7 @@ export function formatMultiRows(rows: readonly MultiRow[]): string {
 }
 ```
 
-- [ ] **Step 3: Write `src/config/limits.ts`**
+- [x] **Step 3: Write `src/config/limits.ts`**
 
 ```ts
 // Every number Phase 0 can change (step-1 spec §3.5, §6.3). A fallback is a one-line change here, committed together
@@ -981,7 +981,7 @@ export const MAX_OBSTACLES = 8;
 export const FACE_TABLE_CARRIER: 'texture' | 'ubo' = 'texture';
 ```
 
-- [ ] **Step 4: Debug state fields**
+- [x] **Step 4: Debug state fields**
 
 `src/types.ts` (CRLF), `DebugState` (`:409-421`), after `face: boolean;` add:
 
@@ -1001,7 +1001,7 @@ export const FACE_TABLE_CARRIER: 'texture' | 'ubo' = 'texture';
 
 In both `src/app/debug.ts:7-17` and `src/ui/debug.ts:7-16` add to the initial object, after `face: false,`: `faces: 0, persons: 0, selected: null, detectCalls: 0, boxes: [],`.
 
-- [ ] **Step 5: Write `src/engine/glProbe.ts`**
+- [x] **Step 5: Write `src/engine/glProbe.ts`**
 
 ```ts
 // Phase 0 GL limits and probes (S §6.2). Limits are plain getParameter reads (free) and are logged once per engine
@@ -1160,7 +1160,7 @@ void main() { o = vec4(textureLod(uA, vec3(0.5, 0.5, 1.0), 0.0).r, 0.5, 0.5, 0.5
 }
 ```
 
-- [ ] **Step 6: Log GL limits in `build()` and probe in dev**
+- [x] **Step 6: Log GL limits in `build()` and probe in dev**
 
 `src/engine/index.ts` (CRLF): add imports `import { debugState } from '../app/debug';` and `import { probeFaceTable, probeR16FArray, readGlLimits } from './glProbe';`. At the end of `build()` (after `maxSize = …;`, `:62`) add:
 
@@ -1186,7 +1186,7 @@ void main() { o = vec4(textureLod(uA, vec3(0.5, 0.5, 1.0), 0.0).r, 0.5, 0.5, 0.5
 
 (The probes leave no GL state behind except bindings `pipeline.ts` resets per frame; `createPipeline` already ran. In the node unit tests `window` is undefined, so `debugState()` is null and nothing runs; `src/engine/index.test.ts`'s fake context has no `getExtension`.)
 
-- [ ] **Step 7: Write `src/bench/multiFace.ts`**
+- [x] **Step 7: Write `src/bench/multiFace.ts`**
 
 ```ts
 // Bench 「多臉」 section (S §6.2 rows). Rows D (multi-face detectImage), B (multi-pose body detection) and GL (limits +
@@ -1377,7 +1377,7 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
 }
 ```
 
-- [ ] **Step 8: Mount it in the bench page**
+- [x] **Step 8: Mount it in the bench page**
 
 `src/bench/main.ts` (CRLF): add `import { mountMultiFace } from './multiFace';` and `formatMultiRows` to its existing `./report` import. After the `bodySection` definition (`:207-217`) add `const multi = mountMultiFace(root);`. In `copyResults()` (`:684`) change the first line to:
 
@@ -1386,7 +1386,7 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
   const text = formatReport(reportMeta(), samples, bodyRows) + multiText;
 ```
 
-- [ ] **Step 9: Write the desktop driver `scripts/bench-multiface.mjs`**
+- [x] **Step 9: Write the desktop driver `scripts/bench-multiface.mjs`**
 
 ```js
 // Runs the bench 「多臉」 rows on this desktop and prints them as Markdown for spec §6.4. Tries a headed Chrome with
@@ -1430,19 +1430,19 @@ try {
 }
 ```
 
-- [ ] **Step 10: Run the unit tests and the typecheck**
+- [x] **Step 10: Run the unit tests and the typecheck**
 
 Run: `npx vitest run src/config/limits.test.ts src/bench/report.test.ts && npm run typecheck`
 Expected: PASS, then `tsc` exits 0.
 
-- [ ] **Step 11: Measure on this desktop and record**
+- [x] **Step 11: Measure on this desktop and record**
 
 Run: `node scripts/bench-multiface.mjs D B GL`
 Expected: a Markdown block with D rows for GPU/CPU × 2048/1440 × n 1/4/6/8 (faces ≥ 3 at n ≥ 4 on 2048), two B rows (`persons` 2 for `numPoses 4` on group_people), GL `limits` and `probes` rows.
 
 Append to S §6.4 a subsection `#### Results` (first run) with the printed block and one line: `Decisions: none taken (desktop only; the §3.5 defaults ship until iPhone rows exist, RM §12). PG1/PG2 on desktop: <copy the probes row>.` If `PG1_texture` is `false` on desktop, also set `FACE_TABLE_CARRIER = 'ubo'` in `limits.ts` (S §6.3 PG1) and say so in that line. Add one more line for the S §3.4 T4 smoother check: `ONE_EURO: LandmarksSmoothingCalculator is compiled into node_modules/@mediapipe/tasks-vision/wasm/vision_wasm_internal.wasm (0.10.35); its face-graph options are not readable from the binary offline, so the §3.5 values {minCutoff 0.05, beta 80, dCutoff 1.0} ship unverified until checked against the 0.10.35 source.` (replace the clause after the semicolon with the outcome if you can check them).
 
-- [ ] **Step 12: Run the bench e2e and commit**
+- [x] **Step 12: Run the bench e2e and commit**
 
 Run: `npm run build && npx playwright test tests/e2e/bench.spec.ts tests/e2e/parity.spec.ts`
 Expected: PASS.

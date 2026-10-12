@@ -25,10 +25,12 @@ import type {
   Prefs,
   Tracker,
 } from '../types';
+import { mountMultiFace } from './multiFace';
 import {
   type BenchSample,
   type BodyBenchRow,
   formatElapsed,
+  formatMultiRows,
   formatReport,
   maskCoverage,
   median,
@@ -216,6 +218,8 @@ const bodySection = el(
   ),
   bodyCopyBtn,
 );
+// 多臉 (v0.4 step 1 Phase 0): on the start screen, like 美體偵測 (no camera needed); results join 複製結果
+const multi = mountMultiFace(gate);
 const resumeBtn = button('恢復相機', () => void camera?.resume().catch((e: unknown) => showError('resume', e)), 'primary');
 resumeBtn.hidden = true;
 const note = el('div', { className: 'note' });
@@ -682,7 +686,8 @@ function reportMeta(): Record<string, string> {
 }
 
 function copyResults(): void {
-  const text = formatReport(reportMeta(), samples, bodyRows);
+  const multiText = multi.rows().length ? `\n\n${formatMultiRows(multi.rows())}` : '';
+  const text = formatReport(reportMeta(), samples, bodyRows) + multiText;
   // the body section may be on the start screen, where the panel (and its textarea) is hidden
   if (panel.hidden) bodySection.append(copyArea);
   else if (copyArea.parentElement !== panel) panel.append(copyArea);

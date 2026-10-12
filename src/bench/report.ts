@@ -216,3 +216,25 @@ export function formatBodyReport(rows: readonly BodyBenchRow[]): string {
   }
   return lines.join('\n');
 }
+
+// ───────────────────────── 多臉 (v0.4 step 1, S §6.2) ─────────────────────────
+
+/** One measured row of the bench 「多臉」 section (S §6.2). */
+export interface MultiRow {
+  row: string;
+  config: string;
+  values: Record<string, string | number>;
+}
+
+/** One `# 多臉 <row>` block per row id: a header of the value keys, then one tab-separated line per config. */
+export function formatMultiRows(rows: readonly MultiRow[]): string {
+  const ids = [...new Set(rows.map((r) => r.row))];
+  return ids
+    .map((id) => {
+      const rs = rows.filter((r) => r.row === id);
+      const keys = [...new Set(rs.flatMap((r) => Object.keys(r.values)))];
+      const line = (r: MultiRow) => [r.config, ...keys.map((k) => String(r.values[k] ?? ''))].join('\t');
+      return [`# 多臉 ${id}`, ['config', ...keys].join('\t'), ...rs.map(line)].join('\n');
+    })
+    .join('\n\n');
+}

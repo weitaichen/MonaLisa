@@ -339,6 +339,9 @@ class FakeUndo<T> implements UndoLike<T> {
     if (this.i >= this.stack.length - 1) return null;
     return structuredClone(this.stack[++this.i]);
   }
+  rebase(fn: (s: T) => T) {
+    this.stack = this.stack.map((s) => structuredClone(fn(s)));
+  }
   get current() {
     return this.stack[this.i] ?? null;
   }

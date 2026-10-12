@@ -2679,7 +2679,7 @@ git commit -m "v0.4 step 1b: the lens (photo/person routing, 全部, presets, �
 - Consumes: nothing new.
 - Produces: `interface UndoOptions<T> { clone?: boolean; key?: (s: T) => string }`; `new UndoStack<T>(limit = 50, opts: UndoOptions<T> = {})`; `UndoStack.rebase(fn: (s: T) => T): void`; `UndoLike<T>.rebase(fn: (s: T) => T): void`; `deps.createUndo: <T>(limit?: number, opts?: UndoOptions<T>) => UndoLike<T>`.
 
-- [ ] **Step 1: Write the failing tests** (append to `src/store/undo.test.ts`)
+- [x] **Step 1: Write the failing tests** (append to `src/store/undo.test.ts`)
 
 ```ts
 describe('UndoStack {clone: false, key} and rebase (RM §3.4)', () => {
@@ -2714,12 +2714,12 @@ describe('UndoStack {clone: false, key} and rebase (RM §3.4)', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `npx vitest run src/store/undo.test.ts`
 Expected: FAIL (`rebase is not a function`; the by-reference test sees clones).
 
-- [ ] **Step 3: Implement** — replace `src/store/undo.ts:1-62` (keep `stableKey` below it unchanged) with:
+- [x] **Step 3: Implement** — replace `src/store/undo.ts:1-62` (keep `stableKey` below it unchanged) with:
 
 ```ts
 // OWNER: store agent. Generic bounded undo/redo stack.
@@ -2817,12 +2817,12 @@ export class UndoStack<T> {
   }
 ```
 
-- [ ] **Step 4: Run tests and typecheck**
+- [x] **Step 4: Run tests and typecheck**
 
 Run: `npx vitest run src/store && npm run typecheck`
 Expected: PASS; `tsc` exits 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/store/undo.ts src/store/undo.test.ts src/ui/deps.ts tests/harness/t7/fakes.ts

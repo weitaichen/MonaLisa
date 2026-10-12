@@ -34,7 +34,7 @@ import { lensFor } from '../../edit/lens';
 import { legacyProjection } from '../../edit/legacy';
 import { firstAnswer } from '../../edit/migrate';
 import { assignPersons, editKey, P0, renamePersons } from '../../edit/state';
-import { warpGuard } from '../../edit/warpGuard';
+import { createWarpGuard } from '../../edit/warpGuard';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
 import { FaceBoxes, type FaceBoxItem } from '../components/FaceBoxes';
 import { HeightBandOverlay } from '../components/HeightBandOverlay';
@@ -249,6 +249,8 @@ export function Editor({ source }: { source: EditorSource }) {
   protectsRef.current = protects;
   /** λ_f per face id from the last commit (S §4.4): reset by the next change, recomputed on every commit */
   const warpScales = useRef<ReadonlyMap<string, number>>(new Map());
+  /** the safety net memoized on its table: a commit that changes no face warp (a filter tile, a shade, 美體…) skips the CPU map */
+  const warpGuard = useMemo(createWarpGuard, []);
   /**
    * what session `s` renders and exports for `e`: every face with its person's params and its limit (S §4.1). Pass the
    * exporting session: a corrected thumbnail may still export after the unmount cleared sessionRef
@@ -257,7 +259,7 @@ export function Editor({ source }: { source: EditorSource }) {
     const d = detectRef.current;
     return buildFrame(e, frameFacesOf(d, s?.faces ?? []), d?.obstacles ?? [], protectsRef.current, d?.primary ?? P0, warpScales.current);
   };
-  /** on a commit with ≥ 2 faces: the CPU port checks the summed map; an empty map whenever the guard does not act */
+  /** on a commit with ≥ 2 faces: the CPU port checks the summed map (once per warp); an empty map whenever the guard does not act */
   const guardScales = (e: EditState): ReadonlyMap<string, number> => {
     const s = sessionRef.current;
     const d = detectRef.current;

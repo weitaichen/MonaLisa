@@ -150,10 +150,7 @@ export interface LegsMeasure {
  */
 export interface BodyMeasure {
   regions: Record<BodyRegion, RegionStatus>;
-  /**
-   * people detected in the photo (≥ 2 → UI hint 「偵測到多人，僅調整畫面中央的主要人物」; the edited person is the
-   * largest landmark bbox discounted by its distance from the image centre, bodyTracker.ts selectPerson)
-   */
+  /** people detected in the photo (the v1 BodyDetection field; persons and their pairing live in DetectionCache) */
   people: number;
   /** source aspect W/H the measure was taken at */
   aspect: number;

@@ -6,9 +6,10 @@ import type { EditState } from '../../types';
 import { Icon } from '../icons';
 import {
   activate,
-  bodyNote,
+  bodyNoteFor,
   itemsFor,
   MAKEUP_PARTS,
+  personNote,
   tabHasValue,
   TABS,
   type BodyContext,
@@ -52,7 +53,7 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
     const strip = stripRef.current;
     if (!strip) return;
     strip.scrollLeft = 0;
-    // a 美體 note (download progress, no person, ≥ 2 people…) leads the strip: keep it in view
+    // a 美體 note (download progress, no person, a person without a body, the bands note…) leads the strip: keep it in view
     if (strip.querySelector('.body-note')) return;
     const selected = strip.querySelector<HTMLElement>('.item.selected:not(.part)');
     if (selected && selected.offsetLeft + selected.offsetWidth > strip.clientWidth) {
@@ -61,8 +62,12 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
   }, [stripKey]);
 
   const items = itemsFor(lens, sel, body);
-  const faceOff = !!faceNote && FACE_TABS.includes(sel.tab);
-  const note = sel.tab === 'body' ? bodyNote(body) : null;
+  // photo-level face note (no face, 基本模式, tracker health) first; then the selected person's (S §2.4, U5)
+  const pNote = personNote(sel.tab, lens);
+  const offText = faceNote ?? (pNote?.dim ? pNote.text : null);
+  const faceOff = !!offText && FACE_TABS.includes(sel.tab);
+  const infoNote = !faceOff && pNote && !pNote.dim ? pNote.text : null;
+  const note = sel.tab === 'body' ? bodyNoteFor(body, lens, sel) : null;
   const bodyOff = body?.status === 'unsupported';
 
   const tapItem = (item: PanelItem) => {
@@ -87,7 +92,12 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
         <div class={`strip${faceOff ? ' face-off' : ''}`} ref={stripRef} role="listbox" aria-label="效果">
           {faceOff && (
             <p class="strip-note" role="note" id="face-note">
-              {faceNote}
+              {offText}
+            </p>
+          )}
+          {infoNote && (
+            <p class="strip-note" role="note">
+              {infoNote}
             </p>
           )}
           {note && <StripBodyNote note={note} />}
@@ -127,7 +137,7 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
               aria-selected={item.selected}
               aria-disabled={faceOff || item.disabled ? 'true' : undefined}
               aria-pressed={item.pressed}
-              aria-description={item.disabled ? (item.reason ?? undefined) : undefined}
+              aria-description={item.disabled ? (item.reason ?? undefined) : item.badge ? '整張照片' : undefined}
               class={`item${item.selected ? ' selected' : ''}${item.hasValue ? ' has-value' : ''}${item.disabled ? ' disabled' : ''}${
                 item.pressed === undefined ? '' : item.pressed ? ' switchable on' : ' switchable'
               }`}
@@ -136,6 +146,11 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
               <span class="item-tile">
                 <ItemVisual item={item} />
                 {item.pressed !== undefined && <i class="item-switch" aria-hidden="true" />}
+                {item.badge && (
+                  <span class="item-badge" aria-hidden="true">
+                    {item.badge}
+                  </span>
+                )}
               </span>
               <span class="item-label">{item.label}</span>
               <span class="item-dot" />
@@ -145,8 +160,8 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
         <div class="tabs" role="tablist">
           {TABS.map((t) => {
             // stays tappable: a remembered selection may already be on it
-            const unavailable = t.id === 'body' ? bodyOff : !!faceNote && FACE_TABS.includes(t.id);
-            const why = t.id === 'body' ? bodyNote(body)?.text : faceNote;
+            const unavailable = t.id === 'body' ? bodyOff : (!!faceNote || personNote(t.id, lens)?.dim === true) && FACE_TABS.includes(t.id);
+            const why = t.id === 'body' ? bodyNoteFor(body, lens, sel)?.text : (faceNote ?? personNote(t.id, lens)?.text);
             return (
               <button
                 key={t.id}
@@ -170,7 +185,10 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
   );
 }
 
-/** 美體 status at the head of the strip: download progress, no person / failure (+ 重試), multi-person hint, camera note. */
+/**
+ * 美體 note at the head of the strip: download progress, no person / failure (+ 重試), camera note; with ≥ 2 persons the
+ * selected person without a body, or the bands / 長腿 anchor note (S §2.4).
+ */
 function StripBodyNote({ note }: { note: BodyNote }) {
   const p = note.progress;
   return (

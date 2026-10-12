@@ -44,9 +44,11 @@ interface Props {
   onCommit(v: number): void;
   /** camera: float over the preview with a scrim */
   float?: boolean;
+  /** shown in the empty row (程度 under 全部 with different presets) */
+  emptyText?: string | null;
 }
 
-export function SliderRow({ binding, onChange, onCommit, float }: Props) {
+export function SliderRow({ binding, onChange, onCommit, float, emptyText }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ id: number; x0: number; v0: number; moved: boolean; snapped: boolean } | null>(null);
   const lastTap = useRef(0);
@@ -64,7 +66,16 @@ export function SliderRow({ binding, onChange, onCommit, float }: Props) {
   }, [key]);
   useEffect(() => () => clearTimeout(bubbleTimer.current), []);
 
-  if (!binding) return <div class={`slider-row empty${float ? ' float' : ''}`} aria-hidden="true" />;
+  if (!binding) {
+    // the empty row is invisible; with a text (各人不同) it stays up and says why there is no slider
+    return emptyText ? (
+      <div class={`slider-row empty has-text${float ? ' float' : ''}`}>
+        <span class="slider-empty">{emptyText}</span>
+      </div>
+    ) : (
+      <div class={`slider-row empty${float ? ' float' : ''}`} aria-hidden="true" />
+    );
+  }
 
   const bi = binding.bidirectional;
   const v = dragV ?? binding.value;
@@ -143,16 +154,19 @@ export function SliderRow({ binding, onChange, onCommit, float }: Props) {
   const text = formatDisplay(bi, v);
   return (
     <div class={`slider-row${float ? ' float' : ''}`}>
-      <span class="slider-label">{binding.label}</span>
+      <span class="slider-label">
+        {binding.label}
+        {binding.mixed && <small class="slider-mixed">各人不同</small>}
+      </span>
       <div
         class={`slider${dragV !== null ? ' dragging' : ''}`}
         ref={sliderRef}
         role="slider"
-        aria-label={binding.label}
+        aria-label={binding.aria ?? binding.label}
         aria-valuemin={bi ? -50 : 0}
         aria-valuemax={bi ? 50 : 100}
         aria-valuenow={displayOf(bi, v)}
-        aria-valuetext={text}
+        aria-valuetext={binding.mixed ? `${text}，各人不同` : text}
         tabIndex={0}
         onPointerDown={onDown}
         onPointerMove={onMove}

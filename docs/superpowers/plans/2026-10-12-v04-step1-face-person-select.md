@@ -9792,7 +9792,7 @@ export function photoTouchToast(b: SliderBinding, lens: Lens, seen: Set<string>)
 ```
 - `SliderRow` gains the prop `emptyText?: string | null`.
 
-- [ ] **Step 1: Failing tests (`src/ui/panelModel.test.ts`)**
+- [x] **Step 1: Failing tests (`src/ui/panelModel.test.ts`)**
 
 Intended change #3 (S §8.5): in the import list replace `BODY_MULTI_NOTE,` (`:20`) with `BANDS_NOTE,`; `:264` becomes `expect(bodyNote(ready({ people: 2 }))).toBeNull();`; the test at `:333-335` becomes:
 
@@ -9920,7 +9920,7 @@ describe('persons in the panel (S §2.4, A9, A11)', () => {
 Run: `npx vitest run src/ui/panelModel.test.ts`
 Expected: FAIL (missing exports; `bodyNote(ready({ people: 2 }))` is still the old hint).
 
-- [ ] **Step 2: Implement in `src/ui/panelModel.ts` (CRLF)**
+- [x] **Step 2: Implement in `src/ui/panelModel.ts` (CRLF)**
 
 1. Imports: add `import { NO_BODY_NOTE, NO_FACE_NOTE } from '../edit/lens';` and `PersonId` to the type import.
 2. `BodyContext` (`:62-91`): after `suggestedBand?` add `/** the person 長腿 is measured on (Editor: legsAnchor, else the primary with a body) */ legsAnchor?: PersonId | null;`. The `people` doc comment becomes `/** body persons in the photo */`.
@@ -10037,7 +10037,7 @@ export function photoTouchToast(b: SliderBinding, lens: Lens, seen: Set<string>)
 }
 ```
 
-- [ ] **Step 3: `BeautyPanel` (CRLF)**
+- [x] **Step 3: `BeautyPanel` (CRLF)**
 
 1. Import `bodyNoteFor, personNote` from `../panelModel` (drop `bodyNote`).
 2. Below `const items = itemsFor(lens, sel, body);`:
@@ -10055,13 +10055,13 @@ export function photoTouchToast(b: SliderBinding, lens: Lens, seen: Set<string>)
 3. Inside `<span class="item-tile">`, after the switch `<i>`: `{item.badge && <span class="item-badge" aria-hidden="true">{item.badge}</span>}`; the button gets `aria-description={item.disabled ? (item.reason ?? undefined) : item.badge ? '整張照片' : undefined}`.
 4. Tabs: `const unavailable = t.id === 'body' ? bodyOff : (!!faceNote || personNote(t.id, lens)?.dim === true) && FACE_TABS.includes(t.id);` and `const why = t.id === 'body' ? bodyNoteFor(body, lens, sel)?.text : (faceNote ?? personNote(t.id, lens)?.text);`.
 
-- [ ] **Step 4: `SliderRow` (CRLF)**
+- [x] **Step 4: `SliderRow` (CRLF)**
 
 1. Props: add `/** shown in the empty row (程度 under 全部 with different presets) */ emptyText?: string | null;`.
 2. Empty row: `if (!binding) return emptyText ? <div class={`slider-row empty${float ? ' float' : ''}`}><span class="slider-empty">{emptyText}</span></div> : <div class={`slider-row empty${float ? ' float' : ''}`} aria-hidden="true" />;`
 3. `aria-label={binding.aria ?? binding.label}`; `aria-valuetext={binding.mixed ? `${text}，各人不同` : text}`; the label span: `<span class="slider-label">{binding.label}{binding.mixed && <small class="slider-mixed">各人不同</small>}</span>`.
 
-- [ ] **Step 5: Styles (`src/ui/theme.css`, CRLF) and the P6 comment**
+- [x] **Step 5: Styles (`src/ui/theme.css`, CRLF) and the P6 comment**
 
 Append:
 
@@ -10103,7 +10103,7 @@ Run the same command for `src/ui/panelModel.ts`, `src/ui/components/BeautyPanel.
 
 `src/body/measure.ts:153-156`: the `people` comment becomes `/** people detected in the photo (the v1 BodyDetection field; persons and their pairing live in DetectionCache) */`.
 
-- [ ] **Step 6: Run and commit**
+- [x] **Step 6: Run and commit**
 
 Run: `npx vitest run src/ui && npm run typecheck`
 Expected: PASS.

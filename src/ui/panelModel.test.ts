@@ -9,26 +9,33 @@ import {
   setHeightBand,
   setParam,
 } from '../engine/params';
-import type { BeautyParams, EditState, ParamId, RegionStatus } from '../types';
-import { lensFor, P0_INFO } from '../edit/lens';
+import type { BeautyParams, EditState, ParamId, RegionStatus, Selection } from '../types';
+import { lensFor, NO_BODY_NOTE, NO_FACE_NOTE, P0_INFO, type PersonInfo } from '../edit/lens';
 import { editFromLegacy, legacyProjection } from '../edit/legacy';
+import { assignPersons, personFromPreset, withPersons } from '../edit/state';
 import { heightBandStretch } from '../body/bands';
 import { bandEdges, bandToDisplay, defaultStretch, displayToBand, dragEdge, keyStep, MIN_GAP, moveEdge } from './components/HeightBandOverlay';
 import { hasIcon } from './icons';
 import {
   activate,
   bandOrSuggested,
+  BANDS_NOTE,
   BODY_ERROR_NOTE,
-  BODY_MULTI_NOTE,
   BODY_NO_MASK_REASON,
   BODY_NONE_NOTE,
   BODY_UNSUPPORTED_NOTE,
   bodyNote,
+  bodyNoteFor,
   CAMERA_BODY,
   DEFAULT_BAND,
   INITIAL_SELECTION,
   itemsFor,
+  legsAnchorNote,
+  personNote,
+  photoScoped,
+  photoTouchToast,
   showsHeightBand,
+  sliderEmptyText,
   sliderFor,
   tabHasValue,
   TABS,
@@ -266,7 +273,7 @@ describe('美體 tab', () => {
     const run = () => undefined;
     expect(bodyNote({ ...CAMERA_BODY, action: { label: '匯入照片', run } })?.action?.run).toBe(run);
     expect(bodyNote(ready())).toBeNull();
-    expect(bodyNote(ready({ people: 2 }))?.text).toBe(BODY_MULTI_NOTE);
+    expect(bodyNote(ready({ people: 2 }))).toBeNull();
   });
   it('body slider writes the value and keeps the active preset (美體 is outside presets)', () => {
     const p = defaultParams();
@@ -336,8 +343,8 @@ describe('美體 tab', () => {
       expect(byKey(itemsFor(lensOf(p), s, { ...noMask, status }), 'protect').disabled, status).toBe(false);
     }
   });
-  it('≥ 2 people: the hint names the main (centred) person, as selectPerson picks it', () => {
-    expect(BODY_MULTI_NOTE).toBe('偵測到多人，僅調整畫面中央的主要人物');
+  it('the bands note replaces the multi-person hint (P6, S §2.6)', () => {
+    expect(BANDS_NOTE).toBe('增高、長腿會拉伸整排畫面，套用於整張照片');
   });
   it('⊘ resets the body sliders and the band, keeps the preset, and is a no-op when already neutral', () => {
     const p = setHeightBand(setParam(defaultParams(), 'body.hip', 0.8), { top: 0.5, bottom: 0.8, amount: 0.5 });
@@ -465,5 +472,126 @@ describe('增高 band overlay maths', () => {
     expect(dragEdge('bottom', 0.9, model, 1, heightBandStretch).display.bottom).toBe(0.9);
     // the frame bottom still bounds a band whose source end is reachable inside it at amount 0
     expect(dragEdge('bottom', 1.4, model, 0, defaultStretch).display.bottom).toBe(1);
+  });
+});
+
+describe('persons in the panel (S §2.4, A9, A11)', () => {
+  // person 1: face + body · person 2: face only · person 3: body only
+  const persons: PersonInfo[] = [
+    { id: 'f0', face: true, body: true },
+    { id: 'f1', face: true, body: false },
+    { id: 'b1', face: false, body: true },
+  ];
+  const base = assignPersons(editFromLegacy(defaultParams()), ['f0', 'f1', 'b1'], 'f0');
+  const at = (sel: Selection, e: EditState = base) => lensFor(e, sel, persons, 'f0');
+  const one = (id: 'f0' | 'f1' | 'b1') => at({ kind: 'person', id });
+  const ALL: Selection = { kind: 'all' };
+
+  it('a body-only person: 磨皮 / 紅潤 disabled per item with the no-face reason; 美白 / 銳化 usable, badged 整張', () => {
+    const items = itemsFor(one('b1'), sel({ tab: 'skin' }));
+    expect(byKey(items, 'skin.smooth')).toMatchObject({ disabled: true, reason: NO_FACE_NOTE });
+    expect(byKey(items, 'skin.rosy')).toMatchObject({ disabled: true, reason: NO_FACE_NOTE });
+    expect(byKey(items, 'skin.whiten')).toMatchObject({ disabled: false, badge: '整張' });
+    expect(byKey(items, 'skin.sharpen')).toMatchObject({ disabled: false, badge: '整張' });
+    expect(personNote('skin', one('b1'))).toEqual({ text: NO_FACE_NOTE, dim: false });
+    expect(personNote('preset', one('b1'))).toEqual({ text: NO_FACE_NOTE, dim: false });
+    expect(personNote('shape', one('b1'))).toEqual({ text: NO_FACE_NOTE, dim: true });
+    expect(personNote('makeup', one('b1'))).toEqual({ text: NO_FACE_NOTE, dim: true });
+    expect(personNote('shape', at(ALL))).toBeNull();
+    expect(personNote('shape', one('f1'))).toBeNull();
+  });
+  it('one person: no badges, no person notes, v0.3 labels and keys', () => {
+    const l = lensFor(editFromLegacy(defaultParams()), { kind: 'person', id: 'p0' }, P0_INFO, 'p0');
+    expect(byKey(itemsFor(l, sel({ tab: 'skin' })), 'skin.whiten').badge).toBeUndefined();
+    expect(personNote('shape', l)).toBeNull();
+    const b = sliderFor(l, sel({ tab: 'skin', skin: 'skin.whiten' }))!;
+    expect(b).toMatchObject({ key: 'skin.whiten', label: '美白' });
+    expect(b.aria).toBeUndefined();
+  });
+  it('美體 note order: status, then the selected person without a body, then the bands / 長腿 anchor note', () => {
+    const ctx = { ...ready({ people: 2 }), legsAnchor: 'b1' };
+    expect(bodyNoteFor({ ...ctx, status: 'loading' }, one('f1'), bodySel('body.waist'))?.text).toBe('正在偵測人物…');
+    expect(bodyNoteFor(ctx, one('f1'), bodySel('body.waist'))?.text).toBe(NO_BODY_NOTE);
+    expect(bodyNoteFor(ctx, at(ALL), bodySel('body.waist'))).toBeNull();
+    expect(bodyNoteFor(ctx, one('f0'), bodySel('height'))?.text).toBe(BANDS_NOTE);
+    expect(bodyNoteFor(ctx, at(ALL), bodySel('body.legs'))?.text).toBe(legsAnchorNote(3));
+    expect(legsAnchorNote(3)).toBe('長腿以人物 3 的腿長為準，套用於整張照片');
+    expect(bodyNoteFor(ctx, one('f0'), bodySel('body.waist'))).toBeNull();
+  });
+  it('body items under ≥ 2 persons are gated per person (the lens), 增高 / 長腿 / 背景保護 badged 整張', () => {
+    const items = itemsFor(one('f1'), bodySel('body.waist'), ready({ people: 2 }));
+    expect(byKey(items, 'body.waist')).toMatchObject({ disabled: true, reason: NO_BODY_NOTE });
+    expect(byKey(items, 'height').badge).toBe('整張');
+    expect(byKey(items, 'body.legs').badge).toBe('整張');
+    expect(byKey(items, 'protect').badge).toBe('整張');
+    expect(byKey(itemsFor(at(ALL), bodySel('body.waist'), ready({ people: 2 })), 'body.waist').disabled).toBe(false);
+  });
+  it('slider identity and labels (S §2.4): key per selection, 人物 n / 全部 / 整張照片, mixed by display value', () => {
+    const b = sliderFor(one('f1'), sel({ tab: 'shape', shape: 'shape.eyeEnlarge' }))!;
+    expect(b).toMatchObject({ key: 'f1:shape.eyeEnlarge', label: '大眼', aria: '大眼，人物 2' });
+    expect(sliderFor(at(ALL), sel({ tab: 'shape', shape: 'shape.eyeEnlarge' }))!.aria).toBe('大眼，全部');
+    const w = sliderFor(one('f1'), sel({ tab: 'skin', skin: 'skin.whiten' }))!;
+    expect(w).toMatchObject({ label: '美白 · 整張照片', aria: '美白，整張照片' });
+    const near = withPersons(withPersons(base, ['f0'], (p) => ({ ...p, values: { ...p.values, 'shape.eyeEnlarge': 0.3451 } })), ['f1'], (p) => ({ ...p, values: { ...p.values, 'shape.eyeEnlarge': 0.3549 } }));
+    expect(sliderFor(at(ALL, near), sel({ tab: 'shape', shape: 'shape.eyeEnlarge' }))!.mixed).toBe(false);
+    const far = withPersons(near, ['f1'], (p) => ({ ...p, values: { ...p.values, 'shape.eyeEnlarge': 0.4 } }));
+    expect(sliderFor(at(ALL, far), sel({ tab: 'shape', shape: 'shape.eyeEnlarge' }))!.mixed).toBe(true);
+  });
+  it('程度 under 全部 with different presets: no slider, the row says 各人不同', () => {
+    // base: f0 holds p0 (自然), f1 and b1 the template (原圖): the face persons already differ
+    const same = withPersons(base, ['f1', 'b1'], () => personFromPreset('natural', 1));
+    const mixed = withPersons(same, ['f1'], () => personFromPreset('refined', 1));
+    expect(sliderFor(at(ALL, mixed), sel({ tab: 'preset' }))).toBeNull();
+    expect(sliderEmptyText(at(ALL, mixed), sel({ tab: 'preset' }))).toBe('各人不同');
+    expect(sliderEmptyText(at(ALL, same), sel({ tab: 'preset' }))).toBeNull();
+    expect(sliderFor(at(ALL, same), sel({ tab: 'preset' }))).toMatchObject({ label: '程度', value: 1 });
+  });
+  it('no dead slider: an item the selected person cannot use has no slider; photo items keep theirs (Review Focus #2)', () => {
+    expect(sliderFor(one('b1'), sel({ tab: 'skin', skin: 'skin.smooth' }))).toBeNull(); // 美膚 opens on 磨皮
+    expect(sliderFor(one('b1'), sel({ tab: 'shape', shape: 'shape.eyeEnlarge' }))).toBeNull();
+    expect(sliderFor(one('b1'), sel({ tab: 'makeup', makeupPart: 'lip' }))).toBeNull();
+    expect(sliderFor(one('f1'), bodySel('body.waist'), ready({ people: 2 }))).toBeNull();
+    expect(sliderFor(one('b1'), sel({ tab: 'skin', skin: 'skin.whiten' }))).not.toBeNull();
+    expect(sliderFor(one('f1'), bodySel('height'), ready({ people: 2 }))).not.toBeNull();
+    expect(sliderFor(at(ALL), sel({ tab: 'skin', skin: 'skin.smooth' }))).not.toBeNull();
+  });
+  it('no dead item under 全部: a body item available for another person than the shown measure keeps its slider (S §2.4)', () => {
+    // the context reads the primary's measure (瘦腿 off there, as in ready()); b1's measure has it
+    const ctx = ready({ people: 2 });
+    const measured = (s: Selection) => lensFor(base, s, persons, 'f0', { available: (p, id) => p !== 'f0' || id !== 'body.legSlim' });
+    const f0: Selection = { kind: 'person', id: 'f0' };
+    expect(byKey(itemsFor(measured(ALL), bodySel('body.legSlim'), ctx), 'body.legSlim').disabled).toBe(false);
+    expect(sliderFor(measured(ALL), bodySel('body.legSlim'), ctx)).not.toBeNull();
+    expect(byKey(itemsFor(measured(f0), bodySel('body.legSlim'), ctx), 'body.legSlim').disabled).toBe(true);
+    expect(sliderFor(measured(f0), bodySel('body.legSlim'), ctx)).toBeNull();
+  });
+  it('a photo without a face (two body persons): 磨皮 / 紅潤 act on all skin and read 「整張照片」 (S §2.4 美膚)', () => {
+    const bodies: PersonInfo[] = [
+      { id: 'b0', face: false, body: true },
+      { id: 'b1', face: false, body: true },
+    ];
+    const e = assignPersons(editFromLegacy(defaultParams()), ['b0', 'b1'], 'b0');
+    const l = lensFor(e, { kind: 'person', id: 'b1' }, bodies, 'b0');
+    expect(sliderFor(l, sel({ tab: 'skin', skin: 'skin.smooth' }))).toMatchObject({ label: '磨皮 · 整張照片', aria: '磨皮，整張照片' });
+    expect(byKey(itemsFor(l, sel({ tab: 'skin' })), 'skin.rosy')).toMatchObject({ disabled: false, badge: '整張' });
+  });
+  it('A11: the chips dim on 濾鏡 and while 美白 / 銳化 / 增高 / 長腿 is the active item', () => {
+    expect(photoScoped(sel({ tab: 'filter' }))).toBe(true);
+    expect(photoScoped(sel({ tab: 'skin', skin: 'skin.whiten' }))).toBe(true);
+    expect(photoScoped(sel({ tab: 'skin', skin: 'skin.smooth' }))).toBe(false);
+    expect(photoScoped(bodySel('height'))).toBe(true);
+    expect(photoScoped(bodySel('body.legs'))).toBe(true);
+    expect(photoScoped(bodySel('body.waist'))).toBe(false);
+  });
+  it('the first touch of each photo-level item says so once; person items and one person never', () => {
+    const seen = new Set<string>();
+    const w = sliderFor(one('f1'), sel({ tab: 'skin', skin: 'skin.whiten' }))!;
+    expect(photoTouchToast(w, one('f1'), seen)).toBe('美白套用於整張照片');
+    expect(photoTouchToast(w, one('f1'), seen)).toBeNull();
+    expect(photoTouchToast(sliderFor(one('f1'), sel({ tab: 'skin', skin: 'skin.smooth' }))!, one('f1'), seen)).toBeNull();
+    const h = sliderFor(one('f0'), bodySel('height'), ready({ people: 2 }))!;
+    expect(photoTouchToast(h, one('f0'), seen)).toBe('增高套用於整張照片');
+    const solo = lensFor(editFromLegacy(defaultParams()), { kind: 'person', id: 'p0' }, P0_INFO, 'p0');
+    expect(photoTouchToast(sliderFor(solo, sel({ tab: 'skin', skin: 'skin.whiten' }))!, solo, new Set())).toBeNull();
   });
 });

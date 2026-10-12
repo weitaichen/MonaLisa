@@ -1,7 +1,7 @@
 // BeautyPanel logic (spec §7.3), kept pure so it can be unit-tested without a DOM.
 import { BLUSH_SHADES, FILTERS, hasValue, LIP_SHADES, MAKEUP_PICK_DEFAULT, paramDef, paramsInGroup, PRESETS } from '../engine/params';
-import type { Lens } from '../edit/lens';
-import type { EditState, HeightBand, ParamId, PresetId, RegionStatus } from '../types';
+import { NO_BODY_NOTE, NO_FACE_NOTE, type Lens } from '../edit/lens';
+import type { EditState, HeightBand, ParamId, PersonId, PresetId, RegionStatus } from '../types';
 
 export type TabId = 'preset' | 'skin' | 'shape' | 'body' | 'filter' | 'makeup';
 export type MakeupPart = 'lip' | 'blush';
@@ -56,7 +56,7 @@ export interface BodyContext {
    * gate every detection-driven slider with this module's own reasons)
    */
   availability(id: ParamId): RegionStatus;
-  /** people detected (≥ 2 → hint that only the main person, the large one near the centre, is edited) */
+  /** body persons in the photo */
   people: number;
   /**
    * a person mask exists (背景保護 needs it: without one it would silently do nothing, e.g. the CPU pose fallback
@@ -71,11 +71,11 @@ export interface BodyContext {
   action?: { label: string; run(): void };
   /** where a new 增高 band starts (e.g. hip → ankle of the detected person); default DEFAULT_BAND */
   suggestedBand?: { top: number; bottom: number };
+  /** the person 長腿 is measured on (Editor: legsAnchor, else the primary with a body) */
+  legsAnchor?: PersonId | null;
 }
 
 export const BODY_UNSUPPORTED_NOTE = '美體目前僅支援照片編輯';
-/** matches selectPerson (src/tracking/bodyTracker.ts): the person with the largest area × centrality */
-export const BODY_MULTI_NOTE = '偵測到多人，僅調整畫面中央的主要人物';
 /** 背景保護 while the detection has no person mask */
 export const BODY_NO_MASK_REASON = '無法取得人像輪廓，背景保護暫不可用';
 export const BODY_NONE_NOTE = '未偵測到人物，仍可使用手動增高';
@@ -126,9 +126,71 @@ export function bodyNote(body: BodyContext | undefined): BodyNote | null {
       return { text, tone: 'warn', action: b.retry ? { label: '重試', run: b.retry } : b.action };
     }
     case 'ready':
-      return b.people >= 2 ? { text: BODY_MULTI_NOTE, tone: 'info' } : null;
+      return null;
   }
 }
+
+export const PHOTO_BADGE = '整張';
+export const PHOTO_SCOPE = '整張照片';
+export const MIXED = '各人不同';
+export const BANDS_NOTE = '增高、長腿會拉伸整排畫面，套用於整張照片';
+export const legsAnchorNote = (n: number): string => `長腿以人物 ${n} 的腿長為準，套用於整張照片`;
+
+/** ≥ 2 persons: the person / photo distinction shows (labels, badges, notes, strip) */
+export const multiPerson = (lens: Lens): boolean => lens.persons.length >= 2;
+/** a person's number: position in the cache's display order + 1, never derived from the id (S §2.1) */
+export const personNumber = (lens: Lens, id: PersonId): number => lens.persons.findIndex((p) => p.id === id) + 1;
+/** slider identity: a person switch must reset the drag state and the double-tap timer (S §2.4) */
+export const selKey = (lens: Lens): string => (lens.sel.kind === 'all' ? 'all' : lens.sel.id);
+
+export interface PersonNote {
+  text: string;
+  /** the whole strip is off (美型, 美妝); else an info line above usable items (一鍵, 美膚) */
+  dim: boolean;
+}
+
+/** S §2.4: a body-only person on a face tab. 美體 has bodyNoteFor; 濾鏡 is photo-level; 全部 has no person note. */
+export function personNote(tab: TabId, lens: Lens): PersonNote | null {
+  if (!multiPerson(lens) || lens.sel.kind !== 'person' || tab === 'body' || tab === 'filter') return null;
+  const id = lens.sel.id;
+  const me = lens.persons.find((p) => p.id === id);
+  if (!me || me.face) return null;
+  return { text: NO_FACE_NOTE, dim: tab === 'shape' || tab === 'makeup' };
+}
+
+/** S §2.4 美體 note, the first that applies: detection status · the selected person has no body · bands / 長腿 anchor */
+export function bodyNoteFor(body: BodyContext | undefined, lens: Lens, sel: PanelSelection): BodyNote | null {
+  const status = bodyNote(body);
+  if (status || !multiPerson(lens)) return status;
+  if (lens.sel.kind === 'person') {
+    const id = lens.sel.id;
+    const me = lens.persons.find((p) => p.id === id);
+    if (me && !me.body) return { text: NO_BODY_NOTE, tone: 'info' };
+  }
+  if (sel.body === 'height' || sel.body === 'body.legs') {
+    const anchor = body?.legsAnchor ?? null;
+    const n = anchor ? personNumber(lens, anchor) : 0;
+    const bodies = lens.persons.filter((p) => p.body).length;
+    if (sel.body === 'body.legs' && n > 0 && bodies >= 2) return { text: legsAnchorNote(n), tone: 'info' };
+    return { text: BANDS_NOTE, tone: 'info' };
+  }
+  return null;
+}
+
+/** A11: the chips and boxes dim while the tab or its active item is photo-level */
+export function photoScoped(sel: PanelSelection): boolean {
+  if (sel.tab === 'filter') return true;
+  if (sel.tab === 'skin') return sel.skin === 'skin.whiten' || sel.skin === 'skin.sharpen';
+  if (sel.tab === 'body') return sel.body === 'height' || sel.body === 'body.legs';
+  return false;
+}
+
+const isPhotoItem = (id: ParamId): boolean => paramDef(id).scope === 'photo';
+/** photo-level as the user sees it: the photo scope, plus 磨皮 / 紅潤 in a photo without a face (all skin, RM §3.3) */
+const photoLike = (lens: Lens, id: ParamId): boolean => isPhotoItem(id) || (lens.noFace && (id === 'skin.smooth' || id === 'skin.rosy'));
+const badged = (lens: Lens, item: PanelItem): PanelItem => (multiPerson(lens) ? { ...item, badge: PHOTO_BADGE } : item);
+/** ≥ 2 persons: a person item the selected person (or no 全部 target) can use; else no slider, never one that snaps back */
+const usable = (lens: Lens, id: ParamId): boolean => !multiPerson(lens) || lens.applies(id).ok;
 
 /**
  * Gate of one 美體 item. 增高 / 背景保護 / 原圖 need no detection, so only 'unsupported' turns them off, plus
@@ -153,6 +215,15 @@ function bodyGate(body: BodyContext | undefined, item: BodySel | 'protect' | 're
       return r.ok ? { ok: true, reason: null } : { ok: false, reason: r.reason ?? '此照片無法使用這個效果' };
     }
   }
+}
+
+/**
+ * Gate of a 美體 item, shared by its tile and its slider (so an enabled tile always has a slider). ≥ 2 persons with a
+ * finished detection: the lens decides per person (its `available` reads each person's measure, S §2.4 "Availability
+ * under 全部"); 長腿 is photo-level and keeps the anchor's availability (the context's).
+ */
+function bodyItemGate(lens: Lens, body: BodyContext | undefined, item: BodySel): RegionStatus {
+  return multiPerson(lens) && body?.status === 'ready' && item !== 'height' && item !== 'body.legs' ? lens.applies(item) : bodyGate(body, item);
 }
 
 /** The 增高 band overlay is up while the 增高 tool is the selected 美體 item (and 美體 is offered at all). */
@@ -201,6 +272,8 @@ export interface PanelItem {
   reason: string | null;
   /** on/off items (背景保護): current state; undefined for everything else */
   pressed?: boolean;
+  /** short tile badge: 「整張」 on photo-level items with ≥ 2 persons (A9; step 5 adds 「左右」) */
+  badge?: string;
 }
 
 const ENABLED = { disabled: false, reason: null } as const;
@@ -246,21 +319,21 @@ function bodyItems(lens: Lens, sel: PanelSelection, body: BodyContext | undefine
     action: { type: 'height' },
     ...ENABLED,
   };
-  const sliders = paramsInGroup('body').map(
-    (d): PanelItem =>
-      gated(
-        {
-          key: d.id,
-          label: d.label,
-          visual: { kind: 'icon', icon: d.icon },
-          selected: sel.body === d.id,
-          hasValue: hasValue(d, lens.get(d.id).value),
-          action: { type: 'param', id: d.id },
-          ...ENABLED,
-        },
-        bodyGate(body, d.id),
-      ),
-  );
+  const sliders = paramsInGroup('body').map((d): PanelItem => {
+    const item = gated(
+      {
+        key: d.id,
+        label: d.label,
+        visual: { kind: 'icon', icon: d.icon },
+        selected: sel.body === d.id,
+        hasValue: hasValue(d, lens.get(d.id).value),
+        action: { type: 'param', id: d.id },
+        ...ENABLED,
+      },
+      bodyItemGate(lens, body, d.id),
+    );
+    return isPhotoItem(d.id) ? badged(lens, item) : item;
+  });
   const protect: PanelItem = {
     key: 'protect',
     label: '背景保護',
@@ -271,7 +344,12 @@ function bodyItems(lens: Lens, sel: PanelSelection, body: BodyContext | undefine
     pressed: edit.photo.bodyProtect,
     ...ENABLED,
   };
-  return [gated(RESET_ITEM(), bodyGate(body, 'reset')), gated(height, bodyGate(body, 'height')), ...sliders, gated(protect, bodyGate(body, 'protect'))];
+  return [
+    gated(RESET_ITEM(), bodyGate(body, 'reset')),
+    gated(badged(lens, height), bodyGate(body, 'height')),
+    ...sliders,
+    gated(badged(lens, protect), bodyGate(body, 'protect')),
+  ];
 }
 
 /** the preset the 一鍵 strip highlights: the targets' common preset; for a body-only person, the photo's link */
@@ -305,8 +383,8 @@ export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext): P
     case 'shape':
       return [
         RESET_ITEM(),
-        ...paramsInGroup(sel.tab).map(
-          (d): PanelItem => ({
+        ...paramsInGroup(sel.tab).map((d): PanelItem => {
+          const item: PanelItem = {
             key: d.id,
             label: d.label,
             visual: { kind: 'icon', icon: d.icon },
@@ -314,21 +392,27 @@ export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext): P
             hasValue: hasValue(d, lens.get(d.id).value),
             action: { type: 'param', id: d.id },
             ...ENABLED,
-          }),
-        ),
+          };
+          const it = photoLike(lens, d.id) ? badged(lens, item) : item;
+          // 美膚 gates per item (美白 / 銳化 stay usable for a body-only person); 美型 keeps the whole-strip dimming of
+          // personNote, as v0.3 did for a photo without a face
+          return multiPerson(lens) && sel.tab === 'skin' ? gated(it, lens.applies(d.id)) : it;
+        }),
       ];
     case 'body':
       return bodyItems(lens, sel, body);
     case 'filter':
-      return FILTERS.map((f) => ({
-        key: f.id,
-        label: f.label,
-        visual: f.id === 'none' ? { kind: 'icon', icon: 'none' } : { kind: 'thumb', src: `/luts/filters/${f.id}_thumb.png` },
-        selected: edit.photo.filterId === f.id,
-        hasValue: false,
-        action: { type: 'filter', id: f.id },
-        ...ENABLED,
-      }));
+      return FILTERS.map((f) =>
+        badged(lens, {
+          key: f.id,
+          label: f.label,
+          visual: f.id === 'none' ? { kind: 'icon', icon: 'none' } : { kind: 'thumb', src: `/luts/filters/${f.id}_thumb.png` },
+          selected: edit.photo.filterId === f.id,
+          hasValue: false,
+          action: { type: 'filter', id: f.id },
+          ...ENABLED,
+        }),
+      );
     case 'makeup': {
       const part = sel.makeupPart;
       const s = lens.shade(part);
@@ -425,6 +509,8 @@ export interface SliderBinding {
   /** the ParamId the slider writes; null for 程度 and 增高 */
   param: ParamId | null;
   label: string;
+  /** aria-label (S §2.4): 「{label}，人物 {n}」 / 「{label}，全部」 / 「{label}，整張照片」; absent → label */
+  aria?: string;
   bidirectional: boolean;
   value: number;
   /** the targets disagree under 全部 (the label adds 各人不同, Task 22) */
@@ -454,6 +540,13 @@ function paramBinding(lens: Lens, id: ParamId): SliderBinding {
   return { key: d.id, param: d.id, label: d.label, bidirectional: d.bidirectional, value: g.value, mixed: g.mixed, defaultValue: d.default, apply: (l, v) => l.set(d.id, v) };
 }
 
+/** ≥ 2 persons: the key carries the selection, photo items read 「· 整張照片」, aria names the target (S §2.4, A9) */
+function decorate(b: SliderBinding, lens: Lens, photo: boolean): SliderBinding {
+  if (!multiPerson(lens)) return b;
+  const who = photo ? PHOTO_SCOPE : lens.sel.kind === 'all' ? '全部' : `人物 ${personNumber(lens, lens.sel.id)}`;
+  return { ...b, key: `${selKey(lens)}:${b.key}`, label: photo ? `${b.label} · ${PHOTO_SCOPE}` : b.label, aria: `${b.label}，${who}` };
+}
+
 export function sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext): SliderBinding | null {
   const edit = lens.edit;
   switch (sel.tab) {
@@ -463,25 +556,49 @@ export function sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext): 
       const id = ref === null ? (link?.id ?? null) : ref !== 'custom' && !mixed ? ref.id : null;
       if (id === null || id === 'original') return null;
       const value = ref !== null && ref !== 'custom' ? ref.amount : (link?.amount ?? 1);
-      return { key: `preset.${id}`, param: null, label: '程度', bidirectional: false, value, mixed: false, defaultValue: 1, apply: (l, v) => l.setPresetAmount(v) };
+      const b: SliderBinding = { key: `preset.${id}`, param: null, label: '程度', bidirectional: false, value, mixed: false, defaultValue: 1, apply: (l, v) => l.setPresetAmount(v) };
+      return decorate(b, lens, false);
     }
     case 'skin':
-    case 'shape':
-      return paramBinding(lens, sel[sel.tab]);
+    case 'shape': {
+      const id = sel[sel.tab];
+      if (!usable(lens, id)) return null;
+      return decorate(paramBinding(lens, id), lens, photoLike(lens, id));
+    }
     case 'body':
-      if (!bodyGate(body, sel.body).ok) return null;
-      return sel.body === 'height' ? heightBinding(edit, body) : paramBinding(lens, sel.body);
+      // the tile's own gate: an item the selected person cannot use has no slider, an enabled one always has one
+      if (!bodyItemGate(lens, body, sel.body).ok) return null;
+      if (sel.body === 'height') return decorate(heightBinding(edit, body), lens, true);
+      return decorate(paramBinding(lens, sel.body), lens, isPhotoItem(sel.body));
     case 'filter': {
       if (edit.photo.filterId === 'none') return null;
       const f = FILTERS.find((x) => x.id === edit.photo.filterId);
-      return { ...paramBinding(lens, 'filter.amount'), key: `filter.${edit.photo.filterId}`, label: '濾鏡強度', defaultValue: f?.defaultAmount ?? 0.5 };
+      return decorate({ ...paramBinding(lens, 'filter.amount'), key: `filter.${edit.photo.filterId}`, label: '濾鏡強度', defaultValue: f?.defaultAmount ?? 0.5 }, lens, true);
     }
     case 'makeup': {
-      // always shown: dragging to 0 must not unmount the slider mid-gesture; raising it from 0 applies 原色
-      const b = paramBinding(lens, makeupKey(sel.makeupPart));
-      return { ...b, label: sel.makeupPart === 'lip' ? '口紅' : '腮紅', defaultValue: MAKEUP_PICK_DEFAULT[sel.makeupPart] };
+      // always shown (one person, or a face person): dragging to 0 must not unmount the slider mid-gesture; raising it
+      // from 0 applies 原色. A body-only person has no slider (no dead slider, Review Focus #2)
+      const key = makeupKey(sel.makeupPart);
+      if (!usable(lens, key)) return null;
+      const b = paramBinding(lens, key);
+      return decorate({ ...b, label: sel.makeupPart === 'lip' ? '口紅' : '腮紅', defaultValue: MAKEUP_PICK_DEFAULT[sel.makeupPart] }, lens, false);
     }
   }
+}
+
+/** the slider row's text when there is no slider: 程度 under 全部 with different presets (S §2.4) */
+export function sliderEmptyText(lens: Lens, sel: PanelSelection): string | null {
+  return sel.tab === 'preset' && lens.sel.kind === 'all' && lens.preset().mixed ? MIXED : null;
+}
+
+/** 「{label}套用於整張照片」 on the first touch of each photo-level slider in this editor (≥ 2 persons, S §2.4) */
+export function photoTouchToast(b: SliderBinding, lens: Lens, seen: Set<string>): string | null {
+  if (!multiPerson(lens)) return null;
+  const id = b.param ?? (b.key.endsWith('body.height') ? 'height' : null);
+  if (id === null || (id !== 'height' && !photoLike(lens, id)) || seen.has(id)) return null;
+  seen.add(id);
+  const label = id === 'height' ? '增高' : paramDef(id).label;
+  return `${label}套用於整張照片`;
 }
 
 /** Accent dot on a tab when anything in its group differs from neutral (美體: a slider or the 增高 band). */

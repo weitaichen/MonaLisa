@@ -1,7 +1,11 @@
 // Editor face-detection / export / 美體 bookkeeping (spec §7.2.4, body research report §落地設計), kept pure so
 // it can be unit-tested without a DOM.
+import type { SessionFace } from '../app/still';
+import type { BodyFieldInput, BodyPersonInput } from '../body/field';
+import type { FrameFaceIn } from '../edit/frame';
+import { personOf } from '../edit/state';
 import { hasValue, paramsInGroup } from '../engine/params';
-import type { BodyFieldInput } from '../body/field';
+import { protectWindow } from '../tracking/faceProtect';
 import type { BodyMeasure } from '../body/measure';
 import type {
   BeautyParams,
@@ -9,11 +13,16 @@ import type {
   BodyDetections,
   BodyField,
   BodyTracker,
+  DetectionCache,
+  EditState,
   Face,
   ParamId,
+  PersonId,
+  Rect,
   RegionStatus,
   TrackerState,
 } from '../types';
+import { contourActiveValues, type ProtectRequest } from './faceProtectModel';
 import { BODY_NONE_NOTE, BODY_WAIT_REASON, type BodyContext } from './panelModel';
 import type { BodyTrackerState } from './services';
 
@@ -396,4 +405,114 @@ export function stampIs(stamp: OutputStamp | null | undefined, key: string, fiel
 export function bodyToPersist(det: BodyDet, stored: boolean): BodyDetection | null | undefined {
   if (stored || det.phase !== 'done') return undefined;
   return det.det;
+}
+
+// ───────────────────────── persons (S §3.3) ─────────────────────────
+
+/** a cached body as the v1 BodyDetection measureBody reads */
+export function bodyDetectionOf(cache: DetectionCache, bodyId: string): BodyDetection | null {
+  const b = cache.bodies?.find((x) => x.id === bodyId);
+  return b ? { pose: b.pose, mask: b.mask, people: cache.bodies!.length, width: cache.width, height: cache.height } : null;
+}
+
+/** every body person measured with its PAIRED face, or none (fixes the v0.3 group-photo bug, S §1.4, P4) */
+export function measurePersons(
+  cache: DetectionCache | null,
+  faceOf: (faceId: string) => Face | null,
+  measure: (d: BodyDetection, f: Face | null) => BodyMeasure,
+  onError: (e: unknown) => void,
+): Map<PersonId, BodyMeasure> {
+  const out = new Map<PersonId, BodyMeasure>();
+  if (!cache?.bodies) return out;
+  for (const p of cache.persons) {
+    if (!p.body) continue;
+    const det = bodyDetectionOf(cache, p.body);
+    if (!det) continue;
+    try {
+      out.set(p.id, measure(det, p.face ? faceOf(p.face) : null));
+    } catch (e) {
+      onError(e);
+    }
+  }
+  return out;
+}
+
+/** the 長腿 anchor (S §4.6): legsAnchor with a body, else the primary with a body, else the best-scoring body person */
+function legsAnchorOf(edit: EditState, cache: DetectionCache, measures: ReadonlyMap<PersonId, BodyMeasure>): PersonId | null {
+  const a = edit.photo.legsAnchor;
+  if (a && measures.has(a)) return a;
+  if (measures.has(cache.primary)) return cache.primary;
+  let best: PersonId | null = null;
+  let score = -Infinity;
+  for (const p of cache.persons) {
+    const b = p.body ? cache.bodies?.find((x) => x.id === p.body) : undefined;
+    if (b && measures.has(p.id) && b.score > score) {
+      score = b.score;
+      best = p.id;
+    }
+  }
+  return best;
+}
+
+/** the 美體 field's input (S §4.6): every measured body person, its local values, every mask, the bands and 長腿 */
+export function fieldInputOf(edit: EditState, cache: DetectionCache | null, measures: ReadonlyMap<PersonId, BodyMeasure>, aspect: number): BodyFieldInput {
+  const LOCAL = paramsInGroup('body').filter((d) => d.id !== 'body.legs');
+  const band = edit.photo.heightBand;
+  // with 增高 / 長腿 on, every body person carries today's hands-rigid term (it rides with the bands)
+  const bandsOn = (!!band && band.amount > 0 && band.bottom > band.top) || edit.photo.values['body.legs'] > 0;
+  const edited: BodyPersonInput[] = [];
+  for (const [id, m] of measures) {
+    const v = personOf(edit, id).values;
+    const values = Object.fromEntries(LOCAL.map((d) => [d.id, v[d.id as keyof typeof v]])) as BodyPersonInput['values'];
+    if (bandsOn || LOCAL.some((d) => hasValue(d, values[d.id as keyof typeof values]))) edited.push({ id, measure: m, values });
+  }
+  const masks = cache?.bodies
+    ? cache.persons.flatMap((p) => {
+        const b = p.body ? cache.bodies!.find((x) => x.id === p.body) : undefined;
+        return b?.mask ? [{ id: p.id, mask: b.mask }] : [];
+      })
+    : [];
+  const anchor = cache ? legsAnchorOf(edit, cache, measures) : null;
+  return { edited, masks, heightBand: edit.photo.heightBand, legs: { value: edit.photo.values['body.legs'], measure: anchor ? measures.get(anchor)! : null }, bodyProtect: edit.photo.bodyProtect, aspect };
+}
+
+/** the session faces with their persons (cache links) for buildFrame */
+export function frameFacesOf(cache: DetectionCache | null, faces: readonly SessionFace[]): FrameFaceIn[] {
+  return faces.map((f) => ({ id: f.id, face: f.face, person: cache?.persons.find((p) => p.face === f.id)?.id ?? null }));
+}
+
+/** one 瘦臉-limit request per face (F1): its person's contour, its paired pose mask, the other faces / obstacles / persons */
+export function protectRequests(cache: DetectionCache, faces: readonly SessionFace[], edit: EditState, size: { width: number; height: number }): ProtectRequest[] {
+  const centre = (b: Rect): [number, number] => [b.x + b.w / 2, b.y + b.h / 2];
+  return faces.map((f) => {
+    const person = cache.persons.find((p) => p.face === f.id);
+    const pose = person?.body ? (cache.bodies?.find((b) => b.id === person.body)?.mask ?? null) : null;
+    const others = faces.filter((g) => g.id !== f.id);
+    const otherMasks = cache.persons.flatMap((p) => {
+      if (p.id === person?.id || !p.body) return [];
+      const m = cache.bodies?.find((b) => b.id === p.body)?.mask;
+      return m ? [m] : [];
+    });
+    return {
+      id: f.id,
+      face: f.face,
+      contour: !!person && contourActiveValues(personOf(edit, person.id).values),
+      pose,
+      others: {
+        otherCentres: [...others.map((g) => centre(g.box)), ...cache.obstacles.map((o) => centre(o.box))],
+        otherOvals: [...others.map((g) => g.face.oval), ...cache.obstacles.map((o) => o.oval)],
+        otherMasks,
+        window: faces.length >= 2 ? protectWindow(f.face, size.width, size.height) : null,
+      },
+    };
+  });
+}
+
+/**
+ * A detection-driven rebase (assignPersons, withBodies, the p0 hand-over, renamePersons) is not an edit (U2): when the
+ * output of `prevKey` was saved, the stamp follows the edit to `nextKey` with its field generation, so the autosave does
+ * not fire for it; an output that was not saved stays unsaved.
+ */
+export function rebaseStamp(saved: OutputStamp | null, prevKey: string, nextKey: string, field: number): OutputStamp | null {
+  return saved && stampIs(saved, prevKey, field) ? { key: nextKey, field: saved.field } : saved;
 }

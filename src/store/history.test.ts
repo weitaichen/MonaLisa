@@ -1,10 +1,13 @@
 import 'fake-indexeddb/auto';
 import { IDBDatabase as FDBDatabase, IDBFactory, IDBObjectStore as FDBObjectStore, forceCloseDatabase } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeCache } from '../detect/testCaches';
-import { editFromLegacy } from '../edit/legacy';
-import { applyPreset, defaultParams, setParam } from '../engine/params';
-import type { BodyDetection, HistoryEntry } from '../types';
+import { withBodies } from '../detect/cache';
+import { cacheBody, makeCache } from '../detect/testCaches';
+import { editFromLegacy, legacyProjection } from '../edit/legacy';
+import { openState } from '../edit/migrate';
+import { assignPersons, renamePersons } from '../edit/state';
+import { applyPreset, defaultParams, sanitizeParams, setParam } from '../engine/params';
+import type { BodyDetection, DetectionCache, EditState, HistoryEntry } from '../types';
 import {
   addEntry,
   closeHistory,
@@ -22,6 +25,7 @@ import {
   updateEntry,
   type NewHistoryEntry,
 } from './history';
+import { stableKey } from './undo';
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -729,5 +733,26 @@ describe('HistoryEntry v2 (RM §5.1, S §5.2)', () => {
     expect(e?.edit).toBeUndefined();
     expect(e?.detect).toBeUndefined();
     expect(Object.keys(e?.staleBoxes ?? {})).toEqual(['f0', 'f1']);
+  });
+});
+
+describe('detection-driven writes keep 最近編輯 (S §5.2, A17)', () => {
+  it('reopening a v1 entry, assigning its persons and adding bodies changes neither the order nor updatedAt', async () => {
+    const older = await addEntry(entry('older'));
+    await addEntry(entry('newer'));
+    const before = (await listEntries()).map((e) => [e.id, e.updatedAt]);
+    const opened = openState((await getEntry(older))!, { width: 1536, height: 2048 });
+    /** the patch rebaseOnDetect writes */
+    const write = async (edit: EditState, detect: DetectionCache) => {
+      const params = sanitizeParams(legacyProjection(edit, detect.primary));
+      await updateEntry(older, { schema: 2, edit, params, paramsKey: stableKey(params), detect }, { touch: false });
+    };
+    const cache = makeCache({ width: 1536, height: 2048 });
+    const assigned = assignPersons(opened.edit, cache.persons.map((p) => p.id), cache.primary);
+    await write(assigned, cache);
+    const r = withBodies(cache, [{ pose: cacheBody('x', 0.95).pose, mask: null, score: 0.1 }], () => null);
+    await write(assignPersons(renamePersons(assigned, r.renamed), r.cache.persons.map((p) => p.id), r.cache.primary), r.cache);
+    expect((await listEntries()).map((e) => [e.id, e.updatedAt])).toEqual(before);
+    expect((await getEntry(older))!.detect?.bodies).toHaveLength(1);
   });
 });

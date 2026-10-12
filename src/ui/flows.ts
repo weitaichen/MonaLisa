@@ -28,7 +28,6 @@ export async function openInEditor(blob: Blob, opts: { entry?: HistoryEntry | nu
     if (entry) {
       const o = openState(entry, { width: bitmap.width, height: bitmap.height });
       source = { ...freshSource(bitmap, o.edit, opts.returnTo), historyId: entry.id, detect: o.detect, needsFaceDetect: o.needsFaceDetect, rematch: o.rematch, v1Body: o.v1Body, cacheDropped: o.cacheDropped };
-      if (entry.body !== undefined) source.body = entry.body;
       if (entry.faceProtect === true) source.faceProtect = true;
       if (entry.faceMask) source.faceMask = entry.faceMask;
     } else source = freshSource(bitmap, importEdit(app.get().look), opts.returnTo);

@@ -1,11 +1,13 @@
 // Reading a stored entry (lazy migration at open, RM §5.2, S §5.3): HistoryEntry → the edit to open with, the cache to
 // trust, and what detection is still owed. Nothing is rewritten in bulk; the first write after an open writes v2.
-// The answer-time half (pairing, the p0 hand-over, A13) is firstAnswer (Task 21).
-import { aspectFits, boxScore, cachedFits, poseBox, scanned0 } from '../detect/cache';
+// The answer-time half (pairing, the p0 hand-over, A13) is firstAnswer.
+import { aspectFits, boxScore, buildCache, cachedFits, noFaceCache, poseBox, rematchByIoU, scanned0, withFaces } from '../detect/cache';
+import { EMPTY_PREPARED, type PreparedFaces } from '../detect/faces';
+import { seedPrimary } from '../detect/persons';
 import { stableKey } from '../store/undo';
-import type { CachedBody, CameraLook, DetectionCache, EditState, FaceSeed, HistoryEntry, PersonId, Rect } from '../types';
+import type { CachedBody, CameraLook, DetectionCache, EditState, FaceSeed, HistoryEntry, PersonId, PersonParams, Rect } from '../types';
 import { editFromLegacy, splitLegacy } from './legacy';
-import { assignPersons, neutralPerson, P0, sanitizeEditState } from './state';
+import { assignPersons, neutralPerson, P0, renamePersons, sanitizeEditState, withPersons } from './state';
 
 export interface V1Bodies {
   bodies: CachedBody[];
@@ -96,4 +98,81 @@ export function importEdit(look: CameraLook): EditState {
 export function cameraShotEdit(look: CameraLook, seed: FaceSeed): EditState {
   const point = seed !== null && seed !== 'all';
   return { v: 2, photo: look.photo, persons: { [P0]: look.person }, template: point ? neutralPerson() : look.person, primaryInit: look.person };
+}
+
+export interface AnswerInput {
+  /** the cache the editor opened with (a 基本模式 cache to merge into), or null */
+  detect: DetectionCache | null;
+  /** the detection (null in 基本模式: no face answer) */
+  prepared: PreparedFaces | null;
+  size: { width: number; height: number };
+  v1Body: V1Bodies | null;
+  rematch: Record<PersonId, Rect> | null;
+  faceSeed: FaceSeed;
+}
+export interface Answer {
+  detect: DetectionCache;
+  /** apply to the current edit and to every undo state (UndoStack.rebase) */
+  rebase: (e: EditState) => EditState;
+  /** persons were renamed or reset by a rematch: show the cache-dropped toast */
+  dropped: boolean;
+}
+
+const LOCAL_BODY = (k: string) => k.startsWith('body.') && k !== 'body.legs';
+
+/** p0 split for A13: the face part (local 美體 neutral) and the body part (neutral face, p0's local 美體) */
+function splitBodyLook(p: PersonParams): { face: PersonParams; body: PersonParams } {
+  const n = neutralPerson();
+  const faceValues = { ...p.values };
+  const bodyValues = { ...n.values };
+  for (const k of Object.keys(p.values) as (keyof PersonParams['values'])[]) {
+    if (!LOCAL_BODY(k)) continue;
+    faceValues[k] = n.values[k];
+    bodyValues[k] = p.values[k];
+  }
+  return { face: { ...p, values: faceValues }, body: { ...n, values: bodyValues } };
+}
+
+/**
+ * The first definite answer of a photo's face detection (S §3.3 item 4): the cache, and the mapping every stored edit
+ * goes through (assignPersons / renamePersons, applied to the current edit and to every undo state).
+ * - primary: a camera seed's face (C2: a seed in no padded box → the score primary, and p0 is discarded); for a
+ *   migrated v1 body, the person owning b0 (A13); else the best score;
+ * - A13: when b0 pairs with no face, its person keeps p0's nine local 美體 values and the face primary gets the face part;
+ * - a dropped cache is rematched by face-box IoU (S §5.3).
+ * The one-shot inputs (v1Body, rematch, faceSeed) belong to the photo's first answer only: a later answer (a 基本模式
+ * cache gaining faces, A15) passes null for them, or the A13 split would run again on persons that no longer hold p0.
+ */
+export function firstAnswer(a: AnswerInput): Answer {
+  const scans: DetectionCache['faceScans'] = a.prepared ? [{ quarter: 0, flipH: false }] : [];
+  let cache: DetectionCache;
+  if (a.detect) cache = a.prepared ? withFaces(a.detect, a.prepared, scans) : a.detect;
+  else if (a.prepared || a.v1Body?.bodies.length) {
+    cache = buildCache(a.size, a.prepared ?? EMPTY_PREPARED, a.v1Body?.bodies ?? null, { faceScans: scans, bodiesComplete: a.v1Body?.complete ?? true });
+  } else cache = { ...noFaceCache(a.size.width, a.size.height, scans), bodies: a.v1Body ? [] : null };
+  const ids = cache.persons.map((p) => p.id);
+  let discardP0 = false;
+  if (a.faceSeed && a.faceSeed !== 'all') {
+    const f = seedPrimary(a.faceSeed, cache.faces);
+    const owner = f ? cache.persons.find((p) => p.face === f) : undefined;
+    if (owner) cache = { ...cache, primary: owner.id };
+    else discardP0 = true;
+  }
+  const b0 = a.v1Body?.bodies.length ? cache.persons.find((p) => p.body === 'b0') : undefined;
+  if (b0 && b0.face !== null) cache = { ...cache, primary: b0.id };
+  const split = !!b0 && b0.face === null && cache.faces.length > 0;
+  if (b0 && !split && b0.face === null) cache = { ...cache, primary: b0.id };
+  const primary = cache.primary;
+  const rename = a.rematch ? rematchByIoU(a.rematch, cache) : null;
+  const rebase = (e: EditState): EditState => {
+    let out = rename ? renamePersons(e, rename) : e;
+    if (split && b0) {
+      const look = splitBodyLook(out.persons[P0] ?? out.primaryInit ?? out.template);
+      out = assignPersons(out, ids, primary, { discardP0 });
+      out = withPersons(out, [primary], () => look.face);
+      return withPersons(out, [b0.id], () => look.body);
+    }
+    return assignPersons(out, ids, primary, { discardP0 });
+  };
+  return { detect: cache, rebase, dropped: a.rematch !== null };
 }

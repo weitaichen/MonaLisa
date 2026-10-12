@@ -401,6 +401,8 @@ export interface RenderFace {
   protect: FaceProtect | null;
   /** camera: the track's presence easer, scaling its part in its neighbours' caps (S §4.1); absent = 1 */
   presence?: number;
+  /** λ_f of the editor's fold safety net (S §4.4): multiplies this face's warp strengths only; absent = 1 */
+  warpScale?: number;
 }
 
 export interface RenderInput {

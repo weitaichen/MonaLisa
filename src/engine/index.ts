@@ -15,7 +15,7 @@ import {
 import { probeFaceTable, probeR16FArray, readGlLimits } from './glProbe';
 import { boxCentre, ovalBox } from './passes/faceCap';
 import { makeupUniformsFor } from './passes/makeup';
-import { reshapeUniforms } from './passes/reshape';
+import { reshapeUniforms, type ReshapeUniforms } from './passes/reshape';
 import { createPipeline, type FrameFace, type FrameJob, type Pipeline, type StaticLuts } from './pipeline';
 import { processingSize, type Size, skinMaxima, skinUniformsFor } from './uniforms';
 
@@ -32,6 +32,14 @@ const CONTEXT_ATTRS: WebGLContextAttributes = {
 const LUT_NAMES = ['gray', 'origin', 'skin', 'light'] as const;
 const FILTER_ID = /^[a-z0-9_-]+$/;
 const FILTER_LUT_SIZE = 512;
+
+/** λ_f (S §4.4): every warp strength × k; k = 1 returns `u` itself, so the unguarded table is bit-identical */
+function scaleUniforms(u: ReshapeUniforms, k: number): ReshapeUniforms {
+  if (k === 1) return u;
+  const o = { ...u };
+  for (const key of Object.keys(o) as (keyof ReshapeUniforms)[]) o[key] *= Math.min(1, Math.max(0, k));
+  return o;
+}
 
 export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOptions>): Engine {
   const ctx = canvas.getContext('webgl2', CONTEXT_ATTRS);
@@ -206,7 +214,7 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       return {
         face: f.face,
         weight: w,
-        reshape: reshapeUniforms(f.person.values, w),
+        reshape: scaleUniforms(reshapeUniforms(f.person.values, w), f.warpScale ?? 1),
         makeup: makeupUniformsFor(f.person, w),
         kS: m.k[i][0],
         kR: m.k[i][1],

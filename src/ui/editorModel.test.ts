@@ -2,11 +2,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BodyFieldInput } from '../body/field';
 import type { BodyMeasure } from '../body/measure';
-import { fakeBodyTracker, makeBodyDetection, makeBodyDetections, makeBodyField } from '../app/testFakes';
+import { fakeBodyTracker, makeBodyDetection, makeBodyDetections, makeBodyField, makeFace } from '../app/testFakes';
+import { personInfos } from '../detect/cache';
+import { cacheBody, makeCache } from '../detect/testCaches';
 import { applyPreset, setBodyProtect, setFilter, setHeightBand, setParam } from '../engine/params';
 import type { BeautyParams, BodyField, EditState, Face, ParamId, RegionStatus, TrackerState } from '../types';
 import { lensFor, P0_INFO } from '../edit/lens';
 import { editFromLegacy } from '../edit/legacy';
+import { assignPersons } from '../edit/state';
 import {
   ANY_FIELD,
   BODY_DRAFT_LONG_EDGE,
@@ -23,9 +26,14 @@ import {
   detectSession,
   exportOnLatest,
   FieldDraftGate,
+  fieldInputOf,
+  frameFacesOf,
   MAX_REDETECTS,
+  measurePersons,
   measureSafe,
   needsBodyMeasure,
+  protectRequests,
+  rebaseStamp,
   RedetectBudget,
   shouldDetectBody,
   stampIs,
@@ -536,5 +544,41 @@ describe('BodyFieldMemo (multi-person)', () => {
       { ...base, aspect: 0.5 },
     ];
     for (const v of variants) expect(bodyInputKey(v)).not.toBe(k);
+  });
+});
+
+describe('persons in the editor model (S §3.3)', () => {
+  const cache = makeCache({ bodies: [cacheBody('b0', 0.3), cacheBody('b1', 0.7)], persons: [{ id: 'f0', face: 'f0', body: 'b0' }, { id: 'f1', face: 'f1', body: null }, { id: 'b1', face: null, body: 'b1' }] });
+  it('each body person is measured with its paired face, or none', () => {
+    const seen: [number, boolean][] = [];
+    const ms = measurePersons(cache, () => FACE, (d, f) => (seen.push([d.pose.points[0], f !== null]), {} as BodyMeasure), () => undefined);
+    expect([...ms.keys()]).toEqual(['f0', 'b1']);
+    expect(seen.map(([, f]) => f)).toEqual([true, false]);
+  });
+  it('fieldInputOf lists only persons with a body and a non-neutral local item; 長腿 anchors on the primary with a body', () => {
+    const m0 = {} as BodyMeasure;
+    const m1 = {} as BodyMeasure;
+    const e = lensFor(assignPersons(editFromLegacy(applyPreset('natural', 1)), ['f0', 'f1', 'b1'], 'f0'), { kind: 'person', id: 'b1' }, personInfos(cache), 'f0').set('body.waist', 0.5);
+    const i = fieldInputOf(e, cache, new Map([['f0', m0], ['b1', m1]]), 0.75);
+    expect(i.edited.map((p) => p.id)).toEqual(['b1']);
+    expect(i.legs.measure).toBe(m0);
+    // 長腿 on: every body person rides along (hands-rigid term), as one person did in v0.3
+    const legs = { ...e, photo: { ...e.photo, values: { ...e.photo.values, 'body.legs': 0.3 } } };
+    expect(fieldInputOf(legs, cache, new Map([['f0', m0], ['b1', m1]]), 0.75).edited.map((p) => p.id)).toEqual(['f0', 'b1']);
+  });
+  it('frameFacesOf links faces to persons; protectRequests: windows with ≥ 2 faces and the others’ ovals', () => {
+    const faces = [{ id: 'f0', face: makeFace(0, 0.3), box: cache.faces[0].box, lm: cache.faces[0].lm }, { id: 'f1', face: makeFace(1, 0.7), box: cache.faces[1].box, lm: cache.faces[1].lm }];
+    expect(frameFacesOf(cache, faces).map((f) => f.person)).toEqual(['f0', 'f1']);
+    const r = protectRequests(cache, faces, assignPersons(editFromLegacy(applyPreset('natural', 1)), ['f0', 'f1', 'b1'], 'f0'), { width: 1600, height: 1200 });
+    expect(r[0].others.otherOvals).toHaveLength(1);
+    expect(r[0].others.window).not.toBeNull();
+    expect(r[0].contour).toBe(true);
+  });
+  it('rebaseStamp: a saved output stays saved across a detection-driven rebase; an unsaved one stays unsaved (U2, S §8.1)', () => {
+    const saved = { key: 'a', field: ANY_FIELD };
+    expect(rebaseStamp(saved, 'a', 'b', 3)).toEqual({ key: 'b', field: ANY_FIELD });
+    expect(stampIs(rebaseStamp(saved, 'a', 'b', 3), 'b', 7)).toBe(true);
+    expect(rebaseStamp({ key: 'x', field: 2 }, 'a', 'b', 2)).toEqual({ key: 'x', field: 2 });
+    expect(rebaseStamp(null, 'a', 'b', 0)).toBeNull();
   });
 });

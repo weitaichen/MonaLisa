@@ -8924,7 +8924,7 @@ export function mapMinDet(map: UvMap, box: readonly [number, number, number, num
 // src/edit/frame.ts: buildFrame(edit, faces, obstacles, protects, primary, warpScales?: ReadonlyMap<string, number>)
 ```
 
-- [ ] **Step 1: Failing tests for `firstAnswer` (every answer-time row of S §5.3 and the seed rule of C2)**
+- [x] **Step 1: Failing tests for `firstAnswer` (every answer-time row of S §5.3 and the seed rule of C2)**
 
 Append to `src/edit/migrate.test.ts`. Imports to add: `firstAnswer` (`./migrate`), `personFromPreset, withPersons` (`./state`), `prepareFaces` (`../detect/faces`), `cacheBody` (`../detect/testCaches`), `defaultParams` is already there; plus `readFileSync` (`node:fs`), the `Landmarks478` type, and the `fx` / `sample` / `lmAt` helpers copied verbatim from `src/detect/faces.test.ts` (Task 13 Step 3):
 
@@ -9004,7 +9004,7 @@ describe('firstAnswer (S §3.3 item 4, §5.3 answer-time rows, C2)', () => {
 Run: `npx vitest run src/edit/migrate.test.ts`
 Expected: FAIL (`firstAnswer` is not exported).
 
-- [ ] **Step 2: Implement `firstAnswer` (append to `src/edit/migrate.ts`)**
+- [x] **Step 2: Implement `firstAnswer` (append to `src/edit/migrate.ts`)**
 
 Imports at the top of `migrate.ts` become:
 
@@ -9096,7 +9096,7 @@ export function firstAnswer(a: AnswerInput): Answer {
 
 `firstAnswer` consumes the source's one-shot inputs (`v1Body`, `rematch`, `faceSeed`): the Editor passes them only with the photo's first answer and `null` afterwards (a 基本模式 cache gaining faces later, A15), or the A13 split would run a second time on persons that no longer hold `p0`.
 
-- [ ] **Step 3: Editor helpers (append to `src/ui/editorModel.ts`) and their tests**
+- [x] **Step 3: Editor helpers (append to `src/ui/editorModel.ts`) and their tests**
 
 ```ts
 /** a cached body as the v1 BodyDetection measureBody reads */
@@ -9279,7 +9279,7 @@ describe('detection-driven writes keep 最近編輯 (S §5.2, A17)', () => {
 Run: `npx vitest run src/edit src/ui/editorModel.test.ts src/store/history.test.ts`
 Expected: PASS.
 
-- [ ] **Step 3b: The editor's fold safety net for summed face warps (S §4.4 last bullet)**
+- [x] **Step 3b: The editor's fold safety net for summed face warps (S §4.4 last bullet)**
 
 The caps make the summed map fold-free in every swept layout (Task 16), so this guard should never act; S §4.4 still asks for it, so a commit can never ship a fold. Write the failing test `src/edit/warpGuard.test.ts`:
 
@@ -9439,7 +9439,7 @@ export function warpGuard(frame: StillFrame, aspect: number, opts: { minDet?: nu
 Run: `npx vitest run src/edit/warpGuard.test.ts src/engine src/edit/frame.test.ts`
 Expected: PASS (the first case logs nothing: λ = 1, the guard did not act).
 
-- [ ] **Step 4: The editor (`src/ui/screens/Editor.tsx`)**
+- [x] **Step 4: The editor (`src/ui/screens/Editor.tsx`)**
 
 Replace the interim pieces of Tasks 12, 18 and 19 with the person model. Exact edits:
 
@@ -9655,7 +9655,7 @@ Render effect: `session.render(frameOf(edit))` with dependencies `[session, edit
 
 In `update(e, commit)` (Task 12), before `setEditState(e)`: `warpScales.current = commit ? guardScales(e) : new Map();` (a drag step draws the plain table; the commit checks it). In `doUndo` / `doRedo`, before `setEditState(e)`: `warpScales.current = guardScales(e);` (an undo lands on another committed state). `guardScales`, `update` and `rebaseOnDetect` only read `protectsRef`, `warpScales` and `photo` when they run (from handlers and effects, after the first render), so their place in the component body is free; keep every `useRef` / `useState` at the top level.
 
-- [ ] **Step 5: First persons e2e (`tests/e2e/persons.spec.ts`)**
+- [x] **Step 5: First persons e2e (`tests/e2e/persons.spec.ts`)**
 
 Add helpers to `tests/e2e/fixtures.ts`:
 
@@ -9743,7 +9743,7 @@ test('reopening an edited group photo runs no face detector: the cache answers',
 });
 ```
 
-- [ ] **Step 6: Sub-step 1c gate**
+- [x] **Step 6: Sub-step 1c gate**
 
 Run: `npm run typecheck && npm test && npm run build`
 Expected: all green.
@@ -9751,7 +9751,7 @@ Expected: all green.
 Run: `npm run test:e2e`
 Expected: every spec passes, including `parity.spec.ts` (max ≤ 1/255) and `persons.spec.ts`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src tests/e2e

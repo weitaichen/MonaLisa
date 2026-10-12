@@ -3,7 +3,7 @@ import { defaultParams } from '../engine/params';
 import { splitLegacy } from '../edit/legacy';
 import { DEFAULT_PREFS } from '../store/settings';
 import type { V1Bodies } from '../edit/migrate';
-import type { BodyDetection, CameraLook, DetectionCache, EditState, FaceSeed, PersonId, PersonMask, Prefs, Rect } from '../types';
+import type { CameraLook, DetectionCache, EditState, FaceSeed, PersonId, PersonMask, Prefs, Rect } from '../types';
 import { deps } from './deps';
 import { debug, reportError } from './debug';
 import { createStore } from './store';
@@ -46,11 +46,6 @@ export interface EditorSource {
   cacheDropped: boolean;
   /** camera → editor: the beautified face (C2) */
   faceSeed: FaceSeed;
-  /**
-   * sub-step 1b only (Task 21 removes it): the v1 body detection the 美體 tab starts from (null = checked, nobody in
-   * the photo; undefined = never checked / unknown)
-   */
-  body?: BodyDetection | null;
   /** the entry was saved with the 瘦臉 background limit requested (HistoryEntry.faceProtect): reopening requests it again */
   faceProtect?: boolean;
   /** the entry's cached segmenter mask for that limit (HistoryEntry.faceMask) */

@@ -1,6 +1,7 @@
 // The still frame of an edit (S §4.1 item 1): every selectable face in cache order at weight 1 with its person's params
 // (a face whose person has no entry yet: neutral) and its 瘦臉 limit; the obstacles' centres; all-skin 磨皮／紅潤 from the
-// primary person only when the photo has no face. The selection is never an input.
+// primary person only when the photo has no face; the fold safety net's λ_f per face (warpGuard). The selection is never
+// an input.
 import { boxCentre } from '../engine/passes/faceCap';
 import type { BeautyParams, CachedObstacle, EditState, Face, FaceProtect, PersonId, StillFrame } from '../types';
 import { splitLegacy } from './legacy';
@@ -19,6 +20,8 @@ export function buildFrame(
   obstacles: readonly CachedObstacle[],
   protects: ReadonlyMap<string, FaceProtect>,
   primary: PersonId,
+  /** λ_f of the editor's fold safety net per face id (S §4.4, warpGuard); absent = 1 */
+  warpScales: ReadonlyMap<string, number> = new Map(),
 ): StillFrame {
   const skin = personOf(edit, primary).values;
   return {
@@ -27,6 +30,7 @@ export function buildFrame(
       weight: 1,
       person: f.person && edit.persons[f.person] ? edit.persons[f.person] : neutralPerson(),
       protect: protects.get(f.id) ?? null,
+      warpScale: warpScales.get(f.id) ?? 1,
     })),
     obstacles: obstacles.map((o) => boxCentre(o.box)),
     globalSkin: faces.length ? null : { smooth: skin['skin.smooth'], rosy: skin['skin.rosy'], weight: 1 },

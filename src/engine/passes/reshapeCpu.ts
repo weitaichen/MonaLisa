@@ -1,9 +1,10 @@
-// Test / harness-only CPU port of RESHAPE_FS (reshape.ts): the backward map vUv → tc the P2 reshape pass samples the
+// CPU port of RESHAPE_FS (reshape.ts): the backward map vUv → tc the P2 reshape pass samples the
 // source at. v0.4 (S §4.4): the 美體 field is the outermost map; every listed face's chain (contour curveWarps, chin,
 // forehead, the per-face 瘦臉 limit, nose, mouth, eye distance, big eyes) starts from the same tcB, a capped face's
 // displacement is held within its cap budget, and the displacements are summed — one face without a cap is its own chain
 // output, bit-exact with v0.3 (reshapeCpuV03.ts). Double precision throughout; the e2e reshape pins compare the GPU with
-// this port within 0.05 px. Never imported by the app.
+// this port within 0.05 px. Imported by the app only for the editor's fold safety net (src/edit/warpGuard.ts, on slider
+// commits).
 import type { BodyField, Face, FaceProtect, Rect } from '../../types';
 import { fieldAt } from '../../body/cpuWarp';
 import { attenuate, boxCentre, faceDrawn, influenceBox, ovalBox, WHOLE, type TableFace } from './faceCap';
@@ -160,4 +161,23 @@ export function reshapeMapCpu(face: Face | null, uIn: ReshapeUniforms | null, as
   if (!face || !uIn) return reshapeMapMulti([], aspect, { body });
   const t: TableFace = { face, u: attenuate(uIn, face.yaw), layer: protect ? 0 : -1, window: protect?.window ?? WHOLE, centre: boxCentre(ovalBox(face)), cap: -1 };
   return reshapeMapMulti([t], aspect, { body, protects: protect ? [protect] : [] });
+}
+
+/** smallest forward-difference Jacobian determinant of `map` on an n × n grid over `box` (UV); −∞ on a non-finite value */
+export function mapMinDet(map: UvMap, box: readonly [number, number, number, number], n = 65): number {
+  let min = Infinity;
+  const hx = (box[2] - box[0]) / (n - 1);
+  const hy = (box[3] - box[1]) / (n - 1);
+  for (let j = 0; j + 1 < n; j++) {
+    for (let i = 0; i + 1 < n; i++) {
+      const x = box[0] + i * hx;
+      const y = box[1] + j * hy;
+      const a = map(x, y);
+      const bx = map(x + hx, y);
+      const by = map(x, y + hy);
+      if (![...a, ...bx, ...by].every(Number.isFinite)) return -Infinity;
+      min = Math.min(min, ((bx[0] - a[0]) / hx) * ((by[1] - a[1]) / hy) - ((bx[1] - a[1]) / hx) * ((by[0] - a[0]) / hy));
+    }
+  }
+  return min;
 }

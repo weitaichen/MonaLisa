@@ -11,6 +11,8 @@ export const SHOTS = resolve(import.meta.dirname, '__shots__');
 mkdirSync(SHOTS, { recursive: true });
 
 export const SAMPLE_FACE = resolve(import.meta.dirname, '../fixtures/sample_face.png');
+export const GROUP_FACES = resolve(import.meta.dirname, '../fixtures/group_faces.png');
+export const GROUP_PEOPLE = resolve(import.meta.dirname, '../fixtures/group_people.jpg');
 
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
@@ -176,4 +178,52 @@ export async function debugState(page: Page): Promise<DebugState> {
   const d = await page.evaluate(() => (window.__meiyan ? { ...window.__meiyan } : null));
   if (!d) throw new Error('window.__meiyan is missing');
   return d;
+}
+
+/** import a fixture through the home screen's picker and wait for the editor */
+export async function importFixture(page: Page, path: string): Promise<void> {
+  await page.goto('/');
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: /匯入照片/ }).click();
+  await (await chooser).setFiles(path);
+  await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 90_000 });
+  await expect.poll(async () => (await debugState(page)).screen).toBe('editor');
+}
+
+/**
+ * Write a raw record straight into IndexedDB `meiyan` / `edits` (store/history.ts DB_NAME, STORE_NAME; v0.3-shaped or
+ * v2), then reload. Call after `page.goto('/')` (same origin). `original` / `thumb` are fixture URLs fetched in the page.
+ */
+export async function seedHistory(page: Page, record: Record<string, unknown>): Promise<void> {
+  await page.evaluate(async (r) => {
+    const db = await new Promise<IDBDatabase>((res, rej) => {
+      const q = indexedDB.open('meiyan', 1);
+      q.onupgradeneeded = () => q.result.createObjectStore('edits', { keyPath: 'id' }).createIndex('updatedAt', 'updatedAt');
+      q.onsuccess = () => res(q.result);
+      q.onerror = () => rej(q.error);
+    });
+    const blob = async (u: string) => (await fetch(u)).blob();
+    const rec = { ...r, original: await blob(r.original as string), thumb: await blob(r.thumb as string) };
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction('edits', 'readwrite');
+      tx.objectStore('edits').put(rec);
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error);
+    });
+    db.close();
+  }, record);
+  await page.reload();
+}
+
+/** mean |a − b| inside `r` (fractions of the image) and the max outside it */
+export function regionDiff(a: Pixels, b: Pixels, r: Rect): { inside: number; outsideMax: number } {
+  const R = { x: Math.round(r.x * a.width), y: Math.round(r.y * a.height), w: Math.round(r.w * a.width), h: Math.round(r.h * a.height) };
+  let outsideMax = 0;
+  for (let y = 0; y < a.height; y++)
+    for (let x = 0; x < a.width; x++) {
+      if (x >= R.x && x < R.x + R.w && y >= R.y && y < R.y + R.h) continue;
+      const i = (y * a.width + x) * 4;
+      outsideMax = Math.max(outsideMax, Math.abs(a.data[i] - b.data[i]), Math.abs(a.data[i + 1] - b.data[i + 1]), Math.abs(a.data[i + 2] - b.data[i + 2]));
+    }
+  return { inside: mad(a, b, R), outsideMax };
 }

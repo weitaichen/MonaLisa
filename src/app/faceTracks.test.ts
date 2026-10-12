@@ -40,6 +40,16 @@ const B = (w = 0.2) => lmAt(0.7, 0.5, w);
 
 describe('FaceTracks (S §3.4 T4)', () => {
   it('matches by IoU across frames, and by centre when the face doubles in size at once (IoU 0.25); ids stay', () => {
+    // two faces, so the one-track-one-face fallback cannot pair the doubled face: only the centre rule can
+    const t = new FaceTracks();
+    run(t, 3, (i) => [A(i * 0.01), B()]);
+    const ids = t.views().map((v) => v.id).sort((a, b) => a - b);
+    expect(ids).toHaveLength(2);
+    run(t, 1, () => [lmAt(0.32, 0.5, 0.4), B()], 200);
+    expect(t.views().map((v) => v.id).sort((a, b) => a - b)).toEqual(ids);
+    expect(t.views().every((v) => v.present)).toBe(true);
+  });
+  it('one face that doubles in size at once keeps its id', () => {
     const t = new FaceTracks();
     run(t, 3, (i) => [A(i * 0.01)]);
     const id = t.views()[0].id;

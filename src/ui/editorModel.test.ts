@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { BodyMeasure } from '../body/measure';
 import { fakeBodyTracker, makeBodyDetection, makeBodyField } from '../app/testFakes';
 import { applyPreset, setBodyProtect, setFilter, setHeightBand, setParam } from '../engine/params';
-import type { BeautyParams, BodyField, Face, ParamId, RegionStatus, TrackerState } from '../types';
+import type { BeautyParams, BodyField, EditState, Face, ParamId, RegionStatus, TrackerState } from '../types';
+import { lensFor, P0_INFO } from '../edit/lens';
+import { editFromLegacy } from '../edit/legacy';
 import {
   ANY_FIELD,
   BODY_DRAFT_LONG_EDGE,
@@ -28,6 +30,9 @@ import {
   type BodyDet,
 } from './editorModel';
 import { BODY_ERROR_NOTE, bodyNote, INITIAL_SELECTION, itemsFor } from './panelModel';
+
+const lensOfEdit = (e: EditState) => lensFor(e, { kind: 'person', id: 'p0' }, P0_INFO, 'p0');
+const lensOf = (p: BeautyParams) => lensOfEdit(editFromLegacy(p));
 
 const FACE = {} as Face;
 const session = (face: Face | null, faceKnown = true) => ({ face, faceKnown });
@@ -331,7 +336,7 @@ describe('美體 decisions', () => {
     expect(note.text).toContain(hint);
     expect(note.text).toContain('仍可使用手動增高');
     expect(note.action?.label).toBe('重試');
-    const slim = itemsFor(setParam(applyPreset('natural', 1), 'body.slim', 0), { ...INITIAL_SELECTION, tab: 'body' }, c).find(
+    const slim = itemsFor(lensOf(setParam(applyPreset('natural', 1), 'body.slim', 0)), { ...INITIAL_SELECTION, tab: 'body' }, c).find(
       (i) => i.key === 'body.slim',
     )!;
     expect(slim).toMatchObject({ disabled: true, reason: BODY_ERROR_NOTE });
@@ -342,7 +347,7 @@ describe('美體 decisions', () => {
   it('bodyPanelContext → panel: 背景保護 is off when the measure has no person mask (CPU fallback)', () => {
     const p = applyPreset('natural', 1);
     const s = { ...INITIAL_SELECTION, tab: 'body' as const };
-    const protect = (c: ReturnType<typeof bodyPanelContext>) => itemsFor(p, s, c).find((i) => i.key === 'protect')!;
+    const protect = (c: ReturnType<typeof bodyPanelContext>) => itemsFor(lensOf(p), s, c).find((i) => i.key === 'protect')!;
     const masked = { ...measure(), mask: { width: 4, height: 4, data: new Uint8Array(16) } } as BodyMeasure;
     const withMask = bodyPanelContext({ phase: 'done', det }, { state: 'ready' }, masked, avail);
     expect(withMask.hasMask).toBe(true);

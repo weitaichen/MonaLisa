@@ -1,7 +1,8 @@
 // BeautyPanel (spec §7.3): tab row 一鍵 · 美膚 · 美型 · 美體 · 濾鏡 · 美妝 over a horizontal item strip.
 // The value slider (and the 增高 band overlay) are rendered by the screen (floating in Camera, docked in Editor).
 import { useLayoutEffect, useRef } from 'preact/hooks';
-import type { BeautyParams } from '../../types';
+import type { Lens } from '../../edit/lens';
+import type { EditState } from '../../types';
 import { Icon } from '../icons';
 import {
   activate,
@@ -20,11 +21,11 @@ import { haptic } from '../platform';
 import { toast } from '../state';
 
 interface Props {
-  params: BeautyParams;
+  lens: Lens;
   sel: PanelSelection;
   onSel(sel: PanelSelection): void;
   /** a tap-level change (always an undo step) */
-  onParams(params: BeautyParams): void;
+  onEdit(edit: EditState): void;
   collapsed?: boolean;
   /**
    * Set when face effects cannot apply (基本模式, or a photo with no face): 美型 / 美妝 are dimmed with this
@@ -42,7 +43,7 @@ interface Props {
 /** tabs whose effects need a detected face */
 export const FACE_TABS: readonly TabId[] = ['shape', 'makeup'];
 
-export function BeautyPanel({ params, sel, onSel, onParams, collapsed, faceNote, body, id }: Props) {
+export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, body, id }: Props) {
   const stripRef = useRef<HTMLDivElement>(null);
   const stripKey = sel.tab === 'makeup' ? `makeup.${sel.makeupPart}` : sel.tab;
 
@@ -59,19 +60,19 @@ export function BeautyPanel({ params, sel, onSel, onParams, collapsed, faceNote,
     }
   }, [stripKey]);
 
-  const items = itemsFor(params, sel, body);
+  const items = itemsFor(lens, sel, body);
   const faceOff = !!faceNote && FACE_TABS.includes(sel.tab);
   const note = sel.tab === 'body' ? bodyNote(body) : null;
   const bodyOff = body?.status === 'unsupported';
 
   const tapItem = (item: PanelItem) => {
-    const r = activate(item, params, sel);
+    const r = activate(item, lens, sel);
     if (r.notice) toast(r.notice, item.disabled ? 2600 : 3200);
     if (!r.changed) return;
     const a = item.action.type;
     if (a === 'preset' || a === 'reset' || a === 'protect') haptic();
     if (r.sel !== sel) onSel(r.sel);
-    if (r.params !== params) onParams(r.params);
+    if (r.edit !== lens.edit) onEdit(r.edit);
   };
 
   const tapTab = (tab: TabId) => {
@@ -93,7 +94,7 @@ export function BeautyPanel({ params, sel, onSel, onParams, collapsed, faceNote,
           {sel.tab === 'makeup' && (
             <>
               {MAKEUP_PARTS.map((p) => {
-                const on = params.values[p.id === 'lip' ? 'makeup.lip' : 'makeup.blush'] > 0.01;
+                const on = lens.shade(p.id).on;
                 const active = sel.makeupPart === p.id;
                 return (
                   <button
@@ -158,7 +159,7 @@ export function BeautyPanel({ params, sel, onSel, onParams, collapsed, faceNote,
               >
                 <span class="tab-label">
                   {t.label}
-                  {!unavailable && tabHasValue(params, t.id, body) && <i class="tab-dot" aria-hidden="true" />}
+                  {!unavailable && tabHasValue(lens, t.id, body) && <i class="tab-dot" aria-hidden="true" />}
                 </span>
               </button>
             );

@@ -3,7 +3,9 @@
 // 美體 is photo-only for now (body research report P1): the tab is shown with every item off and a note.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { LiveLoop, LiveStats } from '../../app/live';
-import type { CameraController, CameraSnapshot } from '../../types';
+import type { BeautyParams, CameraController, CameraSnapshot, EditState } from '../../types';
+import { lensFor, P0_INFO } from '../../edit/lens';
+import { editFromLegacy, legacyProjection } from '../../edit/legacy';
 import { cameraErrorCopy } from '../cameraErrors';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
 import { CanvasHost } from '../components/CanvasHost';
@@ -56,6 +58,9 @@ export function Camera() {
 
   const paramsRef = useRef(params);
   paramsRef.current = params;
+  // Task 10 shim (removed by Task 11): the panel speaks EditState, the camera still holds BeautyParams
+  const lensOfParams = (p: BeautyParams) => lensFor(editFromLegacy(p), { kind: 'person', id: 'p0' }, P0_INFO, 'p0');
+  const back = (e: EditState) => legacyProjection(e, 'p0');
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
   const countTimer = useRef(0);
@@ -263,7 +268,7 @@ export function Camera() {
     setCollapsed((c) => !c);
   };
 
-  const binding = sliderFor(params, sel, cameraBody);
+  const binding = sliderFor(lensOfParams(params), sel, cameraBody);
   const state = snap?.state ?? 'idle';
   const ready = !!loop && live && !lost;
   // basic mode only: the live no-face state comes and goes (the badge covers it), the panel must not flicker
@@ -365,8 +370,8 @@ export function Camera() {
           <SliderRow
             float
             binding={faceOff ? null : binding}
-            onChange={(v) => binding && setParams(binding.apply(paramsRef.current, v))}
-            onCommit={(v) => binding && setParams(binding.apply(paramsRef.current, v))}
+            onChange={(v) => binding && setParams(back(binding.apply(lensOfParams(paramsRef.current), v)))}
+            onCommit={(v) => binding && setParams(back(binding.apply(lensOfParams(paramsRef.current), v)))}
           />
         )}
         {live && collapsed && !overlay && (
@@ -390,10 +395,10 @@ export function Camera() {
 
       <BeautyPanel
         id="beauty-panel"
-        params={params}
+        lens={lensOfParams(params)}
         sel={sel}
         onSel={setSel}
-        onParams={setParams}
+        onEdit={(e) => setParams(back(e))}
         collapsed={collapsed}
         faceNote={faceNote}
         body={cameraBody}

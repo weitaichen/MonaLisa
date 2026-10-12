@@ -16,6 +16,7 @@ import { heightBandStretch, HEIGHT_MAX_CROP } from '../../body/bands';
 import { defaultParams, setHeightBand, setParam } from '../../engine/params';
 import { UndoStack } from '../../store/undo';
 import type { BeautyParams, HeightBand } from '../../types';
+import { editFromLegacy } from '../../edit/legacy';
 import { bandOrSuggested } from '../panelModel';
 import {
   BandDrag,
@@ -118,7 +119,7 @@ describe('增高 line drag: band invariants', () => {
       const r = dragEdge('top', y, model, band.amount, heightBandStretch);
       p = setHeightBand(p, r.band);
       expect(p.heightBand).not.toBeNull();
-      expect(bandOrSuggested(p, undefined).amount).toBe(1);
+      expect(bandOrSuggested(editFromLegacy(p), undefined).amount).toBe(1);
       expect(r.display.bottom - r.display.top).toBeGreaterThanOrEqual(MIN_GAP - EPS);
       model = r.display;
     }
@@ -290,7 +291,7 @@ function mount(ed: ReturnType<typeof editorLike>) {
     const [, bump] = useState(0);
     return held ? null : (
       <HeightBandOverlay
-        band={bandOrSuggested(ed.params, undefined)}
+        band={bandOrSuggested(editFromLegacy(ed.params), undefined)}
         stretch={heightBandStretch}
         onChange={(b, commit) => {
           ed.update(setHeightBand(ed.params, b), commit);

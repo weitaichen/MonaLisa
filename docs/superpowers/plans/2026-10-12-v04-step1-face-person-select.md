@@ -3614,7 +3614,7 @@ git commit -m "v0.4 step 1b: openState (lazy v1/v2 migration), importEdit, camer
   - `bandOrSuggested(edit: EditState, body: BodyContext | undefined): HeightBand`
   - `BeautyPanel` props: `{ lens: Lens; sel; onSel; onEdit(edit: EditState): void; collapsed?; faceNote?; body?; id? }` (replacing `params` / `onParams`).
 
-- [ ] **Step 1: Port the panel tests (they become the failing tests)**
+- [x] **Step 1: Port the panel tests (they become the failing tests)**
 
 In `src/ui/panelModel.test.ts`:
 
@@ -3687,7 +3687,7 @@ In `src/ui/components/HeightBandOverlay.test.tsx` (CRLF), the other caller of `b
 Run: `npx vitest run src/ui/panelModel.test.ts src/ui/editorModel.test.ts`
 Expected: FAIL (type errors / `lens.preset is not a function`: panelModel still takes BeautyParams).
 
-- [ ] **Step 2: Port `src/ui/panelModel.ts` (CRLF)**
+- [x] **Step 2: Port `src/ui/panelModel.ts` (CRLF)**
 
 Replace the imports (`:2-20`) with:
 
@@ -3993,11 +3993,11 @@ export function tabHasValue(lens: Lens, tab: TabId, body?: BodyContext): boolean
 
 (`PanelItem`, `RESET_ITEM`, `ENABLED`, `PRESET_ICON`, `bodyGate`, `bodyNote`, the constants and `ItemAction` above `makeupKey` are unchanged; delete the old `shadeOf` and `bodyIsNeutral`.)
 
-- [ ] **Step 3: Port `BeautyPanel` (CRLF)**
+- [x] **Step 3: Port `BeautyPanel` (CRLF)**
 
 In `src/ui/components/BeautyPanel.tsx`: replace `import type { BeautyParams } from '../../types';` with `import type { Lens } from '../../edit/lens';` and `import type { EditState } from '../../types';`. In `Props`, replace `params: BeautyParams;` with `lens: Lens;` and `onParams(params: BeautyParams): void;` with `onEdit(edit: EditState): void;`. Change the destructuring to `{ lens, sel, onSel, onEdit, collapsed, faceNote, body, id }`, `itemsFor(params, sel, body)` → `itemsFor(lens, sel, body)`, and in `tapItem`: `const r = activate(item, lens, sel);` … `if (r.edit !== lens.edit) onEdit(r.edit);`. The part dot: `const on = lens.shade(p.id).on;`. Tab dots: `tabHasValue(lens, t.id, body)`.
 
-- [ ] **Step 4: Port the b4 harness**
+- [x] **Step 4: Port the b4 harness**
 
 `tests/harness/b4/main.tsx`: add `import { lensFor, P0_INFO } from '../../../src/edit/lens';` and `import { editFromLegacy, legacyProjection } from '../../../src/edit/legacy';`. In `Harness()` after `paramsRef.current = params;` add:
 
@@ -4009,7 +4009,7 @@ In `src/ui/components/BeautyPanel.tsx`: replace `import type { BeautyParams } fr
 
 Then `sliderFor(params, sel, body)` → `sliderFor(lens, sel, body)`; every `binding.apply(paramsRef.current, v)` → `back(binding.apply(lensOf(paramsRef.current), v))`; both `<BeautyPanel params={params} … onParams={(p) => update(p, true)} …/>` → `<BeautyPanel lens={lens} … onEdit={(e) => update(back(e), true)} …/>`; `bandOrSuggested(params, body)` → `bandOrSuggested(editFromLegacy(params), body)`. Add `EditState` to its type import.
 
-- [ ] **Step 5: Keep both screens compiling with a one-person shim (Tasks 11 and 12 replace it)**
+- [x] **Step 5: Keep both screens compiling with a one-person shim (Tasks 11 and 12 replace it)**
 
 Both screens still hold `BeautyParams`; give them the same shim the b4 harness uses, so the repository typechecks and behaves exactly as before after this task.
 
@@ -4025,7 +4025,7 @@ then: `update(b.apply(paramsRef.current, v), commit)` (`:777`) → `update(back(
 
 `src/ui/screens/Camera.tsx` (CRLF): same two module imports, and `BeautyParams, EditState` added to its `../../types` type import (today it imports only `CameraController, CameraSnapshot`); inside `Camera()` after `paramsRef.current = params;` add the same two shim lines; `sliderFor(params, sel, cameraBody)` → `sliderFor(lensOfParams(params), sel, cameraBody)`; both slider handlers `setParams(binding.apply(paramsRef.current, v))` → `setParams(back(binding.apply(lensOfParams(paramsRef.current), v)))`; `<BeautyPanel … params={params} … onParams={setParams}` → `lens={lensOfParams(params)}` and `onEdit={(e) => setParams(back(e))}`.
 
-- [ ] **Step 6: Run the tests and the typecheck**
+- [x] **Step 6: Run the tests and the typecheck**
 
 Run: `npx vitest run src/ui src/edit && npm run typecheck`
 Expected: PASS; `tsc` exits 0.
@@ -4033,7 +4033,7 @@ Expected: PASS; `tsc` exits 0.
 Run: `npm run build && npx playwright test tests/e2e/parity.spec.ts tests/e2e/editor.spec.ts tests/e2e/camera.spec.ts`
 Expected: PASS (the panel behaves as in v0.3 for one person).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/ui/panelModel.ts src/ui/panelModel.test.ts src/ui/editorModel.test.ts src/ui/components/HeightBandOverlay.test.tsx src/ui/components/BeautyPanel.tsx src/ui/screens/Editor.tsx src/ui/screens/Camera.tsx tests/harness/b4/main.tsx

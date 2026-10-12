@@ -1,23 +1,7 @@
 // BeautyPanel logic (spec §7.3), kept pure so it can be unit-tested without a DOM.
-import {
-  BLUSH_SHADES,
-  FILTERS,
-  hasValue,
-  LIP_SHADES,
-  MAKEUP_PICK_DEFAULT,
-  paramDef,
-  paramsInGroup,
-  PRESETS,
-  resetGroup,
-  setBodyProtect,
-  setFilter,
-  setHeightBand,
-  setParam,
-  setPresetAmount,
-  setShade,
-  applyPreset,
-} from '../engine/params';
-import type { BeautyParams, HeightBand, ParamId, PresetId, RegionStatus } from '../types';
+import { BLUSH_SHADES, FILTERS, hasValue, LIP_SHADES, MAKEUP_PICK_DEFAULT, paramDef, paramsInGroup, PRESETS } from '../engine/params';
+import type { Lens } from '../edit/lens';
+import type { EditState, HeightBand, ParamId, PresetId, RegionStatus } from '../types';
 
 export type TabId = 'preset' | 'skin' | 'shape' | 'body' | 'filter' | 'makeup';
 export type MakeupPart = 'lip' | 'blush';
@@ -177,8 +161,8 @@ export function showsHeightBand(sel: PanelSelection, body: BodyContext | undefin
 }
 
 /** The band the overlay shows: the stored one, else where a new one would start (amount 0). */
-export function bandOrSuggested(params: BeautyParams, body: BodyContext | undefined): HeightBand {
-  if (params.heightBand) return params.heightBand;
+export function bandOrSuggested(edit: EditState, body: BodyContext | undefined): HeightBand {
+  if (edit.photo.heightBand) return edit.photo.heightBand;
   const s = body?.suggestedBand ?? DEFAULT_BAND;
   return { top: s.top, bottom: s.bottom, amount: 0 };
 }
@@ -242,26 +226,23 @@ function makeupKey(part: MakeupPart): ParamId {
   return part === 'lip' ? 'makeup.lip' : 'makeup.blush';
 }
 
-function shadeOf(params: BeautyParams, part: MakeupPart): string | null {
-  return part === 'lip' ? params.lipShade : params.blushShade;
-}
-
 function gated(item: PanelItem, gate: RegionStatus): PanelItem {
   return gate.ok ? item : { ...item, selected: false, disabled: true, reason: gate.reason };
 }
 
-function bandActive(params: BeautyParams): boolean {
-  return !!params.heightBand && params.heightBand.amount > 0.01;
+function bandActive(edit: EditState): boolean {
+  return !!edit.photo.heightBand && edit.photo.heightBand.amount > 0.01;
 }
 
 /** ⊘ 原圖 · 增高 · the 10 sliders (PixPretty order) · 背景保護. 增高 sits next to 長腿: both lengthen the legs. */
-function bodyItems(params: BeautyParams, sel: PanelSelection, body: BodyContext | undefined): PanelItem[] {
+function bodyItems(lens: Lens, sel: PanelSelection, body: BodyContext | undefined): PanelItem[] {
+  const edit = lens.edit;
   const height: PanelItem = {
     key: 'height',
     label: '增高',
     visual: { kind: 'icon', icon: 'height' },
     selected: sel.body === 'height',
-    hasValue: bandActive(params),
+    hasValue: bandActive(edit),
     action: { type: 'height' },
     ...ENABLED,
   };
@@ -273,7 +254,7 @@ function bodyItems(params: BeautyParams, sel: PanelSelection, body: BodyContext 
           label: d.label,
           visual: { kind: 'icon', icon: d.icon },
           selected: sel.body === d.id,
-          hasValue: hasValue(d, params.values[d.id]),
+          hasValue: hasValue(d, lens.get(d.id).value),
           action: { type: 'param', id: d.id },
           ...ENABLED,
         },
@@ -283,43 +264,40 @@ function bodyItems(params: BeautyParams, sel: PanelSelection, body: BodyContext 
   const protect: PanelItem = {
     key: 'protect',
     label: '背景保護',
-    visual: { kind: 'icon', icon: params.bodyProtect ? 'protect' : 'protectOff' },
+    visual: { kind: 'icon', icon: edit.photo.bodyProtect ? 'protect' : 'protectOff' },
     selected: false,
     hasValue: false,
     action: { type: 'protect' },
-    pressed: params.bodyProtect,
+    pressed: edit.photo.bodyProtect,
     ...ENABLED,
   };
-  return [
-    gated(RESET_ITEM(), bodyGate(body, 'reset')),
-    gated(height, bodyGate(body, 'height')),
-    ...sliders,
-    gated(protect, bodyGate(body, 'protect')),
-  ];
+  return [gated(RESET_ITEM(), bodyGate(body, 'reset')), gated(height, bodyGate(body, 'height')), ...sliders, gated(protect, bodyGate(body, 'protect'))];
 }
 
-export function itemsFor(params: BeautyParams, sel: PanelSelection, body?: BodyContext): PanelItem[] {
+/** the preset the 一鍵 strip highlights: the targets' common preset; for a body-only person, the photo's link */
+function shownPreset(lens: Lens): PresetId | 'custom' | null {
+  const { ref, mixed } = lens.preset();
+  if (ref === null) return lens.edit.photo.presetLink?.id ?? null;
+  if (mixed) return null;
+  return ref === 'custom' ? 'custom' : ref.id;
+}
+
+export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext): PanelItem[] {
+  const edit = lens.edit;
   switch (sel.tab) {
     case 'preset': {
+      const cur = shownPreset(lens);
       const items: PanelItem[] = PRESETS.map((p) => ({
         key: p.id,
         label: p.label,
         visual: { kind: 'icon', icon: PRESET_ICON[p.id] },
-        selected: params.presetId === p.id,
+        selected: cur === p.id,
         hasValue: false,
         action: { type: 'preset', id: p.id },
         ...ENABLED,
       }));
-      if (params.presetId === 'custom') {
-        items.push({
-          key: 'custom',
-          label: '自訂',
-          visual: { kind: 'icon', icon: 'custom' },
-          selected: true,
-          hasValue: false,
-          action: { type: 'custom' },
-          ...ENABLED,
-        });
+      if (cur === 'custom') {
+        items.push({ key: 'custom', label: '自訂', visual: { kind: 'icon', icon: 'custom' }, selected: true, hasValue: false, action: { type: 'custom' }, ...ENABLED });
       }
       return items;
     }
@@ -333,49 +311,41 @@ export function itemsFor(params: BeautyParams, sel: PanelSelection, body?: BodyC
             label: d.label,
             visual: { kind: 'icon', icon: d.icon },
             selected: sel[sel.tab as 'skin' | 'shape'] === d.id,
-            hasValue: hasValue(d, params.values[d.id]),
+            hasValue: hasValue(d, lens.get(d.id).value),
             action: { type: 'param', id: d.id },
             ...ENABLED,
           }),
         ),
       ];
     case 'body':
-      return bodyItems(params, sel, body);
+      return bodyItems(lens, sel, body);
     case 'filter':
       return FILTERS.map((f) => ({
         key: f.id,
         label: f.label,
         visual: f.id === 'none' ? { kind: 'icon', icon: 'none' } : { kind: 'thumb', src: `/luts/filters/${f.id}_thumb.png` },
-        selected: params.filterId === f.id,
+        selected: edit.photo.filterId === f.id,
         hasValue: false,
         action: { type: 'filter', id: f.id },
         ...ENABLED,
       }));
     case 'makeup': {
       const part = sel.makeupPart;
-      const on = params.values[makeupKey(part)] > 0.01;
-      const shade = shadeOf(params, part);
+      const s = lens.shade(part);
+      const on = s.on && !s.mixed;
       const shades = part === 'lip' ? LIP_SHADES : BLUSH_SHADES;
       return [
-        // exactly one item is selected in every state: 無 (off) · 原色 (on, no shade) · a shade
-        { ...RESET_ITEM('無'), selected: !on },
-        {
-          key: 'orig',
-          label: '原色',
-          visual: { kind: 'swatch', color: null },
-          selected: on && shade === null,
-          hasValue: false,
-          action: { type: 'shade', part, shade: null },
-          ...ENABLED,
-        },
+        // exactly one item is selected in every unmixed state: 無 (off) · 原色 (on, no shade) · a shade
+        { ...RESET_ITEM('無'), selected: !s.on && !s.mixed },
+        { key: 'orig', label: '原色', visual: { kind: 'swatch', color: null }, selected: on && s.shade === null, hasValue: false, action: { type: 'shade', part, shade: null }, ...ENABLED },
         ...shades.map(
-          (s): PanelItem => ({
-            key: s.id,
-            label: s.label,
-            visual: { kind: 'swatch', color: s.color },
-            selected: on && shade === s.id,
+          (x): PanelItem => ({
+            key: x.id,
+            label: x.label,
+            visual: { kind: 'swatch', color: x.color },
+            selected: on && s.shade === x.id,
             hasValue: false,
-            action: { type: 'shade', part, shade: s.id },
+            action: { type: 'shade', part, shade: x.id },
             ...ENABLED,
           }),
         ),
@@ -385,7 +355,7 @@ export function itemsFor(params: BeautyParams, sel: PanelSelection, body?: BodyC
 }
 
 export interface ActivateResult {
-  params: BeautyParams;
+  edit: EditState;
   sel: PanelSelection;
   /** false when nothing changed (no undo entry, no haptic) */
   changed: boolean;
@@ -393,63 +363,58 @@ export interface ActivateResult {
   notice?: string;
 }
 
-function bodyIsNeutral(params: BeautyParams): boolean {
-  return params.heightBand === null && paramsInGroup('body').every((d) => !hasValue(d, params.values[d.id]));
-}
-
-export function activate(item: PanelItem, params: BeautyParams, sel: PanelSelection): ActivateResult {
+export function activate(item: PanelItem, lens: Lens, sel: PanelSelection): ActivateResult {
   const a = item.action;
-  const done = (next: BeautyParams, nextSel = sel, notice?: string): ActivateResult => ({
-    params: next,
+  const edit = lens.edit;
+  const done = (next: EditState = edit, nextSel = sel, notice?: string): ActivateResult => ({
+    edit: next,
     sel: nextSel,
-    changed: next !== params || nextSel !== sel,
+    changed: next !== edit || nextSel !== sel,
     ...(notice ? { notice } : {}),
   });
-  if (item.disabled) return done(params, sel, item.reason ?? undefined);
+  if (item.disabled) return done(edit, sel, item.reason ?? undefined);
   switch (a.type) {
     case 'custom':
-      return done(params);
+      return done();
     case 'preset': {
-      if (params.presetId === a.id) return done(params);
-      // keep the user's 程度 when hopping between presets; 美體 is not part of any preset, so it is kept too
-      const keep = params.presetId !== 'custom' && params.presetId !== 'original' && a.id !== 'original';
-      return done(applyPreset(a.id, keep ? params.presetAmount : 1, params));
+      const { ref, mixed } = lens.preset();
+      const linked = edit.photo.presetLink?.id === a.id;
+      // a no-op only when every target already has it (RM §3.3) and the photo part is it too (v0.3: presetId ===)
+      if (linked && (ref === null || (ref !== 'custom' && !mixed && ref.id === a.id))) return done();
+      // keep the user's 程度 when hopping between presets (not into or out of 原圖); 美體 is outside presets
+      const amount = ref !== null && ref !== 'custom' && !mixed && ref.id !== 'original' && a.id !== 'original' && edit.photo.presetLink?.id === ref.id ? ref.amount : 1;
+      return done(lens.applyPreset(a.id, amount));
     }
     case 'reset':
       if (sel.tab === 'makeup') {
-        const key = makeupKey(sel.makeupPart);
-        // already off: tapping the selected 無 is a no-op (no haptic, no undo step, no flip to 自訂)
-        if (params.values[key] <= 0.01 && shadeOf(params, sel.makeupPart) === null) return done(params);
-        const cleared = setParam(params, key, 0);
-        return done(sel.makeupPart === 'lip' ? { ...cleared, lipShade: null } : { ...cleared, blushShade: null });
+        const s = lens.shade(sel.makeupPart);
+        // already off everywhere: tapping the selected 無 is a no-op (no haptic, no undo step, no flip to 自訂)
+        if (!s.on && s.shade === null && !s.mixed) return done();
+        return done(lens.clearMakeup(sel.makeupPart));
       }
       // body reset keeps the preset, so an already-neutral body would be an empty undo step
-      if (sel.tab === 'body') return bodyIsNeutral(params) ? done(params) : done(resetGroup(params, 'body'));
-      if (sel.tab === 'skin' || sel.tab === 'shape' || sel.tab === 'filter') return done(resetGroup(params, sel.tab));
-      return done(params);
+      if (sel.tab === 'body') return lens.groupNeutral('body') ? done() : done(lens.resetGroup('body'));
+      if (sel.tab === 'skin' || sel.tab === 'shape' || sel.tab === 'filter') return done(lens.resetGroup(sel.tab));
+      return done();
     case 'param':
-      if (sel.tab === 'body') return done(params, sel.body === a.id ? sel : { ...sel, body: a.id });
-      return done(params, sel.tab === 'shape' ? { ...sel, shape: a.id } : { ...sel, skin: a.id });
+      if (sel.tab === 'body') return done(edit, sel.body === a.id ? sel : { ...sel, body: a.id });
+      return done(edit, sel.tab === 'shape' ? { ...sel, shape: a.id } : { ...sel, skin: a.id });
     case 'height':
-      return done(params, sel.body === 'height' ? sel : { ...sel, body: 'height' });
+      return done(edit, sel.body === 'height' ? sel : { ...sel, body: 'height' });
     case 'protect': {
-      const on = !params.bodyProtect;
+      const on = !edit.photo.bodyProtect;
       // the measured trade (src/body/straightness.test.ts BODY, slim+waist vs slim+waist_noprotect): on keeps the
       // background deformation in a narrower ring beside the person; off spreads it wider and gentler. Line bend
       // is about the same either way, so neither notice promises straight lines or a smoother outline
-      return done(
-        setBodyProtect(params, on),
-        sel,
-        on ? '背景保護已開啟：背景變形範圍較小' : '背景保護已關閉：背景變形範圍較大但較平緩',
-      );
+      return done(lens.setBodyProtect(on), sel, on ? '背景保護已開啟：背景變形範圍較小' : '背景保護已關閉：背景變形範圍較大但較平緩');
     }
     case 'filter':
-      if (params.filterId === a.id) return done(params);
-      return done(setFilter(params, a.id));
+      if (edit.photo.filterId === a.id) return done();
+      return done(lens.setFilter(a.id));
     case 'shade': {
-      const on = params.values[makeupKey(a.part)] > 0.01;
-      if (on && shadeOf(params, a.part) === a.shade) return done(params);
-      return done(setShade(params, a.part, a.shade));
+      const s = lens.shade(a.part);
+      if (s.on && !s.mixed && s.shade === a.shade) return done();
+      return done(lens.setShade(a.part, a.shade));
     }
   }
 }
@@ -457,105 +422,81 @@ export function activate(item: PanelItem, params: BeautyParams, sel: PanelSelect
 export interface SliderBinding {
   /** changes when the slider targets a different value (resets drag state) */
   key: string;
+  /** the ParamId the slider writes; null for 程度 and 增高 */
+  param: ParamId | null;
   label: string;
   bidirectional: boolean;
   value: number;
+  /** the targets disagree under 全部 (the label adds 各人不同, Task 22) */
+  mixed: boolean;
   /** recommended-default dot / double-tap target */
   defaultValue: number;
-  apply(params: BeautyParams, v: number): BeautyParams;
+  apply(lens: Lens, v: number): EditState;
 }
 
 /** 增高 slider: writes the band amount, creating the band where the overlay shows it when there is none yet. */
-function heightBinding(params: BeautyParams, body: BodyContext | undefined): SliderBinding {
+function heightBinding(edit: EditState, body: BodyContext | undefined): SliderBinding {
   return {
     key: 'body.height',
+    param: null,
     label: '增高',
     bidirectional: false,
-    value: params.heightBand?.amount ?? 0,
+    value: edit.photo.heightBand?.amount ?? 0,
+    mixed: false,
     defaultValue: 0,
-    apply: (p, v) => setHeightBand(p, { ...bandOrSuggested(p, body), amount: v }),
+    apply: (l, v) => l.setHeightBand({ ...bandOrSuggested(l.edit, body), amount: v }),
   };
 }
 
-export function sliderFor(params: BeautyParams, sel: PanelSelection, body?: BodyContext): SliderBinding | null {
+function paramBinding(lens: Lens, id: ParamId): SliderBinding {
+  const d = paramDef(id);
+  const g = lens.get(id);
+  return { key: d.id, param: d.id, label: d.label, bidirectional: d.bidirectional, value: g.value, mixed: g.mixed, defaultValue: d.default, apply: (l, v) => l.set(d.id, v) };
+}
+
+export function sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext): SliderBinding | null {
+  const edit = lens.edit;
   switch (sel.tab) {
     case 'preset': {
-      const id = params.presetId;
-      if (id === 'custom' || id === 'original') return null;
-      return {
-        key: `preset.${id}`,
-        label: '程度',
-        bidirectional: false,
-        value: params.presetAmount,
-        defaultValue: 1,
-        apply: (p, v) => setPresetAmount(p, v),
-      };
+      const { ref, mixed } = lens.preset();
+      const link = edit.photo.presetLink;
+      const id = ref === null ? (link?.id ?? null) : ref !== 'custom' && !mixed ? ref.id : null;
+      if (id === null || id === 'original') return null;
+      const value = ref !== null && ref !== 'custom' ? ref.amount : (link?.amount ?? 1);
+      return { key: `preset.${id}`, param: null, label: '程度', bidirectional: false, value, mixed: false, defaultValue: 1, apply: (l, v) => l.setPresetAmount(v) };
     }
     case 'skin':
-    case 'shape': {
-      const d = paramDef(sel[sel.tab]);
-      return {
-        key: d.id,
-        label: d.label,
-        bidirectional: d.bidirectional,
-        value: params.values[d.id],
-        defaultValue: d.default,
-        apply: (p, v) => setParam(p, d.id, v),
-      };
-    }
-    case 'body': {
+    case 'shape':
+      return paramBinding(lens, sel[sel.tab]);
+    case 'body':
       if (!bodyGate(body, sel.body).ok) return null;
-      if (sel.body === 'height') return heightBinding(params, body);
-      const d = paramDef(sel.body);
-      return {
-        key: d.id,
-        label: d.label,
-        bidirectional: d.bidirectional,
-        value: params.values[d.id],
-        defaultValue: d.default,
-        apply: (p, v) => setParam(p, d.id, v),
-      };
-    }
+      return sel.body === 'height' ? heightBinding(edit, body) : paramBinding(lens, sel.body);
     case 'filter': {
-      if (params.filterId === 'none') return null;
-      const f = FILTERS.find((x) => x.id === params.filterId);
-      return {
-        key: `filter.${params.filterId}`,
-        label: '濾鏡強度',
-        bidirectional: false,
-        value: params.values['filter.amount'],
-        defaultValue: f?.defaultAmount ?? 0.5,
-        apply: (p, v) => setParam(p, 'filter.amount', v),
-      };
+      if (edit.photo.filterId === 'none') return null;
+      const f = FILTERS.find((x) => x.id === edit.photo.filterId);
+      return { ...paramBinding(lens, 'filter.amount'), key: `filter.${edit.photo.filterId}`, label: '濾鏡強度', defaultValue: f?.defaultAmount ?? 0.5 };
     }
     case 'makeup': {
       // always shown: dragging to 0 must not unmount the slider mid-gesture; raising it from 0 applies 原色
-      const key = makeupKey(sel.makeupPart);
-      return {
-        key,
-        label: sel.makeupPart === 'lip' ? '口紅' : '腮紅',
-        bidirectional: false,
-        value: params.values[key],
-        defaultValue: MAKEUP_PICK_DEFAULT[sel.makeupPart],
-        apply: (p, v) => setParam(p, key, v),
-      };
+      const b = paramBinding(lens, makeupKey(sel.makeupPart));
+      return { ...b, label: sel.makeupPart === 'lip' ? '口紅' : '腮紅', defaultValue: MAKEUP_PICK_DEFAULT[sel.makeupPart] };
     }
   }
 }
 
 /** Accent dot on a tab when anything in its group differs from neutral (美體: a slider or the 增高 band). */
-export function tabHasValue(params: BeautyParams, tab: TabId, body?: BodyContext): boolean {
+export function tabHasValue(lens: Lens, tab: TabId, body?: BodyContext): boolean {
   switch (tab) {
     case 'preset':
       return false;
     case 'filter':
-      return params.filterId !== 'none';
+      return lens.edit.photo.filterId !== 'none';
     case 'body':
       if (body?.status === 'unsupported') return false;
-      return bandActive(params) || paramsInGroup('body').some((d) => hasValue(d, params.values[d.id]));
+      return bandActive(lens.edit) || lens.groupHasValue('body');
     case 'skin':
     case 'shape':
     case 'makeup':
-      return paramsInGroup(tab).some((d) => hasValue(d, params.values[d.id]));
+      return lens.groupHasValue(tab);
   }
 }

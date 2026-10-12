@@ -18,7 +18,9 @@ import { buildBodyField } from '../../body/field';
 import { measureBody, paramAvailability } from '../../body/measure';
 import { applyPreset, setHeightBand } from '../../engine/params';
 import { buildFaceProtect } from '../../tracking/faceProtect';
-import type { BeautyParams, BodyDetection, BodyField, Engine, Face } from '../../types';
+import type { BeautyParams, BodyDetection, BodyField, EditState, Engine, Face } from '../../types';
+import { lensFor, P0_INFO } from '../../edit/lens';
+import { editFromLegacy, legacyProjection } from '../../edit/legacy';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
 import { HeightBandOverlay } from '../components/HeightBandOverlay';
 import { CanvasHost } from '../components/CanvasHost';
@@ -77,6 +79,9 @@ export function Editor({ source }: { source: EditorSource }) {
   const [params, setParamsState] = useState(source.params);
   const paramsRef = useRef(params);
   paramsRef.current = params;
+  // Task 10 shim (removed by Task 12): the panel speaks EditState, the editor still holds BeautyParams
+  const lensOfParams = (p: BeautyParams) => lensFor(editFromLegacy(p), { kind: 'person', id: 'p0' }, P0_INFO, 'p0');
+  const back = (e: EditState) => legacyProjection(e, 'p0');
   const [sel, setSelState] = useState(lastSel);
   /**
    * the still session plus the engine it draws with (recoverEngine replaces the engine → a new session).
@@ -770,11 +775,11 @@ export function Editor({ source }: { source: EditorSource }) {
 
   /** a slider step (commit=false) or its commit: the only edit that counts as the user's own contour edit */
   const slide = (b: SliderBinding, v: number, commit: boolean) => {
-    if (!contourEdited && isContourEdit(b.key, b.value, v)) {
+    if (!contourEdited && isContourEdit(b.param ?? b.key, b.value, v)) {
       protectSrc.request(); // at once: a history write before the protect effect runs records it already
       setContourEdited(true);
     }
-    update(b.apply(paramsRef.current, v), commit);
+    update(back(b.apply(lensOfParams(paramsRef.current), v)), commit);
   };
 
   const close = () => {
@@ -783,7 +788,7 @@ export function Editor({ source }: { source: EditorSource }) {
   };
 
   const bodyCtx = bodyPanelContext(bodyDet, bodyTracker, measure, paramAvailability, retryBody);
-  const binding = sliderFor(params, sel, bodyCtx);
+  const binding = sliderFor(lensOfParams(params), sel, bodyCtx);
   // face effects cannot apply: 基本模式, or no face in this photo (null while analysing, so no flash)
   // (a tracker that could not answer gets a neutral note until the re-detect gives a real answer)
   let faceNote: string | null = null;
@@ -833,7 +838,7 @@ export function Editor({ source }: { source: EditorSource }) {
             <CanvasHost fit="contain" />
             {session && !fatal && !hold.held && showsHeightBand(sel, bodyCtx) && (
               <HeightBandOverlay
-                band={bandOrSuggested(params, bodyCtx)}
+                band={bandOrSuggested(editFromLegacy(params), bodyCtx)}
                 stretch={heightBandStretch}
                 onChange={(b, commit) => update(setHeightBand(paramsRef.current, b), commit)}
               />
@@ -867,10 +872,10 @@ export function Editor({ source }: { source: EditorSource }) {
           onCommit={(v) => binding && slide(binding, v, true)}
         />
         <BeautyPanel
-          params={params}
+          lens={lensOfParams(params)}
           sel={sel}
           onSel={setSel}
-          onParams={(p) => update(p, true)}
+          onEdit={(e) => update(back(e), true)}
           faceNote={faceNote}
           body={bodyCtx}
         />

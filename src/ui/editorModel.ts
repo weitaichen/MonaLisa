@@ -211,8 +211,8 @@ export function suggestedBand(det: BodyDetection | null): { top: number; bottom:
 }
 
 /**
- * What the 美體 tab shows (panelModel BodyContext): status, model download progress, per-slider availability,
- * the 2+ people hint, 重試 after an error, whether 背景保護 has a person mask, and where a new 增高 band starts.
+ * What the 美體 tab shows (panelModel BodyContext): status, model download progress, per-slider availability, the
+ * body persons, 重試 after an error, whether 背景保護 has a person mask, and where a new 增高 band starts.
  */
 export function bodyPanelContext(
   det: BodyDet,

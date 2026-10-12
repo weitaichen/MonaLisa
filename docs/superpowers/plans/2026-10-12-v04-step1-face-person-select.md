@@ -10,6 +10,19 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-12-face-person-select-design.md` (called **S** below) inside the contract `docs/superpowers/specs/2026-10-12-v04-roadmap.md` (called **RM**). Every §12 open question of RM is decided with its recommended default (RM §12 「決定（2026-10-12）」). Read both before starting; a task's requirements always include the sections it cites.
 
+## Reconciliation (step 1)
+
+Checked against the code at `496756c` (step 1 is the first v0.4 step: no earlier step is committed, `src/` and `tests/e2e/pages/` are unchanged since `892ea61`, and `npm run typecheck` is green there). Every file:line anchor, export and signature the tasks consume was verified; these edits were made:
+
+- **Task 10:** `src/ui/components/HeightBandOverlay.test.tsx` (CRLF) calls `bandOrSuggested` with `BeautyParams` (`:121`, `:293`): it is ported with `editFromLegacy` in the same task (else the run and the typecheck of Step 6 fail). `Camera.tsx` has no `BeautyParams` / `EditState` type import today: the shim adds both.
+- **Task 11:** `src/ui/update.ts` (LF) imports and calls `flushParams` (`:8, :90, :112`): renamed to `flushLook` with the state. `state.ts` keeps `BeautyParams` in its type import until Task 12 (`EditorSource.params` still uses it); `Camera.tsx` drops it once the shim goes.
+- **Task 12:** `state.ts` and `flows.ts` drop their now-unused `BeautyParams` type import (`noUnusedLocals`).
+- **Task 14:** the third `detectBody` test of `editorModel.test.ts` (`:260-264`) also passes a `BodyDetection` to `fakeBodyTracker`; `bodyTracker.fuzz.test.ts:232` reads `det.mask` (not only throw / `null`): both ported. The t7 fake keeps answering `null` for `pose=none`.
+- **Task 20 Step 1:** `sed -i` would rewrite the CRLF `tests/harness/b2/harness.ts` to LF in Git Bash: the rename runs through a `node` one-liner that keeps every line ending.
+- **Tasks 22, 23, 25 (CSS):** `--surface-2` and `--on-accent` are not tokens of `theme.css` (it has `--panel`, `--elevated`, `--accent-ink`, …) and `--dim` is a colour (`#4a4a4c`), so `opacity: var(--dim, 0.4)` would be invalid at computed-value time (no dimming): the rules use `var(--elevated)`, `opacity: 0.4` (as every existing dimmed control) and `var(--accent-ink)`. `.item-tile` clips (`overflow: hidden`), so the 「整張」 badge sits inside it. The 全部套用 chip's accent fill goes on its `> span` pill, like `.float-btn.held > span`.
+- **Task 3 Step 11:** also records the S §3.4 T4 `ONE_EURO` source check in §6.4 (the spec asks sub-step 1a for it).
+- **Commits:** the `git commit -m "v0.4 step 1a: …"` lines show each task's file list and intent; the workflow's own message format (`v0.4 step 1 task <N>: <title>`, written to a file and committed with `git commit -F`) replaces them.
+
 ## Global Constraints
 
 - Branch `feat/meiyan-pwa`; commits are **local only**. Never `git push`, never deploy (that includes the preview deploy the iPhone bench needs: RM §1.2, S §6.2).
@@ -1427,7 +1440,7 @@ Expected: PASS, then `tsc` exits 0.
 Run: `node scripts/bench-multiface.mjs D B GL`
 Expected: a Markdown block with D rows for GPU/CPU × 2048/1440 × n 1/4/6/8 (faces ≥ 3 at n ≥ 4 on 2048), two B rows (`persons` 2 for `numPoses 4` on group_people), GL `limits` and `probes` rows.
 
-Append to S §6.4 a subsection `#### Results` (first run) with the printed block and one line: `Decisions: none taken (desktop only; the §3.5 defaults ship until iPhone rows exist, RM §12). PG1/PG2 on desktop: <copy the probes row>.` If `PG1_texture` is `false` on desktop, also set `FACE_TABLE_CARRIER = 'ubo'` in `limits.ts` (S §6.3 PG1) and say so in that line.
+Append to S §6.4 a subsection `#### Results` (first run) with the printed block and one line: `Decisions: none taken (desktop only; the §3.5 defaults ship until iPhone rows exist, RM §12). PG1/PG2 on desktop: <copy the probes row>.` If `PG1_texture` is `false` on desktop, also set `FACE_TABLE_CARRIER = 'ubo'` in `limits.ts` (S §6.3 PG1) and say so in that line. Add one more line for the S §3.4 T4 smoother check: `ONE_EURO: LandmarksSmoothingCalculator is compiled into node_modules/@mediapipe/tasks-vision/wasm/vision_wasm_internal.wasm (0.10.35); its face-graph options are not readable from the binary offline, so the §3.5 values {minCutoff 0.05, beta 80, dCutoff 1.0} ship unverified until checked against the 0.10.35 source.` (replace the clause after the semicolon with the outcome if you can check them).
 
 - [ ] **Step 12: Run the bench e2e and commit**
 
@@ -3566,7 +3579,7 @@ git commit -m "v0.4 step 1b: openState (lazy v1/v2 migration), importEdit, camer
 ### Task 10: Port the panel model, `BeautyPanel` and the b4 harness to the lens
 
 **Files:**
-- Modify: `src/ui/panelModel.ts:1-20,180-184,186-561` (CRLF), `src/ui/panelModel.test.ts`, `src/ui/editorModel.test.ts:30,334-346`, `src/ui/components/BeautyPanel.tsx:1-170` (CRLF), `tests/harness/b4/main.tsx:130-145,172,211-214,239`
+- Modify: `src/ui/panelModel.ts:1-20,180-184,186-561` (CRLF), `src/ui/panelModel.test.ts`, `src/ui/editorModel.test.ts:30,334-346`, `src/ui/components/HeightBandOverlay.test.tsx:19,121,293` (CRLF), `src/ui/components/BeautyPanel.tsx:1-170` (CRLF), `tests/harness/b4/main.tsx:130-145,172,211-214,239`
 
 **Interfaces:**
 - Consumes: `Lens`, `lensFor`, `P0_INFO` (Task 6), `editFromLegacy`, `legacyProjection` (Task 4).
@@ -3646,6 +3659,8 @@ const proj = (e: EditState) => legacyProjection(e, 'p0');
 and in the 增高 test replace `const r = activate(byKey(itemsFor(p, s, ready()), 'height'), p, s); … expect(r.params).toBe(p);` with `const l = lensOf(p); const r = activate(byKey(itemsFor(l, s, ready()), 'height'), l, s); … expect(r.edit).toBe(l.edit);`, then `sliderFor(lensOf(p), r.sel, ctx)!` / `proj(b.apply(lensOf(p), 0.4)).heightBand` / `sliderFor(lensOf(placed), r.sel, ctx)!.value` / `proj(sliderFor(lensOf(placed), r.sel, ctx)!.apply(lensOf(placed), 0.7)).heightBand`. In the 背景保護-without-mask test, `expect(r.params.bodyProtect).toBe(p.bodyProtect)` becomes `expect(proj(r.edit).bodyProtect).toBe(p.bodyProtect)`.
 
 In `src/ui/editorModel.test.ts`, add the same three helpers (and imports) after its imports and rewrite `itemsFor(setParam(…), …)` (`:334`) and `itemsFor(p, s, c)` (`:345`) to `itemsFor(lensOf(…), …)`.
+
+In `src/ui/components/HeightBandOverlay.test.tsx` (CRLF), the other caller of `bandOrSuggested`: add `import { editFromLegacy } from '../../edit/legacy';` next to its `../panelModel` import (`:19`); `bandOrSuggested(p, undefined)` (`:121`) → `bandOrSuggested(editFromLegacy(p), undefined)` and `bandOrSuggested(ed.params, undefined)` (`:293`) → `bandOrSuggested(editFromLegacy(ed.params), undefined)` (the band survives `splitLegacy` unchanged); then run the CRLF normalizer of the Global Constraints on the file.
 
 Run: `npx vitest run src/ui/panelModel.test.ts src/ui/editorModel.test.ts`
 Expected: FAIL (type errors / `lens.preset is not a function`: panelModel still takes BeautyParams).
@@ -3986,7 +4001,7 @@ Both screens still hold `BeautyParams`; give them the same shim the b4 harness u
 
 then: `update(b.apply(paramsRef.current, v), commit)` (`:777`) → `update(back(b.apply(lensOfParams(paramsRef.current), v)), commit)`; `isContourEdit(b.key, …)` → `isContourEdit(b.param ?? b.key, …)`; `sliderFor(params, sel, bodyCtx)` (`:786`) → `sliderFor(lensOfParams(params), sel, bodyCtx)`; `bandOrSuggested(params, bodyCtx)` (`:836`) → `bandOrSuggested(editFromLegacy(params), bodyCtx)`; `<BeautyPanel params={params} … onParams={(p) => update(p, true)}` → `<BeautyPanel lens={lensOfParams(params)} … onEdit={(e) => update(back(e), true)}`.
 
-`src/ui/screens/Camera.tsx` (CRLF): same imports; inside `Camera()` after `paramsRef.current = params;` add the same two shim lines; `sliderFor(params, sel, cameraBody)` → `sliderFor(lensOfParams(params), sel, cameraBody)`; both slider handlers `setParams(binding.apply(paramsRef.current, v))` → `setParams(back(binding.apply(lensOfParams(paramsRef.current), v)))`; `<BeautyPanel … params={params} … onParams={setParams}` → `lens={lensOfParams(params)}` and `onEdit={(e) => setParams(back(e))}`.
+`src/ui/screens/Camera.tsx` (CRLF): same two module imports, and `BeautyParams, EditState` added to its `../../types` type import (today it imports only `CameraController, CameraSnapshot`); inside `Camera()` after `paramsRef.current = params;` add the same two shim lines; `sliderFor(params, sel, cameraBody)` → `sliderFor(lensOfParams(params), sel, cameraBody)`; both slider handlers `setParams(binding.apply(paramsRef.current, v))` → `setParams(back(binding.apply(lensOfParams(paramsRef.current), v)))`; `<BeautyPanel … params={params} … onParams={setParams}` → `lens={lensOfParams(params)}` and `onEdit={(e) => setParams(back(e))}`.
 
 - [ ] **Step 6: Run the tests and the typecheck**
 
@@ -3999,7 +4014,7 @@ Expected: PASS (the panel behaves as in v0.3 for one person).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/ui/panelModel.ts src/ui/panelModel.test.ts src/ui/editorModel.test.ts src/ui/components/BeautyPanel.tsx src/ui/screens/Editor.tsx src/ui/screens/Camera.tsx tests/harness/b4/main.tsx
+git add src/ui/panelModel.ts src/ui/panelModel.test.ts src/ui/editorModel.test.ts src/ui/components/HeightBandOverlay.test.tsx src/ui/components/BeautyPanel.tsx src/ui/screens/Editor.tsx src/ui/screens/Camera.tsx tests/harness/b4/main.tsx
 git commit -m "v0.4 step 1b: panel model and BeautyPanel read and write through the lens"
 ```
 
@@ -4008,7 +4023,7 @@ git commit -m "v0.4 step 1b: panel model and BeautyPanel read and write through 
 ### Task 11: Camera look (`meiyan.look.v1`) and the camera on the lens
 
 **Files:**
-- Modify: `src/store/settings.ts:7-31,104-113`, `src/store/settings.test.ts` (append), `src/ui/state.ts:2-4,17-25,50-63,74-117` (CRLF), `src/ui/deps.ts:12,60-61` (CRLF), `src/ui/screens/Camera.tsx` (CRLF), `src/ui/screens/Review.tsx:84-92` (CRLF), `src/ui/flows.ts:32` (CRLF), `tests/harness/t7/fakes.ts:376-378,452-453`, `tests/harness/t7/main.tsx` (unchanged: it still passes `params: defaultParams()`), `tests/e2e/camera.spec.ts:58-61`
+- Modify: `src/store/settings.ts:7-31,104-113`, `src/store/settings.test.ts` (append), `src/ui/state.ts:2-4,17-25,50-63,74-117` (CRLF), `src/ui/deps.ts:12,60-61` (CRLF), `src/ui/update.ts:8,90,112` (LF), `src/ui/screens/Camera.tsx` (CRLF), `src/ui/screens/Review.tsx:84-92` (CRLF), `src/ui/flows.ts:32` (CRLF), `tests/harness/t7/fakes.ts:376-378,452-453`, `tests/harness/t7/main.tsx` (unchanged: it still passes `params: defaultParams()`), `tests/e2e/camera.spec.ts:58-61`
 
 **Interfaces:**
 - Consumes: `cameraEdit`, `lookOf`, `LIVE` (Task 4), `splitLegacy`, `legacyProjection` (Task 4), `sanitizePhoto`, `sanitizePerson`, `naturalPerson` (Task 5), `lensFor` (Task 6).
@@ -4086,11 +4101,13 @@ Note: `sanitizePerson(…, naturalPerson())` over `splitLegacy(defaultParams()).
 
 - [ ] **Step 3: App state (`src/ui/state.ts`, CRLF)**
 
-- Imports: keep `defaultParams` (the fallback below); add `import { splitLegacy } from '../edit/legacy';`; in the type import replace `BeautyParams` with `CameraLook`.
+- Imports: keep `defaultParams` (the fallback below); add `import { splitLegacy } from '../edit/legacy';`; add `CameraLook` to the type import (keep `BeautyParams`: `EditorSource.params` still uses it until Task 12).
 - `Shot`: replace `params: BeautyParams;` with `/** the camera look at the shutter (RM §3.7) */ look: CameraLook;`.
 - `AppState`: replace `params: BeautyParams;` with `/** live-camera look (persisted as meiyan.look.v1); the editor keeps its own per-photo edit */ look: CameraLook;`.
 - Store init: `look: safeLoad(() => deps.loadLook(), () => splitLegacy(defaultParams()), 'loadLook'),`.
 - Rename `flushParams` → `flushLook` (body: `deps.saveLook(app.get().look)`, error tag `'saveLook'`) and `setParams` → `setLook(look: CameraLook)` (`app.set({ look })`); update the two listeners at `:112-117` to `flushLook`.
+
+`src/ui/update.ts` (LF), the other caller of `flushParams`: the `./state` import (`:8`) and both calls (`onNeedReload` `:90`, `applyUpdate` `:112`) become `flushLook`.
 
 `src/ui/deps.ts` (CRLF): import `loadLook, saveLook` instead of `loadParams, saveParams`; the `deps` object lists `loadLook, saveLook` in their place.
 
@@ -4098,7 +4115,7 @@ Note: `sanitizePerson(…, naturalPerson())` over `splitLegacy(defaultParams()).
 
 - [ ] **Step 4: Camera on the lens (`src/ui/screens/Camera.tsx`, CRLF)**
 
-1. Imports: replace `setParams` with `setLook` in the `../state` import; the lens import becomes `import { lensFor, LIVE_PERSONS } from '../../edit/lens';`, the legacy import `import { legacyProjection } from '../../edit/legacy';`; add `import { cameraEdit, LIVE, lookOf } from '../../edit/state';` (`EditState` is already in the type import since Task 10).
+1. Imports: replace `setParams` with `setLook` in the `../state` import; the lens import becomes `import { lensFor, LIVE_PERSONS } from '../../edit/lens';`, the legacy import `import { legacyProjection } from '../../edit/legacy';`; add `import { cameraEdit, LIVE, lookOf } from '../../edit/state';` (`EditState` is already in the type import since Task 10; drop `BeautyParams` from it, unused once the shim is gone).
 2. Replace `const params = useStore(app, (s) => s.params);` (`:36`) with `const look = useStore(app, (s) => s.look);` and `paramsRef` (`:57-58`) with `const lookRef = useRef(look); lookRef.current = look;`. Delete the Task 10 shim lines (`lensOfParams`, `back`) and add in their place:
 
 ```tsx
@@ -4145,7 +4162,7 @@ Expected: PASS (the persisted look is now polled from `meiyan.look.v1`).
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/store/settings.ts src/store/settings.test.ts src/ui/state.ts src/ui/deps.ts src/ui/screens/Camera.tsx src/ui/screens/Review.tsx src/ui/flows.ts src/edit/lens.ts tests/harness/t7/fakes.ts tests/e2e/camera.spec.ts
+git add src/store/settings.ts src/store/settings.test.ts src/ui/state.ts src/ui/deps.ts src/ui/update.ts src/ui/screens/Camera.tsx src/ui/screens/Review.tsx src/ui/flows.ts src/edit/lens.ts tests/harness/t7/fakes.ts tests/e2e/camera.spec.ts
 git commit -m "v0.4 step 1b: camera look meiyan.look.v1 and the camera panel on the lens"
 ```
 
@@ -4266,7 +4283,7 @@ export interface EditorSource {
 }
 ```
 
-(types: `DetectionCache, EditState, FaceSeed, PersonId, Rect` from `../types`; `V1Bodies` from `../edit/migrate`.)
+(types: `DetectionCache, EditState, FaceSeed, PersonId, Rect` from `../types`, where `BeautyParams` is dropped: nothing in `state.ts` uses it any more; `V1Bodies` from `../edit/migrate`.)
 
 `src/ui/flows.ts` (CRLF): replace `openInEditor` (`:15-45`) with:
 
@@ -4299,7 +4316,7 @@ export async function openInEditor(blob: Blob, opts: { entry?: HistoryEntry | nu
 }
 ```
 
-Imports: `openState, importEdit` (`../edit/migrate`), types `EditState, FaceSeed, HistoryEntry`. Drop the now-unused `legacyProjection`/`cameraEdit` imports added in Task 11.
+Imports: `openState, importEdit` (`../edit/migrate`), types `EditState, FaceSeed, HistoryEntry` (replacing the `BeautyParams` type import of `:2`). Drop the now-unused `legacyProjection`/`cameraEdit` imports added in Task 11.
 
 `src/ui/screens/Home.tsx` (CRLF) `openEntry`: replace the `openInEditor(entry.original, {…})` call with `await openInEditor(entry.original, { entry, returnTo: 'home' });`.
 
@@ -4873,9 +4890,9 @@ In `src/tracking/bodyTracker.test.ts`:
   });
 ```
 
-4. Every other assertion reading a detection from `t.detect(…)` / `t.detectVideo(…)` (`det.mask`, `det.people`, `det.pose`) reads it through `primaryBody(...)`: add `import { primaryBody } from '../detect/cache';` and wrap, e.g. `const det = primaryBody(t.detect(img(…)))!;`. In `bodyTracker.fuzz.test.ts:230`, `const det = v ? t.detectVideo(video, h.clock) : t.detect(img);` stays (it only checks for a throw / non-throw and `null`).
+4. Every other assertion reading a detection from `t.detect(…)` / `t.detectVideo(…)` (`det.mask`, `det.people`, `det.pose`) reads it through `primaryBody(...)`: add `import { primaryBody } from '../detect/cache';` and wrap, e.g. `const det = primaryBody(t.detect(img(…)))!;`. In `bodyTracker.fuzz.test.ts:230`, `const det = v ? t.detectVideo(video, h.clock) : t.detect(img);` stays; its trace line `:232` reads the mask, so `det.mask ? 'ok+mask' : 'ok'` → `det.bodies.some((b) => b.mask) ? 'ok+mask' : 'ok'` (the fuzz fakes' masks have no `close()`: `toDetections` swallows that throw like a lost-context one).
 
-In `src/ui/editorModel.test.ts` (the two `detectBody` tests, `:205-250`): `const t = fakeBodyTracker(det);` → `const dets = makeBodyDetections(1); const t = fakeBodyTracker(dets);` and `toBe(det)` → `toBe(dets)` (import `makeBodyDetections`).
+In `src/ui/editorModel.test.ts` (the three `detectBody` tests, `:205-264`): `const t = fakeBodyTracker(det);` → `const dets = makeBodyDetections(1); const t = fakeBodyTracker(dets);` and `toBe(det)` → `toBe(dets)` (import `makeBodyDetections`; the third test, `:260-264`, only needs the tracker).
 
 Run: `npx vitest run src/tracking/bodyTracker.test.ts src/ui/editorModel.test.ts`
 Expected: FAIL (`toDetections` missing; `numPoses` 2).
@@ -4986,7 +5003,7 @@ export function makeBodyDetections(n = 1, width = 1536, height = 2048): BodyDete
 
 and change `FakeBodyTracker.result` to `BodyDetections | null` with `fakeBodyTracker(result: BodyDetections | null = makeBodyDetections())`.
 
-Port the other callers through `primaryBody`: `src/bench/main.ts` (CRLF) `const detect = (): BodyDetection | null => primaryBody(cfg.mode === 'IMAGE' ? tracker.detect(bitmap) : tracker.detectVideo(frame as unknown as HTMLVideoElement, (ts += 33)));`; `tests/harness/b3/tracker.ts` wrap `base`, `upscaled`, `two`, `empty`, `y`, `back` and the `vids.push(…)` argument in `primaryBody(…)`; `tests/harness/t7/fakes.ts` fake `createBodyTracker`: return `{ bodies: [{ pose: det.pose, mask: det.mask, score: 1 }], width: det.width, height: det.height }` where it returned `det`; `scripts/record-pose.mjs` (CRLF) single mode: after `const det = tracker.detect(bitmap);` insert `const best = det && det.bodies.reduce((a, b) => (b.score > a.score ? b : a));` and read `best.pose.points`, `best.mask`, `people: det.bodies.length`, `width: det.width`, `height: det.height`.
+Port the other callers through `primaryBody`: `src/bench/main.ts` (CRLF) `const detect = (): BodyDetection | null => primaryBody(cfg.mode === 'IMAGE' ? tracker.detect(bitmap) : tracker.detectVideo(frame as unknown as HTMLVideoElement, (ts += 33)));`; `tests/harness/b3/tracker.ts` wrap `base`, `upscaled`, `two`, `empty`, `y`, `back` and the `vids.push(…)` argument in `primaryBody(…)`; `tests/harness/t7/fakes.ts` fake `createBodyTracker`: return `{ bodies: [{ pose: det.pose, mask: det.mask, score: 1 }], width: det.width, height: det.height }` where it returned `det` (`null` stays `null`: `pose=none`); `scripts/record-pose.mjs` (CRLF) single mode: after `const det = tracker.detect(bitmap);` insert `const best = det && det.bodies.reduce((a, b) => (b.score > a.score ? b : a));` and read `best.pose.points`, `best.mask`, `people: det.bodies.length`, `width: det.width`, `height: det.height`.
 
 - [ ] **Step 3: Run**
 
@@ -8278,13 +8295,13 @@ export function bodyInputKey(input: BodyFieldInput): string;
 
 - [ ] **Step 1: Rename the v0.3 entry points (mechanical) and pin today's fields**
 
-Run:
+Run (a `node` rename, not `sed -i`: Git Bash's `sed -i` rewrites the CRLF `tests/harness/b2/harness.ts` to LF; the regex never touches a `\r`, so every line ending stays as it was):
 ```bash
-sed -i 's/\bbuildBodyField\b/buildBodyFieldV1/g' src/body/field.ts src/body/field.test.ts src/body/straightness.test.ts src/ui/editorModel.ts src/ui/screens/Editor.tsx tests/harness/b1/debug.ts tests/harness/b1/render.ts tests/harness/b2/harness.ts tests/e2e/pages/parity.ts
-sed -i 's/\bBodyFieldMemo\b/BodyFieldMemoV1/g' src/ui/editorModel.ts src/ui/editorModel.test.ts src/ui/screens/Editor.tsx
+node -e "const fs=require('fs');const [re,to,...files]=process.argv.slice(1);for(const f of files)fs.writeFileSync(f,fs.readFileSync(f,'utf8').replace(new RegExp(re,'g'),to))" '\bbuildBodyField\b' buildBodyFieldV1 src/body/field.ts src/body/field.test.ts src/body/straightness.test.ts src/ui/editorModel.ts src/ui/screens/Editor.tsx tests/harness/b1/debug.ts tests/harness/b1/render.ts tests/harness/b2/harness.ts tests/e2e/pages/parity.ts
+node -e "const fs=require('fs');const [re,to,...files]=process.argv.slice(1);for(const f of files)fs.writeFileSync(f,fs.readFileSync(f,'utf8').replace(new RegExp(re,'g'),to))" '\bBodyFieldMemo\b' BodyFieldMemoV1 src/ui/editorModel.ts src/ui/editorModel.test.ts src/ui/screens/Editor.tsx
 git diff --stat
 ```
-Expected: only those identifiers change (`\b` keeps `buildBodyFieldV1` from matching twice; in `editorModel.ts` it is one comment). `sed` edits inside lines and leaves every line ending as it was (`tests/harness/b2/harness.ts` is CRLF, the others LF); `git diff` must show no whole-file rewrites.
+Expected: only those identifiers change (`\b` keeps `buildBodyFieldV1` from matching twice; in `editorModel.ts` it is one comment). `tests/harness/b2/harness.ts` is CRLF, the others LF; `git diff` must show no whole-file rewrites.
 
 Append to `src/body/field.test.ts`:
 
@@ -10030,13 +10047,13 @@ Append:
 /* v0.4 persons (S §2.1, §2.4) */
 .item-badge {
   position: absolute;
-  right: -2px;
-  bottom: -2px;
+  right: 2px;
+  bottom: 2px;
   padding: 0 3px;
   border-radius: 4px;
   font-size: 9px;
   line-height: 13px;
-  background: var(--surface-2);
+  background: var(--elevated);
   color: var(--text-2);
 }
 .item-tile {
@@ -10054,7 +10071,7 @@ Append:
 }
 ```
 
-(`--surface-2` / `--text-2` are existing tokens; if `.item-tile` is already `position: relative`, drop that rule.) Then normalize the file's line endings back to CRLF (an editor may have written LF for the new lines):
+(`--elevated` / `--text-2` are existing tokens of `theme.css`; `.item-tile` (`:337`) is not `position: relative` yet and clips with `overflow: hidden`, hence the badge sits 2 px inside its corner.) Then normalize the file's line endings back to CRLF (an editor may have written LF for the new lines):
 
 ```bash
 node -e "const f='src/ui/theme.css';const fs=require('fs');fs.writeFileSync(f,fs.readFileSync(f,'utf8').replace(/\r?\n/g,'\r\n'))"
@@ -10500,7 +10517,8 @@ export function FaceBoxes({ items, dim, idle, mapY }: { items: FaceBoxItem[]; di
   mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
 }
 .person-strip.dim .person-chip {
-  opacity: var(--dim, 0.4);
+  /* (--dim is a colour token: dimming is an opacity, as for the other dimmed controls) */
+  opacity: 0.4;
 }
 .strip-scope {
   flex: none;
@@ -10516,7 +10534,7 @@ export function FaceBoxes({ items, dim, idle, mapY }: { items: FaceBoxItem[]; di
   border-radius: 10px;
   overflow: hidden;
   border: 0;
-  background: var(--surface-2);
+  background: var(--elevated);
   color: var(--text);
   font-size: 13px;
 }
@@ -10558,7 +10576,7 @@ export function FaceBoxes({ items, dim, idle, mapY }: { items: FaceBoxItem[]; di
   opacity: 0.3;
 }
 .face-boxes.dim {
-  opacity: var(--dim, 0.4);
+  opacity: 0.4;
 }
 .face-box {
   position: absolute;
@@ -12317,9 +12335,10 @@ export function CameraFaceMarker({ loop, canvas, video, mirrored, ring, all, cou
   height: 32px;
   z-index: 3;
 }
-.all-chip.on {
+/* the pill is the float button's span (.float-btn > span, theme.css:1645); on = accent fill, as .float-btn.held > span */
+.all-chip.on > span {
   background: var(--accent);
-  color: var(--on-accent, #fff);
+  color: var(--accent-ink);
 }
 .cam-marker {
   position: absolute;

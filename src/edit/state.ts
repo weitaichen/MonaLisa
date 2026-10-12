@@ -1,8 +1,19 @@
 // The v0.4 edit of one photo (RM §3.2–3.4): an immutable EditState with a photo layer and a person layer. Every change
 // returns a new object and shares what it did not change, so UndoStack keeps states by reference ({clone: false}).
-import { applyPreset, PARAM_DEFS } from '../engine/params';
+import { applyPreset, BLUSH_SHADES, FILTERS, LIP_SHADES, PARAM_DEFS, PRESETS, sanitizeBand } from '../engine/params';
 import { stableKey } from '../store/undo';
-import type { CameraLook, EditState, PersonId, PersonParamId, PersonParams, PhotoParamId, PhotoParams, PresetId } from '../types';
+import type {
+  CameraLook,
+  EditState,
+  PersonId,
+  PersonParamId,
+  PersonParams,
+  PhotoParamId,
+  PhotoParams,
+  PresetId,
+  PresetRef,
+  ShadePart,
+} from '../types';
 
 export const P0: PersonId = 'p0';
 export const LIVE: PersonId = 'live';
@@ -71,4 +82,143 @@ export function cameraEdit(look: CameraLook): EditState {
 
 export function lookOf(edit: EditState): CameraLook {
   return { photo: edit.photo, person: personOf(edit, LIVE) };
+}
+
+const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const PRESET_IDS: ReadonlySet<string> = new Set(PRESETS.map((p) => p.id));
+const SHADES: Record<ShadePart, ReadonlySet<string>> = {
+  lip: new Set(LIP_SHADES.map((s) => s.id)),
+  blush: new Set(BLUSH_SHADES.map((s) => s.id)),
+};
+
+/**
+ * The persons known now (display order) get their params (S §3.3 item 4): a person the edit has keeps its params; the
+ * primary gets p0 (primaryInit plus every edit made meanwhile), else primaryInit, else the template; everyone else the
+ * template. p0 stays only when it is the whole list (nobody found). `discardP0`: a camera seed matched no face, so the
+ * look must not land on a face the camera did not beautify (S §3.4 C2). primaryInit becomes null.
+ */
+export function assignPersons(edit: EditState, ids: readonly PersonId[], primary: PersonId, opts: { discardP0?: boolean } = {}): EditState {
+  const seed = opts.discardP0 ? edit.template : (edit.persons[P0] ?? edit.primaryInit ?? edit.template);
+  const persons: Record<PersonId, PersonParams> = {};
+  for (const id of ids) {
+    const have = id === P0 ? undefined : edit.persons[id];
+    persons[id] = have ?? (id === primary || id === P0 ? seed : edit.template);
+  }
+  const anchor = edit.photo.legsAnchor;
+  const handed = edit.persons[P0] !== undefined && !ids.includes(P0);
+  let legsAnchor = anchor;
+  if (anchor === P0) legsAnchor = handed ? primary : ids.includes(P0) ? P0 : null;
+  else if (anchor !== null && !ids.includes(anchor)) legsAnchor = null;
+  const photo = legsAnchor === anchor ? edit.photo : { ...edit.photo, legsAnchor };
+  return { ...edit, photo, persons, primaryInit: null };
+}
+
+/** old → new person ids (null = drop); persons absent from `map` keep their id; the 長腿 anchor follows (S §5.3) */
+export function renamePersons(edit: EditState, map: Readonly<Record<PersonId, PersonId | null>>): EditState {
+  const persons: Record<PersonId, PersonParams> = {};
+  for (const [id, p] of Object.entries(edit.persons)) {
+    const to = id in map ? map[id] : id;
+    if (to !== null && !(to in persons)) persons[to] = p;
+  }
+  const la = edit.photo.legsAnchor;
+  const legsAnchor = la === null ? null : la in map ? map[la] : la;
+  return { ...edit, persons, photo: legsAnchor === la ? edit.photo : { ...edit.photo, legsAnchor } };
+}
+
+/** 重置 (RM §3.4): the 自然 photo part, every person 自然; the template stays. One undo step. */
+export function resetAll(edit: EditState): EditState {
+  const persons: Record<PersonId, PersonParams> = {};
+  for (const id of Object.keys(edit.persons)) persons[id] = naturalPerson();
+  return { ...edit, photo: defaultPhoto(), persons };
+}
+
+/** the person part of `ref` (face items within 1e-6, lip / blush shades) is what `p` holds (RM §3.4 matching) */
+export function matchesPersonPreset(p: PersonParams, ref: PresetRef): boolean {
+  const q = personFromPreset(ref.id, ref.amount);
+  if (q.shades.lip !== p.shades.lip || q.shades.blush !== p.shades.blush) return false;
+  return PRESET_PERSON_IDS.every((id) => Math.abs(q.values[id] - p.values[id]) < 1e-6);
+}
+
+/** the photo part of `ref` (美白, 銳化, 濾鏡強度, filterId) is what `photo` holds */
+export function matchesPhotoLink(photo: PhotoParams, ref: PresetRef): boolean {
+  const q = applyPreset(ref.id, ref.amount);
+  if (q.filterId !== photo.filterId) return false;
+  return PRESET_PHOTO_IDS.every((id) => Math.abs(q.values[id] - photo.values[id]) < 1e-6);
+}
+
+function presetRefOf(raw: unknown): PresetRef | null {
+  if (!isRecord(raw) || typeof raw.id !== 'string' || !PRESET_IDS.has(raw.id)) return null;
+  if (typeof raw.amount !== 'number' || !Number.isFinite(raw.amount)) return null;
+  return { id: raw.id as PresetId, amount: clamp01(raw.amount) };
+}
+
+/** Untrusted person → valid: values clamped, a missing field from `fallback`, shades validated, preset kept only if matching. */
+export function sanitizePerson(raw: unknown, fallback: PersonParams): PersonParams {
+  const r = isRecord(raw) ? raw : {};
+  const rv = isRecord(r.values) ? r.values : {};
+  const values = {} as Record<PersonParamId, number>;
+  for (const id of PERSON_IDS) {
+    const v = rv[id];
+    values[id] = typeof v === 'number' && Number.isFinite(v) ? clamp01(v) : fallback.values[id];
+  }
+  const rs = isRecord(r.shades) ? r.shades : null;
+  const shade = (part: ShadePart): string | null => {
+    if (!rs || !(part in rs)) return fallback.shades[part];
+    const s = rs[part];
+    return typeof s === 'string' && SHADES[part].has(s) ? s : null;
+  };
+  const shades = { lip: shade('lip'), blush: shade('blush') };
+  const ref = presetRefOf('preset' in r ? r.preset : fallback.preset);
+  const preset = ref && matchesPersonPreset({ values, shades, preset: ref }, ref) ? ref : 'custom';
+  return { values, shades, preset };
+}
+
+/** Untrusted photo layer → valid; `persons` (when known) bounds the 長腿 anchor; a link survives only while it matches. */
+export function sanitizePhoto(raw: unknown, persons: ReadonlySet<PersonId> | null = null): PhotoParams {
+  const base = defaultPhoto();
+  const r = isRecord(raw) ? raw : {};
+  const rv = isRecord(r.values) ? r.values : {};
+  const values = { ...base.values };
+  for (const id of PHOTO_IDS) {
+    const v = rv[id];
+    if (typeof v === 'number' && Number.isFinite(v)) values[id] = clamp01(v);
+  }
+  const la = r.legsAnchor;
+  const photo: PhotoParams = {
+    values,
+    filterId: FILTERS.some((f) => f.id === r.filterId) ? (r.filterId as string) : 'none',
+    presetLink: presetRefOf(r.presetLink),
+    bodyProtect: typeof r.bodyProtect === 'boolean' ? r.bodyProtect : true,
+    heightBand: sanitizeBand(r.heightBand),
+    legsAnchor: typeof la === 'string' && PERSON_ID.test(la) && (!persons || persons.has(la)) ? la : null,
+  };
+  if (photo.presetLink && !matchesPhotoLink(photo, photo.presetLink)) photo.presetLink = null;
+  return photo;
+}
+
+/** a stored v2 edit worth sanitizing (otherwise the entry opens as v1, from `params`) */
+export function isEditStateRecord(raw: unknown): boolean {
+  return isRecord(raw) && raw.v === 2 && isRecord(raw.photo) && isRecord(raw.persons);
+}
+
+/**
+ * Untrusted edit → valid EditState (RM §3.4): values clamped to 0..1, filter / shade / preset ids validated, a preset
+ * id kept only while the values match it. `personIds` (the detection cache's persons) drops persons not in it and
+ * adds missing ones from the template; null (no cache, or one dropped for a rematch) keeps every valid person.
+ */
+export function sanitizeEditState(raw: unknown, personIds: readonly PersonId[] | null): EditState {
+  const r = isRecord(raw) ? raw : {};
+  const template = sanitizePerson(r.template, neutralPerson());
+  const primaryInit = r.primaryInit === undefined || r.primaryInit === null ? null : sanitizePerson(r.primaryInit, template);
+  const persons: Record<PersonId, PersonParams> = {};
+  const rp = isRecord(r.persons) ? r.persons : {};
+  for (const [id, p] of Object.entries(rp)) {
+    if (!PERSON_ID.test(id) || (personIds && !personIds.includes(id))) continue;
+    persons[id] = sanitizePerson(p, template);
+  }
+  if (personIds) {
+    for (const id of personIds) if (!persons[id]) persons[id] = id === P0 ? (primaryInit ?? template) : template;
+  } else if (!Object.keys(persons).length) persons[P0] = primaryInit ?? template;
+  return { v: 2, photo: sanitizePhoto(r.photo, new Set(Object.keys(persons))), persons, template, primaryInit };
 }

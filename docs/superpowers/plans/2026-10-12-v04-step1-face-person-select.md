@@ -1916,7 +1916,7 @@ git commit -m "v0.4 step 1b: EditState types, scope/live table, constructors, sp
 - Consumes: Task 4 (`P0`, `PERSON_ID`, `PHOTO_IDS`, `PERSON_IDS`, `PRESET_PERSON_IDS`, `PRESET_PHOTO_IDS`, `personFromPreset`, `neutralPerson`, `naturalPerson`, `defaultPhoto`); `applyPreset`, `FILTERS`, `LIP_SHADES`, `BLUSH_SHADES`, `PRESETS`, `sanitizeBand` (`params.ts`).
 - Produces: `assignPersons(edit: EditState, ids: readonly PersonId[], primary: PersonId, opts?: { discardP0?: boolean }): EditState`; `renamePersons(edit: EditState, map: Readonly<Record<PersonId, PersonId | null>>): EditState`; `resetAll(edit: EditState): EditState`; `matchesPersonPreset(p: PersonParams, ref: PresetRef): boolean`; `matchesPhotoLink(photo: PhotoParams, ref: PresetRef): boolean`; `sanitizePerson(raw: unknown, fallback: PersonParams): PersonParams`; `sanitizePhoto(raw: unknown, persons?: ReadonlySet<PersonId> | null): PhotoParams`; `isEditStateRecord(raw: unknown): boolean`; `sanitizeEditState(raw: unknown, personIds: readonly PersonId[] | null): EditState`. Steps 3, 4 and 6 add an optional third parameter `oSize` (RM §3.2); keep the first two.
 
-- [ ] **Step 1: Write the failing tests** (append to `src/edit/state.test.ts`; add `assignPersons, isEditStateRecord, renamePersons, resetAll, sanitizeEditState` to the `./state` import and `import type { EditState } from '../types';`)
+- [x] **Step 1: Write the failing tests** (append to `src/edit/state.test.ts`; add `assignPersons, isEditStateRecord, renamePersons, resetAll, sanitizeEditState` to the `./state` import and `import type { EditState } from '../types';`)
 
 ```ts
 const edit0 = (over: Partial<EditState> = {}): EditState => ({
@@ -2029,12 +2029,12 @@ describe('sanitizeEditState (RM §3.4)', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `npx vitest run src/edit/state.test.ts`
 Expected: FAIL (`assignPersons is not a function` etc.).
 
-- [ ] **Step 3: Implement** (append to `src/edit/state.ts`; extend its imports to `import { applyPreset, BLUSH_SHADES, FILTERS, LIP_SHADES, PARAM_DEFS, PRESETS, sanitizeBand } from '../engine/params';` and add `PresetRef`, `ShadePart` to the type import)
+- [x] **Step 3: Implement** (append to `src/edit/state.ts`; extend its imports to `import { applyPreset, BLUSH_SHADES, FILTERS, LIP_SHADES, PARAM_DEFS, PRESETS, sanitizeBand } from '../engine/params';` and add `PresetRef`, `ShadePart` to the type import)
 
 ```ts
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
@@ -2177,12 +2177,12 @@ export function sanitizeEditState(raw: unknown, personIds: readonly PersonId[] |
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/edit`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/edit/state.ts src/edit/state.test.ts

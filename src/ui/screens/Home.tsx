@@ -123,7 +123,7 @@ export function Home() {
     <div class={`screen home${updateShown ? ' has-update' : ''}`}>
       <header class="home-head">
         <div class="wordmark">
-          MonaLisa<em>美顏</em>
+          Mona Misa<em>美顏</em>
         </div>
         <IconButton icon="gear" label="設定" onClick={() => app.set({ sheet: 'settings' })} />
       </header>

@@ -167,7 +167,7 @@ const gateBodyBtn = button('美體偵測', () => bodyTest());
 const gate = el(
   'div',
   { className: 'gate' },
-  el('h1', { textContent: 'MonaLisa Bench' }),
+  el('h1', { textContent: 'Mona Misa Bench' }),
   gateMsg,
   startBtn,
   gateProgress,

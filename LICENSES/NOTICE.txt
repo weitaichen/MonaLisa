@@ -1,4 +1,4 @@
-MonaLisa 美顏 — third-party notices
+Mona Misa 美顏 — third-party notices
 ====================================
 
 This app ships code and assets from the projects below. The full license texts are in this folder

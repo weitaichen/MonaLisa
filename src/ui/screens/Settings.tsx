@@ -158,7 +158,7 @@ function SettingsBody({ prefs }: { prefs: Prefs }) {
           </span>
         </div>
       </div>
-      <div class="sheet-foot">MonaLisa 美顏 · {displayVersion(APP_VERSION)}</div>
+      <div class="sheet-foot">Mona Misa 美顏 · {displayVersion(APP_VERSION)}</div>
     </>
   );
 }

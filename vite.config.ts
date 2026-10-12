@@ -89,8 +89,8 @@ export default defineConfig({
       injectRegister: false,
       manifest: {
         id: '/',
-        name: 'MonaLisa 美顏',
-        short_name: 'MonaLisa',
+        name: 'Mona Misa 美顏',
+        short_name: 'Mona Misa',
         description: '在手機上即時美顏與修圖，所有處理都在裝置上完成。',
         lang: 'zh-Hant',
         start_url: '/',

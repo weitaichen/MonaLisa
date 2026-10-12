@@ -43,7 +43,7 @@ export function App() {
   if (!webgl2) {
     return (
       <div class="screen">
-        <Status icon="warning" tone="danger" title="此裝置不支援 WebGL2" body="MonaLisa 美顏需要 WebGL2 才能處理影像。請更新 iOS，或改用較新的瀏覽器開啟。" />
+        <Status icon="warning" tone="danger" title="此裝置不支援 WebGL2" body="Mona Misa 美顏需要 WebGL2 才能處理影像。請更新 iOS，或改用較新的瀏覽器開啟。" />
       </div>
     );
   }

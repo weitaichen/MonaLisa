@@ -2,7 +2,7 @@ import { expect, shot, test } from './fixtures';
 
 test('home renders, prefetches the engine and registers the service worker', async ({ page, guard }) => {
   await page.goto('/');
-  await expect(page.getByText('MonaLisa', { exact: false }).first()).toBeVisible();
+  await expect(page.getByText('Mona Misa', { exact: false }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: /拍攝/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /匯入照片/ })).toBeVisible();
   await expect(page.getByRole('button', { name: '設定' })).toBeVisible();

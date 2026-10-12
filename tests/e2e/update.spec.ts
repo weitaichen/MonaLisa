@@ -118,7 +118,7 @@ async function installA(page: Page): Promise<void> {
   expect(await page.evaluate(() => (window as unknown as { controlledAtLoad: boolean }).controlledAtLoad)).toBe(false);
   // a fresh install announces nothing
   await expect(toastEl(page)).toHaveCount(0);
-  expect(await footerVersion(page)).toBe(`MonaLisa 美顏 · ${displayVersion(A)}`);
+  expect(await footerVersion(page)).toBe(`Mona Misa 美顏 · ${displayVersion(A)}`);
   await expect(banner(page)).toHaveCount(0);
 }
 
@@ -187,7 +187,7 @@ test('new version: offered on 首頁 / 設定 only, 稍後 until next launch, �
   const sheet = page.getByRole('dialog', { name: '設定' });
   await expect(sheet.locator('.update-card')).toBeVisible();
   await expect(banner(page)).toHaveCount(1);
-  await expect(sheet.locator('.sheet-foot')).toHaveText(`MonaLisa 美顏 · ${displayVersion(A)}`);
+  await expect(sheet.locator('.sheet-foot')).toHaveText(`Mona Misa 美顏 · ${displayVersion(A)}`);
   await shot(page, 'u02-update-banner-settings');
 
   // 稍後 → gone for this session, in 設定 and on 首頁
@@ -201,7 +201,7 @@ test('new version: offered on 首頁 / 設定 only, 稍後 until next launch, �
   await expect(banner(page)).toBeVisible({ timeout: 30_000 });
   await expect(banner(page).locator('b')).toHaveText(`有新版本 ${displayVersion(B)}`);
   await expect(toastEl(page)).toHaveCount(0); // still A: nothing to announce
-  expect(await footerVersion(page)).toBe(`MonaLisa 美顏 · ${displayVersion(A)}`);
+  expect(await footerVersion(page)).toBe(`Mona Misa 美顏 · ${displayVersion(A)}`);
 
   // ── 更新 → the screen is covered until the reload (no way into the camera on A's code under B's worker) ──
   // hold the hand-over to the waiting worker for a moment so the covered state can be looked at
@@ -227,7 +227,7 @@ test('new version: offered on 首頁 / 設定 only, 稍後 until next launch, �
   await expect.poll(() => page.evaluate(() => document.readyState)).toBe('complete');
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
   await expect(toastEl(page)).toHaveText(`已更新至 ${displayVersion(B)}`);
-  expect(await footerVersion(page)).toBe(`MonaLisa 美顏 · ${displayVersion(B)}`);
+  expect(await footerVersion(page)).toBe(`Mona Misa 美顏 · ${displayVersion(B)}`);
   await expect(banner(page)).toHaveCount(0);
   expect(await hasWaiting(page)).toBe(false);
   await page.reload();
@@ -254,7 +254,7 @@ test('first session (uncontrolled at load): 更新 reloads straight into the new
   console.log(`[update] first session: 更新 → reload in ${Date.now() - clicked} ms`);
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
   await expect(toastEl(page)).toHaveText(`已更新至 ${displayVersion(B)}`);
-  expect(await footerVersion(page)).toBe(`MonaLisa 美顏 · ${displayVersion(B)}`);
+  expect(await footerVersion(page)).toBe(`Mona Misa 美顏 · ${displayVersion(B)}`);
   await expect(banner(page)).toHaveCount(0);
   expect(await hasWaiting(page)).toBe(false);
 });
@@ -291,7 +291,7 @@ test('from a version without the banner (0.1): the next cold launch runs the new
   await next.goto(URL_A);
   await next.waitForFunction(() => navigator.serviceWorker.controller !== null);
   await expect(toastEl(next)).toHaveText(`已更新至 ${displayVersion(B)}`);
-  expect(await footerVersion(next)).toBe(`MonaLisa 美顏 · ${displayVersion(B)}`);
+  expect(await footerVersion(next)).toBe(`Mona Misa 美顏 · ${displayVersion(B)}`);
   await expect(banner(next)).toHaveCount(0);
   await next.close();
 });

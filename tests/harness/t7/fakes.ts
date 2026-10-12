@@ -4,6 +4,7 @@
 // brightness / saturation from the params so slider changes are visible.
 import type { LiveDeps, LiveLoop } from '../../../src/app/live';
 import type { StillSession } from '../../../src/app/still';
+import { splitLegacy } from '../../../src/edit/legacy';
 import type { Deps, UndoLike } from '../../../src/ui/deps';
 import type {
   BeautyParams,
@@ -452,8 +453,8 @@ export async function installFakes(deps: Deps, defaults: { params: BeautyParams;
       const i = history.findIndex((x) => x.id === id);
       if (i >= 0) history.splice(i, 1);
     },
-    loadParams: () => defaults.params,
-    saveParams: () => undefined,
+    loadLook: () => splitLegacy(defaults.params),
+    saveLook: () => undefined,
     loadPrefs: () => prefsStore ?? defaults.prefs,
     savePrefs: (p: Prefs) => {
       prefsStore = p;

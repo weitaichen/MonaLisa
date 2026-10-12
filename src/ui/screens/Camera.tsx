@@ -3,9 +3,10 @@
 // 美體 is photo-only for now (body research report P1): the tab is shown with every item off and a note.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { LiveLoop, LiveStats } from '../../app/live';
-import type { BeautyParams, CameraController, CameraSnapshot, EditState } from '../../types';
-import { lensFor, P0_INFO } from '../../edit/lens';
-import { editFromLegacy, legacyProjection } from '../../edit/legacy';
+import type { CameraController, CameraSnapshot, EditState } from '../../types';
+import { lensFor, LIVE_PERSONS } from '../../edit/lens';
+import { legacyProjection } from '../../edit/legacy';
+import { cameraEdit, LIVE, lookOf } from '../../edit/state';
 import { cameraErrorCopy } from '../cameraErrors';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
 import { CanvasHost } from '../components/CanvasHost';
@@ -21,7 +22,7 @@ import { cropImageData, grabOriginalFrame } from '../imaging';
 import { CAMERA_BODY, INITIAL_SELECTION, sliderFor, type BodyContext, type PanelSelection } from '../panelModel';
 import { haptic, isStandalone } from '../platform';
 import { ensureEngine, getCamera, stopCamera, svc } from '../services';
-import { app, go, RATIO_VALUE, RATIOS, setParams, TIMERS, toast } from '../state';
+import { app, go, RATIO_VALUE, RATIOS, setLook, TIMERS, toast } from '../state';
 import { useStore } from '../store';
 import { useFilterLoader, useHold } from './hooks';
 
@@ -35,7 +36,7 @@ const cameraBody: BodyContext = {
 let notedBundle: unknown = null;
 
 export function Camera() {
-  const params = useStore(app, (s) => s.params);
+  const look = useStore(app, (s) => s.look);
   const prefs = useStore(app, (s) => s.prefs);
   const ratio = useStore(app, (s) => s.ratio);
   const timer = useStore(app, (s) => s.timer);
@@ -56,11 +57,11 @@ export function Camera() {
   const [noFace, setNoFace] = useState(false);
   const [loop, setLoop] = useState<LiveLoop | null>(null);
 
-  const paramsRef = useRef(params);
-  paramsRef.current = params;
-  // Task 10 shim (removed by Task 11): the panel speaks EditState, the camera still holds BeautyParams
-  const lensOfParams = (p: BeautyParams) => lensFor(editFromLegacy(p), { kind: 'person', id: 'p0' }, P0_INFO, 'p0');
-  const back = (e: EditState) => legacyProjection(e, 'p0');
+  const lookRef = useRef(look);
+  lookRef.current = look;
+  /** the camera is one person, 'live' (RM §3.7): the panel uses the editor's lens and code */
+  const lensOf = (l: typeof look) => lensFor(cameraEdit(l), { kind: 'person', id: LIVE }, LIVE_PERSONS, LIVE);
+  const setEdit = (e: EditState) => setLook(lookOf(e));
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
   const countTimer = useRef(0);
@@ -92,7 +93,7 @@ export function Camera() {
     if (svc.get().engine.state !== 'unsupported') ensureEngine().catch(() => undefined);
   }, []);
 
-  useFilterLoader(bundle?.engine ?? null, params.filterId);
+  useFilterLoader(bundle?.engine ?? null, look.photo.filterId);
 
   useEffect(() => {
     if (engine.state !== 'ready' || !engine.note || notedBundle === engine.bundle) return;
@@ -120,7 +121,7 @@ export function Camera() {
         camera: ctrl,
         engine: bundle.engine,
         tracker: bundle.tracker,
-        getParams: () => paramsRef.current,
+        getParams: () => legacyProjection(cameraEdit(lookRef.current), LIVE),
         getPrefs: () => prefsRef.current,
         onStats,
       });
@@ -220,7 +221,7 @@ export function Camera() {
       original?.close();
       return;
     }
-    go({ name: 'review', shot: { image, file, original, params: paramsRef.current } });
+    go({ name: 'review', shot: { image, file, original, look: lookRef.current } });
   };
 
   const shutter = () => {
@@ -268,7 +269,7 @@ export function Camera() {
     setCollapsed((c) => !c);
   };
 
-  const binding = sliderFor(lensOfParams(params), sel, cameraBody);
+  const binding = sliderFor(lensOf(look), sel, cameraBody);
   const state = snap?.state ?? 'idle';
   const ready = !!loop && live && !lost;
   // basic mode only: the live no-face state comes and goes (the badge covers it), the panel must not flicker
@@ -370,8 +371,8 @@ export function Camera() {
           <SliderRow
             float
             binding={faceOff ? null : binding}
-            onChange={(v) => binding && setParams(back(binding.apply(lensOfParams(paramsRef.current), v)))}
-            onCommit={(v) => binding && setParams(back(binding.apply(lensOfParams(paramsRef.current), v)))}
+            onChange={(v) => binding && setEdit(binding.apply(lensOf(lookRef.current), v))}
+            onCommit={(v) => binding && setEdit(binding.apply(lensOf(lookRef.current), v))}
           />
         )}
         {live && collapsed && !overlay && (
@@ -395,10 +396,10 @@ export function Camera() {
 
       <BeautyPanel
         id="beauty-panel"
-        lens={lensOfParams(params)}
+        lens={lensOf(look)}
         sel={sel}
         onSel={setSel}
-        onEdit={(e) => setParams(back(e))}
+        onEdit={setEdit}
         collapsed={collapsed}
         faceNote={faceNote}
         body={cameraBody}

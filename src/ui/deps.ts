@@ -9,7 +9,7 @@ import { createCamera } from '../media/camera';
 import { encodeJpeg, saveFile, toJpegBlob } from '../media/exporter';
 import { importPhoto } from '../media/importer';
 import { addEntry, deleteEntry, getEntry, listEntries, updateEntry } from '../store/history';
-import { loadParams, loadPrefs, saveParams, savePrefs } from '../store/settings';
+import { loadLook, loadPrefs, saveLook, savePrefs } from '../store/settings';
 import { UndoStack, type UndoOptions } from '../store/undo';
 import type { PersonSegmenter, PersonSegmenterOptions } from '../tracking/segmenter';
 import type { BodyTracker, BodyTrackerOptions, Tracker, TrackerOptions } from '../types';
@@ -58,8 +58,8 @@ export const deps = {
   listEntries,
   getEntry,
   deleteEntry,
-  loadParams,
-  saveParams,
+  loadLook,
+  saveLook,
   loadPrefs,
   savePrefs,
   createUndo: <T>(limit?: number, opts?: UndoOptions<T>): UndoLike<T> => new UndoStack<T>(limit, opts),

@@ -1,13 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyPreset, defaultParams, PARAM_DEFS, setFilter, setParam, setShade } from '../engine/params';
+import { splitLegacy } from '../edit/legacy';
 import type { Prefs } from '../types';
 import {
   DEFAULT_PREFS,
+  hasSavedSettings,
+  loadLook,
   loadParams,
   loadPrefs,
+  LOOK_KEY,
   PARAMS_KEY,
   PREFS_KEY,
   sanitizePrefs,
+  saveLook,
   saveParams,
   savePrefs,
 } from './settings';
@@ -291,5 +296,39 @@ describe('sanitizePrefs', () => {
   it('is idempotent on valid prefs', () => {
     const p: Prefs = { ...DEFAULT_PREFS, tier: 'M', delegate: 'CPU', mirrorOnSave: false };
     expect(sanitizePrefs(sanitizePrefs(p))).toEqual(p);
+  });
+});
+
+describe('camera look meiyan.look.v1 (RM §3.7, C3)', () => {
+  it('first load without it migrates meiyan.params.v1 and leaves that key alone', () => {
+    const p = setParam(applyPreset('glow', 1), 'skin.whiten', 0.9);
+    store.setItem(PARAMS_KEY, JSON.stringify(p));
+    const look = loadLook();
+    expect(look).toEqual(splitLegacy(p));
+    expect(JSON.parse(store.getItem(LOOK_KEY)!)).toEqual(look);
+    expect(JSON.parse(store.getItem(PARAMS_KEY)!)).toEqual(p);
+    // the next launch reads the migrated look back unchanged
+    expect(loadLook()).toEqual(look);
+  });
+  it('round-trips and sanitizes', () => {
+    const look = splitLegacy(applyPreset('refined', 0.4));
+    saveLook(look);
+    expect(loadLook()).toEqual(look);
+    store.setItem(LOOK_KEY, JSON.stringify({ photo: { filterId: 'nope' }, person: { values: { 'skin.smooth': 7 } } }));
+    const s = loadLook();
+    expect(s.photo.filterId).toBe('none');
+    expect(s.person.values['skin.smooth']).toBe(1);
+  });
+  it('a fresh install gets the 自然 look; hasSavedSettings sees the new key', () => {
+    expect(loadLook()).toEqual(splitLegacy(defaultParams()));
+    store.clear();
+    expect(hasSavedSettings()).toBe(false);
+    store.setItem(LOOK_KEY, '{}');
+    expect(hasSavedSettings()).toBe(true);
+  });
+  it('a fresh install writes nothing: the next announceUpdate must not take it for a returning user', () => {
+    expect(loadLook()).toEqual(splitLegacy(defaultParams()));
+    expect(store.map.size).toBe(0);
+    expect(hasSavedSettings()).toBe(false);
   });
 });

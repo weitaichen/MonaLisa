@@ -4051,7 +4051,7 @@ git commit -m "v0.4 step 1b: panel model and BeautyPanel read and write through 
 - Consumes: `cameraEdit`, `lookOf`, `LIVE` (Task 4), `splitLegacy`, `legacyProjection` (Task 4), `sanitizePhoto`, `sanitizePerson`, `naturalPerson` (Task 5), `lensFor` (Task 6).
 - Produces: `LOOK_KEY = 'meiyan.look.v1'`; `loadLook(): CameraLook` (migrates `meiyan.params.v1` through `splitLegacy` on the first load and writes `meiyan.look.v1`, leaving `meiyan.params.v1` untouched); `saveLook(l: CameraLook): void`; `sanitizeLook(raw: unknown): CameraLook`; `AppState.look: CameraLook` (replacing `params`); `setLook(look: CameraLook)`, `flushLook()` (replacing `setParams` / `flushParams`); `Shot.look: CameraLook` (replacing `params`); `deps.loadLook`, `deps.saveLook` (replacing `loadParams`, `saveParams`); `LIVE_PERSONS: readonly PersonInfo[] = [{id: 'live', face: true, body: false}]` (exported from `src/edit/lens.ts`).
 
-- [ ] **Step 1: Write the failing settings tests** (append to `src/store/settings.test.ts`; add `LOOK_KEY, loadLook, saveLook` to the `./settings` import and `import { splitLegacy } from '../edit/legacy';`)
+- [x] **Step 1: Write the failing settings tests** (append to `src/store/settings.test.ts`; add `LOOK_KEY, loadLook, saveLook` to the `./settings` import and `import { splitLegacy } from '../edit/legacy';`)
 
 ```ts
 describe('camera look meiyan.look.v1 (RM §3.7, C3)', () => {
@@ -4087,7 +4087,7 @@ describe('camera look meiyan.look.v1 (RM §3.7, C3)', () => {
 Run: `npx vitest run src/store/settings.test.ts`
 Expected: FAIL (`loadLook` not exported).
 
-- [ ] **Step 2: Implement in `src/store/settings.ts`**
+- [x] **Step 2: Implement in `src/store/settings.ts`**
 
 Add imports `import { splitLegacy } from '../edit/legacy';`, `import { naturalPerson, sanitizePerson, sanitizePhoto } from '../edit/state';` and `CameraLook` to the type import. After `savePrefs` add:
 
@@ -4121,7 +4121,7 @@ In `hasSavedSettings` (`:109`): `(s.getItem(PARAMS_KEY) !== null || s.getItem(PR
 
 Note: `sanitizePerson(…, naturalPerson())` over `splitLegacy(defaultParams()).person` returns it unchanged, so a fresh install equals 自然 (the test asserts it).
 
-- [ ] **Step 3: App state (`src/ui/state.ts`, CRLF)**
+- [x] **Step 3: App state (`src/ui/state.ts`, CRLF)**
 
 - Imports: keep `defaultParams` (the fallback below); add `import { splitLegacy } from '../edit/legacy';`; add `CameraLook` to the type import (keep `BeautyParams`: `EditorSource.params` still uses it until Task 12).
 - `Shot`: replace `params: BeautyParams;` with `/** the camera look at the shutter (RM §3.7) */ look: CameraLook;`.
@@ -4135,7 +4135,7 @@ Note: `sanitizePerson(…, naturalPerson())` over `splitLegacy(defaultParams()).
 
 `tests/harness/t7/fakes.ts`: `import { splitLegacy } from '../../../src/edit/legacy';`; replace `loadParams: () => defaults.params, saveParams: () => undefined,` with `loadLook: () => splitLegacy(defaults.params), saveLook: () => undefined,`.
 
-- [ ] **Step 4: Camera on the lens (`src/ui/screens/Camera.tsx`, CRLF)**
+- [x] **Step 4: Camera on the lens (`src/ui/screens/Camera.tsx`, CRLF)**
 
 1. Imports: replace `setParams` with `setLook` in the `../state` import; the lens import becomes `import { lensFor, LIVE_PERSONS } from '../../edit/lens';`, the legacy import `import { legacyProjection } from '../../edit/legacy';`; add `import { cameraEdit, LIVE, lookOf } from '../../edit/state';` (`EditState` is already in the type import since Task 10; drop `BeautyParams` from it, unused once the shim is gone).
 2. Replace `const params = useStore(app, (s) => s.params);` (`:36`) with `const look = useStore(app, (s) => s.look);` and `paramsRef` (`:57-58`) with `const lookRef = useRef(look); lookRef.current = look;`. Delete the Task 10 shim lines (`lensOfParams`, `back`) and add in their place:
@@ -4159,11 +4159,11 @@ In `src/edit/lens.ts` add, below `P0_INFO`:
 export const LIVE_PERSONS: readonly PersonInfo[] = [{ id: 'live', face: true, body: false }];
 ```
 
-- [ ] **Step 5: Review and flows keep the v0.3 editor input for one more task**
+- [x] **Step 5: Review and flows keep the v0.3 editor input for one more task**
 
 `src/ui/screens/Review.tsx:91`: `params: shot.params` → `params: legacyProjection(cameraEdit(shot.look), LIVE)` (imports `legacyProjection` from `../../edit/legacy`, `cameraEdit, LIVE` from `../../edit/state`). `src/ui/flows.ts:32`: `params: opts.params ?? app.get().params` → `params: opts.params ?? legacyProjection(cameraEdit(app.get().look), LIVE)` with the same imports. (Task 12 replaces both with `EditState` sources.)
 
-- [ ] **Step 6: The e2e poll (intended change #5)**
+- [x] **Step 6: The e2e poll (intended change #5)**
 
 `tests/e2e/camera.spec.ts:59-61`:
 
@@ -4173,7 +4173,7 @@ export const LIVE_PERSONS: readonly PersonInfo[] = [{ id: 'live', face: true, bo
     .toBe(1);
 ```
 
-- [ ] **Step 7: Run tests**
+- [x] **Step 7: Run tests**
 
 Run: `npx vitest run src/store src/ui src/edit && npm run typecheck`
 Expected: PASS; `tsc` exits 0.
@@ -4181,7 +4181,7 @@ Expected: PASS; `tsc` exits 0.
 Run: `npm run build && npx playwright test tests/e2e/camera.spec.ts tests/e2e/parity.spec.ts tests/e2e/settings.spec.ts`
 Expected: PASS (the persisted look is now polled from `meiyan.look.v1`).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/store/settings.ts src/store/settings.test.ts src/ui/state.ts src/ui/deps.ts src/ui/update.ts src/ui/screens/Camera.tsx src/ui/screens/Review.tsx src/ui/flows.ts src/edit/lens.ts tests/harness/t7/fakes.ts tests/e2e/camera.spec.ts

@@ -5,7 +5,9 @@
 // corrupt or from another version. Loads therefore always return a complete, valid object and
 // saves never throw.
 import { sanitizeParams } from '../engine/params';
-import type { BeautyParams, Prefs } from '../types';
+import { splitLegacy } from '../edit/legacy';
+import { naturalPerson, sanitizePerson, sanitizePhoto } from '../edit/state';
+import type { BeautyParams, CameraLook, Prefs } from '../types';
 
 export const PARAMS_KEY = 'meiyan.params.v1';
 export const PREFS_KEY = 'meiyan.prefs.v1';
@@ -36,6 +38,32 @@ export function loadPrefs(): Prefs {
 
 export function savePrefs(p: Prefs): void {
   writeJson(PREFS_KEY, sanitizePrefs(p));
+}
+
+export const LOOK_KEY = 'meiyan.look.v1';
+
+/** Untrusted camera look → valid (RM §3.7): every field defaulted; no geometry / spots / strokes in the camera. */
+export function sanitizeLook(raw: unknown): CameraLook {
+  const r = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  return { photo: sanitizePhoto(r.photo), person: sanitizePerson(r.person, naturalPerson()) };
+}
+
+/**
+ * The live-camera look. The first load without meiyan.look.v1 migrates meiyan.params.v1 (0.3) through splitLegacy and
+ * stores the result; meiyan.params.v1 is neither written nor deleted (RM §3.7). A fresh install (neither key) gets
+ * the 自然 look and writes nothing, so hasSavedSettings still tells it from a returning user (announceUpdate).
+ */
+export function loadLook(): CameraLook {
+  const raw = readJson(LOOK_KEY);
+  if (raw !== undefined) return sanitizeLook(raw);
+  const legacy = readJson(PARAMS_KEY);
+  const look = splitLegacy(sanitizeParams(legacy));
+  if (legacy !== undefined) writeJson(LOOK_KEY, look);
+  return look;
+}
+
+export function saveLook(l: CameraLook): void {
+  writeJson(LOOK_KEY, sanitizeLook(l));
 }
 
 /** Untrusted value → complete Prefs: each field kept only if it has the right type/value, else default. */
@@ -106,7 +134,7 @@ export function saveSeenVersion(v: string): boolean {
 export function hasSavedSettings(): boolean {
   try {
     const s = storage();
-    return !!s && (s.getItem(PARAMS_KEY) !== null || s.getItem(PREFS_KEY) !== null);
+    return !!s && (s.getItem(PARAMS_KEY) !== null || s.getItem(PREFS_KEY) !== null || s.getItem(LOOK_KEY) !== null);
   } catch {
     return false;
   }

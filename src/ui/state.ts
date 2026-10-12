@@ -1,7 +1,8 @@
 // App-level UI state. No router, no history.pushState, no hash (RB §1 #9): the screen is plain state.
 import { defaultParams } from '../engine/params';
+import { splitLegacy } from '../edit/legacy';
 import { DEFAULT_PREFS } from '../store/settings';
-import type { BeautyParams, BodyDetection, PersonMask, Prefs } from '../types';
+import type { BeautyParams, BodyDetection, CameraLook, PersonMask, Prefs } from '../types';
 import { deps } from './deps';
 import { debug, reportError } from './debug';
 import { createStore } from './store';
@@ -21,7 +22,8 @@ export interface Shot {
   file: Promise<File>;
   /** unprocessed frame with the same crop / mirror, for 編輯 (avoids applying effects twice) */
   original: ImageBitmap | null;
-  params: BeautyParams;
+  /** the camera look at the shutter (RM §3.7) */
+  look: CameraLook;
 }
 
 export interface EditorSource {
@@ -50,8 +52,8 @@ export type Sheet = null | 'settings' | 'credits';
 export interface AppState {
   screen: Screen;
   sheet: Sheet;
-  /** live-camera look (persisted); the editor keeps its own per-photo params */
-  params: BeautyParams;
+  /** live-camera look (persisted as meiyan.look.v1); the editor keeps its own per-photo edit */
+  look: CameraLook;
   prefs: Prefs;
   ratio: Ratio;
   timer: TimerSec;
@@ -74,7 +76,7 @@ function safeLoad<T>(load: () => T, fallback: () => T, what: string): T {
 export const app = createStore<AppState>({
   screen: { name: 'home' },
   sheet: null,
-  params: safeLoad(() => deps.loadParams(), defaultParams, 'loadParams'),
+  look: safeLoad(() => deps.loadLook(), () => splitLegacy(defaultParams()), 'loadLook'),
   prefs: safeLoad(() => deps.loadPrefs(), () => ({ ...DEFAULT_PREFS }), 'loadPrefs'),
   ratio: '3:4',
   timer: 0,
@@ -90,30 +92,30 @@ export function go(screen: Screen): void {
 
 let saveTimer = 0;
 let savePending = false;
-/** Write the debounced live-camera params now (no-op when nothing is pending). */
-export function flushParams(): void {
+/** Write the debounced live-camera look now (no-op when nothing is pending). */
+export function flushLook(): void {
   if (!savePending) return;
   savePending = false;
   clearTimeout(saveTimer);
   try {
-    deps.saveParams(app.get().params);
+    deps.saveLook(app.get().look);
   } catch (e) {
-    reportError(e, 'saveParams');
+    reportError(e, 'saveLook');
   }
 }
-export function setParams(params: BeautyParams): void {
-  app.set({ params });
+export function setLook(look: CameraLook): void {
+  app.set({ look });
   savePending = true;
   clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(flushParams, 300);
+  saveTimer = window.setTimeout(flushLook, 300);
 }
 // iOS: visibilitychange(hidden) is the last reliable event before a backgrounded PWA is suspended or killed;
 // pagehide covers real unloads. (Not beforeunload: unreliable on iOS and it disables bfcache.)
 if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') flushParams();
+    if (document.visibilityState === 'hidden') flushLook();
   });
-  window.addEventListener('pagehide', flushParams);
+  window.addEventListener('pagehide', flushLook);
 }
 
 // ───────────── 最近編輯 writes in flight ─────────────

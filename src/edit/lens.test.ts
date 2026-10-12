@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { applyPreset, LIP_SHADES, setFilter, setParam, setShade } from '../engine/params';
 import type { BeautyParams, EditState } from '../types';
-import { editFromLegacy, legacyProjection } from './legacy';
-import { lensFor, NO_BODY_NOTE, NO_FACE_NOTE, P0_INFO, type PersonInfo } from './lens';
-import { assignPersons, defaultPhoto, naturalPerson, neutralPerson, personFromPreset } from './state';
+import { editFromLegacy, legacyProjection, splitLegacy } from './legacy';
+import { LIVE_PERSONS, lensFor, NO_BODY_NOTE, NO_FACE_NOTE, P0_INFO, type PersonInfo } from './lens';
+import { assignPersons, cameraEdit, defaultPhoto, LIVE, lookOf, naturalPerson, neutralPerson, personFromPreset } from './state';
 
 const three: PersonInfo[] = [
   { id: 'f0', face: true, body: true },
@@ -144,5 +144,19 @@ describe('one person p0 is v0.3 (parity of every op through the projection)', ()
     expect(legacyProjection(l.set('body.hip', 0.7), 'p0')).toEqual(setParam(v1, 'body.hip', 0.7));
     expect(legacyProjection(l.setFilter('mono'), 'p0')).toEqual(canon(setFilter(v1, 'mono')));
     expect(legacyProjection(l.setShade('blush', 'peach'), 'p0')).toEqual(canon(setShade(v1, 'blush', 'peach')));
+  });
+});
+
+describe('the camera lens: one person, live (RM §3.7)', () => {
+  it('writes the live person and the photo through lookOf; 長腿 never anchors (no body in the camera)', () => {
+    const look = splitLegacy(applyPreset('glow', 0.5));
+    const l = lensFor(cameraEdit(look), one(LIVE), LIVE_PERSONS, LIVE);
+    expect(l.applies('shape.chin').ok).toBe(true);
+    const e = lookOf(l.set('shape.chin', 0.7));
+    expect(e.person.values['shape.chin']).toBe(0.7);
+    expect(e.person.preset).toBe('custom');
+    expect(e.photo).toBe(look.photo);
+    expect(lookOf(l.set('skin.whiten', 1)).photo.values['skin.whiten']).toBe(1);
+    expect(l.set('body.legs', 0.5).photo.legsAnchor).toBeNull();
   });
 });

@@ -5,7 +5,7 @@
 import { hasSavedSettings, loadSeenVersion, saveSeenVersion } from '../store/settings';
 import { APP_VERSION, isVersion } from '../version';
 import { debug, reportError } from './debug';
-import { app, flushParams, historySettled, toast } from './state';
+import { app, flushLook, historySettled, toast } from './state';
 import { createStore } from './store';
 import {
   CHECK_EVERY_MS,
@@ -87,7 +87,7 @@ export function onNeedReload(): void {
   const atHome = () => app.get().screen.name === 'home';
   const go = () =>
     window.setTimeout(() => {
-      flushParams();
+      flushLook();
       void historySettled().then(reloadOnce);
     }, 50);
   if (atHome()) return void go();
@@ -109,7 +109,7 @@ export async function applyUpdate(): Promise<void> {
   app.set({ busy: '正在更新…' });
   // only reachable on 首頁 / 設定: the editor flushed its last edit when it closed; wait for that write and for
   // the debounced camera look so the reload loses nothing
-  flushParams();
+  flushLook();
   await historySettled();
   // the new worker claims this page (clientsClaim) → controllerchange → reload. registerSW reloads on its
   // own only when the page was already controlled at load, so listen here too (the first session after an

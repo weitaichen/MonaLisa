@@ -1,4 +1,6 @@
 // Multi-step user flows shared by several screens.
+import { legacyProjection } from '../edit/legacy';
+import { cameraEdit, LIVE } from '../edit/state';
 import type { BeautyParams } from '../types';
 import { reportError } from './debug';
 import { deps } from './deps';
@@ -29,7 +31,7 @@ export async function openInEditor(
     const bitmap = await deps.importPhoto(blob, maxImportEdge());
     const source: EditorSource = {
       bitmap,
-      params: opts.params ?? app.get().params,
+      params: opts.params ?? legacyProjection(cameraEdit(app.get().look), LIVE),
       historyId: opts.historyId ?? null,
       returnTo: opts.returnTo,
     };

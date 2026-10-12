@@ -60,6 +60,8 @@ export interface Lens {
 
 /** before any detection the implicit person edits everything, as v0.3 did (S §3.3 item 2) */
 export const P0_INFO: readonly PersonInfo[] = [{ id: 'p0', face: true, body: true }];
+/** the camera's one person: a face, never a body (美體 is photo-only) */
+export const LIVE_PERSONS: readonly PersonInfo[] = [{ id: 'live', face: true, body: false }];
 
 type PV = keyof PersonParams['values'];
 type PhV = keyof PhotoParams['values'];

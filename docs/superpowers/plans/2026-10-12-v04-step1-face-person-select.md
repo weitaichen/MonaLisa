@@ -11298,7 +11298,7 @@ export class ChipGate { update(shownTracks: number, allOn: boolean, nowMs: numbe
 export function shotSeed(seed: { x: number; y: number } | 'all' | null, vw: number, vh: number, ratio: number, mirrored: boolean): FaceSeed;
 ```
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```ts
 // src/app/oneEuro.test.ts
@@ -11596,7 +11596,7 @@ describe('camera → editor seed (S §3.4 C2)', () => {
 Run: `npx vitest run src/app/oneEuro.test.ts src/app/faceTracks.test.ts src/ui/ui.test.ts`
 Expected: FAIL (cannot resolve `./oneEuro` / `./faceTracks`; `shotSeed` missing).
 
-- [ ] **Step 2: `src/app/oneEuro.ts`**
+- [x] **Step 2: `src/app/oneEuro.ts`**
 
 ```ts
 // MediaPipe's own landmark smoother, replicated for the multi-face camera (S §3.4 T4, RM §3.7): one One-Euro filter
@@ -11689,7 +11689,7 @@ export class LandmarkSmoother {
 }
 ```
 
-- [ ] **Step 3: `src/app/faceTracks.ts`**
+- [x] **Step 3: `src/app/faceTracks.ts`**
 
 ```ts
 // Camera face tracks (S §3.4 T4): de-duplicate, match, hold, smooth (MediaPipe's smoother, bypassed at one face),
@@ -12011,7 +12011,7 @@ export class ChipGate {
 
 Note the gate as written resets `since` whenever the count agrees with the current state, so a flicker never accumulates 300 / 1200 ms (the tests' alternating streams).
 
-- [ ] **Step 4: `shotSeed` (`src/ui/imaging.ts`, append; `FaceSeed` type import)**
+- [x] **Step 4: `shotSeed` (`src/ui/imaging.ts`, append; `FaceSeed` type import)**
 
 ```ts
 /**
@@ -12027,7 +12027,7 @@ export function shotSeed(seed: { x: number; y: number } | 'all' | null, vw: numb
 }
 ```
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 Run: `npx vitest run src/app src/ui/ui.test.ts && npm run typecheck`
 Expected: PASS.

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { cameraErrorCopy } from './cameraErrors';
 import { dragValue, formatDisplay } from './components/Slider';
 import { progressFraction, progressText } from './format';
-import { centerCropRect, cropPixels } from './imaging';
+import { centerCropRect, cropPixels, shotSeed } from './imaging';
 import { clampView, pinchView } from './screens/zoomPan';
 
 describe('slider maths', () => {
@@ -93,5 +93,16 @@ describe('site security headers (vercel.json, mirrored into vite preview)', () =
     const directives = new Map(csp.split(';').map((d) => d.trim().split(/\s+/)).map(([k, ...v]) => [k, v.join(' ')]));
     expect(directives.get('connect-src')).toBe("'self'");
     for (const d of ['frame-ancestors', 'base-uri', 'form-action', 'object-src']) expect(directives.get(d), d).toBe("'none'");
+  });
+});
+
+describe('camera → editor seed (S §3.4 C2)', () => {
+  it('maps into the saved crop, mirrors with the saved image, never clamps', () => {
+    const r = centerCropRect(1280, 720, 3 / 4); // 540 × 720 at x 370
+    expect(shotSeed({ x: 0.5, y: 0.5 }, 1280, 720, 3 / 4, false)).toEqual({ x: (640 - r.x) / r.width, y: 0.5 });
+    expect(shotSeed({ x: 0.5, y: 0.25 }, 1280, 720, 3 / 4, true)).toEqual({ x: 1 - (640 - r.x) / r.width, y: 0.25 });
+    expect((shotSeed({ x: 0.1, y: 0.5 }, 1280, 720, 3 / 4, false) as { x: number }).x).toBeLessThan(0);
+    expect(shotSeed('all', 1280, 720, 1, false)).toBe('all');
+    expect(shotSeed(null, 1280, 720, 1, false)).toBeNull();
   });
 });

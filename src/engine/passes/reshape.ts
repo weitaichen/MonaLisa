@@ -5,17 +5,32 @@
  * Copyright © 2021 PixPark. All rights reserved.
  */
 // Derived from GPUPixel src/filter/face_reshape_filter.cc (GLES variant, pixpark/gpupixel@ef552bf, Apache-2.0);
-// modified: GLSL ES 3.00; vec2 uPts[111] instead of float facePoints[212]; curveWarp / enlargeEye kept,
-// new scaleAround / shiftAround primitives and V-face, narrow, chin, forehead, nose, mouth and
-// eye-distance warps (RB §2.4); big-eye radius from eye width instead of lid distance; yaw
+// modified: GLSL ES 3.00; the 111 points as vec2 pairs (a uniform array in v0.3, the face table in v0.4) instead of
+// float facePoints[212]; curveWarp / enlargeEye kept, new scaleAround / shiftAround primitives and V-face, narrow,
+// chin, forehead, nose, mouth and eye-distance warps (RB §2.4); big-eye radius from eye width instead of lid distance; yaw
 // attenuation; uniform early-outs (zero deltas, face bounding box); 美體 backward displacement texture as
 // the outermost map (body research report §管線); a person-distance budget on the contour warps (瘦臉 background
-// limit, reports/美體修圖 背景扭曲 抑制技術.md stage 1 ②).
-import type { Face, ParamId } from '../../types';
+// limit, reports/美體修圖 背景扭曲 抑制技術.md stage 1 ②); v0.4: up to MAX_RENDER_FACES faces read from one face table
+// (texture or UBO), their displacements capped and summed, one 瘦臉 limit layer per face in an R16F array.
+import { MAX_RENDER_FACES } from '../../config/limits';
+import type { Face, FaceProtect, ParamId } from '../../types';
 import { signed } from '../params';
-import { createProgram, createTexture, deleteTexture, drawFullscreen, bindTarget, bindTexture, FULLSCREEN_VS } from '../gl/gl';
+import {
+  bindTarget,
+  bindTexture,
+  bindTextureArray,
+  createProgram,
+  createTexture,
+  createTextureArray,
+  deleteTexture,
+  drawFullscreen,
+  FULLSCREEN_VS,
+  setUnpackState,
+} from '../gl/gl';
 import type { Framebuffer, GL, Program, Texture } from '../gl/gl';
 import { FACE_TEMPLATE } from './faceMesh';
+import { FT } from './faceTable';
+import { attenuate, boxCentre, ovalBox, packFaceTable, WHOLE, type TableFace } from './faceCap';
 
 /** Engine-space deltas (already scaled per RB §2.4 table and multiplied by faceWeight). */
 export interface ReshapeUniforms {
@@ -177,10 +192,12 @@ export function reshapeGeometry(face: Face, aspect: number, u: ReshapeUniforms):
   return { vTargets, narrowTargets, chinTarget, mouthR, eyeR, eyeDisp, box };
 }
 
-/** texture unit of uBodyDisp (unit 0 = uSrc) */
+/** texture units of P2 (S §4.8): src 0, body 1, protect array 2, face table 3 (texture carrier) */
 export const BODY_UNIT = 1;
-/** texture unit of uFaceProt */
 export const PROTECT_UNIT = 2;
+export const FACE_TABLE_UNIT = 3;
+/** the std140 block binding of the UBO carrier */
+export const FACE_UBO_BINDING = 0;
 
 /**
  * 瘦臉 background limit (stage 1 ②). The contour warps' displacement g (瘦臉 / V臉 / 窄臉 / 下巴 / 額頭 together) is held
@@ -198,6 +215,7 @@ export const PROTECT_UNIT = 2;
  * bounded-stretch fall-off needs R ≳ Δ/slope, so the reach is about 0.6× today's (27–30 % FW) rather than the 15 % FW
  * the report estimated: a 15 % budget stretches the wall beside the cheek 2.5× (or folds it) and weakens the V臉 jaw.
  * The eye / nose / mouth warps run after the limit and are never limited; the live camera passes no FaceProtect.
+ * v0.4 (S §4.4): the same budget, centred on a face's box centre with cap_f as its reach, is the multi-face cap.
  */
 export const PROTECT_REACH = 0.3;
 export const PROTECT_SLOPE = 0.45;
@@ -210,28 +228,44 @@ export function faceWidthIso(face: Face, aspect: number): number {
   return Math.hypot(P[0] - P[64], (P[1] - P[65]) / aspect);
 }
 
-/** exported for the CPU port's sync check (reshapeCpu.test.ts) */
-export const RESHAPE_FS = /* glsl */ `#version 300 es
-precision highp float;
+const glslFloat = (n: number) => (Number.isInteger(n) ? n.toFixed(1) : String(n));
+
+/**
+ * The N-face reshape (S §4.4): the body field is the outermost backward map; every listed face's chain starts from the
+ * same tcB (detected-landmark coordinates); a capped face's displacement is held within its cap budget (the 瘦臉 limit's
+ * construction centred on c_f, 0 beyond cap_f); displacements are summed, and one face without a cap is its own chain
+ * output, so a single face is bit-identical to v0.3. ONE resample of the source. The face table (96 texels per face,
+ * faceTable.ts FT) rides in an RGBA32F NEAREST texture or a std140 UBO (FACE_TABLE_CARRIER). reshapeCpu.ts is the CPU
+ * port; reshapeCpu.test.ts pins this text.
+ */
+export function reshapeFs(carrier: 'texture' | 'ubo'): string {
+  return `#version 300 es
+${carrier === 'ubo' ? '#define FACE_TABLE_UBO\n' : ''}precision highp float;
+precision highp int;
 in vec2 vUv;
 uniform sampler2D uSrc;
-uniform vec2 uPts[111];
-uniform vec2 uExt[8];   // MediaPipe-only anchors (types.ts Face.ext order)
-uniform float uAspect;  // W/H
-uniform vec4 uBox;      // UV bounds of all active warps
-uniform float uSlim, uV, uNarrow, uChin, uForehead, uNose, uMouth, uEye;
-uniform vec2 uVT[6];
-uniform vec2 uNT[4];
-uniform vec2 uChinT;
-uniform float uMouthR;
-uniform vec2 uEyeR;
-uniform vec2 uEyeDisp;
 uniform sampler2D uBodyDisp; // RG16F backward displacement in UV units, row 0 = image top
 uniform float uBodyOn;
-uniform sampler2D uFaceProt; // R16F signed distance to the person (iso units), row 0 = image top
-uniform float uProtOn;
-uniform vec4 uProt;          // reach R (iso), slope, ramp (× R), smooth-min width (iso): the contour budget (reshape.ts)
+uniform mediump sampler2DArray uProtArr; // R16F signed distance (iso units) per face layer, row 0 = window top
+uniform int uCount;
+uniform float uAspect;  // W/H
 out vec4 outColor;
+
+const int MAX_RENDER_FACES = ${MAX_RENDER_FACES};
+const float PROTECT_RAMP = ${glslFloat(PROTECT_RAMP)};
+const float PROTECT_SLOPE = ${glslFloat(PROTECT_SLOPE)};
+#ifdef FACE_TABLE_UBO
+layout(std140) uniform FaceTab { vec4 uFaceTab[${FT.ROW * MAX_RENDER_FACES}]; };
+vec4 F(int f, int i) { return uFaceTab[f * ${FT.ROW} + i]; }
+#else
+uniform highp sampler2D uFaces; // RGBA32F, NEAREST: one ${FT.ROW}-texel row per face
+vec4 F(int f, int i) { return texelFetch(uFaces, ivec2(i, f), 0); }
+#endif
+vec2 pairOf(vec4 t, int k) { return (k & 1) == 0 ? t.xy : t.zw; }
+vec2 P(int f, int k) { return pairOf(F(f, k >> 1), k); }
+vec2 EXT(int f, int k) { return pairOf(F(f, ${FT.EXT} + (k >> 1)), k); }
+vec2 VT(int f, int k) { return pairOf(F(f, ${FT.VT} + (k >> 1)), k); }
+vec2 NT(int f, int k) { return pairOf(F(f, ${FT.NT} + (k >> 1)), k); }
 
 vec2 iso(vec2 p) { return vec2(p.x, p.y / uAspect); }
 
@@ -263,18 +297,25 @@ vec2 shiftAround(vec2 tc, vec2 c, float R, vec2 disp) {
   return tc - disp * k * k;
 }
 
-// 瘦臉 background limit: the contour chain moved tc0 to tc; keep |tc − tc0| within the person-distance budget.
-vec2 protectContour(vec2 tc0, vec2 tc) {
+// The 瘦臉 limit's budget and smooth minimum (v0.3 protectContour), factored out: Ln / L, or 1.0 when it does not bind.
+float budgetScale(float L, float t, float l, float slope, float k) {
+  float x = t / max(l, 1e-6);
+  float B = t <= 0.0 ? 0.0 : (t < l ? slope * l * x * x * x * (1.0 - 0.5 * x) : slope * (t - 0.5 * l));
+  float h = max(k - abs(L - B), 0.0) / k;
+  float Ln = max(min(L, B) - 0.25 * h * h * k, 0.0);
+  return Ln >= L ? 1.0 : Ln / L;
+}
+
+// 瘦臉 background limit of face f: keep |tc − tc0| within the person-distance budget of its layer (window: texel ${FT.WIN}).
+vec2 protectContour(int f, vec2 tc0, vec2 tc, float layer) {
+  vec4 pr = F(f, ${FT.PROT});
+  vec4 win = F(f, ${FT.WIN});
   vec2 g = tc - tc0;
   float L = length(iso(g));
-  float t = uProt.x - texture(uFaceProt, tc0).r;
-  float l = uProt.z * uProt.x;
-  float x = t / max(l, 1e-6);
-  float B = t <= 0.0 ? 0.0 : (t < l ? uProt.y * l * x * x * x * (1.0 - 0.5 * x) : uProt.y * (t - 0.5 * l));
-  float h = max(uProt.w - abs(L - B), 0.0) / uProt.w;
-  float Ln = max(min(L, B) - 0.25 * h * h * uProt.w, 0.0);
-  if (Ln >= L) return tc;
-  return tc0 + g * (Ln / L);
+  // textureLod: non-uniform control flow (after a per-fragment continue), where implicit derivatives are undefined
+  float sd = textureLod(uProtArr, vec3((tc0 - win.xy) * win.zw, layer), 0.0).r;
+  float s = budgetScale(L, pr.x - sd, pr.z * pr.x, pr.y, pr.w);
+  return s >= 1.0 ? tc : tc0 + g * s;
 }
 
 const ivec2 SLIM[9] = ivec2[9](ivec2(3,44), ivec2(29,44), ivec2(7,45), ivec2(25,45),
@@ -283,130 +324,236 @@ const int V_JAW[6] = int[6](8, 10, 12, 24, 22, 20);
 const int NARROW[4] = int[4](2, 4, 30, 28);
 const ivec2 NOSE[4] = ivec2[4](ivec2(80,46), ivec2(81,46), ivec2(82,49), ivec2(83,49));
 
-void main() {
-  vec2 tc = vUv;
-  // Body first as a backward map = face first in forward terms: the face chain below still sees
-  // detected-landmark coordinates, and it is the identity outside uBox, so pose anchors are untouched.
-  if (uBodyOn != 0.0) tc += uBodyOn * texture(uBodyDisp, vUv).xy;
-  if (all(greaterThanEqual(tc, uBox.xy)) && all(lessThanEqual(tc, uBox.zw))) {
-    vec2 tc0 = tc;
-    if (uSlim != 0.0) {
-      for (int i = 0; i < 9; i++) tc = curveWarp(tc, uPts[SLIM[i].x], uPts[SLIM[i].y], uSlim);
-    }
-    if (uV != 0.0) {
-      for (int i = 0; i < 6; i++) tc = curveWarp(tc, uPts[V_JAW[i]], uVT[i], uV);
-    }
-    if (uNarrow != 0.0) {
-      for (int i = 0; i < 4; i++) tc = curveWarp(tc, uPts[NARROW[i]], uNT[i], uNarrow);
-    }
-    if (uChin != 0.0) tc = curveWarp(tc, uPts[16], uChinT, uChin);
-    if (uForehead != 0.0) tc = curveWarp(tc, uExt[0], uExt[3], uForehead);
-    if (uProtOn != 0.0) tc = protectContour(tc0, tc);
-    if (uNose != 0.0) {
-      for (int i = 0; i < 4; i++) tc = curveWarp(tc, uPts[NOSE[i].x], uPts[NOSE[i].y], uNose);
-    }
-    if (uMouth != 0.0) tc = scaleAround(tc, uPts[106], uMouthR, uMouth);
-    if (uEyeDisp != vec2(0.0)) {
-      tc = shiftAround(tc, uPts[74], uEyeR.x, uEyeDisp);
-      tc = shiftAround(tc, uPts[77], uEyeR.y, -uEyeDisp);
-    }
-    if (uEye != 0.0) {
-      tc = enlargeEye(tc, uPts[74], uEyeR.x, uEye);
-      tc = enlargeEye(tc, uPts[77], uEyeR.y, uEye);
-    }
+vec2 faceChain(int f, vec2 tc) {
+  vec2 tc0 = tc;
+  vec4 s1 = F(f, ${FT.S1});        // slim, v, narrow, chin
+  vec4 s2 = F(f, ${FT.S2});        // forehead, nose, mouth, eye
+  vec4 r = F(f, ${FT.RADII});      // eyeR.x, eyeR.y, mouthR, protect layer (−1 = none)
+  vec4 ce = F(f, ${FT.CHIN_EYE});  // chinTarget, eyeDisp
+  if (s1.x != 0.0) {
+    for (int i = 0; i < 9; i++) tc = curveWarp(tc, P(f, SLIM[i].x), P(f, SLIM[i].y), s1.x);
   }
+  if (s1.y != 0.0) {
+    for (int i = 0; i < 6; i++) tc = curveWarp(tc, P(f, V_JAW[i]), VT(f, i), s1.y);
+  }
+  if (s1.z != 0.0) {
+    for (int i = 0; i < 4; i++) tc = curveWarp(tc, P(f, NARROW[i]), NT(f, i), s1.z);
+  }
+  if (s1.w != 0.0) tc = curveWarp(tc, P(f, 16), ce.xy, s1.w);
+  if (s2.x != 0.0) tc = curveWarp(tc, EXT(f, 0), EXT(f, 3), s2.x);
+  if (r.w >= 0.0) tc = protectContour(f, tc0, tc, r.w);
+  if (s2.y != 0.0) {
+    for (int i = 0; i < 4; i++) tc = curveWarp(tc, P(f, NOSE[i].x), P(f, NOSE[i].y), s2.y);
+  }
+  if (s2.z != 0.0) tc = scaleAround(tc, P(f, 106), r.z, s2.z);
+  if (ce.zw != vec2(0.0)) {
+    tc = shiftAround(tc, P(f, 74), r.x, ce.zw);
+    tc = shiftAround(tc, P(f, 77), r.y, -ce.zw);
+  }
+  if (s2.w != 0.0) {
+    tc = enlargeEye(tc, P(f, 74), r.x, s2.w);
+    tc = enlargeEye(tc, P(f, 77), r.y, s2.w);
+  }
+  return tc;
+}
+
+void main() {
+  vec2 tcB = vUv;
+  // Body first as a backward map = face first in forward terms: the face chains still see detected-landmark coordinates.
+  if (uBodyOn != 0.0) tcB += uBodyOn * texture(uBodyDisp, vUv).xy;
+  vec2 acc = vec2(0.0);
+  vec2 only = tcB;
+  int hits = 0;
+  bool anyCap = false;
+  for (int f = 0; f < MAX_RENDER_FACES; f++) {
+    if (f >= uCount) break;
+    vec4 box = F(f, ${FT.BOX});
+    if (any(lessThan(tcB, box.xy)) || any(greaterThan(tcB, box.zw))) continue;
+    vec2 tc = faceChain(f, tcB);
+    vec2 d = tc - tcB;
+    vec4 cap = F(f, ${FT.CAP});
+    if (cap.z >= 0.0) {
+      // the cap: the same budget as the 瘦臉 limit, centred on c_f, 0 beyond cap_f
+      d *= budgetScale(length(iso(d)), cap.z - distance(iso(tcB), iso(cap.xy)), PROTECT_RAMP * cap.z, PROTECT_SLOPE, cap.w);
+      anyCap = true;
+    }
+    acc += d;
+    only = tc;
+    hits++;
+  }
+  // one face without a cap: its chain output itself, so the single-face map is bit-identical to v0.3
+  vec2 tc = (hits == 1 && !anyCap) ? only : tcB + acc;
   outColor = texture(uSrc, tc);
 }`;
+}
+
+/** exported for the CPU port's sync check (reshapeCpu.test.ts) */
+export const RESHAPE_FS = reshapeFs('texture');
 
 /** uBox that no coordinate falls in: the face chain is skipped entirely (no face / all face deltas 0). */
 export const EMPTY_BOX = [1e9, 1e9, -1e9, -1e9] as const;
 
+/** a protect layer's edge bound (pipeline.ts MAX_BODY_FIELD_EDGE): keeps texImage3D within every device's limits */
+const MAX_PROTECT_EDGE = 2048;
+
+/** true when `p` has an uploadable shape (pipeline.ts faceProtectValid); its data's finiteness is checked on upload */
+function protectShapeValid(p: FaceProtect): boolean {
+  const { width: w, height: h, data } = p;
+  return (
+    Number.isInteger(w) &&
+    Number.isInteger(h) &&
+    w > 0 &&
+    h > 0 &&
+    w <= MAX_PROTECT_EDGE &&
+    h <= MAX_PROTECT_EDGE &&
+    data instanceof Float32Array &&
+    data.length >= w * h
+  );
+}
+
 export interface ReshapePass {
   /**
-   * Sample `src` (any size, by UV) and write the warped image into `dst` (processing size).
-   * `aspect` (W/H of the processing size) defaults to dst's; pass it when dst is a scaled buffer
-   * (the ¼-res mask) so the map is exactly the image's.
-   * `face` / `u` null = no face warp (body only). `body` = RG16F backward displacement texture (UV
-   * units), applied before the face chain; null = none. Yaw attenuation scales the face deltas only.
-   * `protect` = R16F FaceProtect distance texture: limits the contour warps (PROTECT_REACH); null = unlimited.
+   * Sample `src` (any size, by UV) and write the warped image into `dst`. `faces` exactly as packed (yaw-attenuated,
+   * × weight; faceCap.ts TableFace), at most MAX_RENDER_FACES; `protects[layer]` are their 瘦臉 limits (all the same
+   * size: the photo grid for one face, PROTECT_WINDOW² windows for ≥ 2; a malformed or mismatched layer is ignored and
+   * its face drawn unlimited); `aspect` defaults to dst's (pass the image's for the ¼-res mask); `body` = RG16F
+   * backward displacement texture (UV units), applied before the face chains; null = none.
    */
-  draw(
-    src: Texture,
-    dst: Framebuffer,
-    face: Face | null,
-    u: ReshapeUniforms | null,
-    aspect?: number,
-    body?: Texture | null,
-    protect?: Texture | null,
-  ): void;
+  drawFaces(src: Texture, dst: Framebuffer, faces: readonly TableFace[], opts?: { aspect?: number; body?: Texture | null; protects?: readonly FaceProtect[] }): void;
+  /**
+   * One face with v0.3's signature (harnesses, pins, the pipeline until RenderInput v0.4): yaw attenuation applied
+   * here, no cap; `face` / `u` null = no face warp (body only); `protect` = the 瘦臉 limit's data (uploaded by the pass).
+   */
+  draw(src: Texture, dst: Framebuffer, face: Face | null, u: ReshapeUniforms | null, aspect?: number, body?: Texture | null, protect?: FaceProtect | null): void;
   dispose(): void;
 }
 
-export function createReshapePass(gl: GL): ReshapePass {
-  const prog: Program = createProgram(gl, FULLSCREEN_VS, RESHAPE_FS, 'reshape');
+export function createReshapePass(gl: GL, opts: { carrier?: 'texture' | 'ubo' } = {}): ReshapePass {
+  const carrier = opts.carrier ?? 'texture';
+  const prog: Program = createProgram(gl, FULLSCREEN_VS, reshapeFs(carrier), 'reshape');
   prog.use();
   gl.uniform1i(prog.u('uSrc'), 0);
   gl.uniform1i(prog.u('uBodyDisp'), BODY_UNIT);
-  gl.uniform1i(prog.u('uFaceProt'), PROTECT_UNIT);
-  // Bound on the body / protect units when there is no texture, so a sampler never reads an empty unit.
+  gl.uniform1i(prog.u('uProtArr'), PROTECT_UNIT);
+  const table = new Float32Array(FT.ROW * MAX_RENDER_FACES * 4);
+  /** what the carrier holds (the packed rows of the last upload); null = nothing uploaded yet */
+  let uploaded: Float32Array | null = null;
+  let tableTex: Texture | null = null;
+  let ubo: WebGLBuffer | null = null;
+  if (carrier === 'texture') {
+    gl.uniform1i(prog.u('uFaces'), FACE_TABLE_UNIT);
+    tableTex = createTexture(gl, FT.ROW, MAX_RENDER_FACES, { internalFormat: gl.RGBA32F, format: gl.RGBA, type: gl.FLOAT, filter: gl.NEAREST });
+  } else {
+    gl.uniformBlockBinding(prog.program, gl.getUniformBlockIndex(prog.program, 'FaceTab'), FACE_UBO_BINDING);
+    ubo = gl.createBuffer();
+    gl.bindBuffer(gl.UNIFORM_BUFFER, ubo);
+    gl.bufferData(gl.UNIFORM_BUFFER, table.byteLength, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.UNIFORM_BUFFER, null);
+  }
+  // Bound on the body / protect units when there is no field / no limit, so a sampler never reads an empty unit.
   const zero = createTexture(gl, 1, 1);
+  const zeroArr = createTextureArray(gl, 1, 1, 1, gl.R16F);
+  let protArr: (Texture & { layers: number }) | null = null;
+  /**
+   * what each layer holds: re-uploaded only when its object, data or version changes; `finite` false = the data held a
+   * non-finite value and nothing was uploaded (a NaN would turn the sample coordinate into garbage)
+   */
+  let layerKeys: { p: FaceProtect; data: Float32Array; version: number; finite: boolean }[] = [];
+  let warned = false;
+
+  /** upload the layers that changed; returns which layers are usable (the rest are ignored, their faces unlimited) */
+  const uploadProtects = (protects: readonly FaceProtect[]): boolean[] => {
+    if (!protects.length) return [];
+    const valid = protects.map(protectShapeValid);
+    const first = protects.find((_, i) => valid[i]);
+    const ok = protects.map((p, i) => valid[i] && !!first && p.width === first.width && p.height === first.height);
+    if (first) {
+      const { width: w, height: h } = first;
+      if (!protArr || protArr.width !== w || protArr.height !== h || protArr.layers < protects.length) {
+        if (protArr) gl.deleteTexture(protArr.tex);
+        protArr = createTextureArray(gl, w, h, protects.length, gl.R16F);
+        layerKeys = [];
+      }
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, protArr.tex);
+      setUnpackState(gl);
+      protects.forEach((p, i) => {
+        if (!ok[i]) return;
+        const k = layerKeys[i];
+        if (k && k.p === p && k.data === p.data && k.version === p.version) {
+          ok[i] = k.finite;
+          return;
+        }
+        const data = p.data.subarray(0, w * h);
+        const finite = data.every(Number.isFinite);
+        // R16F from FLOAT data: core WebGL2, filterable (LINEAR) without extensions
+        if (finite) gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, w, h, 1, gl.RED, gl.FLOAT, data);
+        layerKeys[i] = { p, data: p.data, version: p.version, finite };
+        ok[i] = finite;
+      });
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+    }
+    if (ok.includes(false) && !warned) {
+      warned = true;
+      console.warn('[engine] ignoring a malformed, non-finite or mismatched face limit layer', protects.map((p) => [p.width, p.height]));
+    }
+    return ok;
+  };
+
+  const drawFaces: ReshapePass['drawFaces'] = (src, dst, facesIn, o = {}) => {
+    const aspect = o.aspect ?? dst.width / dst.height;
+    const protects = o.protects ?? [];
+    const ok = uploadProtects(protects);
+    const faces = facesIn.slice(0, MAX_RENDER_FACES).map((t) => (t.layer >= 0 && !ok[t.layer] ? { ...t, layer: -1 } : t));
+    packFaceTable(faces, aspect, table);
+    const n = faces.length * FT.ROW * 4;
+    const changed = !uploaded || uploaded.length !== n || uploaded.some((v, i) => v !== table[i]);
+    if (changed) {
+      if (tableTex) {
+        gl.bindTexture(gl.TEXTURE_2D, tableTex.tex);
+        setUnpackState(gl);
+        if (faces.length) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, FT.ROW, faces.length, gl.RGBA, gl.FLOAT, table.subarray(0, n));
+      } else {
+        gl.bindBuffer(gl.UNIFORM_BUFFER, ubo);
+        gl.bufferSubData(gl.UNIFORM_BUFFER, 0, table);
+        gl.bindBuffer(gl.UNIFORM_BUFFER, null);
+      }
+      uploaded = table.slice(0, n);
+    }
+    bindTarget(gl, dst);
+    gl.disable(gl.BLEND);
+    prog.use();
+    bindTexture(gl, 0, src);
+    bindTexture(gl, BODY_UNIT, o.body ?? zero);
+    gl.uniform1f(prog.u('uBodyOn'), o.body ? 1 : 0);
+    bindTextureArray(gl, PROTECT_UNIT, protArr && ok.includes(true) ? protArr.tex : zeroArr.tex);
+    if (tableTex) bindTexture(gl, FACE_TABLE_UNIT, tableTex);
+    else gl.bindBufferBase(gl.UNIFORM_BUFFER, FACE_UBO_BINDING, ubo);
+    gl.uniform1i(prog.u('uCount'), faces.length);
+    gl.uniform1f(prog.u('uAspect'), aspect);
+    drawFullscreen(gl);
+    bindTexture(gl, BODY_UNIT, null);
+    bindTextureArray(gl, PROTECT_UNIT, null);
+    if (tableTex) bindTexture(gl, FACE_TABLE_UNIT, null);
+    else gl.bindBufferBase(gl.UNIFORM_BUFFER, FACE_UBO_BINDING, null);
+    gl.activeTexture(gl.TEXTURE0);
+  };
 
   return {
-    draw(src, dst, faceIn, uIn, aspectIn, body, protect) {
-      const aspect = aspectIn ?? dst.width / dst.height;
-      let face: Face | null = null;
-      let u: ReshapeUniforms | null = null;
-      if (faceIn && uIn) {
-        const att = yawAttenuation(faceIn.yaw);
-        u = { ...uIn };
-        for (const key of Object.keys(u) as (keyof ReshapeUniforms)[]) u[key] *= att;
-        // Any non-zero delta (not reshapeActive's 1e-4): keeps the face-only output bit-identical to
-        // the pre-body pass, which warped whenever it ran.
-        if (Object.values(u).some((v) => v !== 0)) face = faceIn;
-      }
-
-      bindTarget(gl, dst);
-      gl.disable(gl.BLEND);
-      prog.use();
-      bindTexture(gl, 0, src);
-      bindTexture(gl, BODY_UNIT, body ?? zero);
-      gl.uniform1f(prog.u('uBodyOn'), body ? 1 : 0);
-      const prot = face && protect ? protect : null;
-      bindTexture(gl, PROTECT_UNIT, prot ?? zero);
-      gl.uniform1f(prog.u('uProtOn'), prot ? 1 : 0);
-      gl.uniform1f(prog.u('uAspect'), aspect);
-      if (face && u) {
-        const g = reshapeGeometry(face, aspect, u);
-        gl.uniform2fv(prog.u('uPts'), face.pts111);
-        gl.uniform2fv(prog.u('uExt'), face.ext);
-        gl.uniform4f(prog.u('uBox'), g.box[0], g.box[1], g.box[2], g.box[3]);
-        gl.uniform1f(prog.u('uSlim'), u.faceSlim);
-        gl.uniform1f(prog.u('uV'), u.faceV);
-        gl.uniform1f(prog.u('uNarrow'), u.faceNarrow);
-        gl.uniform1f(prog.u('uChin'), u.chin);
-        gl.uniform1f(prog.u('uForehead'), u.forehead);
-        gl.uniform1f(prog.u('uNose'), u.noseSlim);
-        gl.uniform1f(prog.u('uMouth'), u.mouthSize);
-        gl.uniform1f(prog.u('uEye'), u.eyeEnlarge);
-        gl.uniform2fv(prog.u('uVT'), g.vTargets);
-        gl.uniform2fv(prog.u('uNT'), g.narrowTargets);
-        gl.uniform2f(prog.u('uChinT'), g.chinTarget[0], g.chinTarget[1]);
-        gl.uniform1f(prog.u('uMouthR'), g.mouthR);
-        gl.uniform2f(prog.u('uEyeR'), g.eyeR[0], g.eyeR[1]);
-        gl.uniform2f(prog.u('uEyeDisp'), g.eyeDisp[0], g.eyeDisp[1]);
-        const fw = faceWidthIso(face, aspect);
-        gl.uniform4f(prog.u('uProt'), PROTECT_REACH * fw, PROTECT_SLOPE, PROTECT_RAMP, PROTECT_SMOOTH * fw);
-      } else {
-        gl.uniform4f(prog.u('uBox'), EMPTY_BOX[0], EMPTY_BOX[1], EMPTY_BOX[2], EMPTY_BOX[3]);
-      }
-      drawFullscreen(gl);
-      bindTexture(gl, BODY_UNIT, null);
-      bindTexture(gl, PROTECT_UNIT, null);
-      gl.activeTexture(gl.TEXTURE0);
+    drawFaces,
+    draw(src, dst, face, u, aspectIn, body, protect) {
+      const faces: TableFace[] = face && u ? [{ face, u: attenuate(u, face.yaw), layer: protect ? 0 : -1, window: protect?.window ?? WHOLE, centre: boxCentre(ovalBox(face)), cap: -1 }] : [];
+      drawFaces(src, dst, faces, { aspect: aspectIn, body, protects: protect ? [protect] : [] });
     },
     dispose() {
       prog.dispose();
       deleteTexture(gl, zero);
+      gl.deleteTexture(zeroArr.tex);
+      if (protArr) gl.deleteTexture(protArr.tex);
+      deleteTexture(gl, tableTex);
+      if (ubo) gl.deleteBuffer(ubo);
+      protArr = null;
+      layerKeys = [];
+      uploaded = null;
     },
   };
 }

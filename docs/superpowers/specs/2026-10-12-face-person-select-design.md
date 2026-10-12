@@ -981,6 +981,53 @@ Decisions: none taken (desktop only; the §3.5 defaults ship until iPhone rows e
 
 ONE_EURO: LandmarksSmoothingCalculator is compiled into `node_modules/@mediapipe/tasks-vision/wasm/vision_wasm_internal.wasm` (0.10.35) and its graph options are not stored as text, but the code holds them as constants. At two sites (most likely the face and the pose landmarker graphs; the binary has no symbols to tell which is which) one `i64.store` writes the adjacent OneEuroFilter fields `min_cutoff` 0.05 and `beta` 80 (`i64.const 0x42A000003D4CCCCD`), and the next `i32.store` writes `derivate_cutoff` 1.0 (`0x3F800000`), at consecutive field offsets (212 / 216 / 220 and 56 / 60 / 64). The §3.5 values {minCutoff 0.05, beta 80, dCutoff 1.0} therefore match the 0.10.35 binary. This was not checked against the C++ source, and neither was the graph's `numFaces` 1 condition for smoothing.
 
+#### 2026-10-12 desktop Chrome (GPU), rows R / RC — ANGLE (Intel, Intel(R) UHD Graphics 770 (0x0000A780) Direct3D11 vs_5_0 ps_5_0, D3D11)
+
+`node scripts/bench-multiface.mjs R` (sub-step 1c, Task 17: the face-table `RESHAPE_FS`), same desktop and Chrome as above. Every 美型 item at maximum, caps on (`capsFor` of the layout, no obstacles), square frame. `spread n`: n faces of FW 0.35 / n across the middle row (2.8 FW apart); `row 6 @1.2FW` and `grid 2×3 @1.3FW`: FW 0.1 at 0.12 / 0.13 spacing. `ms` = the median batch time per draw minus the N = 0 baseline (S §6.2). RC = program compile + link + the first draw; the 2048 RC of each carrier reuses the program the 1080 run had just built (ANGLE's program cache), so only the 1080 RC is a cold compile.
+
+| Row | Config | Values |
+|---|---|---|
+| RC | texture 1080 | compile_ms 190 |
+| R | texture 1080 spread 1 | ms 1.34 |
+| R | texture 1080 spread 2 | ms 1.04 |
+| R | texture 1080 spread 3 | ms 1.08 |
+| R | texture 1080 spread 4 | ms 1.21 |
+| R | texture 1080 spread 5 | ms 1.43 |
+| R | texture 1080 spread 6 | ms 1.67 |
+| R | texture 1080 row 6 @1.2FW | ms 1.63 |
+| R | texture 1080 grid 2×3 @1.3FW | ms 1.7 |
+| RC | texture 2048 | compile_ms 8 |
+| R | texture 2048 spread 1 | ms 6.5 |
+| R | texture 2048 spread 2 | ms 4.91 |
+| R | texture 2048 spread 3 | ms 5.3 |
+| R | texture 2048 spread 4 | ms 6.12 |
+| R | texture 2048 spread 5 | ms 7.12 |
+| R | texture 2048 spread 6 | ms 8.09 |
+| R | texture 2048 row 6 @1.2FW | ms 8.37 |
+| R | texture 2048 grid 2×3 @1.3FW | ms 8.39 |
+| RC | ubo 1080 | compile_ms 215 |
+| R | ubo 1080 spread 1 | ms 0.91 |
+| R | ubo 1080 spread 2 | ms 0.63 |
+| R | ubo 1080 spread 3 | ms 0.62 |
+| R | ubo 1080 spread 4 | ms 0.7 |
+| R | ubo 1080 spread 5 | ms 0.6 |
+| R | ubo 1080 spread 6 | ms 0.74 |
+| R | ubo 1080 row 6 @1.2FW | ms 0.83 |
+| R | ubo 1080 grid 2×3 @1.3FW | ms 0.91 |
+| RC | ubo 2048 | compile_ms 9 |
+| R | ubo 2048 spread 1 | ms 3.2 |
+| R | ubo 2048 spread 2 | ms 2.1 |
+| R | ubo 2048 spread 3 | ms 1.86 |
+| R | ubo 2048 spread 4 | ms 2.02 |
+| R | ubo 2048 spread 5 | ms 2.26 |
+| R | ubo 2048 spread 6 | ms 2.46 |
+| R | ubo 2048 row 6 @1.2FW | ms 2.54 |
+| R | ubo 2048 grid 2×3 @1.3FW | ms 2.69 |
+
+PR1/PRC (desktop): the UBO carrier is the faster one, N = 6 at 2048 2.46 ms spread, 2.54 ms in the 1.2 FW row and 2.69 ms in the 1.3 FW grid (the texture carrier: 8.09 / 8.37 / 8.39 ms); cold compile + link 215 ms (UBO) and 190 ms (texture), both within PRC's 300 ms. FACE_TABLE_CARRIER stays 'texture' unless the UBO is faster on the slowest iPhone (pending a deploy).
+
+RP: on desktop Chromium (headless SwiftShader, `tests/e2e/reshape.spec.ts`), `runReshapePinMulti` gives max |GPU − CPU| 0.0001 px (two faces, every warp), 0.0001 px (capped pair, one neutral) and 0.0000 px (an obstacle bounding the cap) with both carriers, and the three one-face pins are unchanged (0.0001 / 0.0001 / 0.0014 px). On the phone, RP is the same page, `/tests/e2e/pages/reshape.html`, and the bench's R button fetches `/tests/fixtures/landmarks_sample_face.json`: neither path is in a production build (`dist/`), so both are recorded from a dev server the phone can reach (`npm run dev`, `server.host`), not from a preview deploy alone.
+
 ---
 
 ## 7. Error and edge cases

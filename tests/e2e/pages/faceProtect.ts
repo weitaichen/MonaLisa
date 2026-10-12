@@ -114,8 +114,8 @@ window.runFaceProtectPin = () => {
   const id = new Float32Array(N * N * 4);
   for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) id.set([(x + 0.5) / N, (y + 0.5) / N, 0, 1], (y * N + x) * 4);
   const src = tex(N, N, gl.RGBA32F, gl.RGBA, id);
-  // uploaded like pipeline.ts: R16F from FLOAT data (the port rounds to half floats the same way)
-  const protTex = (p: FaceProtect) => tex(p.width, p.height, gl.R16F, gl.RED, p.data);
+  // the pass uploads each FaceProtect itself (an R16F array layer from FLOAT data; the port rounds to half floats the
+  // same way)
   const pass = createReshapePass(gl);
 
   const portrait = portraitScene();
@@ -131,7 +131,7 @@ window.runFaceProtectPin = () => {
   const body: BodyField = { width: bw, height: bh, data: bd, version: 1 };
   const bodyTex = tex(bw, bh, gl.RG16F, gl.RG, bd);
 
-  const render = (face: Face, ids: ParamId[], aspect: number, ow: number, oh: number, prot: Texture | null, withBody: boolean) => {
+  const render = (face: Face, ids: ParamId[], aspect: number, ow: number, oh: number, prot: FaceProtect | null, withBody: boolean) => {
     const out = tex(ow, oh, gl.RGBA32F, gl.RGBA, null);
     const fbo = gl.createFramebuffer();
     if (!fbo) throw new Error('createFramebuffer failed');
@@ -159,8 +159,7 @@ window.runFaceProtectPin = () => {
   ];
   for (const c of cases) {
     const aspect = c.W / c.H;
-    const pt = protTex(c.protect);
-    const gpu = render(c.face, CONTOUR, aspect, c.ow, c.oh, pt, c.body);
+    const gpu = render(c.face, CONTOUR, aspect, c.ow, c.oh, c.protect, c.body);
     const free = render(c.face, CONTOUR, aspect, c.ow, c.oh, null, c.body);
     const map = reshapeMapCpu(c.face, reshapeUniforms(at(CONTOUR).values, 1), aspect, c.body ? body : null, c.protect);
     const feats = features(c.face);
@@ -187,18 +186,15 @@ window.runFaceProtectPin = () => {
         if (Math.hypot((s[0] - uu) * c.ow, (s[1] - vv) * c.oh) > 1) moved++;
         maxErr = Math.max(maxErr, Math.hypot((gpu[i] - s[0]) * c.ow, (gpu[i + 1] - s[1]) * c.oh));
       }
-    gl.deleteTexture(pt.tex);
     pins.push({ name: c.name, n, moved, maxErrPx: maxErr, limited, featureDiff, featurePx });
   }
 
   // neutral contour, every other face warp at max: the limit changes nothing at all
   const others: ParamId[] = ['shape.noseSlim', 'shape.mouthSize', 'shape.eyeDistance', 'shape.eyeEnlarge'];
-  const pt = protTex(portrait.protect);
-  const a = render(portrait.pr.face, others, 0.75, 240, 320, pt, false);
+  const a = render(portrait.pr.face, others, 0.75, 240, 320, portrait.protect, false);
   const b = render(portrait.pr.face, others, 0.75, 240, 320, null, false);
   let neutralDiff = 0;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) neutralDiff++;
-  gl.deleteTexture(pt.tex);
   pass.dispose();
   return { pins, neutralDiff, neutralPx: a.length / 4 };
 };

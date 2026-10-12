@@ -4,8 +4,8 @@
 // Face passes (T2) are constructed lazily the first time a frame actually needs them.
 // 美體: the body field is an RG16F texture sampled as the outermost backward map of P2 (no extra FBO,
 // one resample), so P2 also runs for a body-only frame and the skin mask follows via maskWarp.
-// 瘦臉 background limit: an R16F person-distance texture (FaceProtect) bounds the face contour warps in P2 (photo editor
-// only; uploaded on version change like the body field).
+// 瘦臉 background limit: an R16F person-distance grid (FaceProtect) bounds the face contour warps in P2 (photo editor
+// only; the reshape pass uploads it as an array layer on version change, like the body field).
 import type { BeautyParams, BodyField, Face, FaceProtect } from '../types';
 import {
   bindTarget,
@@ -250,9 +250,6 @@ export function createPipeline(gl: GL): Pipeline {
   let bodyTex: Texture | null = null;
   let bodyKey: BodyUploadKey | null = null;
   let bodyWarned = false;
-  let protTex: Texture | null = null;
-  let protKey: ProtectUploadKey | null = null;
-  let protWarned = false;
 
   /** The field's texture (uploaded only on version / size / buffer change), or null when unusable. */
   function bodyTexture(f: BodyField | null): Texture | null {
@@ -284,37 +281,6 @@ export function createPipeline(gl: GL): Pipeline {
       bodyTex.height = f.height;
     }
     return bodyTex;
-  }
-
-  /** The FaceProtect's texture (uploaded only on version / size / buffer change), or null when unusable. */
-  function protectTexture(p: FaceProtect | null): Texture | null {
-    if (!p) return null;
-    if (!faceProtectValid(p)) {
-      if (!protWarned) console.warn('[engine] ignoring malformed face protect', { width: p.width, height: p.height });
-      protWarned = true;
-      return null;
-    }
-    if (!protectUploadNeeded(protKey, p)) return protKey?.usable ? protTex : null;
-    const n = p.width * p.height;
-    const data = p.data.length === n ? p.data : p.data.subarray(0, n);
-    const usable = data.every(Number.isFinite);
-    protKey = { protect: p, data: p.data, version: p.version, width: p.width, height: p.height, usable };
-    if (!usable) {
-      console.warn('[engine] ignoring face protect with non-finite values');
-      return null;
-    }
-    protTex ??= createTexture(gl, 0, 0);
-    gl.bindTexture(gl.TEXTURE_2D, protTex.tex);
-    setUnpackState(gl);
-    if (protTex.width === p.width && protTex.height === p.height) {
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, p.width, p.height, gl.RED, gl.FLOAT, data);
-    } else {
-      // R16F from FLOAT data: core WebGL2, filterable (LINEAR) without extensions.
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, p.width, p.height, 0, gl.RED, gl.FLOAT, data);
-      protTex.width = p.width;
-      protTex.height = p.height;
-    }
-    return protTex;
   }
 
   function getMakeup(): MakeupPass {
@@ -403,8 +369,8 @@ export function createPipeline(gl: GL): Pipeline {
         const faceWarp = faceOn && ru !== null && reshapeActive(ru);
         const rf = faceWarp ? face : null;
         const rru = faceWarp ? ru : null;
-        // the limit only matters with a contour warp drawn: no upload otherwise
-        const prot = faceWarp ? protectTexture(job.faceProtect) : null;
+        // the limit only matters with a face warp drawn: no upload otherwise (the pass uploads and validates it)
+        const prot = faceWarp ? job.faceProtect : null;
         const b = fb('B', job.size);
         reshape.draw(base, b, rf, rru, undefined, body, prot);
         base = b.tex;
@@ -499,13 +465,10 @@ export function createPipeline(gl: GL): Pipeline {
         reshape?.dispose();
         overlay?.dispose();
         deleteTexture(gl, bodyTex);
-        deleteTexture(gl, protTex);
       }
       mask = makeup = reshape = overlay = null;
       bodyTex = null;
       bodyKey = null;
-      protTex = null;
-      protKey = null;
       makeupReady = false;
       for (const k of Object.keys(fbs) as FbName[]) delete fbs[k];
     },

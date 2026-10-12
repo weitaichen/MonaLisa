@@ -240,3 +240,21 @@ export function hexToRgb(hex: string): [number, number, number] {
   const n = parseInt(hex.replace('#', ''), 16);
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 }
+
+/** A TEXTURE_2D_ARRAY (LINEAR, clamp) with storage for `layers` layers; uploads go through texSubImage3D. */
+export function createTextureArray(gl: GL, w: number, h: number, layers: number, internalFormat: number): Texture & { layers: number } {
+  const tex = gl.createTexture();
+  if (!tex) throw new Error('createTexture failed');
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
+  for (const p of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D_ARRAY, p, gl.LINEAR);
+  for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D_ARRAY, p, gl.CLAMP_TO_EDGE);
+  gl.texImage3D(gl.TEXTURE_2D_ARRAY, 0, internalFormat, w, h, layers, 0, gl.RED, gl.FLOAT, null);
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+  return { tex, width: w, height: h, layers };
+}
+
+/** bindTexture binds TEXTURE_2D only (above); arrays need their own target */
+export function bindTextureArray(gl: GL, unit: number, tex: WebGLTexture | null): void {
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
+}

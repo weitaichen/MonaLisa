@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { Face, ParamId } from '../../types';
 import { applyPreset, setParam } from '../params';
 import { adapt } from '../../tracking/adapter111';
-import { RESHAPE_FS, reshapeGeometry, reshapeUniforms } from './reshape';
+import { RESHAPE_FS, reshapeFs, reshapeGeometry, reshapeUniforms } from './reshape';
 import { reshapeMapCpu, reshapeMapMulti } from './reshapeCpu';
 import { reshapeMapCpuV03 } from './reshapeCpuV03';
 import { attenuate, boxCentre, capsFor, ovalBox, WHOLE, type TableFace } from './faceCap';
@@ -11,6 +11,8 @@ import type { ReshapeUniforms as RU } from './reshape';
 import { MIN_DET } from '../../body/field';
 import { syntheticPortrait } from '../../body/synthetic';
 import { buildFaceProtect } from '../../tracking/faceProtect';
+
+const PINNED = 'b7f7bcdc';
 
 /** FNV-1a 32 of the shader with whitespace collapsed */
 function shaderHash(src: string): string {
@@ -35,7 +37,9 @@ const params = (ids: ParamId[]) => ids.reduce((p, id) => setParam(p, id, 1), app
 describe('reshapeMapCpu (CPU port of RESHAPE_FS)', () => {
   it('is pinned to the shader text: a RESHAPE_FS edit must be mirrored in reshapeCpu.ts (then update this hash)', () => {
     // The e2e reshape.spec.ts compares the port with the real shader pixel by pixel; this is the cheap tripwire.
-    expect(shaderHash(RESHAPE_FS)).toBe('ced9563c');
+    expect(RESHAPE_FS).toContain('uniform highp sampler2D uFaces');
+    expect(reshapeFs('ubo')).toContain('#define FACE_TABLE_UBO');
+    expect(shaderHash(RESHAPE_FS)).toBe(PINNED);
   });
 
   it('is the identity with no face / all deltas zero, and outside the influence box', () => {

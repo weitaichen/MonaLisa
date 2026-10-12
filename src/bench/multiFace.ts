@@ -139,6 +139,9 @@ export function addRunner(id: string, run: (photos: { faces: Blob; people: Blob 
   RUNNERS[id] = run;
 }
 
+/** rows that take no photo */
+const NO_PHOTO = new Set(['GL', 'R']);
+
 async function fixtures(): Promise<{ faces: Blob; people: Blob }> {
   const get = async (u: string) => (await fetch(u)).blob();
   return { faces: await get('/tests/fixtures/group_faces.png'), people: await get('/tests/fixtures/group_people.jpg') };
@@ -149,7 +152,7 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
   // own classes (styled in bench/main.ts STYLE like the 美體偵測 box): tests/harness/b3/bench.mjs locates '.body-bench'
   // and tests/harness/t8/run-bench.mjs '.gate .note', and this section sits in .gate, so reusing either breaks them
   section.className = 'multi-bench';
-  section.innerHTML = '<h3>多臉</h3><p class="multi-note">D：多臉偵測（選 group_faces.png）　B：多人美體（選 group_people.jpg）　GL：GPU 上限</p>';
+  section.innerHTML = '<h3>多臉</h3><p class="multi-note">D：多臉偵測（選 group_faces.png）　B：多人美體（選 group_people.jpg）　GL：GPU 上限　R：多臉美型 GPU 時間（需開發伺服器的 /tests/fixtures）</p>';
   const note = document.createElement('pre');
   note.className = 'multi-note';
   const pick = (accept: string) =>
@@ -169,7 +172,8 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
   const run = async (id: string) => {
     note.textContent = `${id}…`;
     try {
-      const photo = id === 'GL' ? null : await pick('image/*');
+      // GL and R measure the GPU alone: no photo
+      const photo = NO_PHOTO.has(id) ? null : await pick('image/*');
       const blob = photo ?? new Blob();
       const got = await RUNNERS[id]({ faces: blob, people: blob });
       rows.push(...got);
@@ -178,7 +182,7 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
       note.textContent = `${id}: ${e instanceof Error ? e.message : String(e)}`;
     }
   };
-  for (const id of ['D', 'B', 'GL']) {
+  for (const id of ['D', 'B', 'GL', 'R']) {
     const b = document.createElement('button');
     b.textContent = id;
     b.addEventListener('click', () => void run(id));
@@ -199,3 +203,77 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
   }
   return { rows: () => rows };
 }
+
+/**
+ * R: the reshape microbench (S §6.2): every 美型 item at maximum with the caps on, N = 1…6 spread across the frame,
+ * 6 in a row at 1.2 FW and a 2×3 grid at 1.3 FW, both face-table carriers, at 1080 and 2048: 30 warm-up draws, then
+ * 10 batches of 10 draws per 1-px readPixels, the median batch / 10 minus the N = 0 baseline. RC: compile + link (the
+ * first draw). RP (GPU vs CPU pin) is tests/e2e/pages/reshape.ts, opened on the device.
+ */
+export async function rowR(): Promise<MultiRow[]> {
+  const { adapt } = await import('../tracking/adapter111');
+  const { createReshapePass, faceWidthIso, reshapeUniforms } = await import('../engine/passes/reshape');
+  const { attenuate, boxCentre, capsFor, ovalBox, WHOLE } = await import('../engine/passes/faceCap');
+  const { applyPreset, PARAM_DEFS, setParam } = await import('../engine/params');
+  const { createFramebuffer, createTexture } = await import('../engine/gl/gl');
+  const res = await fetch('/tests/fixtures/landmarks_sample_face.json');
+  if (!res.ok) throw new Error(`R needs /tests/fixtures/landmarks_sample_face.json (the dev server): ${res.status}`);
+  const lm = (await res.json()) as { width: number; height: number; points: number[] };
+  const base = adapt({ points: new Float32Array(lm.points) }, lm.width, lm.height);
+  const u = reshapeUniforms(PARAM_DEFS.filter((d) => d.group === 'shape').reduce((p, d) => setParam(p, d.id, 1), applyPreset('original', 1)).values, 1);
+  /** the fixture face scaled by k about its oval-box centre, moved to (cx, cy), frontal */
+  const at = (cx: number, cy: number, k: number) => {
+    const b = ovalBox(base);
+    const c = [b.x + b.w / 2, b.y + b.h / 2];
+    const m = (a: Float32Array) => a.map((v, i) => (i % 2 === 0 ? cx + (v - c[0]) * k : cy + (v - c[1]) * k));
+    return { pts111: m(base.pts111), ext: m(base.ext), oval: m(base.oval), yaw: 0 };
+  };
+  // the clustered layouts at FW 0.1 (the bench frame is square: iso = UV), so their spacing is what their names say
+  const kClustered = 0.1 / faceWidthIso(base, 1);
+  const layouts: Record<string, { centres: [number, number][]; k: number }> = {};
+  for (let n = 1; n <= 6; n++) layouts[`spread ${n}`] = { centres: Array.from({ length: n }, (_, i): [number, number] => [(i + 0.5) / n, 0.5]), k: 0.6 / n };
+  layouts['row 6 @1.2FW'] = { centres: Array.from({ length: 6 }, (_, i): [number, number] => [0.2 + i * 0.12, 0.5]), k: kClustered };
+  layouts['grid 2×3 @1.3FW'] = {
+    centres: Array.from({ length: 6 }, (_, i): [number, number] => [0.37 + (i % 3) * 0.13, 0.435 + Math.floor(i / 3) * 0.13]),
+    k: kClustered,
+  };
+  const out: MultiRow[] = [];
+  for (const carrier of ['texture', 'ubo'] as const) {
+    for (const edge of [1080, 2048]) {
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl2');
+      if (!gl) return [{ row: 'R', config: 'webgl2', values: { available: 'no' } }];
+      const t0 = performance.now();
+      const pass = createReshapePass(gl, { carrier });
+      const src = createTexture(gl, edge, edge);
+      const dst = createFramebuffer(gl, edge, edge);
+      pass.drawFaces(src, dst, [], {});
+      const px = new Uint8Array(4);
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      out.push({ row: 'RC', config: `${carrier} ${edge}`, values: { compile_ms: Math.round(performance.now() - t0) } });
+      const time = (faces: Parameters<typeof pass.drawFaces>[2]) => {
+        for (let i = 0; i < 30; i++) pass.drawFaces(src, dst, faces, { aspect: 1 });
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        const batches: number[] = [];
+        for (let b = 0; b < 10; b++) {
+          const s = performance.now();
+          for (let i = 0; i < 10; i++) pass.drawFaces(src, dst, faces, { aspect: 1 });
+          gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+          batches.push((performance.now() - s) / 10);
+        }
+        return median(batches);
+      };
+      const baseline = time([]);
+      for (const [name, { centres, k }] of Object.entries(layouts)) {
+        const faces = centres.map(([x, y]) => at(x, y, k));
+        const caps = capsFor(faces.map((f) => boxCentre(ovalBox(f))), [], 1);
+        const tfs = faces.map((f, i) => ({ face: f, u: attenuate(u, 0), layer: -1, window: WHOLE, centre: boxCentre(ovalBox(f)), cap: caps[i] }));
+        out.push({ row: 'R', config: `${carrier} ${edge} ${name}`, values: { ms: Math.round((time(tfs) - baseline) * 100) / 100 } });
+      }
+      pass.dispose();
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+    }
+  }
+  return out;
+}
+addRunner('R', () => rowR());

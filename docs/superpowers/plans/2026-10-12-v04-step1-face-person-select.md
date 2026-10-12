@@ -6189,7 +6189,7 @@ git commit -m "v0.4 step 1c: caps, face-table layout and the N-face CPU port wit
   - `gl.ts`: `createTextureArray(gl: GL, w: number, h: number, layers: number, internalFormat: number): Texture & { layers: number }`; `bindTextureArray(gl: GL, unit: number, tex: WebGLTexture | null): void`.
   - `window.runReshapePinMulti(carrier: 'texture' | 'ubo'): PinCase[]` (`tests/e2e/pages/reshape.ts`).
 
-- [ ] **Step 1: Failing pin first**
+- [x] **Step 1: Failing pin first**
 
 In `src/engine/passes/reshapeCpu.test.ts`, change the pin test to check both variants and a structural property, so the old shader fails it:
 
@@ -6207,7 +6207,7 @@ with `import { RESHAPE_FS, reshapeFs, … } from './reshape';` and, at the top, 
 Run: `npx vitest run src/engine/passes/reshapeCpu.test.ts`
 Expected: FAIL (`reshapeFs` is not exported).
 
-- [ ] **Step 2: GL helpers (`src/engine/gl/gl.ts`, append)**
+- [x] **Step 2: GL helpers (`src/engine/gl/gl.ts`, append)**
 
 ```ts
 /** A TEXTURE_2D_ARRAY (LINEAR, clamp) with storage for `layers` layers; uploads go through texSubImage3D. */
@@ -6229,7 +6229,7 @@ export function bindTextureArray(gl: GL, unit: number, tex: WebGLTexture | null)
 }
 ```
 
-- [ ] **Step 3: Rewrite the shader and the pass (`src/engine/passes/reshape.ts:180-412`)**
+- [x] **Step 3: Rewrite the shader and the pass (`src/engine/passes/reshape.ts:180-412`)**
 
 Keep everything above `/** texture unit of uBodyDisp` unchanged. Replace from there to the end of the file with:
 
@@ -6550,12 +6550,12 @@ Remove the old `uniform … uPts[111]` program code and the v0.3 `draw` body: th
 
 The pipeline still calls `reshape.draw(base, b, rf, rru, undefined, body, prot)` with `prot` a `Texture` (`pipeline.ts:407-420`): until Task 18, pass the FaceProtect object instead — in `pipeline.ts` replace `const prot = faceWarp ? protectTexture(job.faceProtect) : null;` with `const prot = faceWarp ? job.faceProtect : null;` (the pass uploads it). Delete the private `protectTexture`, `protTex`, `protKey`, `protWarned` state (`pipeline.ts:253-255, 289-318, 502-508`): the pass owns the upload now. Keep the exported, tested `faceProtectValid`, `protectUploadNeeded` and `ProtectUploadKey` (`pipeline.ts:160-194`).
 
-- [ ] **Step 4: Re-pin the hash (intended change #4)**
+- [x] **Step 4: Re-pin the hash (intended change #4)**
 
 Run: `npx vitest run src/engine/passes/reshapeCpu.test.ts -t pinned`
 Expected: FAIL with `expected 'xxxxxxxx' to be 'ced9563c'` (an 8-hex-digit FNV-1a hash of the new text). Set `PINNED` to the received 8-digit value and rerun: PASS. (A hash pin is a tripwire, so its value can only come from the final shader text; the e2e pins below are what prove the port.)
 
-- [ ] **Step 5: GPU pins for N faces and both carriers**
+- [x] **Step 5: GPU pins for N faces and both carriers**
 
 `tests/e2e/pages/reshape.ts`: keep `runReshapePin` as is (it calls the one-face `draw`); add:
 
@@ -6623,7 +6623,7 @@ test('reshape CPU port == RESHAPE_FS with N faces and caps, both face-table carr
 
 `tests/e2e/pages/faceProtect.ts`: `render(…, prot: Texture | null, …)` → `prot: FaceProtect | null`; at the call sites pass `c.protect` (or `null`) instead of `protTex(c.protect)`; delete `protTex` and the `deleteTexture(… pt.tex)` lines that freed it.
 
-- [ ] **Step 6: Bench rows R, RC, RP (`src/bench/multiFace.ts`, append)**
+- [x] **Step 6: Bench rows R, RC, RP (`src/bench/multiFace.ts`, append)**
 
 ```ts
 /** R: reshape microbench, N = 1…6 spread / 6 in a row at 1.2 FW / 2×3 at 1.3 FW, both carriers, 1080 and 2048; RC: compile + link; RP: GPU vs CPU pin */
@@ -6690,7 +6690,7 @@ addRunner('R', () => rowR());
 
 Add `'R'` to the buttons list in `mountMultiFace` (`for (const id of ['D', 'B', 'GL', 'R'])`). (RP: the e2e pin page runs in `/bench.html`'s dev server too; record its numbers by opening `/tests/e2e/pages/reshape.html` on the phone once a deploy exists — note this in §6.4.)
 
-- [ ] **Step 7: Run and record**
+- [x] **Step 7: Run and record**
 
 Run: `npx vitest run src/engine && npm run typecheck && npm run build`
 Expected: PASS.
@@ -6701,7 +6701,7 @@ Expected: PASS (one-face pins unchanged within 0.05 px; the multi pins < 0.05 px
 Run: `node scripts/bench-multiface.mjs R`
 Expected: R and RC rows. Append them to S §6.4 with the line `PR1/PRC (desktop): <fastest carrier and its N = 6 time>; FACE_TABLE_CARRIER stays 'texture' unless the UBO is faster on the slowest iPhone (pending a deploy).`
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/engine/passes/reshape.ts src/engine/passes/reshapeCpu.test.ts src/engine/gl/gl.ts src/engine/pipeline.ts tests/e2e/pages/reshape.ts tests/e2e/reshape.spec.ts tests/e2e/pages/faceProtect.ts src/bench/multiFace.ts docs/superpowers/specs/2026-10-12-face-person-select-design.md

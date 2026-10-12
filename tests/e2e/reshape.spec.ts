@@ -17,3 +17,17 @@ test('reshape CPU port == RESHAPE_FS (contour warps, every face warp, body field
     expect(c.maxErrPx, `${c.name}: ${JSON.stringify(c.samples.slice(0, 4))}`).toBeLessThan(0.05);
   }
 });
+
+test('reshape CPU port == RESHAPE_FS with N faces and caps, both face-table carriers (S §8.2)', async ({ page }) => {
+  await page.goto(`${DEV_URL}/tests/e2e/pages/reshape.html`);
+  await page.waitForFunction(() => typeof window.runReshapePinMulti === 'function');
+  for (const carrier of ['texture', 'ubo'] as const) {
+    const cases = await page.evaluate((c) => window.runReshapePinMulti!(c), carrier);
+    expect(cases).toHaveLength(3);
+    for (const c of cases) {
+      console.log(`${c.name}: ${c.n} px, ${c.moved} moved, max |GPU − CPU| = ${c.maxErrPx.toFixed(4)} px`);
+      expect(c.moved, c.name).toBeGreaterThan(300);
+      expect(c.maxErrPx, c.name).toBeLessThan(0.05);
+    }
+  }
+});

@@ -22,10 +22,15 @@
 // that settled as impossible for this photo (none built, and the segmenter unavailable, failing or finding nobody)
 // records "unlimited", which is what that output was. Every params write carries the record (paramsPatch). The limit
 // is built per face (a re-detected face gets a new one) and kept once built. The live camera never uses it.
+// With several faces (F1, S §4.7) every face has its own limit, keyed by its id: built only for a face whose person
+// draws a contour warp, from its paired pose mask when that covers it, else from the selfie mask clipped to its cell;
+// every other face, obstacle and body person counts as infinitely far. At most one limit is built per call (one per
+// animation frame, deps.schedule); the request stays photo-level.
 import { legacyProjection } from '../edit/legacy';
 import { sanitizeParams } from '../engine/params';
 import { reshapeUniforms } from '../engine/passes/reshape';
 import { stableKey } from '../store/undo';
+import type { ProtectRegions } from '../tracking/faceProtect';
 import type { BeautyParams, EditState, Face, FaceProtect, ParamId, PersonId, PersonMask } from '../types';
 
 /** the contour sliders (the only warps the limit acts on) and their reshape uniforms */
@@ -47,7 +52,12 @@ export function isContourEdit(key: string, before: number, after: number): boole
 
 /** a contour warp (the only warps the limit acts on) is drawn with these params */
 export function contourActive(p: BeautyParams): boolean {
-  const u = reshapeUniforms(p.values, 1);
+  return contourActiveValues(p.values);
+}
+
+/** a contour warp is drawn with these person values */
+export function contourActiveValues(values: Readonly<Record<string, number>>): boolean {
+  const u = reshapeUniforms(values as Record<ParamId, number>, 1);
   return Object.values(CONTOUR).some((k) => u[k] !== 0);
 }
 
@@ -106,7 +116,8 @@ export function maskCoversFace(face: Face, mask: PersonMask, minFrac = 0.5): boo
 export const PROTECT_WAIT_MS = 2500;
 
 export interface FaceProtectDeps {
-  build(face: Face, mask: PersonMask): FaceProtect;
+  /** buildFaceProtect at the photo's size: the mask alone (one face, v0.3's call) or the regions (S §4.7) */
+  build(face: Face, mask: PersonMask | ProtectRegions): FaceProtect;
   /** the 美體 mask is this face's person (maskCoversFace) */
   covers(face: Face, mask: PersonMask): boolean;
   /** the shared segmenter (services.ensureFaceSegmenter): null = unavailable */
@@ -118,7 +129,41 @@ export interface FaceProtectDeps {
   /** the editor closed: drop late results */
   cancelled(): boolean;
   report(e: unknown, where: string): void;
+  /** run fn on the next animation frame (tests: at once) */
+  schedule(fn: () => void): void;
 }
+
+/** one face's limit request (FaceProtectSource.updateAll) */
+export interface ProtectRequest {
+  id: string;
+  face: Face;
+  /** this face's person draws a contour warp */
+  contour: boolean;
+  /** the paired body's pose mask (null: none) */
+  pose: PersonMask | null;
+  /** everything but own / clipToCell */
+  others: Omit<ProtectRegions, 'own' | 'clipToCell'>;
+}
+
+const NO_OTHERS: ProtectRequest['others'] = { otherCentres: [], otherOvals: [], otherMasks: [], window: null };
+
+/** a face's built limit and what it was built from */
+interface Entry {
+  face: Face;
+  mask: PersonMask;
+  othersKey: string;
+  protect: FaceProtect;
+}
+
+/** identity of an oval / mask object in the others key (a new detection gives new objects) */
+const ids = new WeakMap<object, number>();
+let nextId = 0;
+const idOf = (o: object) => {
+  let v = ids.get(o);
+  if (v === undefined) ids.set(o, (v = ++nextId));
+  return v;
+};
+const othersKeyOf = (o: ProtectRequest['others']) => JSON.stringify([o.otherCentres, o.otherOvals.map(idOf), o.otherMasks.map(idOf), o.window]);
 
 type Seg = { phase: 'idle' } | { phase: 'working' } | { phase: 'done'; mask: PersonMask | null } | { phase: 'failed' };
 
@@ -157,11 +202,14 @@ export function paramsPatch(
 }
 
 export class FaceProtectSource {
-  private cur: { face: Face; mask: PersonMask; protect: FaceProtect } | null = null;
+  /** per face id: its limit, kept once built */
+  private entries = new Map<string, Entry>();
   private seg: Seg = { phase: 'idle' };
   private segStarted = 0;
-  /** covers() of the last (face, 美體 mask) pair: a few hundred samples, but update runs on every params change */
-  private bodyOk: { face: Face; mask: PersonMask; ok: boolean } | null = null;
+  /** per face id, covers() of the last (face, 美體 mask) pair: a few hundred samples, but update runs on every params change */
+  private bodyOk = new Map<string, { face: Face; mask: PersonMask; ok: boolean }>();
+  /** a deps.schedule callback is pending (the builds left over by the last updateAll) */
+  private scheduled = false;
   /** the limit is requested for this photo (sticky: see the header) */
   private asked: boolean;
 
@@ -190,9 +238,9 @@ export class FaceProtectSource {
     return this.asked;
   }
 
-  /** the limit for the current face, or null (unlimited) */
+  /** the limit for the (first) face, or null (unlimited): the one-face form */
   get protect(): FaceProtect | null {
-    return this.cur?.protect ?? null;
+    return this.entries.values().next().value?.protect ?? null;
   }
 
   /** where the segmenter stands (tests, debugging) */
@@ -211,56 +259,102 @@ export class FaceProtectSource {
   }
 
   /**
-   * Bring the limit up to date and return it (null = unlimited). `bodyMask`: the cached 美體 detection's mask (null when
-   * there is none, or it has none). `requested`: the limit was asked for (see the header: a user contour edit in this
-   * editor, or a reopened entry saved with it); sticky: once true it stays requested for the photo (request()). Starts
-   * the segmenter when it is the only source left, a contour warp is drawn and the limit was requested.
+   * Bring every face's limit up to date (F1) and return the limits to draw, by face id (absent = unlimited).
+   * `requested`: the limit was asked for (see the header: a user contour edit in this editor, or a reopened entry
+   * saved with it); sticky: once true it stays requested for the photo (request()). A limit is built only for a face
+   * whose person draws a contour warp and kept once built; the own region is the paired pose mask when it covers the
+   * face, else the selfie mask (clipped to the face's cell when other faces exist). Starts the segmenter when it is the
+   * only source left, a contour warp is drawn and the limit was requested. At most ONE build per call: the rest follow
+   * on deps.schedule (one per animation frame, `changed` asks for the next call), and a face whose limit is pending
+   * keeps its previous one meanwhile (or none).
    */
-  update(face: Face | null, contour: boolean, bodyMask: PersonMask | null, requested: boolean): FaceProtect | null {
+  updateAll(requests: readonly ProtectRequest[], requested: boolean): ReadonlyMap<string, FaceProtect> {
     if (requested) this.asked = true;
-    if (!face) return null;
+    const out = new Map<string, FaceProtect>();
     // not asked for: today's unlimited warp, also when a 美體 mask is at hand (its landing changes nothing shown)
-    if (!this.asked && !this.cur) return null;
-    // another person's 美體 mask is no mask for this face: fall through to the segmenter (or stay unlimited)
-    const body = bodyMask && this.ownBodyMask(face, bodyMask) ? bodyMask : null;
-    const mask = body ?? (this.seg.phase === 'done' ? this.seg.mask : null);
-    if (mask) {
-      if (this.cur?.face === face && this.cur.mask === mask) return this.cur.protect;
+    if (!this.asked && !this.entries.size) return out;
+    let built = false;
+    let pending = false;
+    for (const q of requests) {
+      const have = this.entries.get(q.id);
+      // another person's 美體 mask is no mask for this face: fall through to the segmenter (or stay unlimited)
+      const pose = q.pose && this.ownBodyMask(q.id, q.face, q.pose) ? q.pose : null;
+      const mask = pose ?? (this.seg.phase === 'done' ? this.seg.mask : null);
+      if (!mask) {
+        // no mask (yet): the segmenter, once per photo
+        if (q.contour && this.seg.phase === 'idle') this.startSegmenter();
+        if (have && have.face === q.face) out.set(q.id, have.protect);
+        continue;
+      }
+      const key = othersKeyOf(q.others);
+      if (have && have.face === q.face && have.mask === mask && have.othersKey === key) {
+        out.set(q.id, have.protect);
+        continue;
+      }
       // a limit exists only once a contour warp asked for one (building costs a few ms, nothing else)
-      if (!contour && !this.cur) return null;
+      if (!q.contour && !have) continue;
+      if (built) {
+        pending = true;
+        if (have && have.face === q.face) out.set(q.id, have.protect);
+        continue;
+      }
+      built = true;
       try {
-        this.cur = { face, mask, protect: this.deps.build(face, mask) };
+        // one face alone (no others, no window): v0.3's call exactly; else the regions form
+        const o = q.others;
+        const alone = !o.otherCentres.length && !o.otherOvals.length && !o.otherMasks.length && !o.window;
+        const protect = alone ? this.deps.build(q.face, mask) : this.deps.build(q.face, { ...o, own: mask, clipToCell: !pose && o.otherCentres.length > 0 });
+        this.entries.set(q.id, { face: q.face, mask, othersKey: key, protect });
+        out.set(q.id, protect);
       } catch (e) {
         this.deps.report(e, 'buildFaceProtect');
-        this.cur = null;
+        this.entries.delete(q.id);
       }
-      return this.protect;
     }
-    // no mask (yet): the segmenter, once per photo
-    if (contour && this.seg.phase === 'idle') this.startSegmenter();
-    return this.cur?.face === face ? this.cur.protect : null;
+    if (pending && !this.scheduled) {
+      this.scheduled = true;
+      this.deps.schedule(() => {
+        this.scheduled = false;
+        if (!this.deps.cancelled()) this.changed();
+      });
+    }
+    return out;
   }
 
   /**
-   * What a history write of an output drawn with `drawn` (the session's limit at export time) records: the request,
-   * and the segmenter mask the limit was built from, so a reopen rebuilds it with no model. Requested but not drawn
-   * (contour sliders neutral, no face found yet, a segmentation in flight) still records the request: the limit
-   * cannot act yet, and an edit made meanwhile must not drop it for later sessions. Only a limit settled as impossible
-   * for this photo (none built, and the segmenter unavailable, failing or finding nobody) records "unlimited".
+   * One face (v0.3's API; the face is 'f0'): bring its limit up to date and return it (null = unlimited). `bodyMask`:
+   * the cached 美體 detection's mask (null when there is none, or it has none); `requested` as in updateAll.
    */
-  record(drawn: FaceProtect | null): FaceProtectRecord {
-    const c = this.cur;
+  update(face: Face | null, contour: boolean, bodyMask: PersonMask | null, requested: boolean): FaceProtect | null {
+    if (!face) {
+      if (requested) this.asked = true;
+      return null;
+    }
+    return this.updateAll([{ id: 'f0', face, contour, pose: bodyMask, others: NO_OTHERS }], requested).get('f0') ?? null;
+  }
+
+  /**
+   * What a history write of an output drawn with `drawn` (the session's limit at export time: one, or every face's by
+   * id) records, photo-level: the request, and the segmenter mask a drawn limit was built from, so a reopen rebuilds
+   * it with no model. Requested but not drawn (contour sliders neutral, no face found yet, a segmentation in flight)
+   * still records the request: the limit cannot act yet, and an edit made meanwhile must not drop it for later
+   * sessions. Only a limit settled as impossible for this photo (none built, and the segmenter unavailable, failing or
+   * finding nobody) records "unlimited".
+   */
+  record(drawn: FaceProtect | ReadonlyMap<string, FaceProtect> | null): FaceProtectRecord {
+    const list: FaceProtect[] = !drawn ? [] : 'data' in drawn ? [drawn] : [...drawn.values()];
     const segMask = this.seg.phase === 'done' ? this.seg.mask : null;
-    if (drawn) {
-      return c && c.protect === drawn && segMask && c.mask === segMask ? { faceProtect: true, faceMask: segMask } : { faceProtect: true };
+    if (list.length) {
+      const fromSeg = !!segMask && [...this.entries.values()].some((e) => e.mask === segMask && list.includes(e.protect));
+      return fromSeg ? { faceProtect: true, faceMask: segMask } : { faceProtect: true };
     }
     if (!this.asked) return { faceProtect: false };
-    const impossible = !c && (this.seg.phase === 'failed' || (this.seg.phase === 'done' && !this.seg.mask));
+    const impossible = !this.entries.size && (this.seg.phase === 'failed' || (this.seg.phase === 'done' && !this.seg.mask));
     return { faceProtect: !impossible };
   }
 
-  private ownBodyMask(face: Face, mask: PersonMask): boolean {
-    const c = this.bodyOk;
+  private ownBodyMask(id: string, face: Face, mask: PersonMask): boolean {
+    const c = this.bodyOk.get(id);
     if (c?.face === face && c.mask === mask) return c.ok;
     let ok = false;
     try {
@@ -268,7 +362,7 @@ export class FaceProtectSource {
     } catch (e) {
       this.deps.report(e, 'maskCoversFace');
     }
-    this.bodyOk = { face, mask, ok };
+    this.bodyOk.set(id, { face, mask, ok });
     return ok;
   }
 

@@ -3,6 +3,7 @@
 // J2 (Task 25). Results join 複製結果 through formatMultiRows. /bench.html?fixtures=1 (dev server) loads the group
 // fixtures by URL so scripts/bench-multiface.mjs can drive it; on a phone the rows take a picked photo.
 import { FaceLandmarker, FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
+import { EDIT_DETECT_FACES } from '../config/limits';
 import { ENGINE_PATHS, loadEngineAssets, loadPoseModel } from '../engine/assets';
 import { probeFaceTable, probeR16FArray, readGlLimits } from '../engine/glProbe';
 import { downscaleMask } from '../tracking/bodyTracker';
@@ -139,9 +140,6 @@ export function addRunner(id: string, run: (photos: { faces: Blob; people: Blob 
   RUNNERS[id] = run;
 }
 
-/** rows that take no photo */
-const NO_PHOTO = new Set(['GL', 'R']);
-
 async function fixtures(): Promise<{ faces: Blob; people: Blob }> {
   const get = async (u: string) => (await fetch(u)).blob();
   return { faces: await get('/tests/fixtures/group_faces.png'), people: await get('/tests/fixtures/group_people.jpg') };
@@ -152,7 +150,7 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
   // own classes (styled in bench/main.ts STYLE like the 美體偵測 box): tests/harness/b3/bench.mjs locates '.body-bench'
   // and tests/harness/t8/run-bench.mjs '.gate .note', and this section sits in .gate, so reusing either breaks them
   section.className = 'multi-bench';
-  section.innerHTML = '<h3>多臉</h3><p class="multi-note">D：多臉偵測（選 group_faces.png）　B：多人美體（選 group_people.jpg）　GL：GPU 上限　R：多臉美型 GPU 時間（需開發伺服器的 /tests/fixtures）</p>';
+  section.innerHTML = '<h3>多臉</h3><p class="multi-note">D：多臉偵測（選 group_faces.png）　B：多人美體（選 group_people.jpg）　GL：GPU 上限　R：多臉美型 GPU 時間　F：每張臉的瘦臉限制建構時間（R、F 需開發伺服器的 /tests/fixtures）</p>';
   const note = document.createElement('pre');
   note.className = 'multi-note';
   const pick = (accept: string) =>
@@ -172,8 +170,8 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
   const run = async (id: string) => {
     note.textContent = `${id}…`;
     try {
-      // GL and R measure the GPU alone: no photo
-      const photo = NO_PHOTO.has(id) ? null : await pick('image/*');
+      // only D and B take a picked photo: GL measures the GPU alone, R, F and later rows load their own fixtures
+      const photo = id === 'D' || id === 'B' ? await pick('image/*') : null;
       const blob = photo ?? new Blob();
       const got = await RUNNERS[id]({ faces: blob, people: blob });
       rows.push(...got);
@@ -182,7 +180,7 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
       note.textContent = `${id}: ${e instanceof Error ? e.message : String(e)}`;
     }
   };
-  for (const id of ['D', 'B', 'GL', 'R']) {
+  for (const id of ['D', 'B', 'GL', 'R', 'F']) {
     const b = document.createElement('button');
     b.textContent = id;
     b.addEventListener('click', () => void run(id));
@@ -277,3 +275,40 @@ export async function rowR(): Promise<MultiRow[]> {
   return out;
 }
 addRunner('R', () => rowR());
+
+/** F: buildFaceProtect for each face of group6_faces.png at 2048 with a full-frame mask, in its 128² window */
+export async function rowF(): Promise<MultiRow[]> {
+  const { prepareFaces } = await import('../detect/faces');
+  const { buildFaceProtect, protectWindow } = await import('../tracking/faceProtect');
+  const { boxCentre, ovalBox } = await import('../engine/passes/faceCap');
+  const { createTracker } = await import('../tracking/tracker');
+  const res = await fetch('/tests/fixtures/group6_faces.png');
+  if (!res.ok) throw new Error(`F needs /tests/fixtures/group6_faces.png (the dev server): ${res.status}`);
+  const bmp = await decode(await res.blob(), 2048);
+  const { modelBuffer } = await loadEngineAssets();
+  const t = await createTracker({ modelBuffer, wasmBase: ENGINE_PATHS.wasmBase, delegate: 'auto' });
+  const p = prepareFaces(t.detectImage(bmp, { maxFaces: EDIT_DETECT_FACES }), bmp.width, bmp.height);
+  t.close();
+  const mask = { width: 256, height: 192, data: new Uint8Array(256 * 192).fill(255) };
+  const out = p.faces.map((f): MultiRow => {
+    const others = p.faces.filter((g) => g !== f);
+    const t0 = now();
+    buildFaceProtect(
+      f.face,
+      {
+        own: mask,
+        clipToCell: true,
+        otherCentres: others.map((g) => boxCentre(ovalBox(g.face))),
+        otherOvals: others.map((g) => g.face.oval),
+        otherMasks: [],
+        window: protectWindow(f.face, bmp.width, bmp.height),
+      },
+      bmp.width,
+      bmp.height,
+    );
+    return { row: 'F', config: f.id, values: { ms: round(now() - t0) } };
+  });
+  bmp.close();
+  return out;
+}
+addRunner('F', () => rowF());

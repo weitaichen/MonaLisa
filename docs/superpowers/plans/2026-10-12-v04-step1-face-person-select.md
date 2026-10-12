@@ -7734,7 +7734,7 @@ FaceProtectDeps gains schedule(fn: () => void): void  // next animation frame; t
 
 `update(face, contour, bodyMask, requested)` and `protect` stay as the one-face form (the face is `'f0'`).
 
-- [ ] **Step 1: Characterize today's single-face limit (snapshot) — before touching the code**
+- [x] **Step 1: Characterize today's single-face limit (snapshot) — before touching the code**
 
 Append to `src/tracking/faceProtect.test.ts`:
 
@@ -7761,7 +7761,7 @@ describe('single face is byte-equal to v0.3 (S §4.7 item 4)', () => {
 Run: `npx vitest run src/tracking/faceProtect.test.ts`
 Expected: PASS with `2 snapshots written` (today's code: this is the v0.3 reference). Commit the snapshot file with the task.
 
-- [ ] **Step 2: Failing tests for the regions**
+- [x] **Step 2: Failing tests for the regions**
 
 Append to `src/tracking/faceProtect.test.ts`:
 
@@ -7871,7 +7871,7 @@ In the file's `harness()` (`:27-47`) add `schedule: vi.fn((fn: () => void) => fn
 Run: `npx vitest run src/tracking/faceProtect.test.ts src/ui/faceProtectModel.test.ts`
 Expected: FAIL (`protectWindow` / `updateAll` missing).
 
-- [ ] **Step 3: Implement the regions (`src/tracking/faceProtect.ts`)**
+- [x] **Step 3: Implement the regions (`src/tracking/faceProtect.ts`)**
 
 Imports: `PROTECT_WINDOW` (`../config/limits`), `PROTECT_REACH` (`../engine/passes/reshape`), `ovalBox, uMaxBox` (`../engine/passes/faceCap`), `Rect` type. Replace `buildFaceProtect` (`:102-145`) with:
 
@@ -7984,7 +7984,7 @@ export function buildFaceProtect(face: Face, regions: ProtectRegions | PersonMas
 
 Byte-equality without others and without a window: `uvOf` gives `0 + ((x + 0.5) / w) · 1` (exact), `texel = 1 / w`, the others pass is skipped and `fwTexels` is today's expression, so the Step 1 snapshots must still match.
 
-- [ ] **Step 4: Per-face source (`src/ui/faceProtectModel.ts`)**
+- [x] **Step 4: Per-face source (`src/ui/faceProtectModel.ts`)**
 
 1. `contourActive` keeps its signature; add
 
@@ -8114,7 +8114,7 @@ The existing one-face tests keep passing: `update` routes through `updateAll` wi
 
 `Editor.tsx` (`:567-576`): the `FaceProtectSource` deps gain `schedule: (fn) => requestAnimationFrame(() => fn()),` (`build` is unchanged).
 
-- [ ] **Step 5: Bench row F (`src/bench/multiFace.ts`, append)**
+- [x] **Step 5: Bench row F (`src/bench/multiFace.ts`, append)**
 
 ```ts
 /** F: buildFaceProtect for each face of group6_faces.png at 2048 with a full-frame mask, in its 128² window */
@@ -8141,7 +8141,7 @@ addRunner('F', () => rowF());
 
 Add `'F'` to the buttons list in `mountMultiFace`; in its `run`, only D and B pick a photo: `const photo = id === 'D' || id === 'B' ? await pick('image/*') : null;` (R, F and later rows load their own fixtures).
 
-- [ ] **Step 5b: The windowed limit on the reshape map (S §8.1) and on the GPU (S §8.2)**
+- [x] **Step 5b: The windowed limit on the reshape map (S §8.1) and on the GPU (S §8.2)**
 
 Append to `src/engine/passes/faceProtect.test.ts` (imports: `buildFaceProtect, protectWindow` from `../../tracking/faceProtect`; `PersonMask` type):
 
@@ -8262,7 +8262,7 @@ bare('per-face limits in 128² windows: GPU == CPU port for two faces and a smal
 });
 ```
 
-- [ ] **Step 6: Run and commit**
+- [x] **Step 6: Run and commit**
 
 Run: `npx vitest run src/tracking src/ui src/engine && npm run typecheck`
 Expected: PASS (snapshots match: the single-face limit is byte-equal).

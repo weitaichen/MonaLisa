@@ -8,7 +8,8 @@ import { reshapeMapCpu, reshapeMapMulti, type UvMap } from '../../../src/engine/
 import { attenuate, boxCentre, ovalBox, WHOLE, type TableFace } from '../../../src/engine/passes/faceCap';
 import { applyPreset, setParam } from '../../../src/engine/params';
 import { adapt } from '../../../src/tracking/adapter111';
-import type { BodyField, Face, ParamId } from '../../../src/types';
+import { buildFaceProtect, protectWindow } from '../../../src/tracking/faceProtect';
+import type { BodyField, Face, FaceProtect, ParamId } from '../../../src/types';
 import type { Framebuffer, GL, Texture } from '../../../src/engine/gl/gl';
 
 export interface PinCase {
@@ -27,6 +28,7 @@ declare global {
   interface Window {
     runReshapePin?: () => PinCase[];
     runReshapePinMulti?: (carrier: 'texture' | 'ubo') => PinCase[];
+    runProtectPinMulti?: (carrier: 'texture' | 'ubo') => PinCase[];
   }
 }
 
@@ -149,13 +151,18 @@ window.runReshapePin = () => {
 };
 
 /** N-face cases through drawFaces on a pass with the given face-table carrier, against reshapeMapMulti */
-function pinCases(gl: GL, cases: readonly { name: string; faces: TableFace[] }[], aspect: number, carrier: 'texture' | 'ubo'): PinCase[] {
+function pinCases(
+  gl: GL,
+  cases: readonly { name: string; faces: TableFace[]; protects?: FaceProtect[] }[],
+  aspect: number,
+  carrier: 'texture' | 'ubo',
+): PinCase[] {
   const r = rig(gl);
   const pass = createReshapePass(gl, { carrier });
   const res: PinCase[] = [];
   for (const c of cases) {
-    pass.drawFaces(r.src, r.dst, c.faces, { aspect });
-    res.push(r.compare(c.name, reshapeMapMulti(c.faces, aspect)));
+    pass.drawFaces(r.src, r.dst, c.faces, { aspect, protects: c.protects });
+    res.push(r.compare(c.name, reshapeMapMulti(c.faces, aspect, { protects: c.protects })));
   }
   pass.dispose();
   r.dispose();
@@ -190,6 +197,51 @@ window.runReshapePinMulti = (carrier) => {
     { name: `two faces, every warp (${carrier})`, faces: [tf(A, capAB), tf(B, capAB)] },
     { name: `capped pair, one neutral (${carrier})`, faces: [tf(A, capAB), { ...tf(B, capAB), u: reshapeUniforms(applyPreset('original', 1).values, 1) }] },
     { name: `obstacle bounds the cap (${carrier})`, faces: [tf(A, Math.min(capObs, capAB))] },
+  ];
+  return pinCases(gl, cases, aspect, carrier);
+};
+
+window.runProtectPinMulti = (carrier) => {
+  // two faces with their 瘦臉 limits in 128² windows, and a small face (0.1 of the fixture's) alone in its window
+  const gl = context();
+  const { width: W, height: H } = landmarks;
+  const aspect = W / H;
+  const base = adapt({ points: new Float32Array(landmarks.points) }, W, H);
+  const shrink = (f: Face, k: number, dx: number): Face => {
+    const b = ovalBox(f);
+    const c = [b.x + b.w / 2, b.y + b.h / 2];
+    const m = (a: Float32Array) => a.map((v, i) => (i % 2 === 0 ? c[0] + (v - c[0]) * k + dx : c[1] + (v - c[1]) * k));
+    return { pts111: m(f.pts111), ext: m(f.ext), oval: m(f.oval), yaw: f.yaw };
+  };
+  const A = shrink(base, 0.45, -0.24);
+  const B = shrink(base, 0.45, 0.24);
+  const S = shrink(base, 0.1, 0);
+  const contour: ParamId[] = ['shape.faceSlim', 'shape.faceV', 'shape.faceNarrow'];
+  const u = reshapeUniforms(contour.reduce((p, k) => setParam(p, k, 1), applyPreset('original', 1)).values, 1);
+  const limit = (f: Face, others: Face[]) =>
+    buildFaceProtect(
+      f,
+      { own: null, clipToCell: false, otherCentres: others.map((g) => boxCentre(ovalBox(g))), otherOvals: others.map((g) => g.oval), otherMasks: [], window: protectWindow(f, W, H) },
+      W,
+      H,
+    );
+  const pA = limit(A, [B]);
+  const pB = limit(B, [A]);
+  const pS = limit(S, []);
+  const cA = boxCentre(ovalBox(A));
+  const cB = boxCentre(ovalBox(B));
+  const capAB = Math.hypot(cA[0] - cB[0], (cA[1] - cB[1]) / aspect) / 2;
+  const tf = (f: Face, cap: number, layer: number, p: FaceProtect): TableFace => ({
+    face: f,
+    u: attenuate(u, f.yaw),
+    layer,
+    window: p.window ?? WHOLE,
+    centre: boxCentre(ovalBox(f)),
+    cap,
+  });
+  const cases: { name: string; faces: TableFace[]; protects: FaceProtect[] }[] = [
+    { name: `two faces, windowed limits (${carrier})`, faces: [tf(A, capAB, 0, pA), tf(B, capAB, 1, pB)], protects: [pA, pB] },
+    { name: `small face in its 128² window (${carrier})`, faces: [tf(S, -1, 0, pS)], protects: [pS] },
   ];
   return pinCases(gl, cases, aspect, carrier);
 };

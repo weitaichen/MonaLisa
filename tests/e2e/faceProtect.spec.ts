@@ -482,3 +482,17 @@ test('face protect: a contour edit flushed while the WebGL context is lost keeps
   // the flushed params carry the request: a reopen draws them with the limit the user saw them with
   await expect.poll(async () => (await entries(page)).map((e) => e.faceProtect), { timeout: 15_000 }).toEqual([true]);
 });
+
+bare('per-face limits in 128² windows: GPU == CPU port for two faces and a small face, both carriers (S §8.2)', async ({ page }) => {
+  await page.goto(`${DEV_URL}/tests/e2e/pages/reshape.html`);
+  await page.waitForFunction(() => typeof window.runProtectPinMulti === 'function');
+  for (const carrier of ['texture', 'ubo'] as const) {
+    const cases = await page.evaluate((c) => window.runProtectPinMulti!(c), carrier);
+    expect(cases).toHaveLength(2);
+    for (const c of cases) {
+      console.log(`${c.name}: ${c.n} px, ${c.moved} moved, max |GPU − CPU| = ${c.maxErrPx.toFixed(4)} px`);
+      expect(c.moved).toBeGreaterThan(0);
+      expect(c.maxErrPx).toBeLessThan(0.05);
+    }
+  }
+});

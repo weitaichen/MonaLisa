@@ -606,6 +606,7 @@ export function Editor({ source }: { source: EditorSource }) {
           now: () => performance.now(),
           cancelled: () => unmounted.current,
           report: (e, where) => reportError(e, where),
+          schedule: (fn) => requestAnimationFrame(() => fn()),
         },
         () => setProtectTick((n) => n + 1),
         // a reopened entry's saved segmentation: the same limit at once, no model

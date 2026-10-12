@@ -44,6 +44,7 @@ function harness(
     now: vi.fn(() => 1000),
     cancelled: vi.fn(() => false),
     report: vi.fn(),
+    schedule: vi.fn((fn: () => void) => fn()),
   } satisfies FaceProtectDeps;
   const changed = vi.fn();
   return { deps, changed, built, src: new FaceProtectSource(deps, changed, savedMask, requested) };
@@ -445,6 +446,39 @@ describe('FaceProtectSource', () => {
     h.src.update(face(), true, null, true);
     await flush();
     expect(h.changed).not.toHaveBeenCalled();
+  });
+});
+
+describe('FaceProtectSource per face (F1)', () => {
+  // ≥ 2 faces: the others are listed and each face has a window, so the regions form of build is used
+  const others = { otherCentres: [[0.9, 0.5]] as [number, number][], otherOvals: [], otherMasks: [], window: { x: 0, y: 0, w: 0.5, h: 0.5 } };
+  const req = (id: string, f: Face, contour: boolean, pose: PersonMask) => ({ id, face: f, contour, pose, others });
+  it('builds only the faces whose person draws a contour warp, at most one per call; the rest follow on schedule', () => {
+    const h = harness();
+    const [A, B, m] = [face(), face(), mask()];
+    const r1 = h.src.updateAll([req('f0', A, true, m), req('f1', B, true, m)], true);
+    expect(r1.size).toBe(1);
+    expect(h.built).toHaveLength(1);
+    expect(h.deps.schedule).toHaveBeenCalledTimes(1);
+    expect(h.changed).toHaveBeenCalledTimes(1); // the fake schedule runs at once: the editor calls updateAll again
+    const r2 = h.src.updateAll([req('f0', A, true, m), req('f1', B, true, m)], true);
+    expect(r2.size).toBe(2);
+    expect(h.built).toHaveLength(2);
+    expect(h.src.updateAll([req('f0', A, true, m), req('f1', B, false, m)], true).size).toBe(2); // kept once built
+    expect(h.built).toHaveLength(2);
+  });
+  it('a contour edit on person 2 builds only f1; repeating the same requests rebuilds nothing', () => {
+    const h = harness();
+    const [A, B, m] = [face(), face(), mask()];
+    h.src.updateAll([req('f0', A, false, m), req('f1', B, true, m)], true);
+    expect(h.built).toHaveLength(1);
+    h.src.updateAll([req('f0', A, false, m), req('f1', B, true, m)], true);
+    expect(h.built).toHaveLength(1);
+  });
+  it('record stays photo-level: requested and drawn → true with any limit', () => {
+    const h = harness();
+    const drawn = h.src.updateAll([req('f0', face(), true, mask())], true);
+    expect(h.src.record(drawn).faceProtect).toBe(true);
   });
 });
 

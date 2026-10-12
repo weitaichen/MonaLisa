@@ -443,6 +443,22 @@ export function measurePersons(
   return out;
 }
 
+/**
+ * The lens's per-person 美體 gate (S §2.4 "Availability under 全部"): that person's own measure decides. A body person
+ * without one (measureBody threw, so measurePersons skipped it) can use no local item: fieldInputOf lists measured
+ * persons only, so a write to it would move nothing (a dead slider, Review Focus #2; v0.3 disabled these items with
+ * BODY_UNMEASURED_REASON).
+ */
+export function measuredAvailable(
+  measures: ReadonlyMap<PersonId, BodyMeasure>,
+  person: PersonId,
+  id: ParamId,
+  availability: (m: BodyMeasure, id: ParamId) => RegionStatus,
+): boolean {
+  const m = measures.get(person);
+  return !!m && availability(m, id).ok;
+}
+
 /** the 長腿 anchor (S §4.6): legsAnchor with a body, else the primary with a body, else the best-scoring body person */
 export function legsAnchorOf(edit: EditState, cache: DetectionCache, measures: ReadonlyMap<PersonId, BodyMeasure>): PersonId | null {
   const a = edit.photo.legsAnchor;

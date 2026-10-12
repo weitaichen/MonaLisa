@@ -61,6 +61,7 @@ import {
   frameFacesOf,
   hitCtxOf,
   legsAnchorOf,
+  measuredAvailable,
   measurePersons,
   PERSON_TABS,
   protectRequests,
@@ -236,13 +237,7 @@ export function Editor({ source }: { source: EditorSource }) {
   );
   const measuresRef = useRef(measures);
   measuresRef.current = measures;
-  const lensOf = (e: EditState) =>
-    lensFor(e, selected, infos, primary, {
-      available: (p, id) => {
-        const m = measuresRef.current.get(p);
-        return !m || paramAvailability(m, id).ok;
-      },
-    });
+  const lensOf = (e: EditState) => lensFor(e, selected, infos, primary, { available: (p, id) => measuredAvailable(measuresRef.current, p, id, paramAvailability) });
   /** every face's 瘦臉 limit by face id (absent = unlimited): every render and export draws with them */
   const [protects, setProtects] = useState<ReadonlyMap<string, FaceProtect>>(() => new Map());
   const protectsRef = useRef(protects);

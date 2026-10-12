@@ -6,7 +6,7 @@ import { fakeBodyTracker, makeBodyDetection, makeBodyDetections, makeBodyField, 
 import { personInfos } from '../detect/cache';
 import { cacheBody, makeCache } from '../detect/testCaches';
 import { applyPreset, setBodyProtect, setFilter, setHeightBand, setParam } from '../engine/params';
-import type { BeautyParams, BodyField, EditState, Face, ParamId, RegionStatus, TrackerState } from '../types';
+import type { BeautyParams, BodyField, EditState, Face, ParamId, PersonId, RegionStatus, Selection, TrackerState } from '../types';
 import { lensFor, P0_INFO } from '../edit/lens';
 import { editFromLegacy } from '../edit/legacy';
 import { assignPersons, withPersons } from '../edit/state';
@@ -32,6 +32,7 @@ import {
   frameFacesOf,
   hitCtxOf,
   MAX_REDETECTS,
+  measuredAvailable,
   measurePersons,
   measureSafe,
   needsBodyMeasure,
@@ -45,7 +46,7 @@ import {
   undoToast,
   type BodyDet,
 } from './editorModel';
-import { BODY_ERROR_NOTE, bodyNote, INITIAL_SELECTION, itemsFor } from './panelModel';
+import { BODY_ERROR_NOTE, bodyNote, INITIAL_SELECTION, itemsFor, sliderFor } from './panelModel';
 
 const lensOfEdit = (e: EditState) => lensFor(e, { kind: 'person', id: 'p0' }, P0_INFO, 'p0');
 const lensOf = (p: BeautyParams) => lensOfEdit(editFromLegacy(p));
@@ -559,6 +560,35 @@ describe('persons in the editor model (S §3.3)', () => {
     const ms = measurePersons(cache, () => FACE, (d, f) => (seen.push([d.pose.points[0], f !== null]), {} as BodyMeasure), () => undefined);
     expect([...ms.keys()]).toEqual(['f0', 'b1']);
     expect(seen.map(([, f]) => f)).toEqual([true, false]);
+  });
+  it('a body person without a measure (measureBody threw) can use no local 美體 item: no dead slider (Review Focus #2)', () => {
+    // the waist is measurable on any measure; nothing without one
+    const torso = (m: BodyMeasure | null, id: ParamId): RegionStatus => (m && id === 'body.waist' ? { ok: true, reason: null } : { ok: false, reason: 'x' });
+    const lens = (s: Selection, ms: ReadonlyMap<PersonId, BodyMeasure>) =>
+      lensFor(assignPersons(editFromLegacy(applyPreset('natural', 1)), ['f0', 'f1', 'b1'], 'f0'), s, personInfos(cache), 'f0', {
+        available: (p, id) => measuredAvailable(ms, p, id, torso),
+      });
+    const s = { ...INITIAL_SELECTION, tab: 'body' as const, body: 'body.waist' as const };
+    const waist = (l: ReturnType<typeof lens>, c: ReturnType<typeof bodyPanelContext>) => itemsFor(l, s, c).find((i) => i.key === 'body.waist')!;
+    // every measure threw: the context reads BODY_UNMEASURED_REASON, and so does the item, for 全部 and each body person
+    const boom = (): BodyMeasure => {
+      throw new Error('bad mask');
+    };
+    const none = measurePersons(cache, () => FACE, boom, () => undefined);
+    expect(none.size).toBe(0);
+    const unmeasured = bodyPanelContext({ phase: 'done', det: makeBodyDetection(2) }, { state: 'ready' }, null, torso);
+    for (const sel of [{ kind: 'all' }, { kind: 'person', id: 'f0' }, { kind: 'person', id: 'b1' }] as Selection[]) {
+      expect(waist(lens(sel, none), unmeasured), JSON.stringify(sel)).toMatchObject({ disabled: true, reason: BODY_UNMEASURED_REASON });
+      expect(sliderFor(lens(sel, none), s, unmeasured), JSON.stringify(sel)).toBeNull();
+    }
+    // only b1 measured: 全部 writes b1 alone; f0 (a body, no measure) has no slider
+    const m = {} as BodyMeasure;
+    const some = new Map([['b1', m]]);
+    const measured = bodyPanelContext({ phase: 'done', det: makeBodyDetection(2) }, { state: 'ready' }, m, torso);
+    expect(lens({ kind: 'all' }, some).targets('body.waist')).toEqual(['b1']);
+    expect(waist(lens({ kind: 'all' }, some), measured).disabled).toBe(false);
+    expect(waist(lens({ kind: 'person', id: 'f0' }, some), measured).disabled).toBe(true);
+    expect(sliderFor(lens({ kind: 'person', id: 'f0' }, some), s, measured)).toBeNull();
   });
   it('fieldInputOf lists only persons with a body and a non-neutral local item; 長腿 anchors on the primary with a body', () => {
     const m0 = {} as BodyMeasure;

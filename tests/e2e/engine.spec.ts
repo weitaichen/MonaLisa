@@ -175,4 +175,7 @@ test('two faces: per-face skin strengths and makeup; the neutral face is untouch
   expect(r.maskBBorder).toBeLessThan(0.5);
   expect(r.lipA).toBeGreaterThan(3);
   expect(Math.abs(r.lipA - r.lipASolo)).toBeLessThan(0.5);
+  // overlapping meshes: a later mesh without lip makeup keeps the earlier face's lip (the MESH_FS discard, §4.3)
+  expect(r.lipOverlapSolo).toBeGreaterThan(3);
+  expect(Math.abs(r.lipOverlap - r.lipOverlapSolo)).toBeLessThan(0.5);
 });

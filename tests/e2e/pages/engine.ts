@@ -27,7 +27,15 @@ export interface EngineCheck {
 declare global {
   interface Window {
     runEngineCheck?: () => Promise<EngineCheck>;
-    runEngineMulti?: () => Promise<{ maskA: number; maskB: number; maskBBorder: number; lipA: number; lipASolo: number }>;
+    runEngineMulti?: () => Promise<{
+      maskA: number;
+      maskB: number;
+      maskBBorder: number;
+      lipA: number;
+      lipASolo: number;
+      lipOverlap: number;
+      lipOverlapSolo: number;
+    }>;
   }
 }
 
@@ -108,6 +116,19 @@ window.runEngineMulti = async () => {
   const both = engine.renderToImageData(frame([{ face: A.face, weight: 1, person: lipPerson, protect: null }, { face: B.face, weight: 1, person: neutralPerson(), protect: null }]), { mirror: false });
   const solo = engine.renderToImageData(frame([{ face: A.face, weight: 1, person: lipPerson, protect: null }]), { mirror: false });
   const orig = engine.renderToImageData(frame([]), { mirror: false });
+  // overlapping meshes (the case the MESH_FS discard exists for): two entries on A's landmarks, both on 原圖 (no warp,
+  // no smoothing), the first with a rose lip only, the second with blush only. The second mesh covers the first, and
+  // its blush factor is 1 at the lip, so without the discard it writes src · 1 over the first face's lip (§4.3).
+  const lipOnly = splitLegacy(setShade(setParam(applyPreset('original', 1), 'makeup.lip', 0.8), 'lip', 'rose')).person;
+  const blushOnly = splitLegacy(setParam(applyPreset('original', 1), 'makeup.blush', 0.8)).person;
+  const overlap = engine.renderToImageData(
+    frame([
+      { face: A.face, weight: 1, person: lipOnly, protect: null },
+      { face: A.face, weight: 1, person: blushOnly, protect: null },
+    ]),
+    { mirror: false },
+  );
+  const overlapSolo = engine.renderToImageData(frame([{ face: A.face, weight: 1, person: lipOnly, protect: null }]), { mirror: false });
   const mean = (img: ImageData, cx: number, cy: number, r = 3) => {
     let s = 0;
     let n = 0;
@@ -132,5 +153,7 @@ window.runEngineMulti = async () => {
     maskBBorder: Math.abs(mean(both, Q[0], Q[1]) - mean(orig, Q[0], Q[1])),
     lipA: Math.abs(mean(both, lip[0], lip[1]) - mean(orig, lip[0], lip[1])),
     lipASolo: Math.abs(mean(solo, lip[0], lip[1]) - mean(orig, lip[0], lip[1])),
+    lipOverlap: Math.abs(mean(overlap, lip[0], lip[1]) - mean(orig, lip[0], lip[1])),
+    lipOverlapSolo: Math.abs(mean(overlapSolo, lip[0], lip[1]) - mean(orig, lip[0], lip[1])),
   };
 };

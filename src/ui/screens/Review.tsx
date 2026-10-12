@@ -90,7 +90,7 @@ export function Review({ shot }: { shot: Shot }) {
       return;
     }
     handedOff.current = true;
-    go({ name: 'editor', source: freshSource(shot.original, cameraShotEdit(shot.look, null), 'camera') });
+    go({ name: 'editor', source: freshSource(shot.original, cameraShotEdit(shot.look, shot.faceSeed), 'camera', shot.faceSeed) });
   };
 
   const busy = !file && !encodeErr;

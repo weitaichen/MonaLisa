@@ -5,6 +5,8 @@ import { resolve } from 'node:path';
 import { defineConfig } from '@playwright/test';
 
 const y4m = resolve(import.meta.dirname, 'tests/fixtures/face.y4m');
+// three faces (gen-y4m composeGroupCam): the chromium-group project runs camera-group.spec.ts on it
+const groupY4m = resolve(import.meta.dirname, 'tests/fixtures/group.y4m');
 const APP_URL = 'http://127.0.0.1:4173';
 const DEV_URL = 'http://127.0.0.1:5190';
 
@@ -32,6 +34,7 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
+      testIgnore: 'camera-group.spec.ts',
       use: {
         browserName: 'chromium',
         launchOptions: {
@@ -40,6 +43,21 @@ export default defineConfig({
             '--use-fake-device-for-media-stream',
             `--use-file-for-fake-video-capture=${y4m}`,
             // headless has no GPU here: let WebGL2 (engine + MediaPipe GPU delegate) run on SwiftShader
+            '--enable-unsafe-swiftshader',
+          ],
+        },
+      },
+    },
+    {
+      name: 'chromium-group',
+      testMatch: 'camera-group.spec.ts',
+      use: {
+        browserName: 'chromium',
+        launchOptions: {
+          args: [
+            '--use-fake-ui-for-media-stream',
+            '--use-fake-device-for-media-stream',
+            `--use-file-for-fake-video-capture=${groupY4m}`,
             '--enable-unsafe-swiftshader',
           ],
         },

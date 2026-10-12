@@ -1,6 +1,7 @@
 // createTracker recovery paths against a fake MediaPipe: lost GL context (event and poll),
 // poisoned-graph rebuilds, throttling, escalation, logging and the GPU → CPU last resort.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { LIVE_DETECT_FACES } from '../config/limits';
 import type { TrackerState } from '../types';
 
 const h = vi.hoisted(() => ({
@@ -86,7 +87,7 @@ class FakeDocument {
 
 const video = { readyState: 4, videoWidth: 640, videoHeight: 480 } as unknown as HTMLVideoElement;
 const image = { width: 100, height: 100 } as unknown as ImageBitmap;
-const ONE = { maxFaces: 1 };
+const ONE = { maxFaces: LIVE_DETECT_FACES };
 
 let doc: FakeDocument;
 let states: TrackerState[];
@@ -148,7 +149,7 @@ describe('createTracker: lost GL context', () => {
     expect(second.detectForVideo.mock.calls[0][1]).toBeGreaterThan(20);
     expect(second.setOptions).not.toHaveBeenCalled(); // new graph already in VIDEO
     expect(t.detectImage(image, ONE)).toHaveLength(1);
-    expect(second.setOptions).toHaveBeenLastCalledWith({ runningMode: 'IMAGE', numFaces: 1 });
+    expect(second.setOptions).toHaveBeenLastCalledWith({ runningMode: 'IMAGE', numFaces: LIVE_DETECT_FACES });
   });
 
   it('reacts to the webglcontextlost event and ignores later events from retired canvases', async () => {
@@ -274,7 +275,7 @@ describe('createTracker: inference failures', () => {
     });
     expect(() => t.detectVideo(video, 1, ONE)).toThrow('ROI');
     expect(t.detectVideo(video, 2, ONE)).not.toBeNull();
-    expect(lm.setOptions).toHaveBeenCalledWith({ runningMode: 'VIDEO', numFaces: 1 }); // same-mode rebuild
+    expect(lm.setOptions).toHaveBeenCalledWith({ runningMode: 'VIDEO', numFaces: LIVE_DETECT_FACES }); // same-mode rebuild
     expect(t.detectVideo(video, 3, ONE)).not.toBeNull();
     expect(lm.setOptions).toHaveBeenCalledTimes(1);
     expect(h.created).toHaveLength(1);
@@ -291,9 +292,9 @@ describe('createTracker: inference failures', () => {
     });
     expect(() => t.detectVideo(video, 1, ONE)).toThrow();
     expect(t.detectImage(image, ONE)).toHaveLength(1);
-    expect(lm.setOptions.mock.calls).toEqual([[{ runningMode: 'IMAGE', numFaces: 1 }]]);
+    expect(lm.setOptions.mock.calls).toEqual([[{ runningMode: 'IMAGE', numFaces: LIVE_DETECT_FACES }]]);
     expect(t.detectVideo(video, 2, ONE)).not.toBeNull();
-    expect(lm.setOptions.mock.calls).toEqual([[{ runningMode: 'IMAGE', numFaces: 1 }], [{ runningMode: 'VIDEO', numFaces: 1 }]]);
+    expect(lm.setOptions.mock.calls).toEqual([[{ runningMode: 'IMAGE', numFaces: LIVE_DETECT_FACES }], [{ runningMode: 'VIDEO', numFaces: LIVE_DETECT_FACES }]]);
   });
 
   it('logs each distinct error once', async () => {
@@ -433,7 +434,7 @@ describe('createTracker: multiple faces (S §3.4 T1, T2)', () => {
   it('numFaces travels with runningMode in one setOptions; no call when neither changes', async () => {
     const t = await make();
     const lm = last();
-    expect(lm.opts.numFaces).toBe(1); // the first instance: LIVE_DETECT_FACES
+    expect(lm.opts.numFaces).toBe(LIVE_DETECT_FACES); // the first instance
     t.detectImage(image, { maxFaces: 8 });
     t.detectImage(image, { maxFaces: 8 });
     expect(lm.setOptions.mock.calls).toEqual([[{ runningMode: 'IMAGE', numFaces: 8 }]]);

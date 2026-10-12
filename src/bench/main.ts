@@ -8,6 +8,7 @@ import { debugState, reportError } from '../app/debug';
 import { type LiveLoop, type LiveStats, autoTierSession, resetAutoTierSession, startLiveLoop } from '../app/live';
 import { type StillSession, createStillSession } from '../app/still';
 import { legacyFrame } from '../edit/frame';
+import { splitLegacy } from '../edit/legacy';
 import { ENGINE_PATHS, loadEngineAssets, loadPoseModel } from '../engine/assets';
 import { createEngine, isWebGL2Supported } from '../engine/index';
 import { applyPreset, resetGroup } from '../engine/params';
@@ -338,7 +339,8 @@ function startLoop(): void {
     camera,
     engine,
     tracker,
-    getParams: () => params,
+    getLook: () => splitLegacy(params),
+    getAll: () => false,
     getPrefs: () => prefs,
     onStats: (s) => {
       stats = s;
@@ -402,7 +404,7 @@ async function captureTest(): Promise<void> {
   if (!loop) return;
   try {
     const t0 = performance.now();
-    const img = loop.capture();
+    const img = loop.capture()?.image ?? null;
     const t1 = performance.now();
     if (!img) {
       note.textContent = '尚無畫面';

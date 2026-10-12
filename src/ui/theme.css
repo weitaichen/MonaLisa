@@ -2227,3 +2227,51 @@ button.row:active {
   transform: scale(calc(1 / var(--zs, 1)));
   transform-origin: top left;
 }
+
+/* ───────────── Camera: 全部套用 and the face marker (S §2.5) ───────────── */
+
+.all-chip {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  height: 32px;
+  z-index: 3;
+}
+/* the pill is the float button's span (.float-btn > span); on = accent fill, as .float-btn.held > span */
+.all-chip.on > span {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.cam-marker {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.cam-ring {
+  position: absolute;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  animation: cam-ring 800ms ease-out forwards;
+}
+.cam-dot {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+@keyframes cam-ring {
+  from {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+  to {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cam-ring {
+    animation: none;
+  }
+}

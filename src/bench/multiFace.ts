@@ -3,10 +3,14 @@
 // J2 (Task 25). Results join 複製結果 through formatMultiRows. /bench.html?fixtures=1 (dev server) loads the group
 // fixtures by URL so scripts/bench-multiface.mjs can drive it; on a phone the rows take a picked photo.
 import { FaceLandmarker, FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
+import { LandmarkSmoother } from '../app/oneEuro';
 import { EDIT_DETECT_FACES } from '../config/limits';
 import { ENGINE_PATHS, loadEngineAssets, loadPoseModel } from '../engine/assets';
 import { probeFaceTable, probeR16FArray, readGlLimits } from '../engine/glProbe';
+import { ovalBox } from '../engine/passes/faceCap';
+import { adapt } from '../tracking/adapter111';
 import { downscaleMask } from '../tracking/bodyTracker';
+import type { Landmarks478, Tracker } from '../types';
 import { formatMultiRows, median, type MultiRow } from './report';
 
 const rows: MultiRow[] = [];
@@ -150,7 +154,7 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
   // own classes (styled in bench/main.ts STYLE like the 美體偵測 box): tests/harness/b3/bench.mjs locates '.body-bench'
   // and tests/harness/t8/run-bench.mjs '.gate .note', and this section sits in .gate, so reusing either breaks them
   section.className = 'multi-bench';
-  section.innerHTML = '<h3>多臉</h3><p class="multi-note">D：多臉偵測（選 group_faces.png）　B：多人美體（選 group_people.jpg）　GL：GPU 上限　R：多臉美型 GPU 時間　F：每張臉的瘦臉限制建構時間　BF：四人美體場建構時間　PE：多臉編輯每格時間　M：多人美體偵測記憶體（頁面被終止時，下次開啟會回報）（R、F、BF、PE、M 需開發伺服器的 /tests/fixtures）</p>';
+  section.innerHTML = '<h3>多臉</h3><p class="multi-note">D：多臉偵測（選 group_faces.png）　B：多人美體（選 group_people.jpg）　GL：GPU 上限　R：多臉美型 GPU 時間　F：每張臉的瘦臉限制建構時間　BF：四人美體場建構時間　PE：多臉編輯每格時間　M：多人美體偵測記憶體（頁面被終止時，下次開啟會回報）　L：相機多臉追蹤時間　J／J2：相機平滑的抖動／延遲（L、J、J2 用相機）（R、F、BF、PE、M 需開發伺服器的 /tests/fixtures）</p>';
   // a page killed during M (out of memory) left its breadcrumb: report it first
   const killed = staleKill();
   if (killed) rows.push(killed);
@@ -184,7 +188,7 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
       note.textContent = `${id}: ${e instanceof Error ? e.message : String(e)}`;
     }
   };
-  for (const id of ['D', 'B', 'GL', 'R', 'F', 'BF', 'PE', 'M']) {
+  for (const id of ['D', 'B', 'GL', 'R', 'F', 'BF', 'PE', 'M', 'L', 'J', 'J2']) {
     const b = document.createElement('button');
     b.textContent = id;
     b.addEventListener('click', () => void run(id));
@@ -443,3 +447,174 @@ export function staleKill(): MultiRow | null {
   }
   return run === null ? null : { row: 'M', config: `killed during run ${run}`, values: { killed: 1 } };
 }
+
+const r1 = (v: number) => Math.round(v * 10) / 10;
+
+async function cameraVideo(): Promise<{ video: HTMLVideoElement; stop(): void }> {
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+  const video = document.createElement('video');
+  video.muted = true;
+  video.playsInline = true;
+  video.srcObject = stream;
+  await video.play();
+  return { video, stop: () => stream.getTracks().forEach((t) => t.stop()) };
+}
+
+/** call `frame` on every video frame for `ms`; resolves with the frame rate */
+function eachFrame(video: HTMLVideoElement, ms: number, frame: (now: number) => void): Promise<number> {
+  return new Promise((done) => {
+    const t0 = performance.now();
+    let n = 0;
+    const tick = (now: number) => {
+      frame(now);
+      n++;
+      if (now - t0 < ms) video.requestVideoFrameCallback(tick);
+      else done(n / ((now - t0) / 1000));
+    };
+    video.requestVideoFrameCallback(tick);
+  });
+}
+
+async function liveTracker(): Promise<Tracker> {
+  const { createTracker } = await import('../tracking/tracker');
+  const { modelBuffer } = await loadEngineAssets();
+  return createTracker({ modelBuffer, wasmBase: ENGINE_PATHS.wasmBase, delegate: 'auto' });
+}
+
+/** L: detectVideo at numFaces 1 and 3 on the camera for 10 s each (phone: point it at group_faces.png; desktop: --video group.y4m) */
+export async function rowL(): Promise<MultiRow[]> {
+  const cam = await cameraVideo();
+  const out: MultiRow[] = [];
+  try {
+    for (const n of [1, 3]) {
+      const t = await liveTracker();
+      const times: number[] = [];
+      let faces = 0;
+      const fps = await eachFrame(cam.video, 10_000, (now) => {
+        const t0 = performance.now();
+        const r = t.detectVideo(cam.video, now, { maxFaces: n });
+        times.push(performance.now() - t0);
+        faces = Math.max(faces, r?.length ?? 0);
+      });
+      t.close();
+      times.sort((a, b) => a - b);
+      out.push({ row: 'L', config: `numFaces ${n}`, values: { p50_ms: r1(times[times.length >> 1]), p95_ms: r1(times[Math.floor(times.length * 0.95)]), fps: r1(fps), faces } });
+    }
+  } finally {
+    cam.stop();
+  }
+  return out;
+}
+
+/** the largest face's pts111 (UV) of a detection */
+function largestFace(lms: readonly Landmarks478[] | null, w: number, h: number): Float32Array | null {
+  if (!lms?.length) return null;
+  const faces = lms.map((l) => adapt(l, w, h));
+  const best = faces.reduce((a, f) => (ovalBox(f).w * ovalBox(f).h > ovalBox(a).w * ovalBox(a).h ? f : a));
+  return best.pts111;
+}
+
+/**
+ * J (jitter, static scene, 2 s) and J2 (lag, panning, 4 s): MediaPipe's own smoothing (VIDEO, numFaces 1), the raw
+ * landmarks (VIDEO, numFaces 3) and the app's smoother on the raw ones, on the same frames. Jitter: RMS of every
+ * pts111 point's deviation from its mean, px at a 1080-px frame height. Lag: the mean of (raw − smoothed) / raw velocity
+ * of the pts111 centroid x, ms. All three runs follow one face: the one MediaPipe's numFaces-1 graph picked (not
+ * necessarily the largest of a group), so the smoothers are compared on the same face. Both graphs warm up first (the
+ * first GPU inferences take about a second).
+ */
+async function jitterLag(ms: number): Promise<Record<string, { pts: Float32Array[]; t: number[] }>> {
+  const cam = await cameraVideo();
+  const mp = await liveTracker();
+  const raw = await liveTracker();
+  const smoother = new LandmarkSmoother();
+  const runs: Record<string, { pts: Float32Array[]; t: number[] }> = { mediapipe: { pts: [], t: [] }, raw: { pts: [], t: [] }, app: { pts: [], t: [] } };
+  try {
+    const w = cam.video.videoWidth;
+    const h = cam.video.videoHeight;
+    await eachFrame(cam.video, 1500, (now) => {
+      mp.detectVideo(cam.video, now, { maxFaces: 1 });
+      raw.detectVideo(cam.video, now, { maxFaces: 3 });
+    });
+    const centre = (p: Float32Array): [number, number] => {
+      let x = 0;
+      let y = 0;
+      for (let i = 0; i < 111; i++) {
+        x += p[i * 2] / 111;
+        y += p[i * 2 + 1] / 111;
+      }
+      return [x, y];
+    };
+    await eachFrame(cam.video, ms, (now) => {
+      const m = largestFace(mp.detectVideo(cam.video, now, { maxFaces: 1 }), w, h);
+      const rl = raw.detectVideo(cam.video, now, { maxFaces: 3 });
+      if (!m || !rl?.length) return;
+      // the raw face MediaPipe's graph follows: the nearest pts111 centroid
+      const [mx, my] = centre(m);
+      const dist = (l: Landmarks478) => {
+        const [x, y] = centre(adapt(l, w, h).pts111);
+        return Math.hypot(x - mx, y - my);
+      };
+      const big = rl.reduce((a, l) => (dist(l) < dist(a) ? l : a));
+      const r = adapt(big, w, h).pts111;
+      const a = adapt({ points: smoother.apply(big.points, w, h, now) }, w, h).pts111;
+      for (const [k, p] of [['mediapipe', m], ['raw', r], ['app', a]] as const) {
+        runs[k].pts.push(p);
+        runs[k].t.push(now);
+      }
+    });
+  } finally {
+    mp.close();
+    raw.close();
+    cam.stop();
+  }
+  return runs;
+}
+
+export async function rowJ(): Promise<MultiRow[]> {
+  const runs = await jitterLag(2000);
+  const h = 1080;
+  return Object.entries(runs).map(([k, r]) => {
+    const n = r.pts.length;
+    let s = 0;
+    let c = 0;
+    for (let i = 0; i < 111; i++) {
+      let mx = 0;
+      let my = 0;
+      for (const p of r.pts) {
+        mx += p[i * 2] / n;
+        my += p[i * 2 + 1] / n;
+      }
+      for (const p of r.pts) {
+        s += ((p[i * 2] - mx) * h * (16 / 9)) ** 2 + ((p[i * 2 + 1] - my) * h) ** 2;
+        c++;
+      }
+    }
+    return { row: 'J', config: k, values: { rms_px1080: r1(Math.sqrt(s / Math.max(1, c))), frames: n } };
+  });
+}
+
+export async function rowJ2(): Promise<MultiRow[]> {
+  const runs = await jitterLag(4000);
+  const cx = (p: Float32Array) => {
+    let s = 0;
+    for (let i = 0; i < 111; i++) s += p[i * 2];
+    return s / 111;
+  };
+  const raw = runs.raw.pts.map(cx);
+  const t = runs.raw.t;
+  return (['mediapipe', 'app'] as const).map((k) => {
+    const sm = runs[k].pts.map(cx);
+    let sum = 0;
+    let n = 0;
+    for (let i = 3; i < raw.length; i++) {
+      const v = (raw[i] - raw[i - 3]) / (t[i] - t[i - 3]); // UV per ms
+      if (Math.abs(v) < 1e-5) continue;
+      sum += (raw[i] - sm[i]) / v;
+      n++;
+    }
+    return { row: 'J2', config: k, values: { lag_ms: n ? r1(sum / n) : 'n/a', samples: n } };
+  });
+}
+addRunner('L', () => rowL());
+addRunner('J', () => rowJ());
+addRunner('J2', () => rowJ2());

@@ -25,6 +25,8 @@ export interface Shot {
   original: ImageBitmap | null;
   /** the camera look at the shutter (RM §3.7) */
   look: CameraLook;
+  /** camera → editor (C2): the beautified face's centre in the saved image, 'all', or null */
+  faceSeed: FaceSeed;
 }
 
 export interface EditorSource {
@@ -74,6 +76,8 @@ export interface AppState {
   saveFallback: string | null;
   /** blocking work in progress (e.g. decoding an imported photo) */
   busy: string | null;
+  /** 全部套用 (S §2.5): in memory only, false at app start, kept across Review and retakes */
+  cameraAll: boolean;
 }
 
 function safeLoad<T>(load: () => T, fallback: () => T, what: string): T {
@@ -95,6 +99,7 @@ export const app = createStore<AppState>({
   toast: null,
   saveFallback: null,
   busy: null,
+  cameraAll: false,
 });
 
 export function go(screen: Screen): void {

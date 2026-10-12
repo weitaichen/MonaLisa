@@ -12,11 +12,8 @@ export const MAX_RENDER_FACES = 6;
 export const MAX_EDIT_BODIES = 4;
 /** faces the camera tracks; 1 hides the camera's 選臉 and bypasses the smoother (§6.3 PL1, PL2, PJ1) */
 export const MAX_LIVE_FACES = 3;
-/**
- * numFaces the camera requests (tracker.ts builds every instance with it). 1 = v0.3 (MediaPipe smooths at numFaces 1)
- * until sub-step 1e turns multi-face tracking on (Task 25 sets it to MAX_LIVE_FACES).
- */
-export const LIVE_DETECT_FACES = 1;
+/** numFaces the camera requests: every live instance is built with it and the camera never toggles it (T1) */
+export const LIVE_DETECT_FACES = MAX_LIVE_FACES;
 /** a face box narrower than this fraction of the short edge is not selectable and gets no face effects */
 export const MIN_FACE_FRAC = 0.03;
 /** camera: a missing track is held this long, then dropped */

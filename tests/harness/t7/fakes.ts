@@ -4,7 +4,6 @@
 // brightness / saturation from the params so slider changes are visible.
 import type { LiveDeps, LiveLoop } from '../../../src/app/live';
 import type { StillSession } from '../../../src/app/still';
-import { legacyFrame } from '../../../src/edit/frame';
 import { splitLegacy } from '../../../src/edit/legacy';
 import type { Deps, UndoLike } from '../../../src/ui/deps';
 import type {
@@ -16,6 +15,7 @@ import type {
   CachedObstacle,
   CameraController,
   CameraErrorKind,
+  CameraLook,
   CameraSnapshot,
   Engine,
   EngineAssetsProgress,
@@ -192,6 +192,13 @@ function fakeCamera(): CameraController {
   };
 }
 
+const fakeFrame = (look: CameraLook) => ({
+  faces: [],
+  obstacles: [],
+  globalSkin: { smooth: look.person.values['skin.smooth'], rosy: look.person.values['skin.rosy'], weight: 1 },
+  photo: look.photo,
+});
+
 function fakeLiveLoop(d: LiveDeps): LiveLoop {
   const e = d.engine as FakeEngine;
   let compare = false;
@@ -204,9 +211,9 @@ function fakeLiveLoop(d: LiveDeps): LiveLoop {
     e.setOptions({ mirror: d.camera.snapshot.facing === 'user' });
     const input = { source: v, width: v.videoWidth, height: v.videoHeight };
     if (compare) e.renderOriginal(input);
-    else e.render({ ...input, ...legacyFrame(d.getParams(), null, 1) });
+    else e.render({ ...input, ...fakeFrame(d.getLook()) });
     if (++n % 15 === 0) {
-      const s = { fps: 30, detectMs: 6.2, renderMs: 3.1, tier: e.tier, face: flag('face') !== '0' };
+      const s = { fps: 30, detectMs: 6.2, renderMs: 3.1, tier: e.tier, face: flag('face') !== '0', faces: flag('face') !== '0' ? 1 : 0 };
       window.__meiyan && Object.assign(window.__meiyan, s);
       d.onStats?.(s);
     }
@@ -220,11 +227,15 @@ function fakeLiveLoop(d: LiveDeps): LiveLoop {
     capture: () => {
       if (!v.videoWidth) return null;
       const mirror = d.getPrefs().mirrorOnSave && d.camera.snapshot.facing === 'user';
-      return e.renderToImageData(
-        { source: v, width: v.videoWidth, height: v.videoHeight, ...legacyFrame(d.getParams(), null, 1) },
-        { mirror },
-      );
+      return {
+        image: e.renderToImageData({ source: v, width: v.videoWidth, height: v.videoHeight, ...fakeFrame(d.getLook()) }, { mirror }),
+        seed: null,
+      };
     },
+    hitTest: () => null,
+    select: () => undefined,
+    selection: () => 'auto' as const,
+    tracks: () => [],
   };
 }
 

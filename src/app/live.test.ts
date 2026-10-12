@@ -19,24 +19,26 @@ import {
 
 let faceSeq = 0;
 vi.mock('../tracking/adapter111', () => ({
-  adapt: vi.fn(() => makeFace(++faceSeq)),
+  adapt: vi.fn((lm: { points: Float32Array }) => makeFace(++faceSeq, lm.points[0] > 0.5005 ? 0.75 : 0.25)),
 }));
 
 const params = applyPreset('natural');
 
-function setup(opts: { prefs?: Partial<Prefs>; tracker?: boolean; engineTier?: 'H' | 'M' | 'L'; period?: number } = {}) {
+function setup(opts: { prefs?: Partial<Prefs>; tracker?: boolean; engineTier?: 'H' | 'M' | 'L'; period?: number; faces?: number } = {}) {
+  let all = false;
   const clock = installWorkClock();
   const video = new FakeVideo();
   const camera = fakeCamera(video);
   const engine = fakeEngine(clock, opts.engineTier ?? 'M');
-  const tracker = opts.tracker === false ? null : fakeTracker(clock);
+  const tracker = opts.tracker === false ? null : fakeTracker(clock, true, opts.faces ?? 1);
   let p = makePrefs(opts.prefs);
   const stats: LiveStats[] = [];
   const deps: LiveDeps = {
     camera,
     engine,
     tracker,
-    getParams: () => params,
+    getLook: () => splitLegacy(params),
+    getAll: () => all,
     getPrefs: () => p,
     onStats: (s) => stats.push(s),
   };
@@ -52,6 +54,9 @@ function setup(opts: { prefs?: Partial<Prefs>; tracker?: boolean; engineTier?: '
     stats,
     setPrefs(over: Partial<Prefs>) {
       p = { ...p, ...over };
+    },
+    setAll(on: boolean) {
+      all = on;
     },
   };
 }
@@ -117,7 +122,8 @@ describe('frame loop basics', () => {
       camera: fakeCamera(video),
       engine,
       tracker: null,
-      getParams: () => p,
+      getLook: () => splitLegacy(p),
+      getAll: () => false,
       getPrefs: () => makePrefs(),
     });
     video.play();
@@ -427,7 +433,7 @@ describe('compare and capture', () => {
     const { engine, loop } = setup();
     expect(loop.capture()).toBeNull();
     vi.advanceTimersByTime(33 * 10 + 1);
-    const img = loop.capture();
+    const img = loop.capture()?.image ?? null;
     expect(img).not.toBeNull();
     const [input, opts] = engine.renderToImageData.mock.calls[0];
     expect(input).toMatchObject({ width: 1280, height: 720 });
@@ -499,6 +505,39 @@ describe('rVFC watchdog', () => {
     video.rvfcSilent = true;
     vi.advanceTimersByTime(5000);
     expect(err).not.toHaveBeenCalled();
+    loop.stop();
+  });
+});
+
+describe('live loop on face tracks (S §3.3 Live camera, §3.4 T4)', () => {
+  it('lists every shown track: the auto face at weight 1, the other at 0 (caps only); 全部套用 beautifies both', () => {
+    const { engine, loop, setAll } = setup({ faces: 2 });
+    vi.advanceTimersByTime(600);
+    const input = engine.lastInput()!;
+    expect(input.faces.map((f) => f.weight).sort()).toEqual([0, 1]);
+    expect(input.globalSkin?.weight).toBe(0);
+    setAll(true);
+    vi.advanceTimersByTime(300);
+    expect(engine.lastInput()!.faces.map((f) => f.weight)).toEqual([1, 1]);
+    loop.stop();
+  });
+  it('select pins a track; capture returns the beautified raw box centre, or all', () => {
+    const { loop, setAll } = setup({ faces: 2 });
+    vi.advanceTimersByTime(600);
+    const right = loop.tracks().find((t) => t.box.x > 0.5)!;
+    expect(loop.hitTest(right.box.x + right.box.w / 2, 0.5, 0.01, 0.01)).toBe(right.id);
+    loop.select(right.id);
+    expect(loop.selection()).toBe(right.id);
+    vi.advanceTimersByTime(300);
+    expect(loop.capture()!.seed).toEqual({ x: right.rawBox.x + right.rawBox.w / 2, y: right.rawBox.y + right.rawBox.h / 2 });
+    setAll(true);
+    expect(loop.capture()!.seed).toBe('all');
+    loop.stop();
+  });
+  it('LiveStats.faces counts the shown tracks', () => {
+    const { stats, loop } = setup({ faces: 2 });
+    vi.advanceTimersByTime(600);
+    expect(stats.at(-1)!.faces).toBe(2);
     loop.stop();
   });
 });

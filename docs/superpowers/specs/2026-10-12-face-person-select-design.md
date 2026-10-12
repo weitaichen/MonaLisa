@@ -1028,6 +1028,40 @@ PR1/PRC (desktop): the UBO carrier is the faster one, N = 6 at 2048 2.46 ms spre
 
 RP: on desktop Chromium (headless SwiftShader, `tests/e2e/reshape.spec.ts`), `runReshapePinMulti` gives max |GPU − CPU| 0.0001 px (two faces, every warp), 0.0001 px (capped pair, one neutral) and 0.0000 px (an obstacle bounding the cap) with both carriers, and the three one-face pins are unchanged (0.0001 / 0.0001 / 0.0014 px). On the phone, RP is the same page, `/tests/e2e/pages/reshape.html`, and the bench's R button fetches `/tests/fixtures/landmarks_sample_face.json`: neither path is in a production build (`dist/`), so both are recorded from a dev server the phone can reach (`npm run dev`, `server.host`), not from a preview deploy alone.
 
+#### 2026-10-12 desktop Chrome (GPU), rows L / J / J2 / F / BF / PE / M — ANGLE (Intel, Intel(R) UHD Graphics 770 (0x0000A780) Direct3D11 vs_5_0 ps_5_0, D3D11)
+
+Sub-step 1e (Task 25), same desktop and Chrome as above (the heading date is the driver's UTC date; local time was the morning of 2026-10-13): `node scripts/bench-multiface.mjs --video tests/fixtures/group.y4m L`, `--video tests/fixtures/group_noise.y4m J`, `--video tests/fixtures/group_pan.y4m J2`, then `F BF PE M`. The camera rows read Chrome's fake camera fed by the 1280 × 720, 30 fps clip (A, B and C in view; `group_pan` pans them); L measured 25 fps at both counts, so on this desktop its fps does not separate them (p50 / p95 do). J and J2 warm both graphs up for 1.5 s first, and all three runs follow the face MediaPipe's numFaces-1 graph picks (the raw face with the nearest pts111 centroid). A first J / J2 run without either change had only 9 frames in J (the first GPU inferences ate the 2 s window) and a J2 `mediapipe` lag of −1089 ms (numFaces 1 had followed a different face from the raw largest).
+
+| Row | Config | Values |
+|---|---|---|
+| L | numFaces 1 | p50_ms 12.3, p95_ms 17.8, fps 25.1, faces 1 |
+| L | numFaces 3 | p50_ms 30.3, p95_ms 37, fps 25.2, faces 3 |
+| J | mediapipe | rms_px1080 0.3, frames 50 |
+| J | raw | rms_px1080 0.7, frames 50 |
+| J | app | rms_px1080 0.3, frames 50 |
+| J2 | mediapipe | lag_ms 16.3, samples 92 |
+| J2 | app | lag_ms 4, samples 92 |
+| F | f0 | ms 16.6 |
+| F | f1 | ms 9.6 |
+| F | f2 | ms 8.1 |
+| F | f3 | ms 6.6 |
+| F | f4 | ms 8 |
+| F | f5 | ms 6.7 |
+| BF | 4 persons | full_ms 88, draft_ms 15, drag_ms 5 |
+| PE | 6 faces 2048 | p50_ms 29.5 |
+| M | run 1 | persons 2, heapMB 55 |
+| M | run 2 | persons 2, heapMB 65 |
+| M | run 3 | persons 2, heapMB 63 |
+
+Desktop readings against §6.3, for orientation only:
+- PJ1: app 0.3 px ≤ max(0.4, 1.25 × 0.3). PJ2: app 4 ms ≤ 1.25 × 16.3 ms.
+- PBF: full 88 ≤ 120 ms and draft 15 ≤ 16 ms. PM1: 3 of 3 runs completed.
+- PL1: p50 30.3 ms at 3 faces is above the 20 ms target on this desktop's GPU delegate. PL2 needs a one-face scene and was not measured here.
+- PF: f0, the first call, is 16.6 ms; the other faces are 6.6 to 9.6 ms.
+- PE1: there is no v0.3 one-face drag baseline in this run.
+
+Decisions: none taken (desktop only; PL1/PL2/PJ1/PJ2/PB1/PBF/PF/PE1/PM1 need the iPhone rows, RM §12: the §3.5 defaults ship).
+
 ---
 
 ## 7. Error and edge cases

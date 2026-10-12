@@ -12069,7 +12069,7 @@ Shot.faceSeed: FaceSeed;  AppState.cameraAll: boolean   // in memory, false at s
 export function CameraFaceMarker(p: { loop: LiveLoop; canvas: HTMLCanvasElement; video: HTMLVideoElement; mirrored: boolean; ring: { id: TrackId; at: number } | null; all: boolean; count: number }): JSX.Element;
 ```
 
-- [ ] **Step 1: Turn multi-face tracking on, and port the tracker test**
+- [x] **Step 1: Turn multi-face tracking on, and port the tracker test**
 
 `src/config/limits.ts`: `export const LIVE_DETECT_FACES = MAX_LIVE_FACES;` and its comment becomes `/** numFaces the camera requests: every live instance is built with it and the camera never toggles it (T1) */`.
 
@@ -12078,7 +12078,7 @@ export function CameraFaceMarker(p: { loop: LiveLoop; canvas: HTMLCanvasElement;
 Run: `npx vitest run src/tracking/tracker.test.ts src/config`
 Expected: PASS.
 
-- [ ] **Step 2: Port the live tests and add the multi-face cases (they fail until Step 3)**
+- [x] **Step 2: Port the live tests and add the multi-face cases (they fail until Step 3)**
 
 `src/app/live.test.ts` (CRLF):
 1. The adapter mock places the fake faces apart, so two detections are two tracks: `adapt: vi.fn((lm: { points: Float32Array }) => makeFace(++faceSeq, lm.points[0] > 0.5005 ? 0.75 : 0.25)),` (`makeLandmarks(tag)` puts `0.5 + tag/1000` in `points[0]`).
@@ -12126,7 +12126,7 @@ describe('live loop on face tracks (S §3.3 Live camera, §3.4 T4)', () => {
 Run: `npx vitest run src/app/live.test.ts`
 Expected: FAIL (`getLook` unknown, `tracks` missing).
 
-- [ ] **Step 3: The live loop (`src/app/live.ts`, CRLF)**
+- [x] **Step 3: The live loop (`src/app/live.ts`, CRLF)**
 
 1. Imports: drop `adapt` and `Face`; add `LIVE_DETECT_FACES, MAX_RENDER_FACES` (`../config/limits`), `FaceTracks, type CameraSelection, type LiveTrackView, type TrackId` (`./faceTracks`); types `CameraLook, FaceSeed, Landmarks478, StillFrame`; drop `legacyFrame` (Task 18).
 2. `LiveStats` gains `faces: number`; `LiveLoop` and `LiveDeps` as in the Interfaces block (`getParams` → `getLook`, `getAll` added).
@@ -12218,7 +12218,7 @@ export function liveFrame(views: readonly LiveTrackView[], anyFace: number, look
 Run: `npx vitest run src/app && npm run typecheck`
 Expected: the live tests PASS; `tsc` lists only the callers fixed in Step 4.
 
-- [ ] **Step 4: Callers: state, Camera, Review, the bench page and the t7 fake**
+- [x] **Step 4: Callers: state, Camera, Review, the bench page and the t7 fake**
 
 `src/ui/state.ts` (CRLF): `Shot` gains `/** camera → editor (C2): the beautified face's centre in the saved image, 'all', or null */ faceSeed: FaceSeed;`; `AppState` gains `/** 全部套用 (S §2.5): in memory only, false at app start, kept across Review and retakes */ cameraAll: boolean;` with `cameraAll: false,` in the store init. Import the `FaceSeed` type.
 
@@ -12407,7 +12407,7 @@ the stats object gains `faces: flag('face') !== '0' ? 1 : 0`, `capture` returns 
 Run: `npm run typecheck && npx vitest run`
 Expected: PASS.
 
-- [ ] **Step 5: The group camera e2e project and spec**
+- [x] **Step 5: The group camera e2e project and spec**
 
 `playwright.config.ts`: after `const y4m = …` add `const groupY4m = resolve(import.meta.dirname, 'tests/fixtures/group.y4m');`; the `chromium` project gains `testIgnore: 'camera-group.spec.ts',`; add a second project:
 
@@ -12521,7 +12521,7 @@ test('three faces: auto beautifies the largest; tap B; 全部套用; tap C; the 
 
 (The chip shows only after 300 ms of ≥ 2 tracks; the style tag hiding it for the pixel grabs is overridden before it is clicked. The review screen's edit button is 「編輯」, `Review.tsx:119-123`.)
 
-- [ ] **Step 6: Bench rows L, J, J2 and the driver's `--video`**
+- [x] **Step 6: Bench rows L, J, J2 and the driver's `--video`**
 
 `src/bench/multiFace.ts`, append:
 
@@ -12692,7 +12692,7 @@ use `args` in place of `process.argv.slice(2)` for `ids`, and pass, when `video`
 Run on this desktop: `node scripts/bench-multiface.mjs --video tests/fixtures/group.y4m L`, `node scripts/bench-multiface.mjs --video tests/fixtures/group_noise.y4m J`, `node scripts/bench-multiface.mjs --video tests/fixtures/group_pan.y4m J2`, `node scripts/bench-multiface.mjs F BF PE M`.
 Expected: Markdown blocks; L has two rows, J and J2 three and two. Append them to S §6.4 under the Task 3 results with the line `Decisions: none taken (desktop only; PL1/PL2/PJ1/PJ2/PB1/PBF/PF/PE1/PM1 need the iPhone rows, RM §12: the §3.5 defaults ship).`
 
-- [ ] **Step 7: Sub-step 1e gate**
+- [x] **Step 7: Sub-step 1e gate**
 
 Run: `npm run typecheck && npm test && npm run build`
 Expected: all green.
@@ -12700,7 +12700,7 @@ Expected: all green.
 Run: `npm run test:e2e`
 Expected: both projects pass: `chromium` (every existing spec, `camera.spec.ts` with one face: a tap still collapses the panel, `:71-73`) and `chromium-group` (`camera-group.spec.ts`).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src tests playwright.config.ts scripts/bench-multiface.mjs docs/superpowers/specs/2026-10-12-face-person-select-design.md

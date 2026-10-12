@@ -8,6 +8,8 @@ describe('limits (S §3.5)', () => {
     expect(L.MAX_RENDER_FACES).toBe(6);
     expect(L.MAX_EDIT_BODIES).toBe(4);
     expect(L.MAX_LIVE_FACES).toBe(3);
+    // sub-step 1e: the camera tracks every face it can show (T1)
+    expect(L.LIVE_DETECT_FACES).toBe(L.MAX_LIVE_FACES);
     expect(L.MIN_FACE_FRAC).toBe(0.03);
     expect(L.LOST_HOLD_MS).toBe(1000);
     expect(L.ONE_EURO).toEqual({ minCutoff: 0.05, beta: 80, dCutoff: 1.0 });

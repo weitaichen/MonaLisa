@@ -8,8 +8,9 @@
 // (GLES variant, pixpark/gpupixel@ef552bf, Apache-2.0); modified: GLSL ES 3.00; VAO/VBO/Uint16 IBO;
 // lipstick and blusher merged into one mesh draw (multiply commutes, so the result equals the two
 // sequential GPUPixel filters); base sampled by gl_FragCoord from the source texture; optional
-// shade tint through single-channel masks (RB §2.5).
-import type { BeautyParams, Face } from '../../types';
+// shade tint through single-channel masks (RB §2.5); v0.4: one mesh per face, each reading the source, fragments
+// without makeup discarded so a later face never erases an earlier face's lip or blush (S §4.3).
+import type { BeautyParams, Face, PersonParams } from '../../types';
 import { shadeColor } from '../params';
 import {
   COPY_FS,
@@ -43,6 +44,19 @@ export function makeupUniforms(params: BeautyParams, faceWeight: number): Makeup
   return {
     lip: clamp01(params.values['makeup.lip']) * w,
     blush: clamp01(params.values['makeup.blush']) * w,
+    lipColor: lipHex ? hexToRgb(lipHex) : null,
+    blushColor: blushHex ? hexToRgb(blushHex) : null,
+  };
+}
+
+/** one person's makeup uniforms at a face weight (S §4.3) */
+export function makeupUniformsFor(person: PersonParams, weight: number): MakeupUniforms {
+  const w = clamp01(weight);
+  const lipHex = shadeColor('lip', person.shades.lip);
+  const blushHex = shadeColor('blush', person.shades.blush);
+  return {
+    lip: clamp01(person.values['makeup.lip']) * w,
+    blush: clamp01(person.values['makeup.blush']) * w,
     lipColor: lipHex ? hexToRgb(lipHex) : null,
     blushColor: blushHex ? hexToRgb(blushHex) : null,
   };
@@ -92,7 +106,11 @@ void main() {
                          : texture(uLip, vUvLip).rgb;
   vec3 blushMul = uBlushTint ? mix(vec3(1.0), uBlushShade, texture(uBlushMask, vUvBlush).r)
                              : texture(uBlush, vUvBlush).rgb;
-  outColor = vec4(base * mix(vec3(1.0), lipMul, uLipI) * mix(vec3(1.0), blushMul, uBlushI * vBlushFade), 1.0);
+  vec3 m = mix(vec3(1.0), lipMul, uLipI) * mix(vec3(1.0), blushMul, uBlushI * vBlushFade);
+  // a fragment without makeup keeps the copy (= src) bit for bit, so a later face's mesh never erases an earlier
+  // face's lip or blush where the later face has none (S §4.3)
+  if (all(greaterThanEqual(m, vec3(0.999)))) discard;
+  outColor = vec4(base * m, 1.0);
 }`;
 
 /**
@@ -115,6 +133,8 @@ export interface MakeupPass {
   readonly ready: Promise<void>;
   /** Copy `src` (any size, by UV) into `dst`, then draw makeup on top. `src` must not alias `dst`. */
   draw(src: Texture, dst: Framebuffer, face: Face, u: MakeupUniforms): void;
+  /** one copy of src, then one mesh per face whose makeup is active, each reading src (S §4.3) */
+  drawFaces(src: Texture, dst: Framebuffer, faces: readonly { face: Face; u: MakeupUniforms }[]): void;
   dispose(): void;
 }
 
@@ -187,16 +207,17 @@ export function createMakeupPass(gl: GL, assetBase = '/makeup/gp/'): MakeupPass 
     tex = { lip, lipMask, blush, blushMask };
   });
 
-  return {
-    ready,
-    draw(src, dst, face, u) {
-      bindTarget(gl, dst);
-      gl.disable(gl.BLEND);
-      copy.use();
-      bindTexture(gl, 0, src);
-      drawFullscreen(gl);
-      if (!tex || !makeupActive(u)) return;
-
+  const drawFaces: MakeupPass['drawFaces'] = (src, dst, faces) => {
+    bindTarget(gl, dst);
+    gl.disable(gl.BLEND);
+    copy.use();
+    bindTexture(gl, 0, src);
+    drawFullscreen(gl);
+    if (!tex) return;
+    let drew = false;
+    for (const { face, u } of faces) {
+      if (!makeupActive(u)) continue;
+      drew = true;
       const p = face.pts111;
       for (let i = 0; i < 222; i++) pos[i] = p[i] * 2 - 1;
       mesh.use();
@@ -221,8 +242,16 @@ export function createMakeupPass(gl: GL, assetBase = '/makeup/gp/'): MakeupPass 
       gl.disable(gl.CULL_FACE);
       gl.drawElements(gl.TRIANGLES, FACE_INDICES.length, gl.UNSIGNED_SHORT, 0);
       gl.bindVertexArray(null);
-      gl.activeTexture(gl.TEXTURE0);
+    }
+    if (drew) gl.activeTexture(gl.TEXTURE0);
+  };
+
+  return {
+    ready,
+    draw(src, dst, face, u) {
+      drawFaces(src, dst, [{ face, u }]);
     },
+    drawFaces,
     dispose() {
       disposed = true;
       copy.dispose();

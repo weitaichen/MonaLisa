@@ -8,6 +8,7 @@
 import landmarks from '../../fixtures/landmarks_sample_face.json';
 import pose from '../../fixtures/sample_face.pose.json';
 import { syntheticPortrait } from '../../../src/body/synthetic';
+import { legacyFrame } from '../../../src/edit/frame';
 import { createEngine } from '../../../src/engine/index';
 import { createReshapePass, reshapeUniforms } from '../../../src/engine/passes/reshape';
 import { reshapeMapCpu } from '../../../src/engine/passes/reshapeCpu';
@@ -217,7 +218,7 @@ window.runFaceProtectEngine = async () => {
   const glErrors: number[] = [];
   const passes: string[] = [];
   const draw = (p: BeautyParams, fp: FaceProtect | null) => {
-    const input = { source: bitmap, width: W, height: H, face: pr.face, faceWeight: 1, params: p, faceProtect: fp };
+    const input = { source: bitmap, width: W, height: H, ...legacyFrame(p, pr.face, 1, fp) };
     passes.push(...engine.render(input, { still: true }).passes);
     const out = engine.renderToImageData(input, { mirror: false });
     glErrors.push(gl.getError());

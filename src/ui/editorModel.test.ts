@@ -35,7 +35,7 @@ const lensOfEdit = (e: EditState) => lensFor(e, { kind: 'person', id: 'p0' }, P0
 const lensOf = (p: BeautyParams) => lensOfEdit(editFromLegacy(p));
 
 const FACE = {} as Face;
-const session = (face: Face | null, faceKnown = true) => ({ face, faceKnown });
+const session = (face: Face | null, faceKnown = true) => ({ faces: face ? [face] : [], faceKnown });
 
 describe('detectSession', () => {
   it('a healthy tracker that found nothing is a definite "no face"', () => {

@@ -4,6 +4,7 @@
 // brightness / saturation from the params so slider changes are visible.
 import type { LiveDeps, LiveLoop } from '../../../src/app/live';
 import type { StillSession } from '../../../src/app/still';
+import { legacyFrame } from '../../../src/edit/frame';
 import { splitLegacy } from '../../../src/edit/legacy';
 import type { Deps, UndoLike } from '../../../src/ui/deps';
 import type {
@@ -11,15 +12,17 @@ import type {
   BodyDetection,
   BodyField,
   BodyTracker,
+  CachedFace,
+  CachedObstacle,
   CameraController,
   CameraErrorKind,
   CameraSnapshot,
   Engine,
   EngineAssetsProgress,
-  FaceProtect,
   HistoryEntry,
   Prefs,
   RenderInput,
+  StillFrame,
   Tier,
   Tracker,
 } from '../../../src/types';
@@ -28,7 +31,19 @@ const q = new URLSearchParams(location.search);
 const flag = (k: string) => q.get(k);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function cssFilter(p: BeautyParams): string {
+/** the values the CSS stand-in reads (BeautyParams fits) */
+type CssLook = Pick<BeautyParams, 'filterId'> & {
+  values: Record<'skin.whiten' | 'skin.rosy' | 'skin.sharpen' | 'skin.smooth' | 'filter.amount', number>;
+};
+
+/** a render input's look for the CSS stand-in: the photo layer plus the first face's (or the all-skin) 磨皮／紅潤 */
+function lookOfInput(i: RenderInput): CssLook {
+  const person = i.faces[0]?.person.values;
+  const skin = i.globalSkin ?? { smooth: person?.['skin.smooth'] ?? 0, rosy: person?.['skin.rosy'] ?? 0 };
+  return { filterId: i.photo.filterId, values: { ...i.photo.values, 'skin.smooth': skin.smooth, 'skin.rosy': skin.rosy } };
+}
+
+function cssFilter(p: CssLook): string {
   const v = p.values;
   const parts = [
     `brightness(${(1 + v['skin.whiten'] * 0.18).toFixed(3)})`,
@@ -102,7 +117,7 @@ class FakeEngine implements Engine {
     const { w, h } = this.size(input.width, input.height, opts?.still);
     if (this.canvas.width !== w) this.canvas.width = w;
     if (this.canvas.height !== h) this.canvas.height = h;
-    draw(this.ctx, input.source as CanvasImageSource, w, h, this.mirror, cssFilter(input.params));
+    draw(this.ctx, input.source as CanvasImageSource, w, h, this.mirror, cssFilter(lookOfInput(input)));
     return { cpuMs: 1, width: w, height: h, passes: ['fake'] };
   }
   renderToImageData(input: RenderInput, opts: { mirror: boolean }) {
@@ -110,7 +125,7 @@ class FakeEngine implements Engine {
     c.width = input.width;
     c.height = input.height;
     const ctx = c.getContext('2d', { willReadFrequently: true })!;
-    draw(ctx, input.source as CanvasImageSource, input.width, input.height, opts.mirror, cssFilter(input.params));
+    draw(ctx, input.source as CanvasImageSource, input.width, input.height, opts.mirror, cssFilter(lookOfInput(input)));
     return ctx.getImageData(0, 0, input.width, input.height);
   }
   renderOriginal(input: Pick<RenderInput, 'source' | 'width' | 'height'>, opts?: { still?: boolean }) {
@@ -189,7 +204,7 @@ function fakeLiveLoop(d: LiveDeps): LiveLoop {
     e.setOptions({ mirror: d.camera.snapshot.facing === 'user' });
     const input = { source: v, width: v.videoWidth, height: v.videoHeight };
     if (compare) e.renderOriginal(input);
-    else e.render({ ...input, face: null, faceWeight: 1, params: d.getParams() });
+    else e.render({ ...input, ...legacyFrame(d.getParams(), null, 1) });
     if (++n % 15 === 0) {
       const s = { fps: 30, detectMs: 6.2, renderMs: 3.1, tier: e.tier, face: flag('face') !== '0' };
       window.__meiyan && Object.assign(window.__meiyan, s);
@@ -206,7 +221,7 @@ function fakeLiveLoop(d: LiveDeps): LiveLoop {
       if (!v.videoWidth) return null;
       const mirror = d.getPrefs().mirrorOnSave && d.camera.snapshot.facing === 'user';
       return e.renderToImageData(
-        { source: v, width: v.videoWidth, height: v.videoHeight, face: null, faceWeight: 1, params: d.getParams() },
+        { source: v, width: v.videoWidth, height: v.videoHeight, ...legacyFrame(d.getParams(), null, 1) },
         { mirror },
       );
     },
@@ -217,14 +232,13 @@ function fakeStill(
   engine: Engine,
   _t: Tracker | null,
   bitmap: ImageBitmap,
-  opts: { ownsBitmap?: boolean; body?: BodyField | null } = {},
+  opts: { ownsBitmap?: boolean; faces?: readonly CachedFace[]; obstacles?: readonly CachedObstacle[]; body?: BodyField | null } = {},
 ): StillSession {
   let raf = 0;
-  let last: BeautyParams | null = null;
+  let last: StillFrame | null = null;
   let compare = false;
   let body = opts.body ?? null;
-  let faceProtect: FaceProtect | null = null;
-  const input = (p: BeautyParams) => ({ source: bitmap, width: bitmap.width, height: bitmap.height, face: null, faceWeight: 1, params: p });
+  const input = (f: StillFrame): RenderInput => ({ source: bitmap, width: bitmap.width, height: bitmap.height, ...f });
   const paint = () => {
     raf = 0;
     if (!last) return;
@@ -235,10 +249,19 @@ function fakeStill(
     width: bitmap.width,
     height: bitmap.height,
     // a structurally valid Face (美體 measures head anchors from it); only its presence matters to the screens
-    face:
+    faces:
       flag('face') === '0'
-        ? null
-        : { pts111: new Float32Array(222).fill(0.5), ext: new Float32Array(16).fill(0.5), oval: new Float32Array(72).fill(0.5), yaw: 0 },
+        ? []
+        : [
+            {
+              id: 'f0',
+              face: { pts111: new Float32Array(222).fill(0.5), ext: new Float32Array(16).fill(0.5), oval: new Float32Array(72).fill(0.5), yaw: 0 },
+              box: { x: 0.3, y: 0.3, w: 0.4, h: 0.4 },
+              lm: new Float32Array(1434).fill(0.5),
+            },
+          ],
+    obstacles: [],
+    dropped: { tooSmall: 0, overCap: 0 },
     faceKnown: true,
     render(p) {
       last = p;
@@ -255,15 +278,9 @@ function fakeStill(
       body = f; // the 2D fake engine cannot warp: the field is only recorded
       if (!raf) raf = requestAnimationFrame(paint);
     },
-    get faceProtect() {
-      return faceProtect;
-    },
-    setFaceProtect(p) {
-      faceProtect = p; // recorded only, like the body field
-    },
-    prepareExport: (p) => (p.filterId === 'none' ? Promise.resolve() : engine.loadFilter(p.filterId).catch(() => undefined)),
+    prepareExport: (f) => (f.photo.filterId === 'none' ? Promise.resolve() : engine.loadFilter(f.photo.filterId).catch(() => undefined)),
     exportReady: () => true,
-    exportImageData: (p) => engine.renderToImageData(input(p), { mirror: false }),
+    exportImageData: (f) => engine.renderToImageData(input(f), { mirror: false }),
     stopDisplay() {
       cancelAnimationFrame(raf);
       raf = 0;

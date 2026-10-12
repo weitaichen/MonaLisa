@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { splitLegacy } from '../edit/legacy';
 import { applyPreset, setFilter, setParam } from './params';
 import {
   maskBufferSize,
@@ -12,7 +13,9 @@ import {
   presentScale,
   processingSize,
   sharpenTexel,
+  skinMaxima,
   skinUniforms,
+  skinUniformsFor,
 } from './uniforms';
 
 describe('processingSize', () => {
@@ -135,5 +138,28 @@ describe('presentScale', () => {
     expect(presentScale(true, false)).toEqual([1, -1]);
     expect(presentScale(true, true)).toEqual([-1, -1]);
     expect(presentScale(false, true)).toEqual([-1, 1]);
+  });
+});
+
+describe('skinMaxima (S §4.1 item 2, §4.2 clear)', () => {
+  it('one editor face: S, R = its own; k = 1; clear 0 (bit-equal to v0.3)', () => {
+    expect(skinMaxima([{ weight: 1, smooth: 0.55, rosy: 0.25 }], null)).toEqual({ S: 0.55, R: 0.35 * 0.25, k: [[1, 1]], clear: [0, 0] });
+  });
+  it('a camera fade: the global skin (same person) clears to 1 − w, the face writes w', () => {
+    const m = skinMaxima([{ weight: 0.3, smooth: 0.6, rosy: 0.4 }], { smooth: 0.6, rosy: 0.4, weight: 0.7 });
+    expect(m.k).toEqual([[1, 1]]);
+    expect(m.clear[0]).toBeCloseTo(0.7);
+    expect(m.clear[1]).toBeCloseTo(0.7);
+  });
+  it('two faces: the maxima and relative strengths; a weight-0 face is listed but sets no maximum', () => {
+    const m = skinMaxima([{ weight: 1, smooth: 0.8, rosy: 0 }, { weight: 1, smooth: 0.4, rosy: 0.5 }, { weight: 0, smooth: 1, rosy: 1 }], null);
+    expect(m.S).toBe(0.8);
+    expect(m.k[1]).toEqual([0.5, 1]);
+    expect(m.k[0][1]).toBe(0);
+  });
+  it('skinUniformsFor = v1 skinUniforms for one person', () => {
+    const p = applyPreset('glow', 1);
+    const { photo } = splitLegacy(p);
+    expect(skinUniformsFor(photo, 0.55, 0.35 * 0.45, true)).toEqual(skinUniforms(p, true));
   });
 });

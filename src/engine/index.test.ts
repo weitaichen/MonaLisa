@@ -1,5 +1,6 @@
 // createEngine context-loss bookkeeping of filter LUT loads, with the GL layer and the pipeline faked.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { legacyFrame } from '../edit/frame';
 import { loadImageTexture } from './gl/gl';
 import { createEngine } from './index';
 import { defaultParams } from './params';
@@ -75,7 +76,7 @@ describe('createEngine: filter loads across a context loss', () => {
     await engine.ready;
     const before = filterCalls('x');
     const params = { ...defaultParams(), filterId: 'x' };
-    engine.render({ source: {} as TexImageSource, width: 640, height: 480, face: null, faceWeight: 0, params });
+    engine.render({ source: {} as TexImageSource, width: 640, height: 480, ...legacyFrame(params, null, 0) });
     expect(filterCalls('x')).toBe(before + 1);
   });
 
@@ -88,7 +89,7 @@ describe('createEngine: filter loads across a context loss', () => {
     });
     await expect(engine.loadFilter('y')).rejects.toThrow('HTTP 404');
     const params = { ...defaultParams(), filterId: 'y' };
-    engine.render({ source: {} as TexImageSource, width: 640, height: 480, face: null, faceWeight: 0, params });
+    engine.render({ source: {} as TexImageSource, width: 640, height: 480, ...legacyFrame(params, null, 0) });
     expect(filterCalls('y')).toBe(1);
   });
 });
@@ -103,9 +104,7 @@ describe('createEngine: 美體 field', () => {
     source: {} as TexImageSource,
     width: 640,
     height: 480,
-    face: null,
-    faceWeight: 0,
-    params: defaultParams(),
+    ...legacyFrame(defaultParams(), null, 0),
     ...(b === undefined ? {} : { body: b }),
   });
 

@@ -22,14 +22,14 @@ import type { BodyTrackerState } from './services';
  * or the call itself found it unusable (tracker.ts retires a lost instance and reports 'lost' synchronously
  * before returning null), or the detect call threw (faceKnown false).
  */
-export function detectSession<S extends { face: Face | null; faceKnown: boolean }>(
+export function detectSession<S extends { faces: readonly unknown[]; faceKnown: boolean }>(
   hasTracker: boolean,
   healthy: () => boolean,
   create: () => S,
 ): { s: S; unsure: boolean } {
   const before = healthy();
   const s = create();
-  const unsure = hasTracker && !s.face && (!before || !healthy() || !s.faceKnown);
+  const unsure = hasTracker && s.faces.length === 0 && (!before || !healthy() || !s.faceKnown);
   return { s, unsure };
 }
 

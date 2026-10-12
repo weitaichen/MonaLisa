@@ -6728,7 +6728,7 @@ git commit -m "v0.4 step 1c: RESHAPE_FS with the face table (texture/UBO), summe
   - `StillSession`: `faces: readonly SessionFace[]` (`SessionFace { id; face: Face; box: Rect; lm: Float32Array }`), `obstacles: readonly CachedObstacle[]`, `dropped`, `render(frame: StillFrame)`, `prepareExport(frame)`, `exportReady(frame)`, `exportImageData(frame, body?)`; options `faces?: readonly CachedFace[]`, `obstacles?: readonly CachedObstacle[]` (replacing `face` / `faceProtect`); `setFaceProtect` / `faceProtect` removed (A6).
   - test helpers in `testFakes.ts`: `faceOf(i: RenderInput | undefined): Face | null`, `weightOf(i: RenderInput | undefined): number`.
 
-- [ ] **Step 1: Failing tests for the pure parts**
+- [x] **Step 1: Failing tests for the pure parts**
 
 ```ts
 // src/edit/frame.test.ts
@@ -6906,7 +6906,7 @@ describe('tableFaces (S §4.1)', () => {
 Run: `npx vitest run src/edit/frame.test.ts src/engine`
 Expected: FAIL (missing exports / signatures).
 
-- [ ] **Step 2: Types and the pure parts**
+- [x] **Step 2: Types and the pure parts**
 
 `src/types.ts` (CRLF): replace `RenderInput` (`:276-292`) with the `RenderFace`, `RenderInput` and `StillFrame` declarations of the Interfaces block above (doc comments: "`faces` ≤ MAX_RENDER_FACES, table order = cache face order, so packing is deterministic; a face whose person is neutral is still listed so its skin mask writes 0 (others untouched) and it bounds its neighbours' caps"; "`globalSkin`: … the camera's "no face" fade (A2)").
 
@@ -7007,7 +7007,7 @@ export function legacyFrame(params: BeautyParams, face: Face | null, weight: num
 }
 ```
 
-- [ ] **Step 3: Mask (RGBA8, per face; `src/engine/passes/mask.ts`, CRLF)**
+- [x] **Step 3: Mask (RGBA8, per face; `src/engine/passes/mask.ts`, CRLF)**
 
 1. `MASK_FS` becomes:
 
@@ -7161,7 +7161,7 @@ export function createMaskPass(gl: GL): MaskPass {
 
 `buildMaskGeometry(face, aspect, out)` writes into `out` from index 0, which is why the segment loop passes `verts.subarray(at * 3)`.
 
-- [ ] **Step 4: Makeup per face (`src/engine/passes/makeup.ts`, CRLF)**
+- [x] **Step 4: Makeup per face (`src/engine/passes/makeup.ts`, CRLF)**
 
 1. Add (keep the v1 `makeupUniforms`):
 
@@ -7235,7 +7235,7 @@ export function makeupUniformsFor(person: PersonParams, weight: number): MakeupU
 
 declared just before the `return {`; in the returned object the `draw` method becomes `draw(src, dst, face, u) { drawFaces(src, dst, [{ face, u }]); },`, `drawFaces,` is added after `ready,`, and `dispose` stays exactly as it is.
 
-- [ ] **Step 5: Composite per-pixel gates (`src/engine/shaders/composite.ts:166-194`)**
+- [x] **Step 5: Composite per-pixel gates (`src/engine/shaders/composite.ts:166-194`)**
 
 ```glsl
   // Smoothing (GLES gate is blurAlpha >= 0.0, so it always runs; k = 0 when uSmooth = 0). Per-pixel strengths
@@ -7250,7 +7250,7 @@ declared just before the `return {`; in the returned object the `draw` method be
 
 and in the 紅潤 block `uRosy * p` → `uRosy * pR`. Nothing else changes.
 
-- [ ] **Step 6: Pipeline and engine**
+- [x] **Step 6: Pipeline and engine**
 
 `src/engine/pipeline.ts` (CRLF):
 1. Imports: `FACE_TABLE_CARRIER` (`../config/limits`), `attenuate, capsFor, faceDrawn, WHOLE, type TableFace` (`./passes/faceCap`), `makeupUniformsFor` is not needed here; types `FaceProtect, PhotoParams`.
@@ -7424,7 +7424,7 @@ export function tableFaces(job: Pick<FrameJob, 'faces' | 'obstacles'>, aspect: n
 
 and the overlay (`:228-231`): `if (options.showLandmarks && input.faces.length) { for (const f of input.faces) pipeline.drawOverlay(f.face, options.mirror); res.passes.push('overlay'); }`.
 
-- [ ] **Step 7: The still session (S1, `src/app/still.ts`)**
+- [x] **Step 7: The still session (S1, `src/app/still.ts`)**
 
 1. Imports: `EDIT_DETECT_FACES` (`../config/limits`), `adaptCached, prepareFaces` (`../detect/faces`); types `BodyField, CachedFace, CachedObstacle, Engine, Face, Rect, RenderInput, StillFrame, Tracker`.
 2. Interfaces:
@@ -7514,7 +7514,7 @@ function detectOnce(tracker: Tracker | null, bitmap: ImageBitmap, width: number,
 
 `src/ui/editorModel.ts` `detectSession`: `S extends { faces: readonly unknown[]; faceKnown: boolean }` and `const unsure = hasTracker && s.faces.length === 0 && (!before || !healthy() || !s.faceKnown);`. In `editorModel.test.ts` the `session(face, known)` helper becomes `({ faces: face ? [face] : [], faceKnown: known })`.
 
-- [ ] **Step 8: The camera and the interim editor**
+- [x] **Step 8: The camera and the interim editor**
 
 `src/app/live.ts` (CRLF): `import { legacyFrame } from '../edit/frame';`; `draw()` (`:176-179`): `else engine.render({ source: video, width: w, height: h, ...legacyFrame(params, shown, shown ? weight : 0) });`; `capture()` (`:326-336`): `engine.renderToImageData({ source: video, width: video.videoWidth, height: video.videoHeight, ...legacyFrame(deps.getParams(), shown, shown ? weight : 0) }, { mirror: … })`.
 
@@ -7561,7 +7561,7 @@ The session-creation options lose `faceProtect: protectSrc.protect` (`:234`).
 9. `encode(s, p, field)`: `await s.prepareExport(frameOf(p)); … s.exportImageData(frameOf(p), field)`. Every other `s.exportReady(p)` / `s.prepareExport(params)` / `s.exportImageData(params, field)` / `s.exportImageData(p, field)` in `flushHistory` and the encode effect wraps its params in `frameOf(…)`.
 10. `faceNote` (`:790`): `if (session && !session.faces.length)`.
 
-- [ ] **Step 9: Port tests, pages and harnesses (mechanical)**
+- [x] **Step 9: Port tests, pages and harnesses (mechanical)**
 
 `src/app/testFakes.ts` (CRLF), append:
 
@@ -7599,7 +7599,7 @@ and `:36` becomes `toHaveBeenCalledWith(bmp, { maxFaces: EDIT_DETECT_FACES })`.
 - `tests/harness/t7/fakes.ts` `fakeStill` (`:215-273`), the UI harness's still session, follows S1: `opts` gains `faces?: readonly CachedFace[]; obstacles?: readonly CachedObstacle[]`; `let last: StillFrame | null`; `const input = (f: StillFrame) => ({ source: bitmap, width: bitmap.width, height: bitmap.height, ...f });`; the `face:` property becomes `faces: flag('face') === '0' ? [] : [{ id: 'f0', face: { pts111: new Float32Array(222).fill(0.5), ext: new Float32Array(16).fill(0.5), oval: new Float32Array(72).fill(0.5), yaw: 0 }, box: { x: 0.3, y: 0.3, w: 0.4, h: 0.4 }, lm: new Float32Array(1434).fill(0.5) }],` followed by `obstacles: [], dropped: { tooSmall: 0, overCap: 0 },`; delete the `faceProtect` local, its getter and `setFaceProtect`; `prepareExport: (f) => (f.photo.filterId === 'none' ? Promise.resolve() : engine.loadFilter(f.photo.filterId).catch(() => undefined))`; `exportImageData: (f) => engine.renderToImageData(input(f), { mirror: false })`. Its fake live loop (`:191, :208`) renders `...legacyFrame(d.getParams(), null, 1)` (Task 25 moves it to the look). Imports: `legacyFrame` (`../../../src/edit/frame`), types `CachedFace, CachedObstacle, StillFrame`; drop `FaceProtect` and `BeautyParams` if unused.
 - `tests/harness/b2/harness.ts`: its check 1 compares with the generated pre-美體 engine copy, whose `RenderInput` is v0.3's; mark that check `skipped (pre-v0.4 baseline)` in its `check()` list (`check('1. …', true, 'skipped: the baseline engine predates RenderInput v0.4 (tests/e2e/parity.spec.ts covers single-face identity)')`) and delete the stale `tests/harness/b2/baseline/` directory if it exists.
 
-- [ ] **Step 10: E2E engine harness for N faces (`tests/e2e/pages/engine.ts`, `tests/e2e/engine.spec.ts`)**
+- [x] **Step 10: E2E engine harness for N faces (`tests/e2e/pages/engine.ts`, `tests/e2e/engine.spec.ts`)**
 
 Add to `engine.ts`:
 
@@ -7671,7 +7671,7 @@ test('two faces: per-face skin strengths and makeup; the neutral face is untouch
 });
 ```
 
-- [ ] **Step 11: Run**
+- [x] **Step 11: Run**
 
 Run: `npx vitest run && npm run typecheck && npm run build`
 Expected: all green.
@@ -7679,7 +7679,7 @@ Expected: all green.
 Run: `npx playwright test tests/e2e/parity.spec.ts tests/e2e/engine.spec.ts tests/e2e/reshape.spec.ts tests/e2e/faceProtect.spec.ts tests/e2e/editor.spec.ts tests/e2e/camera.spec.ts tests/e2e/body.spec.ts`
 Expected: PASS; parity max ≤ 1/255 (the per-face mask, the makeup discard and the face-table reshape keep one face within tolerance).
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add -A src tests/e2e tests/harness

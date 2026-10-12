@@ -1,8 +1,8 @@
-// B2 harness driver: `node tests/harness/b2/run.mjs` regenerates baseline/ from the pre-美體 commit, starts its
-// own Vite on :5402 (no HMR), runs window.runB2() in headless Chromium and writes PNGs + results.json
-// to tests/harness/b2/out/. Exit code 1 when any check fails.
+// B2 harness driver: `node tests/harness/b2/run.mjs` starts its own Vite on :5402 (no HMR), runs window.runB2() in
+// headless Chromium and writes PNGs + results.json to tests/harness/b2/out/. Exit code 1 when any check fails.
+// (baseline/ is no longer generated: check 1 is skipped since RenderInput v0.4, and a generated copy of the v0.3 engine
+// would fail `npm run typecheck`; make-baseline.mjs stays for checking out an older tree.)
 import { chromium } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,6 @@ import { createServer } from 'vite';
 const here = dirname(fileURLToPath(import.meta.url));
 const outDir = join(here, 'out');
 mkdirSync(outDir, { recursive: true });
-execFileSync(process.execPath, [join(here, 'make-baseline.mjs')], { stdio: 'inherit' });
 
 const server = await createServer({ configFile: join(here, 'vite.config.mjs'), server: { port: 5402, strictPort: true } });
 await server.listen();

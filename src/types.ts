@@ -387,23 +387,47 @@ export interface EngineOptions {
   showLandmarks: boolean;
 }
 
+/** One face of a frame (S §3.2, §4.1). */
+export interface RenderFace {
+  face: Face;
+  /** 0..1, scales this face's landmark-driven effects: 1 in the editor; the track's eased weight in the camera (0 = listed for the caps only) */
+  weight: number;
+  /** this face's person: 磨皮／紅潤, 美型 and 美妝 (photo-level items come from RenderInput.photo) */
+  person: PersonParams;
+  /**
+   * 瘦臉 background limit of this face's contour warps (photo editor); null = unlimited (today's warp, and the live
+   * camera). Only read when the face's warp is drawn.
+   */
+  protect: FaceProtect | null;
+  /** camera: the track's presence easer, scaling its part in its neighbours' caps (S §4.1); absent = 1 */
+  presence?: number;
+}
+
 export interface RenderInput {
   source: TexImageSource;
   /** source pixel size (video.videoWidth/Height or bitmap size) */
   width: number;
   height: number;
-  face: Face | null;
-  /** 0..1, scales all landmark-driven effects (eased by caller on face gain/loss) */
-  faceWeight: number;
-  params: BeautyParams;
+  /**
+   * ≤ MAX_RENDER_FACES, table order = cache face order, so packing is deterministic; a face whose person is neutral is
+   * still listed so its skin mask writes 0 (others untouched) and it bounds its neighbours' caps
+   */
+  faces: readonly RenderFace[];
+  /** box centres (UV) of faces that are not rendered but bound the caps (S §4.1): the editor's obstacles; [] in the camera */
+  obstacles?: readonly [number, number][];
+  /**
+   * all-skin 磨皮／紅潤 at `weight`: the editor when the photo has no face (weight 1), the camera's "no face" fade
+   * (A2: 1 − the face weight, so a fading camera face is v0.3's mask exactly); null = the faces only
+   */
+  globalSkin: { smooth: number; rosy: number; weight: number } | null;
+  /** the photo layer: 美白, 銳化, 濾鏡 and the 美體 photo items */
+  photo: PhotoParams;
   /** body displacement field (美體); null/undefined = none */
   body?: BodyField | null;
-  /**
-   * 瘦臉 background limit of the face contour warps (photo editor); null/undefined = unlimited (today's warp, and
-   * the live camera). Only read when a face is drawn.
-   */
-  faceProtect?: FaceProtect | null;
 }
+
+/** What a still session renders: the frame without its source, size and body field (the session adds those, S1). */
+export type StillFrame = Omit<RenderInput, 'source' | 'width' | 'height' | 'body'>;
 
 export interface RenderStats {
   /** CPU-side time spent issuing the frame, ms */

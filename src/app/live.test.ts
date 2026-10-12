@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { splitLegacy } from '../edit/legacy';
 import { applyPreset } from '../engine/params';
 import type { DebugState, Face, Prefs } from '../types';
 import { AUTO_TIER, FACE_EASE_MS } from './liveCore';
 import { type LiveDeps, type LiveStats, autoTierSession, resetAutoTierSession, startLiveLoop } from './live';
 import {
   FakeVideo,
+  faceOf,
   fakeCamera,
   fakeEngine,
   fakeTracker,
@@ -12,6 +14,7 @@ import {
   makeFace,
   prefs as makePrefs,
   stubRaf,
+  weightOf,
 } from './testFakes';
 
 let faceSeq = 0;
@@ -77,7 +80,7 @@ describe('frame loop basics', () => {
     const input = engine.lastInput()!;
     expect(input.width).toBe(1280);
     expect(input.height).toBe(720);
-    expect(input.params).toBe(params);
+    expect(input.photo).toEqual(splitLegacy(params).photo);
     expect(input.source).toBeDefined();
     loop.stop();
   });
@@ -160,7 +163,7 @@ describe('frame loop basics', () => {
     });
     vi.advanceTimersByTime(33 * 5 + 1);
     expect(engine.render).toHaveBeenCalledTimes(5);
-    expect(engine.lastInput()!.face).toBeNull();
+    expect(faceOf(engine.lastInput())).toBeNull();
     loop.stop();
   });
 });
@@ -207,13 +210,13 @@ describe('pausing', () => {
   it('a resumed stream fades the face back in from zero', () => {
     const { engine, camera, loop } = setup();
     vi.advanceTimersByTime(33 * 10 + 1);
-    expect(engine.lastInput()!.faceWeight).toBe(1);
+    expect(weightOf(engine.lastInput())).toBe(1);
     camera.set({ state: 'interrupted' });
     camera.set({ state: 'live' });
     vi.advanceTimersByTime(33);
-    expect(engine.lastInput()!.faceWeight).toBe(0);
+    expect(weightOf(engine.lastInput())).toBe(0);
     vi.advanceTimersByTime(33 * 6);
-    expect(engine.lastInput()!.faceWeight).toBe(1);
+    expect(weightOf(engine.lastInput())).toBe(1);
     loop.stop();
   });
 });
@@ -225,7 +228,7 @@ describe('face weight easing', () => {
     const weights: number[] = [];
     for (let i = 0; i < 8; i++) {
       vi.advanceTimersByTime(33);
-      weights.push(engine.lastInput()!.faceWeight);
+      weights.push(weightOf(engine.lastInput()));
     }
     for (let i = 1; i < weights.length; i++) expect(weights[i]).toBeGreaterThanOrEqual(weights[i - 1]);
     expect(weights[0]).toBeGreaterThan(0);
@@ -240,18 +243,18 @@ describe('face weight easing', () => {
   it('holds the last face while fading out, then renders without a face', () => {
     const { engine, tracker, loop } = setup();
     vi.advanceTimersByTime(33 * 10 + 1);
-    const lastFace = engine.lastInput()!.face as Face;
+    const lastFace = faceOf(engine.lastInput()) as Face;
     expect(lastFace).not.toBeNull();
     tracker!.face = false;
     vi.advanceTimersByTime(33);
     const a = engine.lastInput()!;
-    expect(a.face).toBe(lastFace);
-    expect(a.faceWeight).toBeGreaterThan(0);
-    expect(a.faceWeight).toBeLessThan(1);
+    expect(faceOf(a)).toBe(lastFace);
+    expect(weightOf(a)).toBeGreaterThan(0);
+    expect(weightOf(a)).toBeLessThan(1);
     vi.advanceTimersByTime(33 * 5);
     const b = engine.lastInput()!;
-    expect(b.face).toBeNull();
-    expect(b.faceWeight).toBe(0);
+    expect(faceOf(b)).toBeNull();
+    expect(weightOf(b)).toBe(0);
     expect(dbg()?.face).toBe(false);
     loop.stop();
   });
@@ -260,7 +263,7 @@ describe('face weight easing', () => {
     const { engine, loop } = setup({ tracker: false });
     vi.advanceTimersByTime(33 * 10 + 1);
     expect(engine.render).toHaveBeenCalledTimes(10);
-    expect(engine.render.mock.calls.every((c) => c[0].face === null && c[0].faceWeight === 0)).toBe(true);
+    expect(engine.render.mock.calls.every((c) => faceOf(c[0]) === null && weightOf(c[0]) === 0)).toBe(true);
     loop.stop();
   });
 });
@@ -271,7 +274,7 @@ describe('tier L detection cadence', () => {
     vi.advanceTimersByTime(33 * 20 + 1);
     expect(engine.render).toHaveBeenCalledTimes(20);
     expect(tracker!.detectVideo).toHaveBeenCalledTimes(10);
-    const faces = engine.render.mock.calls.slice(10).map((c) => c[0].face);
+    const faces = engine.render.mock.calls.slice(10).map((c) => faceOf(c[0]));
     for (let i = 0; i < faces.length; i += 2) expect(faces[i + 1]).toBe(faces[i]);
     expect(faces[2]).not.toBe(faces[0]);
     loop.stop();
@@ -427,8 +430,10 @@ describe('compare and capture', () => {
     const img = loop.capture();
     expect(img).not.toBeNull();
     const [input, opts] = engine.renderToImageData.mock.calls[0];
-    expect(input).toMatchObject({ width: 1280, height: 720, faceWeight: 1, params });
-    expect(input.face).toBe(engine.lastInput()!.face);
+    expect(input).toMatchObject({ width: 1280, height: 720 });
+    expect(weightOf(input)).toBe(1);
+    expect(input.photo).toEqual(splitLegacy(params).photo);
+    expect(faceOf(input)).toBe(faceOf(engine.lastInput()));
     expect(opts).toEqual({ mirror: true });
     loop.stop();
   });

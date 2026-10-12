@@ -1,5 +1,6 @@
 // OWNER: app-glue agent. Live camera loop: rVFC → detect → adapt → render, face easing, auto-tier, debug state.
 import { LIVE_DETECT_FACES } from '../config/limits';
+import { legacyFrame } from '../edit/frame';
 import { adapt } from '../tracking/adapter111';
 import type { BeautyParams, CameraController, Engine, EngineOptions, Face, Prefs, Tier, Tracker } from '../types';
 import { debugState, reportError } from './debug';
@@ -176,7 +177,7 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
 
   function draw(params: BeautyParams, w: number, h: number): void {
     if (compare) engine.renderOriginal({ source: video, width: w, height: h });
-    else engine.render({ source: video, width: w, height: h, face: shown, faceWeight: shown ? weight : 0, params });
+    else engine.render({ source: video, width: w, height: h, ...legacyFrame(params, shown, shown ? weight : 0) });
   }
 
   /** New measurement window + fresh face state (start, resume, flip / resolution change). */
@@ -329,9 +330,7 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
           source: video,
           width: video.videoWidth,
           height: video.videoHeight,
-          face: shown,
-          faceWeight: shown ? weight : 0,
-          params: deps.getParams(),
+          ...legacyFrame(deps.getParams(), shown, shown ? weight : 0),
         },
         { mirror: prefs.mirrorOnSave && camera.snapshot.facing === 'user' },
       );

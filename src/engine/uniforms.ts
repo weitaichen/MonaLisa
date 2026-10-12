@@ -1,6 +1,6 @@
 // Pure engine math: tier sizes, buffer sizes, mean-kernel geometry and the BeautyParams → skin
 // uniform mapping (RB §5 "Engine mapping" column). No GL here, so all of it is unit-tested.
-import type { BeautyParams, Tier } from '../types';
+import type { BeautyParams, PhotoParams, RenderInput, Tier } from '../types';
 import { fitShortEdge } from './gl/gl';
 
 export interface Size {
@@ -121,4 +121,44 @@ export function needsMean(u: SkinUniforms): boolean {
  */
 export function presentScale(flipY: boolean, mirrorX: boolean): [number, number] {
   return [mirrorX ? -1 : 1, flipY ? -1 : 1];
+}
+
+/**
+ * The frame's skin strengths (S §4.1 item 2): S = max 磨皮 and R = max 0.35·紅潤 over the faces with weight > 0 and the
+ * global skin; each face's relative strengths k = (smooth/S, 0.35·rosy/R) are written into the skin mask; the mask is
+ * cleared to the global skin's (weight · strength / max). With one face this is v0.3 exactly: k = 1, clear 1 − w.
+ */
+export function skinMaxima(
+  faces: readonly { weight: number; smooth: number; rosy: number }[],
+  global: RenderInput['globalSkin'],
+): { S: number; R: number; k: [number, number][]; clear: [number, number] } {
+  let S = 0;
+  let R = 0;
+  for (const f of faces) {
+    if (!(f.weight > 0)) continue;
+    S = Math.max(S, clamp01(f.smooth));
+    R = Math.max(R, ROSY_MAX_OPACITY * clamp01(f.rosy));
+  }
+  if (global) {
+    S = Math.max(S, clamp01(global.smooth));
+    R = Math.max(R, ROSY_MAX_OPACITY * clamp01(global.rosy));
+  }
+  const k = faces.map((f): [number, number] => [S > 0 ? clamp01(f.smooth) / S : 0, R > 0 ? (ROSY_MAX_OPACITY * clamp01(f.rosy)) / R : 0]);
+  const w = global ? clamp01(global.weight) : 0;
+  const clear: [number, number] = global
+    ? [S > 0 ? (w * clamp01(global.smooth)) / S : 0, R > 0 ? (w * ROSY_MAX_OPACITY * clamp01(global.rosy)) / R : 0]
+    : [0, 0];
+  return { S, R, k, clear };
+}
+
+/** composite uniforms from the photo layer and the frame maxima (v1 skinUniforms for one person) */
+export function skinUniformsFor(photo: PhotoParams, S: number, R: number, filterAvailable: boolean): SkinUniforms {
+  const v = photo.values;
+  return {
+    smooth: S,
+    sharpen: 2 * clamp01(v['skin.sharpen']),
+    whiten: 0.5 * clamp01(v['skin.whiten']),
+    rosy: R,
+    filterAmount: filterAvailable && photo.filterId !== 'none' ? clamp01(v['filter.amount']) : 0,
+  };
 }

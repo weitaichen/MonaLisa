@@ -165,3 +165,14 @@ test('engine: 原圖 ≈ identity, 自然 smooths the skin only, big-eye warps o
   expect(r.passes.filterMono).not.toContain('reshape');
   expect(r.passes.filterMono).not.toContain('meanH');
 });
+
+test('two faces: per-face skin strengths and makeup; the neutral face is untouched (S §4.2, §4.3)', async ({ page }) => {
+  await page.goto(`${DEV_URL}/tests/e2e/pages/engine.html`);
+  await page.waitForFunction(() => typeof window.runEngineMulti === 'function');
+  const r = await page.evaluate(() => window.runEngineMulti!());
+  console.log(JSON.stringify(r));
+  expect(r.maskB).toBeLessThan(0.5);
+  expect(r.maskBBorder).toBeLessThan(0.5);
+  expect(r.lipA).toBeGreaterThan(3);
+  expect(Math.abs(r.lipA - r.lipASolo)).toBeLessThan(0.5);
+});

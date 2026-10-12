@@ -1,6 +1,7 @@
 // Public entry of the GPU engine (spec §5, RB §2): context lifecycle, static/filter LUT textures,
 // tiers, and the render / capture / compare entry points. Pass logic lives in pipeline.ts.
 import { debugState } from '../app/debug';
+import { MAX_RENDER_FACES } from '../config/limits';
 import type { Engine, EngineOptions, RenderInput, RenderStats, Tier } from '../types';
 import {
   createTexture,
@@ -12,8 +13,11 @@ import {
   uploadSource,
 } from './gl/gl';
 import { probeFaceTable, probeR16FArray, readGlLimits } from './glProbe';
-import { createPipeline, type FrameJob, type Pipeline, type StaticLuts } from './pipeline';
-import { processingSize, type Size, skinUniforms } from './uniforms';
+import { boxCentre, ovalBox } from './passes/faceCap';
+import { makeupUniformsFor } from './passes/makeup';
+import { reshapeUniforms } from './passes/reshape';
+import { createPipeline, type FrameFace, type FrameJob, type Pipeline, type StaticLuts } from './pipeline';
+import { processingSize, type Size, skinMaxima, skinUniformsFor } from './uniforms';
 
 const CONTEXT_ATTRS: WebGLContextAttributes = {
   alpha: false,
@@ -191,19 +195,38 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
   }
 
   function job(input: RenderInput, src: Texture, size: Size, halfMean: boolean, target: FrameJob['target'], mirror: boolean): FrameJob {
-    const filterLut = filterFor(input.params.filterId);
+    const filterLut = filterFor(input.photo.filterId);
+    const listed = input.faces.slice(0, MAX_RENDER_FACES);
+    const m = skinMaxima(
+      listed.map((f) => ({ weight: f.weight, smooth: f.person.values['skin.smooth'], rosy: f.person.values['skin.rosy'] })),
+      input.globalSkin,
+    );
+    const faces: FrameFace[] = listed.map((f, i) => {
+      const w = Math.min(1, Math.max(0, Number.isFinite(f.weight) ? f.weight : 0));
+      return {
+        face: f.face,
+        weight: w,
+        reshape: reshapeUniforms(f.person.values, w),
+        makeup: makeupUniformsFor(f.person, w),
+        kS: m.k[i][0],
+        kR: m.k[i][1],
+        // photo editor only (the live loop passes none): the same object for preview and export
+        protect: f.protect,
+        centre: boxCentre(ovalBox(f.face)),
+        presence: f.presence ?? 1,
+      };
+    });
     return {
       src,
       size,
       halfMean,
-      face: input.face,
-      faceWeight: Math.min(1, Math.max(0, input.faceWeight)),
-      // preview and export share this path, so the 美體 field is applied identically to both
+      faces,
+      obstacles: input.obstacles ?? [],
+      maskClear: m.clear,
+      // preview and export share this path, so the 美體 field and every face's limit apply identically to both
       body: input.body ?? null,
-      // photo editor only (the live loop passes none): the same object for preview and export
-      faceProtect: input.faceProtect ?? null,
-      params: input.params,
-      skin: skinUniforms(input.params, filterLut !== null),
+      photo: input.photo,
+      skin: skinUniformsFor(input.photo, m.S, m.R, filterLut !== null),
       luts,
       filterLut,
       matchGpupixel: options.matchGpupixel,
@@ -244,8 +267,8 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       uploadSource(gl, srcTex, input.source, input.width, input.height);
       sizeCanvas(size);
       const res = pipeline.run(job(input, srcTex, size, !still && tier === 'L', 'canvas', options.mirror));
-      if (options.showLandmarks && input.face) {
-        pipeline.drawOverlay(input.face, options.mirror);
+      if (options.showLandmarks && input.faces.length) {
+        for (const f of input.faces) pipeline.drawOverlay(f.face, options.mirror);
         res.passes.push('overlay');
       }
       return { cpuMs: performance.now() - t0, width: size.width, height: size.height, passes: res.passes };

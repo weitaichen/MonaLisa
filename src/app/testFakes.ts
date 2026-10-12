@@ -30,6 +30,11 @@ export function installWorkClock() {
   };
 }
 
+/** the one face a v0.3-style render input carried (legacyFrame), or null */
+export const faceOf = (i: RenderInput | undefined): Face | null => i?.faces[0]?.face ?? null;
+/** its weight (0 without a face) */
+export const weightOf = (i: RenderInput | undefined): number => i?.faces[0]?.weight ?? 0;
+
 export function makeFace(tag = 0, cx = 0.5): Face {
   const pts111 = new Float32Array(222).fill(0.5);
   pts111[0] = tag;

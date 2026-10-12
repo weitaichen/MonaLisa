@@ -163,11 +163,14 @@ void main() {
   vec3 dv = (I - Mn) * delta;
   vec3 V = min(dv * dv, 1.0);
 
-  // Smoothing (GLES gate is blurAlpha >= 0.0, so it always runs; k = 0 when uSmooth = 0).
-  float p = clamp((min(I.r, Mn.r - 0.1) - 0.2) * 4.0, 0.0, 1.0);
-  p *= mix(1.0, texture(uMask, vUv).r, uMaskOn);
+  // Smoothing (GLES gate is blurAlpha >= 0.0, so it always runs; k = 0 when uSmooth = 0). Per-pixel strengths
+  // (S §4.5): R = 磨皮, G = 紅潤 of the (warped) skin mask; the white stand-in gives today's all-skin path.
+  vec4 mk = texture(uMask, vUv);
+  float ramp = clamp((min(I.r, Mn.r - 0.1) - 0.2) * 4.0, 0.0, 1.0);
+  float pS = ramp * mix(1.0, mk.r, uMaskOn);
+  float pR = ramp * mix(1.0, mk.g, uMaskOn);
   float meanVar = (V.r + V.g + V.b) / 3.0;
-  float kMin = clamp((1.0 - meanVar / (meanVar + theta)) * p * uSmooth, 0.0, 1.0);
+  float kMin = clamp((1.0 - meanVar / (meanVar + theta)) * pS * uSmooth, 0.0, 1.0);
   vec3 color = mix(I, Mn, kMin);
 
   if (uSharpen > 0.0) {
@@ -190,7 +193,7 @@ void main() {
 
   if (uRosy > 0.0) {
     vec3 a = clamp(color, 0.0, 1.0);
-    color = mix(a, softLight(a, uRosyTint), uRosy * p);
+    color = mix(a, softLight(a, uRosyTint), uRosy * pR);
   }
 
   if (uFilterAmt > 0.0) {

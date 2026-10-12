@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { makeFace } from '../app/testFakes';
 import type { BodyField, FaceProtect } from '../types';
 import {
   bodyFieldValid,
@@ -7,7 +8,9 @@ import {
   MAX_BODY_FIELD_EDGE,
   planPasses,
   protectUploadNeeded,
+  tableFaces,
   type BodyUploadKey,
+  type FrameFace,
   type PassPlanInput,
   type ProtectUploadKey,
 } from './pipeline';
@@ -16,8 +19,7 @@ const skinOn = { smooth: 0.55, sharpen: 0.4, whiten: 0.125, rosy: 0.0875, filter
 const skinOff = { smooth: 0, sharpen: 0, whiten: 0, rosy: 0, filterAmount: 0 };
 
 const base: PassPlanInput = {
-  hasFace: true,
-  faceWeight: 1,
+  anyFace: true,
   matchGpupixel: false,
   skin: skinOn,
   makeupActive: true,
@@ -32,11 +34,11 @@ describe('planPasses', () => {
   });
 
   it('skips every face pass without a face, keeping skin', () => {
-    expect(planPasses({ ...base, hasFace: false })).toEqual({ mask: false, makeup: false, reshape: false, mean: true });
+    expect(planPasses({ ...base, anyFace: false })).toEqual({ mask: false, makeup: false, reshape: false, mean: true });
   });
 
   it('skips face passes at faceWeight 0', () => {
-    expect(planPasses({ ...base, faceWeight: 0 })).toMatchObject({ mask: false, makeup: false, reshape: false });
+    expect(planPasses({ ...base, anyFace: false })).toMatchObject({ mask: false, makeup: false, reshape: false });
   });
 
   it('match-GPUPixel mode disables only the mask', () => {
@@ -56,21 +58,21 @@ describe('planPasses', () => {
 
 describe('planPasses with a body field', () => {
   it('runs reshape for a body-only frame (no face), but no face pass', () => {
-    expect(planPasses({ ...base, hasFace: false, bodyOn: true })).toEqual({ mask: false, makeup: false, reshape: true, mean: true });
+    expect(planPasses({ ...base, anyFace: false, bodyOn: true })).toEqual({ mask: false, makeup: false, reshape: true, mean: true });
   });
 
   it('runs reshape at faceWeight 0 and with every face delta 0 when the body is on', () => {
-    expect(planPasses({ ...base, faceWeight: 0, bodyOn: true })).toMatchObject({ mask: false, makeup: false, reshape: true });
+    expect(planPasses({ ...base, anyFace: false, bodyOn: true })).toMatchObject({ mask: false, makeup: false, reshape: true });
     expect(planPasses({ ...base, reshapeActive: false, bodyOn: true }).reshape).toBe(true);
   });
 
   it('keeps the face plan unchanged when the body is off', () => {
-    for (const i of [base, { ...base, hasFace: false }, { ...base, faceWeight: 0 }, { ...base, reshapeActive: false }]) {
+    for (const i of [base, { ...base, anyFace: false }, { ...base, anyFace: false }, { ...base, reshapeActive: false }]) {
       const { reshape, ...rest } = planPasses({ ...i, bodyOn: true });
       const { reshape: r0, ...rest0 } = planPasses(i);
       expect(rest).toEqual(rest0);
       expect(reshape).toBe(true);
-      expect(r0).toBe(i.hasFace && i.faceWeight > 0 && i.reshapeActive);
+      expect(r0).toBe(i.anyFace && i.reshapeActive);
     }
   });
 });
@@ -130,5 +132,33 @@ describe('faceProtectValid / protectUploadNeeded (瘦臉 background limit)', () 
     const k = keyOf(p);
     p.version++;
     expect(protectUploadNeeded(k, p)).toBe(true);
+  });
+});
+
+describe('tableFaces (S §4.1)', () => {
+  const f = (cx: number, over: Partial<FrameFace> = {}): FrameFace => ({
+    face: makeFace(0, cx),
+    weight: 1,
+    reshape: { faceSlim: 0.1, faceV: 0, faceNarrow: 0, chin: 0, forehead: 0, noseSlim: 0, mouthSize: 0, eyeDistance: 0, eyeEnlarge: 0 },
+    makeup: { lip: 0, blush: 0, lipColor: null, blushColor: null },
+    kS: 1,
+    kR: 1,
+    protect: null,
+    centre: [cx, 0.5],
+    presence: 1,
+    ...over,
+  });
+  const prot = { width: 4, height: 4, data: new Float32Array(16), version: 1 };
+  it('one face: no cap; its limit is layer 0 over the whole photo', () => {
+    const t = tableFaces({ faces: [f(0.5, { protect: prot })], obstacles: [] }, 1);
+    expect(t.faces[0]).toMatchObject({ cap: -1, layer: 0, window: { x: 0, y: 0, w: 1, h: 1 } });
+    expect(t.protects).toEqual([prot]);
+  });
+  it('two faces and an obstacle: caps; a neutral or weight-0 face is listed with zero deltas and no layer', () => {
+    const neutral = f(0.7, { reshape: { ...f(0).reshape, faceSlim: 0 }, protect: prot });
+    const t = tableFaces({ faces: [f(0.3), neutral, f(0.9, { weight: 0 })], obstacles: [[0.4, 0.5]] }, 1);
+    expect(t.faces[0].cap).toBeCloseTo(0.05);
+    expect(t.faces[1].layer).toBe(-1);
+    expect(Object.values(t.faces[2].u).every((v) => v === 0)).toBe(true);
   });
 });

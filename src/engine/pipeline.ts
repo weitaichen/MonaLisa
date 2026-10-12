@@ -1,12 +1,16 @@
 // Pass order, skip rules and buffer management (RB §2.2, spec §5):
-//   [P0 mask → R8 ¼-res M] → [P1 makeup → A] → [P2 reshape → B (+ mask M → N)] → P3 meanH → C → P4 meanV → D
+//   [P0 mask → RGBA8 ¼-res M (R 磨皮, G 紅潤 per face)] → [P1 makeup → A] → [P2 reshape → B (+ mask M → N)]
+//   → P3 meanH → C → P4 meanV → D
 //   → P5 composite + present (canvas, or the free one of A/B for capture).
 // Face passes (T2) are constructed lazily the first time a frame actually needs them.
 // 美體: the body field is an RG16F texture sampled as the outermost backward map of P2 (no extra FBO,
 // one resample), so P2 also runs for a body-only frame and the skin mask follows via maskWarp.
 // 瘦臉 background limit: an R16F person-distance grid (FaceProtect) bounds the face contour warps in P2 (photo editor
 // only; the reshape pass uploads it as an array layer on version change, like the body field).
-import type { BeautyParams, BodyField, Face, FaceProtect } from '../types';
+// v0.4 (S §4): every listed face (≤ MAX_RENDER_FACES) through mask, makeup and the face-table reshape, capped by its
+// neighbours and the obstacles; one face is v0.3's frame.
+import { FACE_TABLE_CARRIER } from '../config/limits';
+import type { BodyField, Face, FaceProtect, PhotoParams } from '../types';
 import {
   bindTarget,
   bindTexture,
@@ -24,10 +28,11 @@ import {
   setUnpackState,
   type Texture,
 } from './gl/gl';
-import { createMakeupPass, makeupActive, makeupUniforms, type MakeupPass } from './passes/makeup';
+import { attenuate, capsFor, faceDrawn, WHOLE, type TableFace } from './passes/faceCap';
+import { createMakeupPass, makeupActive, type MakeupPass, type MakeupUniforms } from './passes/makeup';
 import { createMaskPass, type MaskPass } from './passes/mask';
 import { createLandmarkOverlay, type LandmarkOverlay } from './passes/overlay';
-import { createReshapePass, reshapeActive, reshapeUniforms, type ReshapePass } from './passes/reshape';
+import { createReshapePass, reshapeActive, type ReshapePass, type ReshapeUniforms } from './passes/reshape';
 import { COMPOSITE_FS, COMPOSITE_UNITS } from './shaders/composite';
 import { MEAN_FS, MEAN_VS } from './shaders/mean';
 import { PRESENT_FS, PRESENT_VS } from './shaders/present';
@@ -50,6 +55,25 @@ export interface StaticLuts {
   light: Texture;
 }
 
+export interface FrameFace {
+  face: Face;
+  /** 0..1 (live easing; 1 in the editor) */
+  weight: number;
+  /** × weight, not yet yaw-attenuated (tableFaces attenuates, like ReshapePass.draw did) */
+  reshape: ReshapeUniforms;
+  /** × weight */
+  makeup: MakeupUniforms;
+  /** this face's 磨皮 / 紅潤 relative to the frame maxima (skinMaxima) */
+  kS: number;
+  kR: number;
+  /** 瘦臉 background limit (person distance); null = unlimited contour warps */
+  protect: FaceProtect | null;
+  /** oval-bbox centre (UV): the caps */
+  centre: [number, number];
+  /** camera: the track's presence easer for its neighbours' caps; 1 otherwise */
+  presence: number;
+}
+
 export interface FrameJob {
   /** uploaded source (any size; sampled by UV) */
   src: Texture;
@@ -57,13 +81,15 @@ export interface FrameJob {
   size: Size;
   /** live tier L: half-resolution mean buffers */
   halfMean: boolean;
-  face: Face | null;
-  faceWeight: number;
-  /** 美體 backward displacement field (UV units); null = none. Not scaled by faceWeight or yaw. */
+  /** ≤ MAX_RENDER_FACES, in table order */
+  faces: FrameFace[];
+  /** box centres of faces that get no effects but bound the caps */
+  obstacles: readonly (readonly [number, number])[];
+  /** skin-mask clear (gS, gR) */
+  maskClear: [number, number];
+  /** 美體 backward displacement field (UV units); null = none. Not scaled by a face weight or yaw. */
   body: BodyField | null;
-  /** 瘦臉 background limit (person distance); null = unlimited contour warps */
-  faceProtect: FaceProtect | null;
-  params: BeautyParams;
+  photo: PhotoParams;
   skin: SkinUniforms;
   /** null until the GPUPixel LUTs are uploaded (whitening is skipped meanwhile) */
   luts: StaticLuts | null;
@@ -81,8 +107,8 @@ export interface FrameResult {
 }
 
 export interface PassPlanInput {
-  hasFace: boolean;
-  faceWeight: number;
+  /** some listed face has weight > 0 */
+  anyFace: boolean;
   matchGpupixel: boolean;
   skin: SkinUniforms;
   makeupActive: boolean;
@@ -101,7 +127,7 @@ export interface PassPlan {
 
 /** Skip rules (pure). Without a mask pass the composite binds the white texture (mask = 1, uMaskOn = 0). */
 export function planPasses(i: PassPlanInput): PassPlan {
-  const faceOn = i.hasFace && i.faceWeight > 0;
+  const faceOn = i.anyFace;
   const mean = needsMean(i.skin);
   return {
     mask: faceOn && !i.matchGpupixel && mean,
@@ -109,6 +135,25 @@ export function planPasses(i: PassPlanInput): PassPlan {
     reshape: (faceOn && i.reshapeActive) || i.bodyOn,
     mean,
   };
+}
+
+const ZERO_U: ReshapeUniforms = { faceSlim: 0, faceV: 0, faceNarrow: 0, chin: 0, forehead: 0, noseSlim: 0, mouthSize: 0, eyeDistance: 0, eyeEnlarge: 0 };
+
+/** The face table of a frame (S §4.1): caps over every listed face and obstacle; a layer per drawn face with a limit. */
+export function tableFaces(job: Pick<FrameJob, 'faces' | 'obstacles'>, aspect: number): { faces: TableFace[]; protects: FaceProtect[] } {
+  const caps = capsFor(job.faces.map((f) => f.centre), job.obstacles, aspect, job.faces.map((f) => f.presence));
+  const protects: FaceProtect[] = [];
+  const faces = job.faces.map((f, i): TableFace => {
+    // as v0.3: a face warps only with weight and an active warp; its limit only matters with a contour warp drawn
+    const u = f.weight > 0 && reshapeActive(f.reshape) ? attenuate(f.reshape, f.face.yaw) : ZERO_U;
+    let layer = -1;
+    if (faceDrawn(u) && f.protect && faceProtectValid(f.protect)) {
+      layer = protects.length;
+      protects.push(f.protect);
+    }
+    return { face: f.face, u, layer, window: f.protect?.window ?? WHOLE, centre: f.centre, cap: caps[i] };
+  });
+  return { faces, protects };
 }
 
 export interface Pipeline {
@@ -326,64 +371,58 @@ export function createPipeline(gl: GL): Pipeline {
     run(job) {
       const passes: string[] = [];
       resetState();
-      const face = job.face;
-      const faceOn = face !== null && job.faceWeight > 0;
-      // T2's uniform builders are only consulted when a face can actually be drawn.
-      const mu = faceOn ? makeupUniforms(job.params, job.faceWeight) : null;
-      const ru = faceOn ? reshapeUniforms(job.params.values, job.faceWeight) : null;
-      const wantMakeup = mu !== null && makeupActive(mu);
-      if (wantMakeup) getMakeup();
+      const live = job.faces.filter((f) => f.weight > 0);
+      const meshes = live.filter((f) => makeupActive(f.makeup)).map((f) => ({ face: f.face, u: f.makeup }));
+      if (meshes.length) getMakeup();
       const body = bodyTexture(job.body);
       const plan = planPasses({
-        hasFace: face !== null,
-        faceWeight: job.faceWeight,
+        anyFace: live.length > 0,
         matchGpupixel: job.matchGpupixel,
         skin: job.skin,
-        makeupActive: wantMakeup,
+        makeupActive: meshes.length > 0,
         makeupReady,
-        reshapeActive: ru !== null && reshapeActive(ru),
+        reshapeActive: live.some((f) => reshapeActive(f.reshape)),
         bodyOn: body !== null,
       });
 
       let maskTex: Texture | null = null;
-      if (plan.mask && face) {
+      if (plan.mask) {
         mask ??= createMaskPass(gl);
-        const m = fb('M', maskBufferSize(job.size), gl.R8);
-        mask.draw(m, face, job.faceWeight);
+        // RGBA8 (fb's default), still 8-bit unorm per channel: the 磨皮 channel quantizes exactly like v0.3's R8
+        const m = fb('M', maskBufferSize(job.size));
+        mask.drawFaces(m, job.faces.map((f) => ({ face: f.face, weight: f.weight, k: [f.kS, f.kR] as const })), job.maskClear);
         maskTex = m.tex;
         passes.push('mask');
       }
 
       let base: Texture = job.src;
       let baseFb: Framebuffer | null = null;
-      if (plan.makeup && face && mu && makeup) {
+      if (plan.makeup && makeup) {
         const a = fb('A', job.size);
-        makeup.draw(base, a, face, mu);
+        makeup.drawFaces(base, a, meshes);
         base = a.tex;
         baseFb = a;
         passes.push('makeup');
       }
       if (plan.reshape) {
-        reshape ??= createReshapePass(gl);
-        // Face deltas only when the face plan is on (a body-only frame passes null: empty uBox).
-        const faceWarp = faceOn && ru !== null && reshapeActive(ru);
-        const rf = faceWarp ? face : null;
-        const rru = faceWarp ? ru : null;
-        // the limit only matters with a face warp drawn: no upload otherwise (the pass uploads and validates it)
-        const prot = faceWarp ? job.faceProtect : null;
+        reshape ??= createReshapePass(gl, { carrier: FACE_TABLE_CARRIER });
+        const aspect = job.size.width / job.size.height;
+        // every listed face with its cap; a face without weight or an active warp gets zero deltas (EMPTY_BOX), so a
+        // body-only frame draws no face chain; its limit is a layer only with a warp drawn (no upload otherwise)
+        const t = tableFaces(job, aspect);
         const b = fb('B', job.size);
-        reshape.draw(base, b, rf, rru, undefined, body, prot);
+        reshape.drawFaces(base, b, t.faces, { aspect, body, protects: t.protects });
         base = b.tex;
         baseFb = b;
         passes.push('reshape');
         if (body) passes.push('body');
         if (maskTex) {
-          // The mask is built from the detected landmarks but gates the warped image: push it
-          // through the same backward map (face and body), or 瘦臉/V臉/細腰 leave background inside
-          // the mask where the contour moved in. Same pass, uniforms and yaw attenuation; the
-          // image's aspect, not the rounded ¼-res buffer's.
-          const n = fb('N', maskBufferSize(job.size), gl.R8);
-          reshape.draw(maskTex, n, rf, rru, job.size.width / job.size.height, body, prot);
+          // The mask is built from the detected landmarks but gates the warped image: push it through the same
+          // backward map (every face, its cap, the body field), or 瘦臉/V臉/細腰 leave background inside the mask where
+          // the contour moved in. Same program and table, the image's aspect (not the rounded ¼-res buffer's); all
+          // channels pass through.
+          const n = fb('N', maskBufferSize(job.size));
+          reshape.drawFaces(maskTex, n, t.faces, { aspect, body, protects: t.protects });
           maskTex = n.tex;
           passes.push('maskWarp');
         }

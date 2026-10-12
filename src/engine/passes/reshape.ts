@@ -61,10 +61,13 @@ export const RESHAPE_SCALE = {
 const clamp01 = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
 const clampS = (v: number) => Math.min(1, Math.max(-1, signed(clamp01(v))));
 
-export function reshapeUniforms(values: Record<ParamId, number>, faceWeight: number): ReshapeUniforms {
+/** the 美型 items: what the reshape uniforms read (a full Record<ParamId, number> and PersonParams.values both fit) */
+type ShapeId = Extract<ParamId, `shape.${string}`>;
+
+export function reshapeUniforms(values: Readonly<Record<ShapeId, number>>, faceWeight: number): ReshapeUniforms {
   const w = clamp01(faceWeight);
-  const one = (id: ParamId) => clamp01(values[id]) * w;
-  const bi = (id: ParamId) => clampS(values[id]) * w;
+  const one = (id: ShapeId) => clamp01(values[id]) * w;
+  const bi = (id: ShapeId) => clampS(values[id]) * w;
   const k = RESHAPE_SCALE;
   return {
     faceSlim: k.faceSlim * one('shape.faceSlim'),

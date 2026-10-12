@@ -7,6 +7,7 @@
 import { debugState, reportError } from '../app/debug';
 import { type LiveLoop, type LiveStats, autoTierSession, resetAutoTierSession, startLiveLoop } from '../app/live';
 import { type StillSession, createStillSession } from '../app/still';
+import { legacyFrame } from '../edit/frame';
 import { ENGINE_PATHS, loadEngineAssets, loadPoseModel } from '../engine/assets';
 import { createEngine, isWebGL2Supported } from '../engine/index';
 import { applyPreset, resetGroup } from '../engine/params';
@@ -93,6 +94,8 @@ let tracker: Tracker | null = null;
 let model: Uint8Array | null = null;
 let loop: LiveLoop | null = null;
 let still: StillSession | null = null;
+/** the bench's still frame: the current params on the photo's first face (v0.3's one-face render) */
+const stillFrame = (s: StillSession) => legacyFrame(params, s.faces[0]?.face ?? null, 1);
 let stats: LiveStats | null = null;
 /** first live-loop start; sample times and elapsed stay monotonic across loop restarts */
 let startedAt = 0;
@@ -198,7 +201,7 @@ const landmarksBtn = button('特徵點', () => {
   // the live loop re-syncs engine options from prefs; a still session needs them pushed + a redraw
   if (still && engine) {
     engine.setOptions({ showLandmarks: prefs.showLandmarks });
-    still.render(params);
+    still.render(stillFrame(still));
   }
 });
 const compareBtn = button('按住對比', () => {});
@@ -365,7 +368,7 @@ function setTier(t: Prefs['tier']): void {
 function setMode(m: Mode): void {
   mode = m;
   params = paramsFor(m);
-  still?.render(params);
+  if (still) still.render(stillFrame(still));
   syncButtons();
 }
 
@@ -460,16 +463,16 @@ async function runStill(file: File): Promise<void> {
     const t0 = performance.now();
     still = createStillSession(engine, tracker, bitmap);
     const detectMs = performance.now() - t0;
-    still.render(params);
+    still.render(stillFrame(still));
     const times: number[] = [];
     for (let i = 0; i < 5; i++) {
       const t = performance.now();
-      still.exportImageData(params);
+      still.exportImageData(stillFrame(still));
       times.push(performance.now() - t);
     }
     times.sort((a, b) => a - b);
     note.textContent =
-      `靜態 ${still.width}×${still.height}：detect+adapt ${detectMs.toFixed(0)} ms，臉 ${still.face ? '✓' : '✗'}，` +
+      `靜態 ${still.width}×${still.height}：detect+adapt ${detectMs.toFixed(0)} ms，臉 ${still.faces.length ? '✓' : '✗'}，` +
       `全解析 render+readback 中位數 ${times[2].toFixed(0)} ms`;
     stillBtn.textContent = '返回相機';
   } catch (err) {

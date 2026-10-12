@@ -5,6 +5,7 @@ import landmarks from '../../fixtures/landmarks_sample_face.json';
 import pose from '../../fixtures/pose_fullbody.json';
 import { measureBody } from '../../../src/body/measure';
 import { buildBodyField } from '../../../src/body/field';
+import { legacyFrame } from '../../../src/edit/frame';
 import { createEngine } from '../../../src/engine/index';
 import { applyPreset, PARAM_DEFS, setHeightBand, setParam, setShade } from '../../../src/engine/params';
 import { adapt } from '../../../src/tracking/adapter111';
@@ -47,7 +48,7 @@ window.runParity = async () => {
   const renderer = String(gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
 
   const f = adapt({ points: new Float32Array(landmarks.points) }, face.width, face.height);
-  const onFace = (params: BeautyParams): RenderInput => ({ source: face, width: face.width, height: face.height, face: f, faceWeight: 1, params });
+  const onFace = (params: BeautyParams): RenderInput => ({ source: face, width: face.width, height: face.height, ...legacyFrame(params, f, 1) });
 
   const shapeMax = PARAM_DEFS.filter((d) => d.group === 'shape').reduce((p, d) => setParam(p, d.id, 1), applyPreset('refined', 1));
   const shades = setShade(setShade(applyPreset('natural', 1), 'lip', 'rose'), 'blush', 'peach');
@@ -67,7 +68,7 @@ window.runParity = async () => {
   png['refined-shape-max'] = toPng(engine.renderToImageData(onFace(shapeMax), { mirror: false }));
   png['makeup-shades'] = toPng(engine.renderToImageData(onFace(shades), { mirror: false }));
   png['fullbody-body'] = toPng(
-    engine.renderToImageData({ source: body, width: body.width, height: body.height, face: null, faceWeight: 0, params: bodyParams, body: field }, { mirror: false }),
+    engine.renderToImageData({ source: body, width: body.width, height: body.height, ...legacyFrame(bodyParams, null, 0), body: field }, { mirror: false }),
   );
   engine.dispose();
   face.close();

@@ -16,9 +16,21 @@ import type { StillSession } from '../../app/still';
 import { heightBandStretch } from '../../body/bands';
 import { buildBodyField } from '../../body/field';
 import { measureBody, paramAvailability } from '../../body/measure';
-import { primaryBody } from '../../detect/cache';
+import { boxScore, primaryBody } from '../../detect/cache';
 import { buildFaceProtect } from '../../tracking/faceProtect';
-import type { BeautyParams, BodyDetection, BodyField, EditState, Engine, Face, PersonId } from '../../types';
+import type {
+  BeautyParams,
+  BodyDetection,
+  BodyField,
+  CachedFace,
+  CachedObstacle,
+  EditState,
+  Engine,
+  Face,
+  FaceProtect,
+  PersonId,
+} from '../../types';
+import { legacyFrame } from '../../edit/frame';
 import { lensFor, P0_INFO } from '../../edit/lens';
 import { legacyProjection } from '../../edit/legacy';
 import { editKey, P0 } from '../../edit/state';
@@ -91,8 +103,8 @@ export function Editor({ source }: { source: EditorSource }) {
    * unsure: its "no face" came from a tracker that could not answer (recovering, or the detect call threw).
    */
   const [bound, setBound] = useState<{ s: StillSession; engine: Engine; unsure: boolean } | null>(null);
-  /** a definite detection result for this photo (a face, or a real "no face"); undefined → not known yet */
-  const knownFace = useRef<Face | null | undefined>(undefined);
+  /** a definite detection result for this photo (its faces, or a real "no face"); undefined → not known yet */
+  const knownFaces = useRef<{ faces: CachedFace[]; obstacles: CachedObstacle[] } | undefined>(undefined);
   /** bumped to detect again on the same engine once the tracker can answer (bounded: RedetectBudget) */
   const [detectGen, setDetectGen] = useState(0);
   const [redetect] = useState(() => new RedetectBudget(trackerHealth));
@@ -156,6 +168,19 @@ export function Editor({ source }: { source: EditorSource }) {
 
   // only a session bound to the current engine counts; while recoverEngine rebuilds there is none
   const session = bound && bundle && bound.engine === bundle.engine ? bound.s : null;
+  /** sub-step 1c interim: the engine draws the projection on the largest, most central face (Task 21 draws every person) */
+  const primaryFace = useMemo(() => {
+    const fs = session?.faces ?? [];
+    return fs.length ? fs.reduce((a, b) => (boxScore(b.box) > boxScore(a.box) ? b : a)).face : null;
+  }, [session]);
+  const primaryFaceRef = useRef(primaryFace);
+  primaryFaceRef.current = primaryFace;
+  /** the 瘦臉 limit of the primary face (null = unlimited): every render and export draws with it */
+  const [protect, setProtect] = useState<FaceProtect | null>(null);
+  const protectRef = useRef(protect);
+  protectRef.current = protect;
+  /** what the session renders and exports for `p`: the primary face with its limit (none: the all-skin path) */
+  const frameOf = (p: BeautyParams) => legacyFrame(p, primaryFaceRef.current, primaryFaceRef.current ? 1 : 0, protectRef.current);
 
   const undo = useMemo<UndoLike<EditState> | null>(() => {
     try {
@@ -228,34 +253,33 @@ export function Editor({ source }: { source: EditorSource }) {
         sessionRef.current = null;
       }
       try {
-        // the photo is unchanged: a face found before (e.g. by the session a lost engine took with it) still holds
-        const face = tracker ? knownFace.current : undefined;
+        // the photo is unchanged: faces found before (e.g. by the session a lost engine took with it) still hold
+        const known = tracker ? knownFaces.current : undefined;
         const { s, unsure } = detectSession(
           !!tracker,
           () => svc.get().tracker === 'ok',
           () =>
             deps.createStillSession(target, tracker, source.bitmap, {
               ownsBitmap: false,
-              face,
+              faces: known?.faces,
+              obstacles: known?.obstacles,
               body: fieldMemo.field,
-              // built for this same face (the session keeps it only together with `face`)
-              faceProtect: protectSrc.protect,
             }),
         );
         if (tracker && !unsure) {
-          if (s.face && knownFace.current === undefined && replacing) {
+          if (s.faces.length && knownFaces.current === undefined && replacing) {
             // found on a re-detect: what was encoded / autosaved so far lacks the face effects
             fresh.current = null;
             saved.current = null;
           }
-          knownFace.current = s.face;
+          knownFaces.current = { faces: s.faces.map((f) => ({ id: f.id, lm: f.lm, box: f.box })), obstacles: [...s.obstacles] };
         }
         sessionRef.current = s;
         setBound({ s, engine: target, unsure });
         // a tracker that could not answer is not "no face": wait for the re-detect before saying so
         if (!faceToastDone.current && !unsure) {
           faceToastDone.current = true;
-          if (tracker && !s.face) toast('未偵測到臉部，僅套用美膚與濾鏡', 3200);
+          if (tracker && !s.faces.length) toast('未偵測到臉部，僅套用美膚與濾鏡', 3200);
         }
       } catch (e) {
         setFatal(reportError(e, 'createStillSession'));
@@ -277,7 +301,7 @@ export function Editor({ source }: { source: EditorSource }) {
     const stamp: OutputStamp = { key: editKey(e), field: gen };
     saved.current = stamp;
     // the limit `img` was drawn with (a limit change since the export re-arms its own write: see the encode effect)
-    const limit = limitRecord(s);
+    const limit = limitRecord();
     historyChain.current = historyChain.current
       .then(() => writeHistory(e, img, s, limit))
       .catch((e: unknown) => reportError(e, 'history autosave'));
@@ -286,10 +310,10 @@ export function Editor({ source }: { source: EditorSource }) {
   };
 
   /**
-   * The 瘦臉 limit record of a history write from `s` now (HistoryEntry.faceProtect / faceMask): the request for this
-   * photo, and the segmenter mask the limit `s` draws with was built from. Every params write carries one.
+   * The 瘦臉 limit record of a history write now (HistoryEntry.faceProtect / faceMask): the request for this photo, and
+   * the segmenter mask the limit every render and export draws with was built from. Every params write carries one.
    */
-  const limitRecord = (s: StillSession): FaceProtectRecord => protectSrc.record(s.faceProtect);
+  const limitRecord = (): FaceProtectRecord => protectSrc.record(protectRef.current);
 
   /**
    * The params write of an existing entry, the only one there is (writeHistory and the lost-engine flush): always with
@@ -362,18 +386,18 @@ export function Editor({ source }: { source: EditorSource }) {
       const id = historyId.current;
       if (!id) return;
       saved.current = { key, field: gen };
-      const limit = limitRecord(s);
+      const limit = limitRecord();
       historyChain.current = historyChain.current
         .then(() => writeParams(id, e, limit))
         .catch((err: unknown) => reportError(err, 'history flush'));
       setPendingHistory(historyChain.current);
       return;
     }
-    const ready = s.exportReady(p);
+    const ready = s.exportReady(frameOf(p));
     const field = snapshotField();
     let stamp: OutputStamp;
     try {
-      stamp = queueHistory(e, gen, s.exportImageData(p, field), s);
+      stamp = queueHistory(e, gen, s.exportImageData(frameOf(p), field), s);
     } catch (err) {
       reportError(err, 'history flush');
       return;
@@ -383,10 +407,10 @@ export function Editor({ source }: { source: EditorSource }) {
     // one once it is resident, unless a newer edit was queued meanwhile (iOS may suspend us first: the
     // synchronous write above keeps the params either way)
     historyChain.current = historyChain.current
-      .then(() => Promise.race([s.prepareExport(p), new Promise((r) => window.setTimeout(r, FLUSH_LUT_WAIT_MS))]))
+      .then(() => Promise.race([s.prepareExport(frameOf(p)), new Promise((r) => window.setTimeout(r, FLUSH_LUT_WAIT_MS))]))
       .then(async () => {
-        if (saved.current !== stamp || !s.exportReady(p)) return;
-        await writeHistory(e, s.exportImageData(p, field), s, limitRecord(s));
+        if (saved.current !== stamp || !s.exportReady(frameOf(p))) return;
+        await writeHistory(e, s.exportImageData(frameOf(p), field), s, limitRecord());
       })
       .catch((err: unknown) => reportError(err, 'history flush'));
     setPendingHistory(historyChain.current);
@@ -487,7 +511,7 @@ export function Editor({ source }: { source: EditorSource }) {
 
   // head / neck anchors come from the face: keep the last one while a recovering engine has no session
   const bodyFaceRef = useRef<Face | null>(null);
-  const bodyFace = session ? session.face : bodyFaceRef.current;
+  const bodyFace = session ? primaryFace : bodyFaceRef.current;
   bodyFaceRef.current = bodyFace;
   const measure = useMemo(
     () => measureSafe(bodyDet, bodyFace, measureBody, (e) => reportError(e, 'measureBody')),
@@ -590,41 +614,38 @@ export function Editor({ source }: { source: EditorSource }) {
         source.faceProtect === true,
       ),
   );
+  // the session no longer holds the limit (A6): the frame carries it (frameOf)
   useEffect(() => {
     if (!session) return;
     const bodyMask = bodyDet.phase === 'done' ? (bodyDet.det?.mask ?? null) : null;
-    const p = protectSrc.update(session.face, contourActive(params), bodyMask, limitRequested);
-    if (session.faceProtect === p) return;
-    try {
-      session.setFaceProtect(p);
-    } catch (e) {
-      reportError(e, 'session.setFaceProtect');
-      return;
-    }
+    const p = protectSrc.update(primaryFace, contourActive(params), bodyMask, limitRequested);
+    if (protectRef.current === p) return;
+    protectRef.current = p;
+    setProtect(p);
     // what an export is made from changed: re-arm the encode / autosave like a new 美體 field
     fieldGen.current++;
     setFieldTick((n) => n + 1);
-  }, [session, bodyDet, params, protectTick, limitRequested]);
+  }, [session, bodyDet, params, protectTick, limitRequested, primaryFace]);
 
   useFilterLoader(bundle?.engine ?? null, params.filterId);
 
   useEffect(() => {
     if (!session) return;
     try {
-      session.render(params);
+      session.render(frameOf(params));
     } catch (e) {
       setFatal(reportError(e, 'session.render'));
     }
-  }, [session, params]);
+  }, [session, params, protect, primaryFace]);
 
   /**
    * Export + encode with the user's state captured when it was asked for (`p`, the 美體 `field`); waits for the filter
-   * LUT so the file matches the settled preview, and draws with the session's 瘦臉 limit at export time (see save).
+   * LUT so the file matches the settled preview, and draws with the 瘦臉 limit at export time (see save).
    */
   const encode = async (s: StillSession, p: BeautyParams, field: BodyField | null) => {
-    await s.prepareExport(p);
+    await s.prepareExport(frameOf(p));
     if (unmounted.current) throw new Error('editor closed');
-    const img = s.exportImageData(p, field);
+    const img = s.exportImageData(frameOf(p), field);
     return { img, file: await deps.encodeJpeg(img, 0.92) };
   };
 
@@ -662,9 +683,9 @@ export function Editor({ source }: { source: EditorSource }) {
       if (unmounted.current || stampIs(saved.current, key, gen) || sessionRef.current !== s) return;
       if (!img) {
         try {
-          await s.prepareExport(params);
+          await s.prepareExport(frameOf(params));
           if (unmounted.current || stampIs(saved.current, key, gen) || sessionRef.current !== s) return;
-          img = s.exportImageData(params, field);
+          img = s.exportImageData(frameOf(params), field);
         } catch (e) {
           reportError(e, 'history export');
           return;
@@ -797,7 +818,7 @@ export function Editor({ source }: { source: EditorSource }) {
   // face effects cannot apply: 基本模式, or no face in this photo (null while analysing, so no flash)
   // (a tracker that could not answer gets a neutral note until the re-detect gives a real answer)
   let faceNote: string | null = null;
-  if (session && !session.face) {
+  if (session && !session.faces.length) {
     if (bundle?.basic) faceNote = '基本模式不支援臉型與美妝';
     else if (!bound?.unsure) faceNote = '未偵測到臉部，臉型與美妝不會套用';
     else if (trackerHealth === 'lost') faceNote = '臉部偵測重新啟動中，臉型與美妝暫不套用';

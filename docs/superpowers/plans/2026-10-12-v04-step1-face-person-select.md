@@ -2234,7 +2234,7 @@ export const P0_INFO: readonly PersonInfo[];   // [{id: 'p0', face: true, body: 
 
 Step 2 adds `setLook` (RM §3.3); nothing in step 1 depends on it.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // src/edit/lens.test.ts
@@ -2388,12 +2388,12 @@ describe('one person p0 is v0.3 (parity of every op through the projection)', ()
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `npx vitest run src/edit/lens.test.ts`
 Expected: FAIL (cannot resolve `./lens`).
 
-- [ ] **Step 3: Write `src/edit/lens.ts`**
+- [x] **Step 3: Write `src/edit/lens.ts`**
 
 ```ts
 // One lens for every edit (RM §3.3): all panel reads and writes go through it, so the routing between the photo and
@@ -2656,12 +2656,12 @@ export function lensFor(edit: EditState, sel: Selection, persons: readonly Perso
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/edit`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/edit/lens.ts src/edit/lens.test.ts

@@ -2946,6 +2946,24 @@ describe('normalizeDetect (S §5.4)', () => {
     expect(r.stale).toEqual({ f0: c.faces[0].box, f1: c.faces[1].box });
     expect(normalizeDetect(undefined)).toEqual({ cache: null, stale: null, lost: false });
   });
+  it('a cache whose faces or bodies were all corrupt is dropped, not read as "nobody here" (p0 only in the stored no-face form)', () => {
+    const c = makeCache();
+    const both = structuredClone(c) as unknown as { faces: { lm: Float32Array }[] };
+    both.faces[0].lm = new Float32Array(10);
+    both.faces[1].lm = new Float32Array(10);
+    expect(normalizeDetect(both)).toEqual({ cache: null, stale: { f0: c.faces[0].box, f1: c.faces[1].box }, lost: true });
+    const one = makeCache({ faces: [cacheFace('f0', 0.5)], persons: [{ id: 'f0', face: 'f0', body: null }] });
+    const oneRaw = structuredClone(one) as unknown as { faces: { lm: Float32Array }[] };
+    oneRaw.faces[0].lm = new Float32Array(10);
+    expect(normalizeDetect(oneRaw)).toEqual({ cache: null, stale: { f0: one.faces[0].box }, lost: true });
+    const badBody = { ...cacheBody('b0', 0.5), pose: { points: new Float32Array(10) } };
+    const bodyOnly = makeCache({ faces: [], bodies: [badBody], persons: [{ id: 'b0', face: null, body: 'b0' }], primary: 'b0' });
+    expect(normalizeDetect(bodyOnly)).toEqual({ cache: null, stale: {}, lost: true });
+    const noFaces = { ...noFaceCache(1000, 800, [{ quarter: 0, flipH: false }]), faces: undefined };
+    expect(normalizeDetect(noFaces).cache).toBeNull();
+    const bodiesEmpty = { ...noFaceCache(1000, 800, [{ quarter: 0, flipH: false }]), bodies: [] };
+    expect(normalizeDetect(bodiesEmpty)).toEqual({ cache: bodiesEmpty, stale: null, lost: false });
+  });
 });
 
 describe('cache helpers', () => {
@@ -3142,6 +3160,10 @@ export function normalizeDetect(raw: unknown): { cache: DetectionCache | null; s
     dropped: { tooSmall: count(dropped.tooSmall), overCap: count(dropped.overCap) },
   };
   if (!faces.length && !bodies?.length) {
+    // p0 only in the stored no-face form (faces = [], bodies null or []). A record whose faces or bodies were all
+    // dropped as corrupt is not "nobody here": it is dropped, so the photo re-detects and rematches by its stale boxes.
+    const storedEmpty = Array.isArray(raw.faces) && !raw.faces.length && (raw.bodies === null || (Array.isArray(raw.bodies) && !raw.bodies.length));
+    if (!storedEmpty) return fail();
     return { cache: { ...base, persons: [{ id: 'p0', face: null, body: null }], primary: 'p0' }, stale: null, lost };
   }
   const persons: PersonInfoCached[] = [];

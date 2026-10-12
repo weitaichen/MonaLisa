@@ -126,6 +126,10 @@ export function normalizeDetect(raw: unknown): { cache: DetectionCache | null; s
     dropped: { tooSmall: count(dropped.tooSmall), overCap: count(dropped.overCap) },
   };
   if (!faces.length && !bodies?.length) {
+    // p0 only in the stored no-face form (faces = [], bodies null or []). A record whose faces or bodies were all
+    // dropped as corrupt is not "nobody here": it is dropped, so the photo re-detects and rematches by its stale boxes.
+    const storedEmpty = Array.isArray(raw.faces) && !raw.faces.length && (raw.bodies === null || (Array.isArray(raw.bodies) && !raw.bodies.length));
+    if (!storedEmpty) return fail();
     return { cache: { ...base, persons: [{ id: 'p0', face: null, body: null }], primary: 'p0' }, stale: null, lost };
   }
   const persons: PersonInfoCached[] = [];

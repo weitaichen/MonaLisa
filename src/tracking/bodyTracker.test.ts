@@ -203,33 +203,48 @@ describe('pure helpers', () => {
     expect(toDetections(result([big.slice(0, 20)]) as never, 10, 10)).toBeNull();
   });
 
-  it('reads one mask at a time, empties segmentationMasks before close(), closes each mask once, also after a throw (P2)', async () => {
+  it('reads one mask at a time, empties the array the result shares with the landmarker, closes each mask once, also after a throw (P2)', async () => {
     const { toDetections } = await load();
-    let live = 0;
-    let peak = 0;
-    const counted = () => {
+    // As in tasks-vision 0.10.35: getAsFloat32Array caches its array inside the mask and close() deletes only the GL
+    // texture, so a read mask's array lives as long as the mask can be reached. The PoseLandmarker's own
+    // segmentationMasks field is the same array object as result.segmentationMasks (reset only at the next detect).
+    let shared: FakeMask[] = [];
+    const read = new Set<FakeMask>();
+    let unclosed = 0;
+    let peakUnclosed = 0;
+    let peakReachable = 0;
+    const counted = (): FakeMask => {
       const m = mask(64, 64, () => 1);
-      return {
+      const c: FakeMask = {
         ...m,
         getAsFloat32Array: () => {
-          live++;
-          peak = Math.max(peak, live);
+          read.add(c);
+          peakUnclosed = Math.max(peakUnclosed, ++unclosed);
+          // arrays alive at this readback: this one and every read mask the landmarker's field still reaches
+          peakReachable = Math.max(peakReachable, new Set([c, ...shared.filter((x) => read.has(x))]).size);
           return m.getAsFloat32Array();
         },
         close: vi.fn(() => {
-          live--;
+          unclosed--;
         }),
       };
+      return c;
     };
     const ms = [counted(), counted(), counted()];
     const r = result([person(0.1, 0.3, 0.1, 0.9), person(0.4, 0.6, 0.1, 0.9), person(0.7, 0.9, 0.1, 0.9)], ms);
+    shared = r.segmentationMasks!;
     toDetections(r as never, 10, 10);
-    expect(peak).toBe(1);
-    expect(r.segmentationMasks).toEqual([]);
+    expect(peakUnclosed).toBe(1);
+    expect(peakReachable).toBe(1);
+    expect(shared).toEqual([]);
+    expect(r.segmentationMasks ?? []).toEqual([]);
     for (const m of ms) expect(m.close).toHaveBeenCalledTimes(1);
     const boom = { ...counted(), getAsFloat32Array: () => { throw new Error('readback'); } };
     const later = counted();
-    expect(() => toDetections(result([person(0.1, 0.3, 0.1, 0.9), person(0.4, 0.6, 0.1, 0.9)], [boom, later]) as never, 10, 10)).toThrow('readback');
+    const r2 = result([person(0.1, 0.3, 0.1, 0.9), person(0.4, 0.6, 0.1, 0.9)], [boom, later]);
+    shared = r2.segmentationMasks!;
+    expect(() => toDetections(r2 as never, 10, 10)).toThrow('readback');
+    expect(shared).toEqual([]);
     expect(boom.close).toHaveBeenCalledTimes(1);
     expect(later.close).toHaveBeenCalledTimes(1);
   });

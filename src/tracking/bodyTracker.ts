@@ -240,24 +240,26 @@ interface MaskLike {
 
 /**
  * Every person of a raw result (≥ 33 points), each with its own downscaled mask (P2); `width`/`height` are the
- * original image's pixel size. In tasks-vision 0.10.35 getAsFloat32Array caches the array inside the mask until
- * mask.close(), and result.close() only closes the masks; so the masks are taken out of the result first, read one at
- * a time, and closed right after their downscale: at most one full-size array plus one transient readback buffer is
- * alive. Every mask is closed exactly once, also after a throw.
+ * original image's pixel size. In tasks-vision 0.10.35 getAsFloat32Array caches the array inside the mask, and
+ * mask.close() deletes only the GL texture: the array lives as long as the mask can be reached. The result's
+ * segmentationMasks is the same array object as the PoseLandmarker's own field, which keeps it until the next detect.
+ * So the masks are spliced out of that shared array (neither the result nor the landmarker reaches them any more, and
+ * result.close() closes nothing), read one at a time, and each is closed and dropped right after its downscale: at
+ * most one full-size array plus one transient readback buffer is alive. Every mask is closed exactly once, also after
+ * a throw.
  */
 export function toDetections(
   result: { landmarks: NormalizedLandmark[][]; segmentationMasks?: MaskLike[] },
   width: number,
   height: number,
 ): BodyDetections | null {
-  const masks = [...(result.segmentationMasks ?? [])];
-  (result as { segmentationMasks?: MaskLike[] }).segmentationMasks = [];
-  const closed = new Set<number>();
+  const masks: (MaskLike | undefined)[] = result.segmentationMasks?.splice(0) ?? [];
   const close = (i: number) => {
-    if (closed.has(i) || !masks[i]) return;
-    closed.add(i);
+    const m = masks[i];
+    if (!m) return;
+    masks[i] = undefined; // the last reference: the cached array goes with the mask
     try {
-      masks[i].close();
+      m.close();
     } catch {
       // a lost context can make close() throw; the readback is gone either way
     }

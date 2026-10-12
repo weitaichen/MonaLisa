@@ -16,6 +16,7 @@ import type { StillSession } from '../../app/still';
 import { heightBandStretch } from '../../body/bands';
 import { buildBodyField } from '../../body/field';
 import { measureBody, paramAvailability } from '../../body/measure';
+import { primaryBody } from '../../detect/cache';
 import { buildFaceProtect } from '../../tracking/faceProtect';
 import type { BeautyParams, BodyDetection, BodyField, EditState, Engine, Face, PersonId } from '../../types';
 import { lensFor, P0_INFO } from '../../edit/lens';
@@ -456,9 +457,9 @@ export function Editor({ source }: { source: EditorSource }) {
       pause: () => new Promise((r) => window.setTimeout(r, BODY_PAINT_MS)),
       cancelled: () => unmounted.current,
     }).then(
-      (det) => {
-        if (det === undefined || unmounted.current) return;
-        setBodyDet({ phase: 'done', det });
+      (dets) => {
+        if (dets === undefined || unmounted.current) return;
+        setBodyDet({ phase: 'done', det: primaryBody(dets) });
         persistBody();
       },
       (e: unknown) => {

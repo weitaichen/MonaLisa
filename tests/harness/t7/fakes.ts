@@ -419,11 +419,13 @@ export async function installFakes(deps: Deps, defaults: { params: BeautyParams;
     createBodyTracker: async () => {
       await sleep(200);
       const det = flag('pose') === 'none' ? null : await fixturePose();
+      // every person the model found: the fixture's one body (null stays null: pose=none)
+      const dets = det && { bodies: [{ pose: det.pose, mask: det.mask, score: 1 }], width: det.width, height: det.height };
       return {
         variant: 'full',
         delegate: 'CPU',
-        detect: () => det,
-        detectVideo: () => det,
+        detect: () => dets,
+        detectVideo: () => dets,
         close() {},
       } satisfies BodyTracker;
     },

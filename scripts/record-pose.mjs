@@ -38,18 +38,19 @@ window.run = async (imgUrl, variant) => {
     runningMode: 'IMAGE',
   });
   const det = tracker.detect(bitmap);
+  const best = det && det.bodies.reduce((a, b) => (b.score > a.score ? b : a));
   const delegate = tracker.delegate;
   tracker.close();
   if (!det) throw new Error('no person detected');
   let bin = '';
-  if (det.mask) for (const b of det.mask.data) bin += String.fromCharCode(b);
+  if (best.mask) for (const b of best.mask.data) bin += String.fromCharCode(b);
   return {
     delegate,
     width: det.width,
     height: det.height,
-    people: det.people,
-    points: Array.from(det.pose.points),
-    mask: det.mask ? { width: det.mask.width, height: det.mask.height, data: btoa(bin) } : null,
+    people: det.bodies.length,
+    points: Array.from(best.pose.points),
+    mask: best.mask ? { width: best.mask.width, height: best.mask.height, data: btoa(bin) } : null,
   };
 };
 window.runAll = async (imgUrl, variant, numPoses) => {

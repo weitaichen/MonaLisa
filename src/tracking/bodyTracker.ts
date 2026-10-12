@@ -1,8 +1,9 @@
 // MediaPipe PoseLandmarker (tasks-vision 0.10.35) wrapper for 美體 (body research report §偵測).
 //
 // The caller creates one tracker per session, lazily and after the face tracker: every MediaPipe task carries its
-// own wasm heap, and WebKit leaks when instances are created per photo. Photo mode is IMAGE with numPoses 2 (a
-// second person is reported), segmentation on, input copied to our own canvas at ≤ 1280 long edge.
+// own wasm heap, and WebKit leaks when instances are created per photo. Photo mode is IMAGE with numPoses
+// MAX_EDIT_BODIES (4): every person is reported, each with its own mask, read back one at a time (toDetections);
+// segmentation on, input copied to our own canvas at ≤ 1280 long edge.
 //
 // Delegate and masks — measured in headless Chromium (tests/harness/b3/probe.mjs), contrary to BR's CPU plan:
 //  - CPU delegate + outputSegmentationMasks ABORTS the wasm module in 0.10.35 on every detect (image_frame.cc:415
@@ -11,7 +12,7 @@
 //  - GPU delegate masks read inside detect's callback come back all zero (the MPI 4757 symptom); the synchronous
 //    detect, which copies the masks before returning, gives correct masks. So detect is synchronous + close().
 // Hence: masks requested → the graph runs on the GPU delegate (landmarks match CPU to 1e-5); if the GPU graph
-// cannot be created the tracker falls back to CPU without masks (BodyDetection.mask = null, B1's keypoint widths).
+// cannot be created the tracker falls back to CPU without masks (mask: null for every body, B1's keypoint widths).
 // A mask that still comes back empty (some GPU) also reads as null. `delegate` reports what actually runs.
 //
 // ── Recovery ──
@@ -29,7 +30,7 @@
 //      live one (an ordinary error) is kept and the error rethrown: a fresh copy of the same graph fails the same way.
 //  (b) GPU-MASK EVIDENCE. `gpuEscalations` counts escalations (failure-driven retirements) of a GPU mask graph
 //      before any GPU graph read a mask back (`gpuProven`, sticky). Only detect-time failures count: a throw at
-//      inference or at the mask readback (toDetection), or an abort. "No person" never runs the GPU-only mask copy,
+//      inference or at the mask readback (toDetections), or an abort. "No person" never runs the GPU-only mask copy,
 //      so it proves nothing and resets nothing. At CPU_FALLBACK_AFTER the tracker switches for good (`cpuOnly`) to
 //      the CPU graph without masks. A failed creation is NOT evidence (typically OOM right after an abort): a
 //      replacement whose GPU build fails is retried on the GPU after the backoff, and only GPU_CREATE_TRIES
@@ -77,9 +78,10 @@ import {
   PoseLandmarker,
   type NormalizedLandmark,
   type PoseLandmarkerOptions,
-  type PoseLandmarkerResult,
 } from '@mediapipe/tasks-vision';
-import type { BodyDetection, BodyTracker, BodyTrackerOptions, Delegate, PersonMask } from '../types';
+import { MAX_EDIT_BODIES } from '../config/limits';
+import { boxScore, poseBox } from '../detect/cache';
+import type { BodyDetections, BodyTracker, BodyTrackerOptions, Delegate, PersonMask } from '../types';
 
 export const N_POSE_POINTS = 33;
 /** Inference input cap (same as the face tracker's CPU frame copy); the pose model crops to 256² anyway. */
@@ -151,6 +153,16 @@ export function resolveDelegate(opts: Pick<BodyTrackerOptions, 'delegate' | 'out
   return { delegate: masks ? 'GPU' : (opts.delegate ?? 'CPU'), masks };
 }
 
+/** selectPerson's score of one pose: the clipped landmark bbox's area × centrality (detect/cache.ts boxScore) */
+export function poseScore(pose: readonly NormalizedLandmark[]): number {
+  const pts = new Float32Array(pose.length * 4);
+  pose.forEach((p, i) => {
+    pts[i * 4] = p.x;
+    pts[i * 4 + 1] = p.y;
+  });
+  return boxScore(poseBox(pts));
+}
+
 /**
  * Index of the person to edit: the largest landmark bounding box (clipped to the frame), discounted by how far its
  * centre is from the image centre, so a big bystander at the edge does not beat a centred subject of similar size.
@@ -159,21 +171,7 @@ export function selectPerson(poses: readonly (readonly NormalizedLandmark[])[]):
   let best = -1;
   let bestScore = -Infinity;
   poses.forEach((pose, i) => {
-    let x0 = 1;
-    let y0 = 1;
-    let x1 = 0;
-    let y1 = 0;
-    for (const p of pose) {
-      const x = Math.min(1, Math.max(0, p.x));
-      const y = Math.min(1, Math.max(0, p.y));
-      x0 = Math.min(x0, x);
-      y0 = Math.min(y0, y);
-      x1 = Math.max(x1, x);
-      y1 = Math.max(y1, y);
-    }
-    const area = Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
-    const d = Math.hypot((x0 + x1) / 2 - 0.5, (y0 + y1) / 2 - 0.5) / Math.SQRT1_2; // 0 centre … 1 corner
-    const score = area * (1 - 0.5 * d);
+    const score = poseScore(pose);
     if (score > bestScore) {
       bestScore = score;
       best = i;
@@ -233,22 +231,50 @@ export function isWasmAbort(e: unknown): boolean {
   return e instanceof Error && /\bAborted\(/.test(e.message);
 }
 
-/** Assemble a BodyDetection from a raw result; `width`/`height` are the original image's pixel size. */
-export function toDetection(
-  result: Pick<PoseLandmarkerResult, 'landmarks' | 'segmentationMasks'>,
+interface MaskLike {
+  width: number;
+  height: number;
+  getAsFloat32Array(): Float32Array;
+  close(): void;
+}
+
+/**
+ * Every person of a raw result (≥ 33 points), each with its own downscaled mask (P2); `width`/`height` are the
+ * original image's pixel size. In tasks-vision 0.10.35 getAsFloat32Array caches the array inside the mask until
+ * mask.close(), and result.close() only closes the masks; so the masks are taken out of the result first, read one at
+ * a time, and closed right after their downscale: at most one full-size array plus one transient readback buffer is
+ * alive. Every mask is closed exactly once, also after a throw.
+ */
+export function toDetections(
+  result: { landmarks: NormalizedLandmark[][]; segmentationMasks?: MaskLike[] },
   width: number,
   height: number,
-): BodyDetection | null {
-  const all = result.landmarks;
-  const valid = all.map((p, i) => [p, i] as const).filter(([p]) => p.length >= N_POSE_POINTS);
-  if (!valid.length) return null;
-  const [pose, idx] = valid[selectPerson(valid.map(([p]) => p))];
-  const mpMask = result.segmentationMasks?.[idx];
-  let mask: PersonMask | null = null;
-  if (mpMask && mpMask.width > 0 && mpMask.height > 0) {
-    mask = downscaleMask(mpMask.getAsFloat32Array(), mpMask.width, mpMask.height);
+): BodyDetections | null {
+  const masks = [...(result.segmentationMasks ?? [])];
+  (result as { segmentationMasks?: MaskLike[] }).segmentationMasks = [];
+  const closed = new Set<number>();
+  const close = (i: number) => {
+    if (closed.has(i) || !masks[i]) return;
+    closed.add(i);
+    try {
+      masks[i].close();
+    } catch {
+      // a lost context can make close() throw; the readback is gone either way
+    }
+  };
+  try {
+    const bodies: BodyDetections['bodies'] = [];
+    result.landmarks.forEach((pose, i) => {
+      const m = masks[i];
+      const valid = pose.length >= N_POSE_POINTS;
+      const mask = valid && m && m.width > 0 && m.height > 0 ? downscaleMask(m.getAsFloat32Array(), m.width, m.height) : null;
+      close(i);
+      if (valid) bodies.push({ pose: { points: toPose33(pose) }, mask, score: poseScore(pose) });
+    });
+    return bodies.length ? { bodies, width, height } : null;
+  } finally {
+    for (let i = 0; i < masks.length; i++) close(i);
   }
-  return { pose: { points: toPose33(pose) }, mask, people: valid.length, width, height };
 }
 
 // ───────────────────────── tracker ─────────────────────────
@@ -289,7 +315,7 @@ async function createInstance(
     // kept by reference and re-read on every setOptions graph rebuild: never mutate the buffer afterwards
     baseOptions: { modelAssetBuffer: modelBuffer, delegate },
     runningMode: mode,
-    numPoses: 2,
+    numPoses: MAX_EDIT_BODIES,
     outputSegmentationMasks: masks,
   };
   // a fresh canvas per instance: a task's canvas cannot be reset, and it lets us watch the GPU context
@@ -435,7 +461,7 @@ export async function createBodyTracker(opts: BodyTrackerOptions): Promise<BodyT
     return frame.canvas;
   };
 
-  const run = (target: Mode, img: DetectInput | HTMLVideoElement, ts: number): BodyDetection | null => {
+  const run = (target: Mode, img: DetectInput | HTMLVideoElement, ts: number): BodyDetections | null => {
     if (state === 'CLOSED') throw new Error('bodyTracker: closed');
     if (state === 'LIVE' && (inst!.lost || inst!.gl?.isContextLost())) {
       console.warn('[bodyTracker] GPU context lost, replacing the instance');
@@ -459,12 +485,12 @@ export async function createBodyTracker(opts: BodyTrackerOptions): Promise<BodyT
       void live.landmarker.setOptions({ runningMode: target }).catch((e: unknown) => console.warn('[bodyTracker] setOptions', e));
     }
     const input = prepare(img, sw, sh);
-    let det: BodyDetection | null;
+    let det: BodyDetections | null;
     try {
       const result = target === 'IMAGE' ? live.landmarker.detect(input) : live.landmarker.detectForVideo(input, ts);
       try {
         // the mask readback (getAsFloat32Array → readPixels FLOAT) is a GPU failure point too
-        det = toDetection(result, sw, sh);
+        det = toDetections(result, sw, sh);
       } finally {
         result.close();
       }
@@ -475,7 +501,7 @@ export async function createBodyTracker(opts: BodyTrackerOptions): Promise<BodyT
     failures = 0;
     replacements = 0;
     strikes = 0;
-    if (live.delegate === 'GPU' && det?.mask) gpuProven = true; // only a mask read back proves the mask path (b)
+    if (live.delegate === 'GPU' && det?.bodies.some((b) => b.mask)) gpuProven = true; // only a mask read back proves the mask path (b)
     return det;
   };
 

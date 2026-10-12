@@ -2,7 +2,17 @@
 // it can be unit-tested without a DOM.
 import { hasValue, paramsInGroup } from '../engine/params';
 import type { BodyMeasure } from '../body/measure';
-import type { BeautyParams, BodyDetection, BodyField, BodyTracker, Face, ParamId, RegionStatus, TrackerState } from '../types';
+import type {
+  BeautyParams,
+  BodyDetection,
+  BodyDetections,
+  BodyField,
+  BodyTracker,
+  Face,
+  ParamId,
+  RegionStatus,
+  TrackerState,
+} from '../types';
 import { BODY_NONE_NOTE, BODY_WAIT_REASON, type BodyContext } from './panelModel';
 import type { BodyTrackerState } from './services';
 
@@ -112,7 +122,7 @@ export function shouldDetectBody(det: BodyDet, want: { tabOpen: boolean; entered
 }
 
 /**
- * Detect the person on the photo with the session's body tracker. `pause` runs between getting the tracker
+ * Detect every person on the photo with the session's body tracker. `pause` runs between getting the tracker
  * and the synchronous detection (let the 正在偵測人物 note paint); `cancelled` → undefined (the editor closed,
  * the photo is gone). A throw propagates (an error state with 重試): the tracker rebuilds its own graph on the
  * next call, so a retry reuses it rather than creating a second MediaPipe instance (each is its own wasm heap).
@@ -121,7 +131,7 @@ export async function detectBody(
   ensure: () => Promise<BodyTracker>,
   image: ImageBitmap,
   opts: { pause?: () => Promise<void>; cancelled?: () => boolean; recoverWait?: () => Promise<void> } = {},
-): Promise<BodyDetection | null | undefined> {
+): Promise<BodyDetections | null | undefined> {
   const t = await ensure();
   await opts.pause?.();
   for (let attempt = 0; ; attempt++) {

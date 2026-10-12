@@ -1,5 +1,6 @@
 // End-to-end checks of createBodyTracker with the real model (driven by tracker_e2e.mjs).
 import { ENGINE_PATHS, POSE_MODELS, loadPoseModel } from '../../../src/engine/assets';
+import { primaryBody } from '../../../src/detect/cache';
 import { createBodyTracker } from '../../../src/tracking/bodyTracker';
 import type { BodyDetection, BodyTracker } from '../../../src/types';
 
@@ -50,10 +51,10 @@ window.e2e = async () => {
   const createMs = performance.now() - t0;
   const body = await bitmapOf('/tests/fixtures/fullbody.jpg');
   const yoga = await bitmapOf('/tests/fixtures/fullbody_yoga.jpg');
-  const base = tracker.detect(body);
+  const base = primaryBody(tracker.detect(body));
   // 4x upscaled: inference input capped at 1280, coordinates still normalized, size = original
   const big = canvasOf(body.width * 4, body.height * 4, (g) => g.drawImage(body, 0, 0, body.width * 4, body.height * 4));
-  const upscaled = tracker.detect(big);
+  const upscaled = primaryBody(tracker.detect(big));
   // two people (faces visible: BlazePose finds people through the face, so the masked subject is not reused;
   // recall of a second, smaller person is limited, see the report): the full yoga photo and a horizontally
   // squeezed copy of its centre to the right. The larger, more central left person must be selected.
@@ -61,18 +62,20 @@ window.e2e = async () => {
     g.drawImage(yoga, 0, 0);
     g.drawImage(yoga, 150, 0, 1000, 667, 700, 0, 700, 667);
   });
-  const two = tracker.detect(pair);
-  const empty = tracker.detect(
-    canvasOf(800, 600, (g) => {
-      g.fillStyle = '#7a8a99';
-      g.fillRect(0, 0, 800, 600);
-    }),
+  const two = primaryBody(tracker.detect(pair));
+  const empty = primaryBody(
+    tracker.detect(
+      canvasOf(800, 600, (g) => {
+        g.fillStyle = '#7a8a99';
+        g.fillRect(0, 0, 800, 600);
+      }),
+    ),
   );
-  const y = tracker.detect(yoga);
+  const y = primaryBody(tracker.detect(yoga));
   // VIDEO on the same instance, then back to IMAGE
   const vids: (BodyDetection | null)[] = [];
-  for (let i = 0; i < 5; i++) vids.push(tracker.detectVideo(big as unknown as HTMLVideoElement, 1000 + i * 33));
-  const back = tracker.detect(body);
+  for (let i = 0; i < 5; i++) vids.push(primaryBody(tracker.detectVideo(big as unknown as HTMLVideoElement, 1000 + i * 33)));
+  const back = primaryBody(tracker.detect(body));
   const delegate = tracker.delegate;
   tracker.close();
   return {

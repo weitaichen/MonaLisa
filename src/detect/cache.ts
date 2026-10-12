@@ -3,7 +3,18 @@
 // cache and answers questions about it; building and merging land in Task 15.
 import { MAX_EDIT_BODIES, MAX_OBSTACLES, MAX_RENDER_FACES } from '../config/limits';
 import { P0_INFO, type PersonInfo } from '../edit/lens';
-import type { CachedBody, CachedFace, CachedObstacle, DetectionCache, PersonId, PersonInfoCached, PersonMask, Rect } from '../types';
+import type {
+  BodyDetection,
+  BodyDetections,
+  CachedBody,
+  CachedFace,
+  CachedObstacle,
+  DetectionCache,
+  PersonId,
+  PersonInfoCached,
+  PersonMask,
+  Rect,
+} from '../types';
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -214,4 +225,11 @@ export function poseBox(points: Float32Array): Rect {
     y1 = Math.max(y1, y);
   }
   return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
+}
+
+/** v0.3's choice among the detected bodies (selectPerson: the first best score) as the v1 shape; until Task 21 */
+export function primaryBody(d: BodyDetections | null): BodyDetection | null {
+  if (!d || !d.bodies.length) return null;
+  const best = d.bodies.reduce((a, b) => (b.score > a.score ? b : a));
+  return { pose: best.pose, mask: best.mask, people: d.bodies.length, width: d.width, height: d.height };
 }

@@ -2,6 +2,7 @@
 import { vi } from 'vitest';
 import type {
   BodyDetection,
+  BodyDetections,
   BodyField,
   BodyTracker,
   CameraController,
@@ -252,15 +253,27 @@ export function makeBodyDetection(people = 1, width = 1536, height = 2048): Body
   return { pose: { points }, mask: { width: 4, height: 8, data: new Uint8Array(32).fill(255) }, people, width, height };
 }
 
+/** `n` standing persons side by side (makeBodyDetection's pose shifted), each with its 4×8 mask */
+export function makeBodyDetections(n = 1, width = 1536, height = 2048): BodyDetections {
+  const one = makeBodyDetection(1, width, height);
+  const bodies = Array.from({ length: n }, (_, i) => {
+    const points = one.pose.points.slice();
+    const dx = n === 1 ? 0 : (i - (n - 1) / 2) * (0.6 / n);
+    for (let k = 0; k < 33; k++) points[k * 4] += dx;
+    return { pose: { points }, mask: one.mask, score: 0.3 - Math.abs(dx) };
+  });
+  return { bodies, width, height };
+}
+
 export interface FakeBodyTracker extends BodyTracker {
   /** what detect() returns next (null = no person) */
-  result: BodyDetection | null;
+  result: BodyDetections | null;
   detect: ReturnType<typeof vi.fn<BodyTracker['detect']>>;
   detectVideo: ReturnType<typeof vi.fn<BodyTracker['detectVideo']>>;
   close: ReturnType<typeof vi.fn<() => void>>;
 }
 
-export function fakeBodyTracker(result: BodyDetection | null = makeBodyDetection()): FakeBodyTracker {
+export function fakeBodyTracker(result: BodyDetections | null = makeBodyDetections()): FakeBodyTracker {
   const t = {
     variant: 'full' as const,
     delegate: 'CPU' as const,

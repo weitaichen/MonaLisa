@@ -4853,7 +4853,7 @@ git commit -m "v0.4 step 1c: multi-face tracker API (numFaces with the mode) and
 - Consumes: `MAX_EDIT_BODIES`, `boxScore`, `poseBox` (Task 8).
 - Produces: `BodyTracker.detect(image): BodyDetections | null`, `BodyTracker.detectVideo(video, tsMs): BodyDetections | null`; `poseScore(pose: readonly NormalizedLandmark[]): number`; `toDetections(result, width, height): BodyDetections | null` (replacing `toDetection`); `primaryBody(d: BodyDetections | null): BodyDetection | null` (`src/detect/cache.ts`: v0.3's choice, used until Task 21); `detectBody(…)` resolves `BodyDetections | null | undefined`; `makeBodyDetections(n = 1): BodyDetections`; `fakeBodyTracker(result?: BodyDetections | null)`.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 In `src/tracking/bodyTracker.test.ts`:
 1. `FakeMask` gains `close: ReturnType<typeof vi.fn>`; `mask()` returns `{ width: w, height: hh, getAsFloat32Array: () => a, close: vi.fn() }`.
@@ -4919,7 +4919,7 @@ In `src/ui/editorModel.test.ts` (the three `detectBody` tests, `:205-264`): `con
 Run: `npx vitest run src/tracking/bodyTracker.test.ts src/ui/editorModel.test.ts`
 Expected: FAIL (`toDetections` missing; `numPoses` 2).
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 `src/types.ts` (CRLF), `BodyTracker`: `detect(image: ImageBitmap | HTMLCanvasElement): BodyDetections | null;` and `detectVideo(video: HTMLVideoElement, tsMs: number): BodyDetections | null;` (doc: "every person with ≥ 33 points; null when nobody").
 
@@ -5027,7 +5027,7 @@ and change `FakeBodyTracker.result` to `BodyDetections | null` with `fakeBodyTra
 
 Port the other callers through `primaryBody`: `src/bench/main.ts` (CRLF) `const detect = (): BodyDetection | null => primaryBody(cfg.mode === 'IMAGE' ? tracker.detect(bitmap) : tracker.detectVideo(frame as unknown as HTMLVideoElement, (ts += 33)));`; `tests/harness/b3/tracker.ts` wrap `base`, `upscaled`, `two`, `empty`, `y`, `back` and the `vids.push(…)` argument in `primaryBody(…)`; `tests/harness/t7/fakes.ts` fake `createBodyTracker`: return `{ bodies: [{ pose: det.pose, mask: det.mask, score: 1 }], width: det.width, height: det.height }` where it returned `det` (`null` stays `null`: `pose=none`); `scripts/record-pose.mjs` (CRLF) single mode: after `const det = tracker.detect(bitmap);` insert `const best = det && det.bodies.reduce((a, b) => (b.score > a.score ? b : a));` and read `best.pose.points`, `best.mask`, `people: det.bodies.length`, `width: det.width`, `height: det.height`.
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 Run: `npx vitest run src/tracking src/ui src/detect && npm run typecheck`
 Expected: PASS; `tsc` exits 0.
@@ -5035,7 +5035,7 @@ Expected: PASS; `tsc` exits 0.
 Run: `npm run build && npx playwright test tests/e2e/body.spec.ts tests/e2e/parity.spec.ts`
 Expected: PASS (the editor still edits v0.3's chosen body).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/types.ts src/tracking/bodyTracker.ts src/tracking/bodyTracker.test.ts src/tracking/bodyTracker.fuzz.test.ts src/detect/cache.ts src/ui/editorModel.ts src/ui/editorModel.test.ts src/ui/screens/Editor.tsx src/app/testFakes.ts src/bench/main.ts scripts/record-pose.mjs tests/harness/b3/tracker.ts tests/harness/t7/fakes.ts

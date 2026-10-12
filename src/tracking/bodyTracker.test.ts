@@ -3,11 +3,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NormalizedLandmark } from '@mediapipe/tasks-vision';
 import type { BodyTracker } from '../types';
+import { primaryBody } from '../detect/cache';
 
 interface FakeMask {
   width: number;
   height: number;
   getAsFloat32Array: () => Float32Array;
+  close: ReturnType<typeof vi.fn>;
 }
 interface FakeResult {
   landmarks: NormalizedLandmark[][];
@@ -71,7 +73,7 @@ function person(x0: number, x1: number, y0: number, y1: number, vis = 0.9): Norm
 function mask(w: number, hh: number, fill: (x: number, y: number) => number): FakeMask {
   const a = new Float32Array(w * hh);
   for (let y = 0; y < hh; y++) for (let x = 0; x < w; x++) a[y * w + x] = fill(x, y);
-  return { width: w, height: hh, getAsFloat32Array: () => a };
+  return { width: w, height: hh, getAsFloat32Array: () => a, close: vi.fn() };
 }
 
 function result(poses: NormalizedLandmark[][], masks?: FakeMask[]): FakeResult {
@@ -182,34 +184,65 @@ describe('pure helpers', () => {
     expect(downscaleMask(new Float32Array(400 * 300).fill(0.3), 400, 300)).toBeNull();
   });
 
-  it('toDetection keeps the original size, counts people and takes the mask of the selected person', async () => {
-    const { toDetection } = await load();
+  it('toDetections keeps the original size, every person with ≥ 33 points and each one’s own mask', async () => {
+    const { toDetections } = await load();
     const small = person(0.05, 0.15, 0.5, 0.7);
     const big = person(0.3, 0.7, 0.05, 0.95);
-    const det = toDetection(
+    const d = toDetections(
       result([small, big], [mask(100, 100, (x) => (x < 10 ? 1 : 0)), mask(100, 100, (x) => (x >= 50 ? 1 : 0))]) as never,
       4000,
       3000,
     )!;
-    expect(det.people).toBe(2);
-    expect([det.width, det.height]).toEqual([4000, 3000]);
-    expect(det.pose.points[0]).toBeCloseTo(0.3, 6);
-    expect(det.mask!.data[0]).toBe(0);
-    expect(det.mask!.data[99]).toBe(255);
-    expect(toDetection(result([]) as never, 10, 10)).toBeNull();
-    // incomplete poses are ignored
-    expect(toDetection(result([big.slice(0, 20)]) as never, 10, 10)).toBeNull();
+    expect(d.bodies).toHaveLength(2);
+    expect([d.width, d.height]).toEqual([4000, 3000]);
+    expect(d.bodies[1].pose.points[0]).toBeCloseTo(0.3, 6);
+    expect(d.bodies[1].mask!.data[99]).toBe(255);
+    expect(d.bodies[0].mask!.data[0]).toBe(255);
+    expect(d.bodies[1].score).toBeGreaterThan(d.bodies[0].score);
+    expect(toDetections(result([]) as never, 10, 10)).toBeNull();
+    expect(toDetections(result([big.slice(0, 20)]) as never, 10, 10)).toBeNull();
+  });
+
+  it('reads one mask at a time, empties segmentationMasks before close(), closes each mask once, also after a throw (P2)', async () => {
+    const { toDetections } = await load();
+    let live = 0;
+    let peak = 0;
+    const counted = () => {
+      const m = mask(64, 64, () => 1);
+      return {
+        ...m,
+        getAsFloat32Array: () => {
+          live++;
+          peak = Math.max(peak, live);
+          return m.getAsFloat32Array();
+        },
+        close: vi.fn(() => {
+          live--;
+        }),
+      };
+    };
+    const ms = [counted(), counted(), counted()];
+    const r = result([person(0.1, 0.3, 0.1, 0.9), person(0.4, 0.6, 0.1, 0.9), person(0.7, 0.9, 0.1, 0.9)], ms);
+    toDetections(r as never, 10, 10);
+    expect(peak).toBe(1);
+    expect(r.segmentationMasks).toEqual([]);
+    for (const m of ms) expect(m.close).toHaveBeenCalledTimes(1);
+    const boom = { ...counted(), getAsFloat32Array: () => { throw new Error('readback'); } };
+    const later = counted();
+    expect(() => toDetections(result([person(0.1, 0.3, 0.1, 0.9), person(0.4, 0.6, 0.1, 0.9)], [boom, later]) as never, 10, 10)).toThrow('readback');
+    expect(boom.close).toHaveBeenCalledTimes(1);
+    expect(later.close).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('createBodyTracker', () => {
-  it('creates one GPU graph with masks, IMAGE, numPoses 2 on its own canvas, and reports the real delegate', async () => {
+  it('creates one GPU graph with masks, IMAGE, numPoses 4 on its own canvas, and reports the real delegate', async () => {
     const { createBodyTracker } = await load();
     const t = await createBodyTracker(OPTS);
     expect(h.created).toHaveLength(1);
     const o = h.created[0].opts;
     expect(o.baseOptions).toEqual({ modelAssetBuffer: MODEL, delegate: 'GPU' });
-    expect(o).toMatchObject({ runningMode: 'IMAGE', numPoses: 2, outputSegmentationMasks: true });
+    expect(o).toMatchObject({ runningMode: 'IMAGE', numPoses: 4, outputSegmentationMasks: true });
     expect(o.canvas).toBeInstanceOf(FakeCanvas);
     expect(t.delegate).toBe('GPU');
     expect(t.variant).toBe('full');
@@ -231,7 +264,7 @@ describe('createBodyTracker', () => {
     expect(t.delegate).toBe('CPU');
     expect(h.created.at(-1)!.opts.outputSegmentationMasks).toBe(false);
     h.next = () => result([person(0.3, 0.7, 0.1, 0.9)]);
-    expect(t.detect(img(100, 100))!.mask).toBeNull();
+    expect(primaryBody(t.detect(img(100, 100)))!.mask).toBeNull();
   });
 
   it('detect downscales the input to ≤ 1280, reports the original size, closes the result', async () => {
@@ -239,7 +272,7 @@ describe('createBodyTracker', () => {
     const t = await createBodyTracker(OPTS);
     const r = result([person(0.3, 0.7, 0.1, 0.9)], [mask(960, 1280, (x) => (x > 400 ? 1 : 0))]);
     h.next = () => r;
-    const det = t.detect(img(3024, 4032))!;
+    const det = primaryBody(t.detect(img(3024, 4032)))!;
     expect([det.width, det.height]).toEqual([3024, 4032]);
     expect(det.mask).toMatchObject({ width: 192, height: 256 });
     expect(r.close).toHaveBeenCalledTimes(1);
@@ -351,7 +384,7 @@ describe('createBodyTracker', () => {
     expect(h.created[2].opts).toMatchObject({ baseOptions: { delegate: 'CPU' }, outputSegmentationMasks: false });
     expect(t.delegate).toBe('CPU');
     h.next = () => result([person(0.3, 0.7, 0.1, 0.9)]);
-    expect(t.detect(img(100, 100))!.mask).toBeNull();
+    expect(primaryBody(t.detect(img(100, 100)))!.mask).toBeNull();
   });
 
   it('after MAX_ESCALATIONS the original error is rethrown and no further instance is created', async () => {
@@ -466,7 +499,7 @@ describe('createBodyTracker', () => {
     // memory is back: the next try after the window restores detection on the GPU graph, masks included
     clock += CREATE_RETRY_MS;
     canCreate = true;
-    expect((await detect())!.mask).not.toBeNull();
+    expect(primaryBody((await detect())!)!.mask).not.toBeNull();
     expect(attempts).toEqual(['GPU', 'GPU']);
     expect(t.delegate).toBe('GPU');
     expect(h.created[0].close).toHaveBeenCalledTimes(1);
@@ -477,7 +510,7 @@ describe('createBodyTracker', () => {
     let clock = 0;
     vi.spyOn(performance, 'now').mockImplementation(() => clock);
     const t = await createBodyTracker(OPTS);
-    expect(t.detect(img(100, 100))!.mask).not.toBeNull();
+    expect(primaryBody(t.detect(img(100, 100)))!.mask).not.toBeNull();
     h.created[0].detect.mockImplementationOnce(() => {
       throw new WebAssembly.RuntimeError('Aborted(OOM)');
     });
@@ -495,7 +528,7 @@ describe('createBodyTracker', () => {
     expect(attempts).toEqual(['GPU', 'GPU']);
     // the sustained GPU failure (≥ 15 s): the next try builds the CPU graph, detection works without masks
     h.next = () => result([person(0.3, 0.7, 0.1, 0.9)]);
-    expect((await detect())!.mask).toBeNull();
+    expect(primaryBody((await detect())!)!.mask).toBeNull();
     expect(attempts).toEqual(['GPU', 'GPU', 'CPU']);
     expect(h.created.at(-1)!.opts.outputSegmentationMasks).toBe(false);
     expect(t.delegate).toBe('CPU');
@@ -505,7 +538,7 @@ describe('createBodyTracker', () => {
     h.created.at(-1)!.detect.mockImplementationOnce(() => {
       throw new WebAssembly.RuntimeError('Aborted(OOM)');
     });
-    expect((await detect())!.mask).not.toBeNull();
+    expect(primaryBody((await detect())!)!.mask).not.toBeNull();
     expect(attempts).toEqual(['GPU', 'GPU', 'CPU', 'GPU']);
     expect(t.delegate).toBe('GPU');
   });
@@ -546,7 +579,7 @@ describe('createBodyTracker', () => {
   it('wasm aborts separated by "no person" photos are each replaced: the cap never keeps a dead module (G1)', async () => {
     const { createBodyTracker, BodyTrackerRecovering, MAX_ESCALATIONS } = await load();
     const t = await createBodyTracker(OPTS);
-    expect(t.detect(img(100, 100))!.mask).not.toBeNull(); // the GPU mask path works on this device
+    expect(primaryBody(t.detect(img(100, 100)))!.mask).not.toBeNull(); // the GPU mask path works on this device
     for (let k = 1; k <= MAX_ESCALATIONS + 1; k++) {
       h.created[k - 1].detect.mockImplementation(() => {
         throw new WebAssembly.RuntimeError('Aborted(OOM)'); // an aborted module throws on every later call
@@ -558,7 +591,7 @@ describe('createBodyTracker', () => {
       expect(t.detect(img(100, 100))).toBeNull();
       h.next = null;
     }
-    expect(t.detect(img(100, 100))!.mask).not.toBeNull();
+    expect(primaryBody(t.detect(img(100, 100)))!.mask).not.toBeNull();
     expect(h.created.map((lm) => lm.opts.baseOptions.delegate)).toEqual(['GPU', 'GPU', 'GPU', 'GPU']);
     expect(h.created.slice(0, -1).every((lm) => lm.close.mock.calls.length === 1)).toBe(true);
   });
@@ -569,7 +602,7 @@ describe('createBodyTracker', () => {
     let clock = 0;
     vi.spyOn(performance, 'now').mockImplementation(() => clock);
     const t = await createBodyTracker(OPTS);
-    expect(t.detect(img(100, 100))!.mask).not.toBeNull();
+    expect(primaryBody(t.detect(img(100, 100)))!.mask).not.toBeNull();
     const abort = new WebAssembly.RuntimeError('Aborted(OOM)');
     h.next = () => {
       throw abort;
@@ -606,7 +639,7 @@ describe('createBodyTracker', () => {
     clock += CREATE_RETRY_MS;
     expect(() => t.detect(img(100, 100))).toThrow(BodyTrackerRecovering);
     await replaced(MAX_ESCALATIONS + 3);
-    expect(t.detect(img(100, 100))!.mask).not.toBeNull();
+    expect(primaryBody(t.detect(img(100, 100)))!.mask).not.toBeNull();
     expect(t.delegate).toBe('GPU');
     expect(h.created.slice(0, -1).every((lm) => lm.close.mock.calls.length === 1)).toBe(true);
   });
@@ -718,6 +751,7 @@ describe('createBodyTracker', () => {
             getAsFloat32Array: () => {
               throw new Error('readPixels: FLOAT not supported');
             },
+            close: vi.fn(),
           },
         ],
       );
@@ -732,7 +766,7 @@ describe('createBodyTracker', () => {
     expect(results.every((r) => r.close.mock.calls.length === 1)).toBe(true);
     expect(h.created[2].opts).toMatchObject({ baseOptions: { delegate: 'CPU' }, outputSegmentationMasks: false });
     h.next = () => result([person(0.3, 0.7, 0.1, 0.9)]);
-    expect(t.detect(img(100, 100))!.mask).toBeNull();
+    expect(primaryBody(t.detect(img(100, 100)))!.mask).toBeNull();
   });
 
   it('close releases the instance once; later calls throw', async () => {

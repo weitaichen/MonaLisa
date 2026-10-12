@@ -1,7 +1,7 @@
 // editorModel.ts: when the editor trusts a "no face", how often it re-detects, and 儲存 surviving a session swap.
 import { describe, expect, it, vi } from 'vitest';
 import type { BodyMeasure } from '../body/measure';
-import { fakeBodyTracker, makeBodyDetection, makeBodyField } from '../app/testFakes';
+import { fakeBodyTracker, makeBodyDetection, makeBodyDetections, makeBodyField } from '../app/testFakes';
 import { applyPreset, setBodyProtect, setFilter, setHeightBand, setParam } from '../engine/params';
 import type { BeautyParams, BodyField, EditState, Face, ParamId, RegionStatus, TrackerState } from '../types';
 import { lensFor, P0_INFO } from '../edit/lens';
@@ -209,14 +209,15 @@ describe('美體 decisions', () => {
   });
 
   it('detectBody runs the tracker on the photo after the pause; failures propagate', async () => {
-    const t = fakeBodyTracker(det);
+    const dets = makeBodyDetections(1);
+    const t = fakeBodyTracker(dets);
     const img = {} as ImageBitmap;
     const order: string[] = [];
     const pause = async () => {
       order.push('pause');
       expect(t.detect).not.toHaveBeenCalled();
     };
-    expect(await detectBody(async () => t, img, { pause })).toBe(det);
+    expect(await detectBody(async () => t, img, { pause })).toBe(dets);
     expect(order).toEqual(['pause']);
     expect(t.detect).toHaveBeenCalledWith(img);
     t.result = null;
@@ -229,7 +230,8 @@ describe('美體 decisions', () => {
   });
 
   it('detectBody waits out a recovering tracker (BodyTrackerRecovering) instead of failing', async () => {
-    const t = fakeBodyTracker(det);
+    const dets = makeBodyDetections(1);
+    const t = fakeBodyTracker(dets);
     const recovering = () => Object.assign(new Error('rebuilding'), { name: 'BodyTrackerRecovering' });
     t.detect
       .mockImplementationOnce(() => {
@@ -242,7 +244,7 @@ describe('美體 decisions', () => {
     const recoverWait = async () => {
       waits++;
     };
-    expect(await detectBody(async () => t, {} as ImageBitmap, { recoverWait })).toBe(det);
+    expect(await detectBody(async () => t, {} as ImageBitmap, { recoverWait })).toBe(dets);
     expect(waits).toBe(2);
     // still recovering after every try → the error surfaces (重試)
     t.detect.mockImplementation(() => {
@@ -263,7 +265,7 @@ describe('美體 decisions', () => {
   });
 
   it('detectBody: closed meanwhile → undefined, the (closed) photo is never touched', async () => {
-    const t = fakeBodyTracker(det);
+    const t = fakeBodyTracker(makeBodyDetections(1));
     expect(await detectBody(async () => t, {} as ImageBitmap, { cancelled: () => true })).toBeUndefined();
     expect(t.detect).not.toHaveBeenCalled();
   });

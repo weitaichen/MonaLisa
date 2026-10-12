@@ -229,7 +229,7 @@ describe('bodyTracker recovery (randomized)', () => {
         try {
           const det = v ? t.detectVideo(video, h.clock) : t.detect(img);
           h.fastCreates = 0; // a completed inference
-          return det ? (det.mask ? 'ok+mask' : 'ok') : 'null';
+          return det ? (det.bodies.some((b) => b.mask) ? 'ok+mask' : 'ok') : 'null';
         } catch (e) {
           const err = e as Error;
           if (/Aborted\(dead\)/.test(err.message)) h.problems.push('a dead (aborted) instance was called again');

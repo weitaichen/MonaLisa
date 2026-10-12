@@ -25,6 +25,7 @@ import type {
   Prefs,
   Tracker,
 } from '../types';
+import { primaryBody } from '../detect/cache';
 import { mountMultiFace } from './multiFace';
 import {
   type BenchSample,
@@ -614,7 +615,7 @@ async function measureBody(
     try {
       let ts = performance.now();
       const detect = (): BodyDetection | null =>
-        cfg.mode === 'IMAGE' ? tracker.detect(bitmap) : tracker.detectVideo(frame as unknown as HTMLVideoElement, (ts += 33));
+        primaryBody(cfg.mode === 'IMAGE' ? tracker.detect(bitmap) : tracker.detectVideo(frame as unknown as HTMLVideoElement, (ts += 33)));
       t = performance.now();
       let det = detect();
       row.firstMs = performance.now() - t;

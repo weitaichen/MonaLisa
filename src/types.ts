@@ -311,10 +311,11 @@ export interface BodyTracker {
    * while there is no replacement (creating one failed, or the replacement cap since the last completed detection
    * was reached) and the retry backoff (5 s, doubling to 60 s) has not elapsed — a 重試 after that makes one new
    * attempt, so detection comes back once memory does. After any other throw the graph is rebuilt on the next call.
+   * Answers every person with ≥ 33 points (up to MAX_EDIT_BODIES), each with its own mask; null when nobody.
    */
-  detect(image: ImageBitmap | HTMLCanvasElement): BodyDetection | null;
-  /** VIDEO mode (bench / future live): tsMs strictly increasing */
-  detectVideo(video: HTMLVideoElement, tsMs: number): BodyDetection | null;
+  detect(image: ImageBitmap | HTMLCanvasElement): BodyDetections | null;
+  /** VIDEO mode (bench / future live): tsMs strictly increasing; every person with ≥ 33 points, null when nobody */
+  detectVideo(video: HTMLVideoElement, tsMs: number): BodyDetections | null;
   close(): void;
 }
 

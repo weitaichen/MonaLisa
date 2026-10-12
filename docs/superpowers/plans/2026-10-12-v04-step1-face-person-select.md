@@ -628,12 +628,12 @@ git commit -m "v0.4 step 1a: group fixtures (faces, six faces, two people), mult
 - Consumes (current API, `892ea61`): `createEngine` (`engine/index.ts:30`), `applyPreset`, `setParam`, `setShade`, `setHeightBand` (`params.ts`), `adapt` (`adapter111.ts:106`), `measureBody` (`measure.ts:193`), `buildBodyField` (`field.ts:99`), `RenderInput` (`types.ts:276-292`).
 - Produces: `window.runParity(): Promise<{ renderer: string; png: Record<ParityCase, string> }>` with `ParityCase = 'natural' | 'refined-shape-max' | 'makeup-shades' | 'fullbody-body'`; `scripts/record-parity.mjs` writes the four PNGs. Later tasks port `parity.ts` to new APIs (Tasks 18 and 20 say exactly how); the goldens never change.
 
-- [ ] **Step 1: Confirm the source is v0.3**
+- [x] **Step 1: Confirm the source is v0.3**
 
 Run: `git diff --stat 892ea61 -- src tests/e2e/pages`
 Expected: no output (HEAD only added docs since `892ea61`). If anything is listed, check out `892ea61` into a worktree (`git worktree add ../meiyan-v03 892ea61`) and run Step 4 there instead.
 
-- [ ] **Step 2: Write the page**
+- [x] **Step 2: Write the page**
 
 `tests/e2e/pages/parity.html`:
 
@@ -732,7 +732,7 @@ window.runParity = async () => {
 };
 ```
 
-- [ ] **Step 3: Write `scripts/record-parity.mjs`**
+- [x] **Step 3: Write `scripts/record-parity.mjs`**
 
 ```js
 // Records the v0.3 parity goldens (RM §8.3): tests/e2e/pages/parity.html rendered by headless Chromium with the same
@@ -786,12 +786,12 @@ try {
 }
 ```
 
-- [ ] **Step 4: Record the goldens**
+- [x] **Step 4: Record the goldens**
 
 Run: `node scripts/record-parity.mjs && du -ch tests/fixtures/parity-v03/*.png | tail -1`
 Expected: four `wrote …` lines, a SwiftShader renderer line, total ≤ 3 MB.
 
-- [ ] **Step 5: Write `tests/e2e/parity.spec.ts`**
+- [x] **Step 5: Write `tests/e2e/parity.spec.ts`**
 
 ```ts
 // Single-person parity (RM §1.1, S §1.3): the parity cases rendered by today's engine equal the v0.3 goldens within
@@ -829,12 +829,12 @@ test('v0.3 parity: 自然, 精緻 + 美型 max, lip + blush shades, 細腰 + 長
 });
 ```
 
-- [ ] **Step 6: Run it**
+- [x] **Step 6: Run it**
 
 Run: `npx playwright test tests/e2e/parity.spec.ts`
 Expected: PASS, every case `max 0/255, mean 0.0000/255`.
 
-- [ ] **Step 7: NOTICE and commit**
+- [x] **Step 7: NOTICE and commit**
 
 `LICENSES/NOTICE.txt`, after the group lines added in Task 1:
 

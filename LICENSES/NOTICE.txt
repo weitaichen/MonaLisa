@@ -64,6 +64,8 @@ Test data in the repository only (not part of the deployed app):
   - tests/fixtures/group_people.jpg: modified derivative of fullbody.jpg and fullbody_yoga.jpg (Apache-2.0 §4(b)
     change notice): the two photos side by side at equal height (scripts/gen-group-fixture.mjs);
     group_people.pose.json is this project's recorded Pose Landmarker result on it.
+  - tests/fixtures/parity-v03/*.png: this project's engine renders of sample_face.png and fullbody.jpg (modified
+    derivatives, Apache-2.0 §4(b) change notice), made by scripts/record-parity.mjs as regression goldens.
 
 Parameter design (ranges, defaults, presets) follows public SDK documentation of PixelFree,
 FaceUnity FULiveDemo and Alibaba Cloud Queen SDK; none of their code or assets is used.

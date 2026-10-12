@@ -12718,7 +12718,7 @@ git commit -m "v0.4 step 1e: camera face tracks, tap-to-select, 全部套用, th
 - Consumes: everything above.
 - Produces: a green step 1 on `feat/meiyan-pwa`, local commits only, version 0.3.0.
 
-- [ ] **Step 1: The full suites**
+- [x] **Step 1: The full suites**
 
 Run: `npm run typecheck`
 Expected: exit 0.
@@ -12732,7 +12732,7 @@ Expected: exit 0; `dist/` written.
 Run: `npm run test:e2e`
 Expected: every spec of both Playwright projects passes (`chromium`, `chromium-group`).
 
-- [ ] **Step 2: v0.3 equivalence (RM §1.1, S §1.3)**
+- [x] **Step 2: v0.3 equivalence (RM §1.1, S §1.3)**
 
 Run: `npx playwright test tests/e2e/parity.spec.ts --reporter=list`
 Expected: PASS, with the logged per-golden max channel diff ≤ 1/255 and mean < 0.02/255.
@@ -12743,12 +12743,12 @@ Expected: PASS (one face bit-exact against `reshapeCpuV03.ts`; one person's 美�
 Run: `npx vitest run src/app/faceTracks.test.ts -t "live parity"`
 Expected: PASS (one camera face eases exactly as v0.3).
 
-- [ ] **Step 3: Only the intended assertion changes**
+- [x] **Step 3: Only the intended assertion changes**
 
 Run: `git diff 892ea61 --stat -- '*.test.ts' '*.test.tsx' 'tests/e2e/*.spec.ts'`
 Then inspect `git diff 892ea61 -- <each pre-existing test file>` and confirm every changed **assertion** is one of S §8.5 (`bodyTracker.test.ts` `numPoses` 4 and `toDetections`; `panelModel.test.ts` the bands note; `reshapeCpu.test.ts` the hash pin; `camera.spec.ts` `meiyan.look.v1`) or a mechanical port named by a task (helpers `lensOf` / `proj` / `legacyFrame` / `faceOf` / `weightOf`, `face` → `faces`, `detectImage` arrays, `getParams` → `getLook`, `ONE` = `LIVE_DETECT_FACES`). Anything else: fix the code, not the test.
 
-- [ ] **Step 4: Release hygiene**
+- [x] **Step 4: Release hygiene**
 
 Run: `node -p "require('./package.json').version"`
 Expected: `0.3.0`.
@@ -12765,7 +12765,7 @@ Expected: empty (everything committed; `tests/fixtures/*.y4m` and `tests/harness
 Run: `git log --oneline 1f0273d..HEAD`
 Expected: the commits of Tasks 1–25 (plus the plan files, if they were committed), all local. **Do not push, do not deploy.**
 
-- [ ] **Step 5: Record**
+- [x] **Step 5: Record**
 
 No commit (nothing changed). The step is done when Steps 1–4 hold; report the parity numbers and the §6.4 desktop rows in the step summary.
 

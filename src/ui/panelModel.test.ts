@@ -565,6 +565,22 @@ describe('persons in the panel (S §2.4, A9, A11)', () => {
     expect(byKey(itemsFor(measured(f0), bodySel('body.legSlim'), ctx), 'body.legSlim').disabled).toBe(true);
     expect(sliderFor(measured(f0), bodySel('body.legSlim'), ctx)).toBeNull();
   });
+  it('a body item no body can use reads the measure reason, not the no-body note (a half-body group shot)', () => {
+    // f0 and b1 have bodies, neither full-body: 瘦腿 is off for both; f1 has no body at all
+    const ctx = ready({ people: 2 });
+    const halfBody = (s: Selection) => lensFor(base, s, persons, 'f0', { available: (_p, id) => id !== 'body.legSlim' });
+    const f0: Selection = { kind: 'person', id: 'f0' };
+    const f1: Selection = { kind: 'person', id: 'f1' };
+    expect(byKey(itemsFor(halfBody(ALL), bodySel('body.waist'), ctx), 'body.legSlim')).toMatchObject({ disabled: true, reason: LEGS_REASON });
+    expect(byKey(itemsFor(halfBody(f0), bodySel('body.waist'), ctx), 'body.legSlim')).toMatchObject({ disabled: true, reason: LEGS_REASON });
+    expect(byKey(itemsFor(halfBody(f1), bodySel('body.waist'), ctx), 'body.legSlim')).toMatchObject({ disabled: true, reason: NO_BODY_NOTE });
+    // the tap toast says the same
+    const s = bodySel('body.waist');
+    expect(activate(byKey(itemsFor(halfBody(ALL), s, ctx), 'body.legSlim'), halfBody(ALL), s).notice).toBe(LEGS_REASON);
+    // the measure allows it but this person's own measure does not: the lens's generic reason stays
+    const others = lensFor(base, f0, persons, 'f0', { available: (p, id) => p !== 'f0' || id !== 'body.waist' });
+    expect(byKey(itemsFor(others, s, ctx), 'body.waist')).toMatchObject({ disabled: true, reason: '此照片無法使用這個效果' });
+  });
   it('a photo without a face (two body persons): 磨皮 / 紅潤 act on all skin and read 「整張照片」 (S §2.4 美膚)', () => {
     const bodies: PersonInfo[] = [
       { id: 'b0', face: false, body: true },

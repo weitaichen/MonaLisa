@@ -225,9 +225,20 @@ function bodyGate(body: BodyContext | undefined, item: BodySel | 'protect' | 're
  * Gate of a 美體 item, shared by its tile and its slider (so an enabled tile always has a slider). ≥ 2 persons with a
  * finished detection: the lens decides per person (its `available` reads each person's measure, S §2.4 "Availability
  * under 全部"); 長腿 is photo-level and keeps the anchor's availability (the context's).
+ * The lens only says yes / no: when the target has a body (the selected person, or anyone under 全部), the reason is
+ * the context measure's own (拍攝全身照…), never the no-body note; a face-only person keeps NO_BODY_NOTE.
  */
 function bodyItemGate(lens: Lens, body: BodyContext | undefined, item: BodySel): RegionStatus {
-  return multiPerson(lens) && body?.status === 'ready' && item !== 'height' && item !== 'body.legs' ? lens.applies(item) : bodyGate(body, item);
+  if (!(multiPerson(lens) && body?.status === 'ready' && item !== 'height' && item !== 'body.legs')) return bodyGate(body, item);
+  const g = lens.applies(item);
+  if (g.ok) return g;
+  const sel = lens.sel;
+  const hasBody = sel.kind === 'person' ? (lens.persons.find((p) => p.id === sel.id)?.body ?? false) : lens.persons.some((p) => p.body);
+  if (hasBody) {
+    const c = bodyGate(body, item);
+    if (!c.ok) return c;
+  }
+  return g;
 }
 
 /** The 增高 band overlay is up while the 增高 tool is the selected 美體 item (and 美體 is offered at all). */

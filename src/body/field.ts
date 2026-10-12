@@ -8,9 +8,9 @@
 // (relax.ts: the ring's stretch spread evenly, person texels untouched), and finally checked numerically
 // (fieldMinJacobian) with the local part scaled back if anything still came out below MIN_DET.
 //
-// Several persons (S §4.6): one field. Each edited person's L_p is limited against the other persons' masks (0 inside
-// them, against another edited person from the halfway line) and fold-guarded on its own; the sum is relaxed once
-// with every person held fixed. One person with no other mask is the v0.3 builder bit for bit (buildBodyFieldV1).
+// Several persons (S §4.6): one field. Each edited person's L_p is limited against the other persons' masks (0 from
+// the halfway line to them, edited or not) and fold-guarded on its own; the sum is relaxed once with every person
+// held fixed. One person with no other mask is the v0.3 builder bit for bit (buildBodyFieldV1).
 import type { BeautyParams, BodyField, HeightBand, ParamId, PersonId, PersonMask } from '../types';
 import { neutralValue, paramsInGroup, signed } from '../engine/params';
 import { backwardY, forwardY, heightBand, legsBand, type Band } from './bands';
@@ -118,10 +118,11 @@ export interface BodyFieldInput {
 
 /**
  * Build one field for every person (S §4.6). Each edited person's local part is built on its own (its terms, its own
- * 背景保護 weights), limited in magnitude against the other persons' masks (a budget that is 0 inside them), and
- * fold-guarded on its own when two or more persons are edited; the parts are summed, the background relaxed once
- * with every person held fixed, kept inside the frame, assembled through the bands, and the global fold guard runs
- * last (`bodyFieldCacheStats.lambdaGlobal`). With one person and no other mask it is v0.3's builder exactly.
+ * 背景保護 weights), limited in magnitude against the other persons' masks (a budget rising from 0 at the halfway line
+ * to each of them, whether or not they are edited, so no person's edit changes another's part), and fold-guarded on
+ * its own when two or more persons are edited; the parts are summed, the background relaxed once with every person
+ * held fixed, kept inside the frame, assembled through the bands, and the global fold guard runs last
+ * (`bodyFieldCacheStats.lambdaGlobal`). With one person and no other mask it is v0.3's builder exactly.
  * Returns null when nothing would move. Reuses `prev`'s buffer when the size matches (the version still increments).
  * `longEdge` below BODY_FIELD_LONG_EDGE builds a draft (a drag step's preview: the field is in UV units, so any
  * size samples the same warp, only coarser), which also runs a coarser fold-guard bisection.
@@ -163,22 +164,10 @@ export function buildBodyField(input: BodyFieldInput, prev?: BodyField | null, l
     const bandsKey = JSON.stringify(bands);
     // λ_p only once two or more persons are edited; with one, the global guard below is enough (S §4.6 item 4)
     const guardEach = edited.length >= 2;
-    const editedIds = new Set(edited.map((p) => p.id));
-    const union = (ms: readonly { id: PersonId }[]) => {
-      const u = new Uint8Array(N);
-      for (const o of ms) {
-        const g = grids.get(o.id)!;
-        for (let i = 0; i < N; i++) u[i] |= g[i];
-      }
-      return u;
-    };
     for (const p of edited) {
       const own = input.masks.find((m) => m.id === p.id);
       const others = input.masks.filter((m) => m.id !== p.id && m.mask !== p.measure.mask);
-      // the other edited persons: their own parts reach into the gap from the other side
-      const rivals = others.filter((m) => editedIds.has(m.id));
-      const othersKey = others.map((o) => `${maskId(o.mask)}${editedIds.has(o.id) ? 'e' : ''}`).join(',');
-      const key = `${JSON.stringify(p.values)}|${w}x${h}|${own ? maskId(own.mask) : 0}|${othersKey}|${input.bodyProtect}|${bandsKey}|${guardEach}`;
+      const key = `${JSON.stringify(p.values)}|${w}x${h}|${own ? maskId(own.mask) : 0}|${others.map((o) => maskId(o.mask)).join(',')}|${input.bodyProtect}|${bandsKey}|${guardEach}`;
       let byKey = personCache.get(p.measure);
       if (!byKey) personCache.set(p.measure, (byKey = new Map()));
       let L = byKey.get(key);
@@ -187,16 +176,19 @@ export function buildBodyField(input: BodyFieldInput, prev?: BodyField | null, l
         const t = personTerms(p.measure, p.values, input.bodyProtect, w, h, bands);
         if (!t) continue;
         if (others.length) {
-          const d = distanceOutside(union(others), w, h);
-          if (rivals.length) {
-            // Two edited persons' budgets facing each other across a gap would add their slopes (2 × 0.45 folds):
-            // against an edited person the budget is measured from the halfway line instead, (d_q − d_p) / 2 (a
-            // 1-Lipschitz distance to the bisector, ≤ 0 on q's side), so in the gap only one person's part is ever
-            // non-zero (the faces' Voronoi cells, faceProtect.ts)
-            const dRivals = distanceOutside(union(rivals), w, h);
-            const dOwn = own ? distanceOutside(grids.get(p.id)!, w, h) : null;
-            for (let i = 0; i < N; i++) d[i] = Math.min(d[i], Math.max(0, dRivals[i] - (dOwn ? dOwn[i] : 0)) / 2);
+          const union = new Uint8Array(N);
+          for (const o of others) {
+            const g = grids.get(o.id)!;
+            for (let i = 0; i < N; i++) union[i] |= g[i];
           }
+          // Two persons' budgets facing each other across a gap would add their slopes (2 × 0.45 folds), so the
+          // budget is measured from the halfway line, (d_others − d_p) / 2 (a 1-Lipschitz distance to the bisector,
+          // ≤ 0 on the others' side): in the gap only one person's part is ever non-zero (the faces' Voronoi cells,
+          // faceProtect.ts). Against every other person, edited or not, so L_p never depends on who else is edited
+          // (a first drag step on B, or B crossing a neutral value, must not make A jump: S §4.6 item 4).
+          const d = distanceOutside(union, w, h);
+          const dOwn = own ? distanceOutside(grids.get(p.id)!, w, h) : null;
+          for (let i = 0; i < N; i++) d[i] = Math.max(0, d[i] - (dOwn ? dOwn[i] : 0)) / 2;
           budgetOthers(t.gx, t.gy, d, h);
         }
         const lambda = guardEach ? personGuard(t.gx, t.gy, bands, w, h, A, edge < BODY_FIELD_LONG_EDGE ? GUARD_STEPS_DRAFT : GUARD_STEPS_FULL) : 1;

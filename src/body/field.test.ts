@@ -678,6 +678,31 @@ describe('multi-person field (S §4.6)', () => {
     expect(len(alone, at)).toBeGreaterThan(0);
     expect(len(both, at)).toBeCloseTo(len(alone, at), 6);
   });
+  // A's budget must not depend on whether B is edited (S §4.6 item 4: a drag on person 2 never scales person 1)
+  const items = ['body.waist', 'body.arms', 'body.slim'] as const;
+  const worstInA = (s: ReturnType<typeof pairScene>, f: { width: number; height: number; data: Float32Array }, g: { data: Float32Array }) => {
+    const inA = maskOnGrid(new MaskSampler(s.A.mask!, s.A.aspect), f.width, f.height, s.A.aspect);
+    let worst = 0;
+    for (let i = 0; i < inA.length; i++) if (inA[i]) worst = Math.max(worst, Math.abs(f.data[i * 2] - g.data[i * 2]), Math.abs(f.data[i * 2 + 1] - g.data[i * 2 + 1]));
+    return worst;
+  };
+  it('touching: B going from unedited to 細腰 0.05 leaves every texel of A’s mask unchanged (no jump on the first drag step)', () => {
+    for (const id of items) {
+      const a = { id: 'A', measure: touching.A, values: { ...local(0), [id]: 0.6 } };
+      const before = buildBodyField(sceneInput(touching, [a]))!;
+      const after = buildBodyField(sceneInput(touching, [a, { id: 'B', measure: touching.B, values: waist(0.05) }]))!;
+      expect(worstInA(touching, after, before), id).toBeLessThan(1e-6);
+    }
+  });
+  it('touching: B at max does not scale A down on any texel of A’s mask', () => {
+    for (const id of items) {
+      const a = { id: 'A', measure: touching.A, values: { ...local(0), [id]: 0.6 } };
+      const alone = buildBodyField(sceneInput(touching, [a]))!;
+      const both = buildBodyField(sceneInput(touching, [a, { id: 'B', measure: touching.B, values: local(1) }]))!;
+      expect(worstInA(touching, both, alone), id).toBeLessThan(1e-6);
+      expect(bodyFieldCacheStats.lambdaGlobal, id).toBe(1);
+    }
+  });
   it('a draft rebuilds only the dragged person', () => {
     const two = (b: number) => sceneInput(side, [{ id: 'A', measure: side.A, values: waist(0.5) }, { id: 'B', measure: side.B, values: waist(b) }]);
     buildBodyField(two(0.5), null, 128);

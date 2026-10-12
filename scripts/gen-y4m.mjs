@@ -3,13 +3,15 @@
 // landscape frame, face centred, pillarboxed with the photo's own edge colour, encoded as
 // YUV4MPEG2 4:2:0 (BT.601 limited range, which is how Chromium interprets I420 from a file).
 // Output is gitignored; regenerate with `node scripts/gen-y4m.mjs`.
-// Other clips (step-1 group fixtures): `--src <png> --out <y4m>` fits any other PNG with composeFitWidth;
+// Other clips (step-1 group fixtures): `--src <png> --out <y4m>`; group_faces.png is laid out by composeGroupCam
+// (A, B and C inside the camera's 3:4 preview window), any other PNG fitted by composeFitWidth;
 // `--noise <seed>` (per-frame sub-pixel shifts + ±2 levels of noise) or `--pan <FW/s>` (`--fw <px>`, `--frames <n>`)
 // make every frame distinct.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PNG } from 'pngjs';
+import { GROUP_FACES, groupFace } from './gen-group-fixture.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -174,10 +176,8 @@ export function encodeY4m({ Y, U, V }, w, h, frames) {
 }
 
 /**
- * Any source other than sample_face: scaled to the frame width, bottom-aligned; the top is cropped, or padded with
- * the top-left pixel's colour when the source is wider than 16:9. group_faces.png's copies stand on its bottom edge
- * under plain background, so its faces keep the size they have in the photo (a "contain" fit shrinks them 0.84×,
- * and Chromium's FaceLandmarker then misses C, and B too on the GPU delegate).
+ * Any source other than sample_face and group_faces: scaled to the frame width, bottom-aligned; the top is cropped,
+ * or padded with the top-left pixel's colour when the source is wider than 16:9.
  */
 export function composeFitWidth(png) {
   const dh = Math.round((png.height * W) / png.width);
@@ -194,6 +194,67 @@ export function composeFitWidth(png) {
       rgb[o] = inside ? img[i] : fill[0];
       rgb[o + 1] = inside ? img[i + 1] : fill[1];
       rgb[o + 2] = inside ? img[i + 2] : fill[2];
+    }
+  }
+  return rgb;
+}
+
+/** The part of the frame the camera preview shows at its default 3:4 ratio (object-fit: cover), in frame px. */
+export const PREVIEW_34 = { x0: (W - (H * 3) / 4) / 2, x1: (W + (H * 3) / 4) / 2 };
+
+/**
+ * The group camera clips' layout. The preview shows only the frame's centred 3:4 window (PREVIEW_34: x 370–910,
+ * 0.289–0.711; 1:1 shows 0.219–0.781), and group_faces.png's A, B and C sit at x 0.22, 0.55 and 0.82, so any fit of
+ * the whole photo leaves A and C off screen. The clip cuts each face out of the photo instead and sets it inside the
+ * window, A above, B and C side by side below (`faces`: face centres in frame px), at `scale` × the width fit
+ * (1280/1800): A about 222, B 180 and C 169 px wide. At 1.0 (A 185, B 150, C 141 px, the whole-photo clip's sizes)
+ * Chromium's FaceLandmarker misses C (on the CPU or GPU delegate) at 5 of 12 placements a few px apart; at 1.1, 1.15
+ * and 1.2 it finds all three at every placement, and along the whole pan at 1.2, on both delegates.
+ */
+export const GROUP_CAM = { scale: 1.2, faces: { A: { x: 640, y: 182 }, B: { x: 505, y: 540 }, C: { x: 782, y: 540 } } };
+/** A tile around a face: ±0.65 FW across (1.3 FW, as group6_faces.png's cells), 0.75 FW above the centre to 0.85 FW below (chin 0.58 FW, neck). */
+const TILE = { half: 0.65, above: 0.75, below: 0.85 };
+
+/**
+ * composeGroupCam's tiles: `rect` (whole px) in group_faces.png scaled by `k` (= GROUP_CAM.scale × the width fit),
+ * moved by (`dx`, `dy`) whole px, so the face pixels are those of that scaled photo; `face` (centre) and `fw` (face
+ * width) in the scaled photo.
+ */
+export function groupCamTiles() {
+  const k = (W / GROUP_FACES.width) * GROUP_CAM.scale;
+  return GROUP_FACES.copies
+    .filter((c) => c.name in GROUP_CAM.faces)
+    .map((c) => {
+      const f = groupFace(c);
+      const face = { x: f.cx * k, y: f.cy * k };
+      const fw = f.fw * k;
+      const x = Math.round(face.x - TILE.half * fw);
+      const y = Math.round(face.y - TILE.above * fw);
+      const rect = { x, y, w: Math.round(face.x + TILE.half * fw) - x, h: Math.round(face.y + TILE.below * fw) - y };
+      const to = GROUP_CAM.faces[c.name];
+      return { name: c.name, k, face, fw, rect, dx: Math.round(to.x - face.x), dy: Math.round(to.y - face.y) };
+    });
+}
+
+/** group_faces.png for the camera clips: its A, B and C tiles (GROUP_CAM) on the photo's plain background colour. */
+export function composeGroupCam(png) {
+  if (png.width !== GROUP_FACES.width || png.height !== GROUP_FACES.height) {
+    throw new Error(`composeGroupCam: expects group_faces.png (${GROUP_FACES.width}×${GROUP_FACES.height}), got ${png.width}×${png.height}`);
+  }
+  const tiles = groupCamTiles();
+  const sw = Math.round(png.width * tiles[0].k);
+  const sh = Math.round(png.height * tiles[0].k);
+  const img = resampleRgb(png.data, png.width, png.height, { x: 0, y: 0, w: png.width, h: png.height }, sw, sh);
+  const rgb = new Float32Array(W * H * 3);
+  for (let i = 0; i < W * H; i++) {
+    rgb[i * 3] = png.data[0];
+    rgb[i * 3 + 1] = png.data[1];
+    rgb[i * 3 + 2] = png.data[2];
+  }
+  for (const t of tiles) {
+    for (let y = t.rect.y; y < t.rect.y + t.rect.h; y++) {
+      const from = (y * sw + t.rect.x) * 3;
+      rgb.set(img.subarray(from, from + t.rect.w * 3), ((y + t.dy) * W + t.rect.x + t.dx) * 3);
     }
   }
   return rgb;
@@ -251,7 +312,11 @@ function main() {
   const noise = arg('--noise', null);
   const pan = arg('--pan', null);
   const src = PNG.sync.read(readFileSync(join(root, srcRel)));
-  const base = srcRel.endsWith('sample_face.png') ? composeFrame(src) : composeFitWidth(src);
+  const base = srcRel.endsWith('sample_face.png')
+    ? composeFrame(src)
+    : srcRel.endsWith('group_faces.png')
+      ? composeGroupCam(src)
+      : composeFitWidth(src);
   const out = join(root, outRel);
   mkdirSync(dirname(out), { recursive: true });
   let buf;
@@ -259,8 +324,8 @@ function main() {
     buf = encodeY4m(rgbToI420(base, W, H), W, H, FRAMES);
   } else {
     const n = Number(arg('--frames', '60'));
-    // face width of group_faces.png's face A in the 1280×720 frame (0.42 × 619 px × 1280/1800)
-    const fwPx = Number(arg('--fw', '185'));
+    // face width of face A in the group clip (0.42 × 619 px × 1280/1800 × GROUP_CAM.scale ≈ 222 px)
+    const fwPx = Number(arg('--fw', String(Math.round(groupCamTiles()[0].fw))));
     const rand = rng(Number(noise ?? 1));
     const frames = [];
     for (let f = 0; f < n; f++) {

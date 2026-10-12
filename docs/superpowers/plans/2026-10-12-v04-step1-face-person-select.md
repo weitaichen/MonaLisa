@@ -12410,7 +12410,8 @@ Expected: PASS.
 `tests/e2e/camera-group.spec.ts`:
 
 ```ts
-// The camera with three faces (S §8.4): group.y4m shows A, B and C (gen-y4m from group_faces.png).
+// The camera with three faces (S §8.4): group.y4m shows A, B and C (gen-y4m from group_faces.png), inside the 3:4
+// preview: A above, B and C side by side below it (composeGroupCam).
 import type { Page } from '@playwright/test';
 import { debugState, expect, grab, hold, regionDiff, test } from './fixtures';
 
@@ -12450,7 +12451,7 @@ test('three faces: auto beautifies the largest; tap B; 全部套用; tap C; the 
   const boxes = (await debugState(page)).boxes;
   const largest = [...boxes].sort((a, b) => b.w * b.h - a.w * a.h)[0].id;
   expect((await debugState(page)).selected).toBe(largest);
-  const [, B, C] = await byX(page).then((ids) => ids.reverse()); // A, B, C left to right in the scene
+  const [B, C] = (await byX(page)).reverse().filter((id) => id !== largest); // A is the largest; B, C left to right in the scene
   const frame = page.locator('.cam-stage .frame');
   await page.addStyleTag({ content: '.cam-marker, .all-chip, .badge { display: none !important; }' });
   // tap B: B beautified, A unchanged
@@ -12485,10 +12486,16 @@ test('three faces: auto beautifies the largest; tap B; 全部套用; tap C; the 
   await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 90_000 });
   await expect.poll(async () => (await debugState(page)).faces, { timeout: 60_000 }).toBeGreaterThanOrEqual(1);
   const d = await debugState(page);
-  const centreMost = [...d.boxes].sort((a, b) => Math.abs(a.x + a.w / 2 - 0.5) - Math.abs(b.x + b.w / 2 - 0.5))[0].id;
-  expect(d.selected).toBe(centreMost); // the 3:4 crop keeps B in the middle
+  // the shot is the preview's 3:4 crop, mirrored as the preview (mirrorOnSave), so B's face is where gb2.rect was
+  const bx = gb2.rect.x + gb2.rect.w / 2;
+  const by = gb2.rect.y + gb2.rect.h / 2;
+  const dist = (b: { x: number; y: number; w: number; h: number }) => Math.hypot(b.x + b.w / 2 - bx, b.y + b.h / 2 - by);
+  const atB = [...d.boxes].sort((a, b) => dist(a) - dist(b))[0].id;
+  expect(d.selected).toBe(atB);
 });
 ```
+
+**Clip layout (Task 1 review fix):** the preview shows only the centred 3:4 window of the 1280 × 720 clip (x 0.289–0.711), so a fit of the whole of `group_faces.png` (A, B and C at x 0.22 / 0.55 / 0.82) leaves A and C off screen. `group.y4m` (and `group_noise` / `group_pan`) is therefore composed by `gen-y4m.mjs`'s `composeGroupCam`: A, B and C cut out of `group_faces.png` at 1.2 × the width-fit size (A ≈ 222, B 180, C 169 px wide), A centred above at (640, 182) px, B at (505, 540) and C at (782, 540) below it (`GROUP_CAM`). So A is identified as the largest box (it is no longer the leftmost), B and C as the other two from scene left to right, and the hand-over checks the editor box at B's preview position: the centre-most box of the 3:4 shot is now A, not B.
 
 (The chip shows only after 300 ms of ≥ 2 tracks; the style tag hiding it for the pixel grabs is overridden before it is clicked. The review screen's edit button is 「編輯」, `Review.tsx:119-123`.)
 

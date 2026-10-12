@@ -2,17 +2,25 @@
 // (gitignored, generated from sample_face.png) and the group camera tests/fixtures/group.y4m (from group_faces.png),
 // and `vite preview` needs a production build.
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '../..');
 
+/** A generated clip is rebuilt when it is missing or older than its generator or source (a layout change). */
+function stale(out: string, ...inputs: string[]): boolean {
+  if (!existsSync(out)) return true;
+  const t = statSync(out).mtimeMs;
+  return inputs.some((i) => statSync(resolve(root, i)).mtimeMs > t);
+}
+
 export default function globalSetup(): void {
-  if (!existsSync(resolve(root, 'tests/fixtures/face.y4m'))) {
-    execFileSync(process.execPath, [resolve(root, 'scripts/gen-y4m.mjs')], { cwd: root, stdio: 'inherit' });
+  const gen = resolve(root, 'scripts/gen-y4m.mjs');
+  if (stale(resolve(root, 'tests/fixtures/face.y4m'), 'scripts/gen-y4m.mjs', 'tests/fixtures/sample_face.png')) {
+    execFileSync(process.execPath, [gen], { cwd: root, stdio: 'inherit' });
   }
-  if (!existsSync(resolve(root, 'tests/fixtures/group.y4m'))) {
-    const gen = resolve(root, 'scripts/gen-y4m.mjs');
+  const groupInputs = ['scripts/gen-y4m.mjs', 'scripts/gen-group-fixture.mjs', 'tests/fixtures/group_faces.png'];
+  if (stale(resolve(root, 'tests/fixtures/group.y4m'), ...groupInputs)) {
     execFileSync(process.execPath, [gen, '--src', 'tests/fixtures/group_faces.png', '--out', 'tests/fixtures/group.y4m'], { cwd: root, stdio: 'inherit' });
   }
   if (!existsSync(resolve(root, 'dist/index.html')) || !existsSync(resolve(root, 'dist/sw.js'))) {

@@ -13,7 +13,6 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { chromium } from '@playwright/test';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fx = (name) => join(root, 'tests', 'fixtures', name);
@@ -37,8 +36,26 @@ export const GROUP_FACES = {
  */
 export const GROUP6 = { width: 2048, height: 1536, cell: 644, crop: { x: 100.5, y: 227.5, w: 805, h: 805 } };
 
+/** sample_face.png's size and its face (centre and width of the oval bbox above), in its own px */
+export const SAMPLE_FACE = { width: 1000, height: 1500, cx: 503, cy: 631, fw: 619 };
+
+/** A GROUP_FACES copy's face in group_faces.png px (centre, face width), from the copy's rect as `main` draws it. */
+export function groupFace(copy) {
+  const w = Math.round(SAMPLE_FACE.width * copy.scale);
+  const h = Math.round(SAMPLE_FACE.height * copy.scale);
+  const left = Math.round(copy.x * GROUP_FACES.width - w / 2);
+  const fx = (SAMPLE_FACE.cx * w) / SAMPLE_FACE.width;
+  return {
+    cx: left + (copy.mirror ? w - fx : fx),
+    cy: GROUP_FACES.height - h + (SAMPLE_FACE.cy * h) / SAMPLE_FACE.height,
+    fw: (SAMPLE_FACE.fw * w) / SAMPLE_FACE.width,
+  };
+}
+
 /** Bundled Playwright chromium may be missing; fall back to the newest installed revision. */
 async function launch() {
+  // imported here, not at the top: gen-y4m.mjs and the unit tests import this module for its geometry only
+  const { chromium } = await import('@playwright/test');
   try {
     return await chromium.launch();
   } catch (e) {
@@ -145,5 +162,5 @@ async function main() {
   }
 }
 
-// CLI only: importing the module (for GROUP_FACES / GROUP6) must not launch a browser
+// CLI only: importing the module (for GROUP_FACES / GROUP6 / groupFace) must not launch a browser
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

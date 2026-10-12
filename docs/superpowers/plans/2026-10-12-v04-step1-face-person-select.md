@@ -1468,7 +1468,7 @@ git commit -m "v0.4 step 1a: limits.ts, GL limits and probes, bench 多臉 rows 
 - Produces (`src/edit/state.ts`): `P0 = 'p0'`, `LIVE = 'live'`, `PERSON_ID: RegExp`, `PHOTO_IDS`, `PERSON_IDS`, `PRESET_PERSON_IDS`, `PRESET_PHOTO_IDS`; `personFromPreset(id: PresetId, amount: number): PersonParams`, `neutralPerson(): PersonParams`, `naturalPerson(): PersonParams`, `defaultPhoto(): PhotoParams`, `editKey(edit: EditState): string`, `personOf(edit: EditState, id: PersonId): PersonParams`, `withPhoto(edit, f: (p: PhotoParams) => PhotoParams): EditState`, `withPersons(edit, ids: readonly PersonId[], f: (p: PersonParams, id: PersonId) => PersonParams): EditState`, `cameraEdit(look: CameraLook): EditState`, `lookOf(edit: EditState): CameraLook`.
 - Produces (`src/edit/legacy.ts`): `splitLegacy(p: BeautyParams): { photo: PhotoParams; person: PersonParams }`, `legacyProjection(edit: EditState, primary: PersonId): BeautyParams`, `editFromLegacy(p: BeautyParams, opts?: { primaryInit?: boolean }): EditState`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // src/edit/state.test.ts
@@ -1595,12 +1595,12 @@ describe('splitLegacy / legacyProjection (RM §3.2)', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run src/edit`
 Expected: FAIL (cannot resolve `./state`, `./legacy`).
 
-- [ ] **Step 3: Types**
+- [x] **Step 3: Types**
 
 `src/types.ts` (CRLF). Above `export interface ParamDef` add `export type ParamScope = 'photo' | 'person';`. In `ParamDef` (`:36-47`), after `icon: string;`, add:
 
@@ -1721,7 +1721,7 @@ export interface BodyDetections {
 
 (`Pose33`, `PersonMask` are declared further down the same file; type declarations are hoisted.)
 
-- [ ] **Step 4: Scope and live on every def; export the band helpers**
+- [x] **Step 4: Scope and live on every def; export the band helpers**
 
 `src/engine/params.ts`: replace `PARAM_DEFS` (`:4-37`) with:
 
@@ -1765,7 +1765,7 @@ export const PARAM_DEFS: readonly ParamDef[] = [
 
 Change `function cleanBand(` (`:211`) to `export function cleanBand(` and `function sanitizeBand(` (`:313`) to `export function sanitizeBand(`.
 
-- [ ] **Step 5: Write `src/edit/state.ts` (constructors)**
+- [x] **Step 5: Write `src/edit/state.ts` (constructors)**
 
 ```ts
 // The v0.4 edit of one photo (RM §3.2–3.4): an immutable EditState with a photo layer and a person layer. Every change
@@ -1844,7 +1844,7 @@ export function lookOf(edit: EditState): CameraLook {
 }
 ```
 
-- [ ] **Step 6: Write `src/edit/legacy.ts`**
+- [x] **Step 6: Write `src/edit/legacy.ts`**
 
 ```ts
 // v1 (BeautyParams, the 0.3 storage shape) ↔ v2 (EditState), RM §3.2 / §5. BeautyParams stays the shape of history v1
@@ -1893,12 +1893,12 @@ export function editFromLegacy(p: BeautyParams, opts: { primaryInit?: boolean } 
 }
 ```
 
-- [ ] **Step 7: Run the tests**
+- [x] **Step 7: Run the tests**
 
 Run: `npx vitest run src/edit src/engine/params.test.ts && npm run typecheck`
 Expected: PASS; `tsc` exits 0 (nothing reads `scope` / `live` yet; the harnesses build `ParamDef`s only through `PARAM_DEFS`).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/types.ts src/engine/params.ts src/edit/state.ts src/edit/legacy.ts src/edit/state.test.ts src/edit/legacy.test.ts

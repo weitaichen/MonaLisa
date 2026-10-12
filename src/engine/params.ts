@@ -2,38 +2,39 @@
 import type { BeautyParams, FilterDef, HeightBand, ParamDef, ParamGroup, ParamId, PresetDef, PresetId, ShadeDef } from '../types';
 
 export const PARAM_DEFS: readonly ParamDef[] = [
-  // 美膚
-  { id: 'skin.smooth', label: '磨皮', group: 'skin', bidirectional: false, default: 0.55, icon: 'smooth' },
-  { id: 'skin.whiten', label: '美白', group: 'skin', bidirectional: false, default: 0.25, icon: 'whiten' },
-  { id: 'skin.rosy', label: '紅潤', group: 'skin', bidirectional: false, default: 0.25, icon: 'rosy' },
-  { id: 'skin.sharpen', label: '銳化', group: 'skin', bidirectional: false, default: 0.2, icon: 'sharpen' },
+  // 美膚 — 美白 / 銳化 are photo-level (the GPUPixel chain is not masked, composite.ts); 磨皮 / 紅潤 per person
+  { id: 'skin.smooth', label: '磨皮', group: 'skin', bidirectional: false, default: 0.55, icon: 'smooth', scope: 'person', live: true },
+  { id: 'skin.whiten', label: '美白', group: 'skin', bidirectional: false, default: 0.25, icon: 'whiten', scope: 'photo', live: true },
+  { id: 'skin.rosy', label: '紅潤', group: 'skin', bidirectional: false, default: 0.25, icon: 'rosy', scope: 'person', live: true },
+  { id: 'skin.sharpen', label: '銳化', group: 'skin', bidirectional: false, default: 0.2, icon: 'sharpen', scope: 'photo', live: true },
   // 美型
-  { id: 'shape.eyeEnlarge', label: '大眼', group: 'shape', bidirectional: false, default: 0.2, icon: 'eye' },
-  { id: 'shape.faceSlim', label: '瘦臉', group: 'shape', bidirectional: false, default: 0.15, icon: 'faceSlim' },
-  { id: 'shape.faceV', label: 'V臉', group: 'shape', bidirectional: false, default: 0.1, icon: 'faceV' },
-  { id: 'shape.faceNarrow', label: '窄臉', group: 'shape', bidirectional: false, default: 0, icon: 'faceNarrow' },
-  { id: 'shape.chin', label: '下巴', group: 'shape', bidirectional: true, default: 0.5, icon: 'chin' },
-  { id: 'shape.forehead', label: '額頭', group: 'shape', bidirectional: true, default: 0.5, icon: 'forehead' },
-  { id: 'shape.noseSlim', label: '瘦鼻', group: 'shape', bidirectional: false, default: 0.1, icon: 'nose' },
-  { id: 'shape.mouthSize', label: '嘴型', group: 'shape', bidirectional: true, default: 0.5, icon: 'mouth' },
-  { id: 'shape.eyeDistance', label: '眼距', group: 'shape', bidirectional: true, default: 0.5, icon: 'eyeDistance' },
-  // 美體 — all neutral by default and never part of a preset (body research report §參數).
+  { id: 'shape.eyeEnlarge', label: '大眼', group: 'shape', bidirectional: false, default: 0.2, icon: 'eye', scope: 'person', live: true },
+  { id: 'shape.faceSlim', label: '瘦臉', group: 'shape', bidirectional: false, default: 0.15, icon: 'faceSlim', scope: 'person', live: true },
+  { id: 'shape.faceV', label: 'V臉', group: 'shape', bidirectional: false, default: 0.1, icon: 'faceV', scope: 'person', live: true },
+  { id: 'shape.faceNarrow', label: '窄臉', group: 'shape', bidirectional: false, default: 0, icon: 'faceNarrow', scope: 'person', live: true },
+  { id: 'shape.chin', label: '下巴', group: 'shape', bidirectional: true, default: 0.5, icon: 'chin', scope: 'person', live: true },
+  { id: 'shape.forehead', label: '額頭', group: 'shape', bidirectional: true, default: 0.5, icon: 'forehead', scope: 'person', live: true },
+  { id: 'shape.noseSlim', label: '瘦鼻', group: 'shape', bidirectional: false, default: 0.1, icon: 'nose', scope: 'person', live: true },
+  { id: 'shape.mouthSize', label: '嘴型', group: 'shape', bidirectional: true, default: 0.5, icon: 'mouth', scope: 'person', live: true },
+  { id: 'shape.eyeDistance', label: '眼距', group: 'shape', bidirectional: true, default: 0.5, icon: 'eyeDistance', scope: 'person', live: true },
+  // 美體 — all neutral by default and never part of a preset (body research report §參數). 長腿 is a row band, so
+  // photo-level; the local items are per person. Editor only (live: false).
   // Order follows the recommended adjustment sequence: length first, then body/limbs, shoulders/neck last.
-  { id: 'body.legs', label: '長腿', group: 'body', bidirectional: false, default: 0, icon: 'legs' },
-  { id: 'body.slim', label: '瘦身', group: 'body', bidirectional: false, default: 0, icon: 'bodySlim' },
-  { id: 'body.waist', label: '細腰', group: 'body', bidirectional: false, default: 0, icon: 'waist' },
-  { id: 'body.whr', label: '腰臀比', group: 'body', bidirectional: false, default: 0, icon: 'whr' },
-  { id: 'body.hip', label: '美臀', group: 'body', bidirectional: true, default: 0.5, icon: 'hip' },
-  { id: 'body.legSlim', label: '瘦腿', group: 'body', bidirectional: false, default: 0, icon: 'legSlim' },
-  { id: 'body.arms', label: '瘦手臂', group: 'body', bidirectional: false, default: 0, icon: 'arms' },
-  { id: 'body.shoulder', label: '直角肩', group: 'body', bidirectional: false, default: 0, icon: 'shoulder' },
-  { id: 'body.neck', label: '天鵝頸', group: 'body', bidirectional: false, default: 0, icon: 'neck' },
-  { id: 'body.head', label: '小頭', group: 'body', bidirectional: false, default: 0, icon: 'head' },
+  { id: 'body.legs', label: '長腿', group: 'body', bidirectional: false, default: 0, icon: 'legs', scope: 'photo', live: false },
+  { id: 'body.slim', label: '瘦身', group: 'body', bidirectional: false, default: 0, icon: 'bodySlim', scope: 'person', live: false },
+  { id: 'body.waist', label: '細腰', group: 'body', bidirectional: false, default: 0, icon: 'waist', scope: 'person', live: false },
+  { id: 'body.whr', label: '腰臀比', group: 'body', bidirectional: false, default: 0, icon: 'whr', scope: 'person', live: false },
+  { id: 'body.hip', label: '美臀', group: 'body', bidirectional: true, default: 0.5, icon: 'hip', scope: 'person', live: false },
+  { id: 'body.legSlim', label: '瘦腿', group: 'body', bidirectional: false, default: 0, icon: 'legSlim', scope: 'person', live: false },
+  { id: 'body.arms', label: '瘦手臂', group: 'body', bidirectional: false, default: 0, icon: 'arms', scope: 'person', live: false },
+  { id: 'body.shoulder', label: '直角肩', group: 'body', bidirectional: false, default: 0, icon: 'shoulder', scope: 'person', live: false },
+  { id: 'body.neck', label: '天鵝頸', group: 'body', bidirectional: false, default: 0, icon: 'neck', scope: 'person', live: false },
+  { id: 'body.head', label: '小頭', group: 'body', bidirectional: false, default: 0, icon: 'head', scope: 'person', live: false },
   // 濾鏡
-  { id: 'filter.amount', label: '濾鏡強度', group: 'filter', bidirectional: false, default: 0.5, icon: 'filter' },
+  { id: 'filter.amount', label: '濾鏡強度', group: 'filter', bidirectional: false, default: 0.5, icon: 'filter', scope: 'photo', live: true },
   // 美妝
-  { id: 'makeup.lip', label: '口紅', group: 'makeup', bidirectional: false, default: 0, icon: 'lip' },
-  { id: 'makeup.blush', label: '腮紅', group: 'makeup', bidirectional: false, default: 0, icon: 'blush' },
+  { id: 'makeup.lip', label: '口紅', group: 'makeup', bidirectional: false, default: 0, icon: 'lip', scope: 'person', live: true },
+  { id: 'makeup.blush', label: '腮紅', group: 'makeup', bidirectional: false, default: 0, icon: 'blush', scope: 'person', live: true },
 ];
 
 const DEF_BY_ID = new Map(PARAM_DEFS.map((d) => [d.id, d]));
@@ -208,7 +209,7 @@ export function setBodyProtect(params: BeautyParams, on: boolean): BeautyParams 
   return { ...params, bodyProtect: on };
 }
 
-function cleanBand(b: HeightBand): HeightBand | null {
+export function cleanBand(b: HeightBand): HeightBand | null {
   const top = clamp01(Math.min(b.top, b.bottom));
   const bottom = clamp01(Math.max(b.top, b.bottom));
   if (!(bottom - top >= 0.02)) return null;
@@ -310,7 +311,7 @@ function matchesPreset(p: BeautyParams, id: PresetId): boolean {
   return PARAM_DEFS.every((d) => Math.abs(p.values[d.id] - ref.values[d.id]) < 1e-6);
 }
 
-function sanitizeBand(raw: unknown): HeightBand | null {
+export function sanitizeBand(raw: unknown): HeightBand | null {
   if (!raw || typeof raw !== 'object') return null;
   const b = raw as Partial<HeightBand>;
   if (![b.top, b.bottom, b.amount].every((v) => typeof v === 'number' && Number.isFinite(v))) return null;

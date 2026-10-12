@@ -33,6 +33,8 @@ export type ParamId =
   | 'makeup.lip'
   | 'makeup.blush';
 
+export type ParamScope = 'photo' | 'person';
+
 export interface ParamDef {
   id: ParamId;
   /** 繁體中文 UI label, e.g. 磨皮 */
@@ -44,6 +46,10 @@ export interface ParamDef {
   default: number;
   /** icon key for ui/icons.tsx */
   icon: string;
+  /** which layer the value lives in (RM §3.1): the whole photo, or each person */
+  scope: ParamScope;
+  /** offered in the live camera */
+  live: boolean;
 }
 
 export type PresetId = 'original' | 'natural' | 'refined' | 'glow';
@@ -104,6 +110,110 @@ export interface HeightBand {
   bottom: number;
   /** 0..1 → stretch S = 1 + min(0.15·amount, 0.08 / (bottom − top)) inside the band (src/body/bands.ts heightBandStretch) */
   amount: number;
+}
+
+// ───────────────────────── v0.4 edit model (RM §3.2, step-1 subset) ─────────────────────────
+
+export type PhotoParamId = Extract<ParamId, 'skin.whiten' | 'skin.sharpen' | 'filter.amount' | 'body.legs'>;
+export type PersonParamId = Exclude<ParamId, PhotoParamId>;
+export type ShadePart = 'lip' | 'blush';
+/**
+ * 'f0'…'f5' a person first built from a face, 'b0'…'b3' from a body, 'p0' the implicit person while nobody is known,
+ * 'live' the camera. Immutable once persisted (a person keeps its id when it gains a face or a body).
+ */
+export type PersonId = string;
+export interface PresetRef {
+  id: PresetId;
+  amount: number;
+}
+export interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+export interface PhotoParams {
+  values: Record<PhotoParamId, number>;
+  filterId: string;
+  /** the photo part of the last beauty preset, while 美白 / 銳化 / 濾鏡 are untouched since (RM §3.4) */
+  presetLink: PresetRef | null;
+  bodyProtect: boolean;
+  heightBand: HeightBand | null;
+  /** the person 長腿 is measured on; null = the primary person */
+  legsAnchor: PersonId | null;
+}
+export interface PersonParams {
+  values: Record<PersonParamId, number>;
+  shades: Record<ShadePart, string | null>;
+  preset: PresetRef | 'custom';
+}
+/** The undoable, persisted edit of one photo. Immutable: every change returns a new object sharing unchanged parts. */
+export interface EditState {
+  v: 2;
+  photo: PhotoParams;
+  persons: Readonly<Record<PersonId, PersonParams>>;
+  /** params for persons who first appear later */
+  template: PersonParams;
+  /** the look meant for the primary person; seeds `p0`, consumed by the first assignPersons, then null */
+  primaryInit: PersonParams | null;
+}
+export type Selection = { kind: 'all' } | { kind: 'person'; id: PersonId };
+/** what the camera keeps (persisted as meiyan.look.v1): only `live` items are meaningful */
+export interface CameraLook {
+  photo: PhotoParams;
+  person: PersonParams;
+}
+/** camera → editor: the beautified face's centre in the saved image, 'all' under 全部套用, null = no face seen */
+export type FaceSeed = { x: number; y: number } | 'all' | null;
+
+/** raw 478×3 MediaPipe landmarks in O-space (adapt() derives Face on load); box = oval bbox */
+export interface CachedFace {
+  id: string;
+  lm: Float32Array;
+  box: Rect;
+}
+/** a face dropped by the size filter or the cap: no effects, but it bounds its neighbours' caps (≈ 300 B) */
+export interface CachedObstacle {
+  box: Rect;
+  /** the 36-point FACE_OVAL, O-space, length 72 */
+  oval: Float32Array;
+}
+export interface CachedBody {
+  id: string;
+  pose: Pose33;
+  mask: PersonMask | null;
+  /** selectPerson's area × centrality */
+  score: number;
+}
+export interface PersonInfoCached {
+  id: PersonId;
+  face: string | null;
+  body: string | null;
+}
+export interface DetectionCache {
+  v: 1;
+  /** pixel size of the image the normalized coordinates were taken on (aspect check) */
+  width: number;
+  height: number;
+  /** step 1 writes [{quarter: 0, flipH: false}] after a definite answer, [] in 基本模式 */
+  faceScans: { quarter: 0 | 1 | 2 | 3; flipH: boolean }[];
+  /** O-space, sorted by box centre x then y */
+  faces: CachedFace[];
+  obstacles: CachedObstacle[];
+  /** null = 美體 detection not run yet */
+  bodies: CachedBody[] | null;
+  /** false for a v0.3 cache with people ≥ 2: the others are unknown */
+  bodiesComplete: boolean;
+  /** display order: left to right when first built, later persons appended */
+  persons: PersonInfoCached[];
+  primary: PersonId;
+  dropped: { tooSmall: number; overCap: number };
+}
+/** BodyTracker.detect result: every person (BodyDetection stays the v1 storage shape) */
+export interface BodyDetections {
+  bodies: { pose: Pose33; mask: PersonMask | null; score: number }[];
+  width: number;
+  height: number;
 }
 
 // ───────────────────────── Tracking ─────────────────────────

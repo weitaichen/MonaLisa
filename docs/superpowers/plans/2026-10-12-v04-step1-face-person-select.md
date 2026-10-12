@@ -3374,7 +3374,7 @@ export function importEdit(look: CameraLook): EditState;
 export function cameraShotEdit(look: CameraLook, seed: FaceSeed): EditState;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // src/edit/migrate.test.ts
@@ -3485,12 +3485,12 @@ describe('new photos (RM §3.7)', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `npx vitest run src/edit/migrate.test.ts`
 Expected: FAIL (cannot resolve `./migrate`).
 
-- [ ] **Step 3: Write `src/edit/migrate.ts`**
+- [x] **Step 3: Write `src/edit/migrate.ts`**
 
 ```ts
 // Reading a stored entry (lazy migration at open, RM §5.2, S §5.3): HistoryEntry → the edit to open with, the cache to
@@ -3584,12 +3584,12 @@ export function cameraShotEdit(look: CameraLook, seed: FaceSeed): EditState {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `npx vitest run src/edit`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/edit/migrate.ts src/edit/migrate.test.ts

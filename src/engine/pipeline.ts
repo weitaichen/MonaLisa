@@ -109,6 +109,8 @@ export interface FrameResult {
 export interface PassPlanInput {
   /** some listed face has weight > 0 */
   anyFace: boolean;
+  /** the skin-mask clear (gS, gR) of skinMaxima: the global skin's weight relative to the frame maxima */
+  maskClear: readonly [number, number];
   matchGpupixel: boolean;
   skin: SkinUniforms;
   makeupActive: boolean;
@@ -125,16 +127,42 @@ export interface PassPlan {
   mean: boolean;
 }
 
-/** Skip rules (pure). Without a mask pass the composite binds the white texture (mask = 1, uMaskOn = 0). */
+/**
+ * Skip rules (pure). Without a mask pass the composite binds the white texture (mask = 1, uMaskOn = 0), so the mask
+ * pass may only be skipped when its result would be 1 wherever the composite reads it: no face with weight > 0 and the
+ * clear at 1 in every channel in use (磨皮 S > 0, 紅潤 R > 0). A camera frame whose listed faces all have weight 0 while a
+ * face is present (the beautified track lost beside another face, held for LOST_HOLD_MS) has the global skin at weight
+ * 0: its clear is 0, and the white texture would smooth every face and all skin at full strength (A2).
+ */
 export function planPasses(i: PassPlanInput): PassPlan {
   const faceOn = i.anyFace;
   const mean = needsMean(i.skin);
+  const clearBelowWhite = (i.skin.smooth > 0 && i.maskClear[0] < 1) || (i.skin.rosy > 0 && i.maskClear[1] < 1);
   return {
-    mask: faceOn && !i.matchGpupixel && mean,
+    mask: (faceOn || clearBelowWhite) && !i.matchGpupixel && mean,
     makeup: faceOn && i.makeupActive && i.makeupReady,
     reshape: (faceOn && i.reshapeActive) || i.bodyOn,
     mean,
   };
+}
+
+/** run()'s plan of a frame job (pure): the faces with weight > 0 drive the face passes, the clear keeps the mask on */
+export function planFrame(
+  job: { faces: readonly Pick<FrameFace, 'weight' | 'makeup' | 'reshape'>[] } & Pick<FrameJob, 'maskClear' | 'matchGpupixel' | 'skin'>,
+  makeupReady: boolean,
+  bodyOn: boolean,
+): PassPlan {
+  const live = job.faces.filter((f) => f.weight > 0);
+  return planPasses({
+    anyFace: live.length > 0,
+    maskClear: job.maskClear,
+    matchGpupixel: job.matchGpupixel,
+    skin: job.skin,
+    makeupActive: live.some((f) => makeupActive(f.makeup)),
+    makeupReady,
+    reshapeActive: live.some((f) => reshapeActive(f.reshape)),
+    bodyOn,
+  });
 }
 
 const ZERO_U: ReshapeUniforms = { faceSlim: 0, faceV: 0, faceNarrow: 0, chin: 0, forehead: 0, noseSlim: 0, mouthSize: 0, eyeDistance: 0, eyeEnlarge: 0 };
@@ -375,15 +403,7 @@ export function createPipeline(gl: GL): Pipeline {
       const meshes = live.filter((f) => makeupActive(f.makeup)).map((f) => ({ face: f.face, u: f.makeup }));
       if (meshes.length) getMakeup();
       const body = bodyTexture(job.body);
-      const plan = planPasses({
-        anyFace: live.length > 0,
-        matchGpupixel: job.matchGpupixel,
-        skin: job.skin,
-        makeupActive: meshes.length > 0,
-        makeupReady,
-        reshapeActive: live.some((f) => reshapeActive(f.reshape)),
-        bodyOn: body !== null,
-      });
+      const plan = planFrame(job, makeupReady, body !== null);
 
       let maskTex: Texture | null = null;
       if (plan.mask) {

@@ -1,7 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { splitLegacy } from '../edit/legacy';
+import { applyPreset } from '../engine/params';
+import { makeupUniformsFor } from '../engine/passes/makeup';
+import { reshapeUniforms } from '../engine/passes/reshape';
+import { planFrame } from '../engine/pipeline';
+import { ROSY_MAX_OPACITY, skinMaxima, skinUniformsFor } from '../engine/uniforms';
 import { adapt } from '../tracking/adapter111';
 import type { Landmarks478 } from '../types';
+import { liveFrame } from './live';
 import { FaceWeightEaser } from './liveCore';
 import { cameraTapAction, ChipGate, coverTapUv, FaceTracks, videoToFrame } from './faceTracks';
 
@@ -184,6 +191,74 @@ describe('FaceTracks (S §3.4 T4)', () => {
     expect(t.hitTest(0.5, 0.5, 0.01, 0.01)).toBeNull();
     expect(t.hitTest(0.5, 0.5, 0.9, 0.9)).not.toBeNull();
     expect(t.hitTest(vb.box.x + vb.box.w / 2, 0.5, 0.9, 0.9)).toBe(vb.id);
+  });
+});
+
+describe('the camera frame on tracks: liveFrame → skinMaxima → planFrame (S §3.3, A2)', () => {
+  const look = splitLegacy(applyPreset('refined'));
+  const smooth = look.person.values['skin.smooth'];
+  const rosy = ROSY_MAX_OPACITY * look.person.values['skin.rosy'];
+  /** the engine's job() for the plan, and the 磨皮 / 紅潤 strength the composite gives a pixel outside every face */
+  const frameOf = (t: FaceTracks) => {
+    const f = liveFrame(t.views(), t.anyFace, look);
+    const m = skinMaxima(f.faces.map((x) => ({ weight: x.weight, smooth: x.person.values['skin.smooth'], rosy: x.person.values['skin.rosy'] })), f.globalSkin);
+    const skin = skinUniformsFor(f.photo, m.S, m.R, false);
+    const faces = f.faces.map((x) => ({ weight: x.weight, reshape: reshapeUniforms(x.person.values, x.weight), makeup: makeupUniformsFor(x.person, x.weight) }));
+    const plan = planFrame({ faces, maskClear: m.clear, matchGpupixel: false, skin }, true, false);
+    // without a mask pass the composite reads the white texture (mask 1); with one, the clear outside every face
+    const bg = [plan.mask ? skin.smooth * m.clear[0] : skin.smooth, plan.mask ? skin.rosy * m.clear[1] : skin.rosy];
+    return { f, m, plan, bg };
+  };
+  const big = () => lmAt(0.3, 0.5, 0.25);
+  const small = () => lmAt(0.7, 0.5, 0.2);
+
+  it.each(['auto', 'pinned'] as const)(
+    'the beautified track (%s) lost beside a present face: the background keeps the global skin weight on every frame',
+    (mode) => {
+      const t = new FaceTracks();
+      let now = run(t, 20, () => [big(), small()]);
+      // auto: the larger face is beautified; pinned: the smaller one. That face leaves, the other stays
+      const stayer = mode === 'auto' ? small : big;
+      if (mode === 'pinned') t.select(t.views().find((v) => v.box.x > 0.5)!.id);
+      now = run(t, 10, () => [big(), small()], now + 33);
+      let held = 0;
+      for (let i = 0; i < 75; i++) {
+        now += 33;
+        t.detect([stayer()], now, W, H);
+        t.step(33, false, now);
+        const { f, m, plan, bg } = frameOf(t);
+        const g = f.globalSkin!.weight;
+        expect(g).toBe(0);
+        expect(bg[0]).toBeCloseTo(g * smooth, 9);
+        expect(bg[1]).toBeCloseTo(g * rosy, 9);
+        if (f.faces.length > 0 && f.faces.every((x) => x.weight === 0)) {
+          // the lost target is held (faded out of the list) and still the target: the face in view is listed at weight 0,
+          // nobody is beautified, so nothing is smoothed
+          held++;
+          expect(plan.mask).toBe(true);
+          expect(m.clear).toEqual([0, 0]);
+        }
+      }
+      // the hold window happened (≈ 1 s minus the 150 ms ease-out), and the face that stayed was handed the look
+      expect(held).toBeGreaterThan(20);
+      expect(frameOf(t).f.faces.map((x) => x.weight)).toEqual([1]);
+    },
+  );
+
+  it('one face (v0.3): the background follows 1 − weight while it leaves, and the mask pass ends with it', () => {
+    const t = new FaceTracks();
+    let now = run(t, 20, () => [big()]);
+    for (let i = 0; i < 40; i++) {
+      now += 33;
+      t.detect([], now, W, H);
+      t.step(33, false, now);
+      const { f, plan, bg } = frameOf(t);
+      const g = f.globalSkin!.weight;
+      expect(bg[0]).toBeCloseTo(g * smooth, 9);
+      expect(bg[1]).toBeCloseTo(g * rosy, 9);
+      if (g === 1) expect(plan.mask).toBe(false);
+    }
+    expect(frameOf(t).f.faces).toEqual([]);
   });
 });
 

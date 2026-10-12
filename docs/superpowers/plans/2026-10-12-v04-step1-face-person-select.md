@@ -8315,7 +8315,7 @@ export class BodyFieldMemo {
 export function bodyInputKey(input: BodyFieldInput): string;
 ```
 
-- [ ] **Step 1: Rename the v0.3 entry points (mechanical) and pin today's fields**
+- [x] **Step 1: Rename the v0.3 entry points (mechanical) and pin today's fields**
 
 Run (a `node` rename, not `sed -i`: Git Bash's `sed -i` rewrites the CRLF `tests/harness/b2/harness.ts` to LF; the regex never touches a `\r`, so every line ending stays as it was):
 ```bash
@@ -8361,7 +8361,7 @@ describe('one person ≡ v0.3 (byte-equal field, S §4.6)', () => {
 Run: `npx vitest run src/body/field.test.ts && npm run typecheck`
 Expected: PASS, `1 snapshot written` (today's builder, renamed only).
 
-- [ ] **Step 2: Failing multi-person tests** (append to `src/body/field.test.ts`; add `buildBodyField, fieldInputV1, type BodyFieldInput` to the `./field` import and `maskOnGrid` to the `./mask` import)
+- [x] **Step 2: Failing multi-person tests** (append to `src/body/field.test.ts`; add `buildBodyField, fieldInputV1, type BodyFieldInput` to the `./field` import and `maskOnGrid` to the `./mask` import)
 
 ```ts
 /**
@@ -8456,7 +8456,7 @@ describe('multi-person field (S §4.6)', () => {
 Run: `npx vitest run src/body/field.test.ts`
 Expected: FAIL (`buildBodyField` with an input object is undefined).
 
-- [ ] **Step 3: Implement in `src/body/field.ts`**
+- [x] **Step 3: Implement in `src/body/field.ts`**
 
 1. Replace `localField` (`:258-322`) by the per-person part and the shared finish. `personTerms` is today's `:259-312` with `localTerms(m, values)` and `bodyProtect` for `params.bodyProtect`; nothing else changes, so one person stays byte-equal:
 
@@ -8756,7 +8756,7 @@ export function buildBodyFieldV1(measure: BodyMeasure | null, params: BeautyPara
 
 A v0.3 input whose `edited` list is empty (no measure: only the 增高 band) skips both branches: `local` stays null exactly as before. With a measure, fieldInputV1 always lists the person, so the band-only case still gets today's hands-rigid term from `personTerms`.
 
-- [ ] **Step 4: The new memo (`src/ui/editorModel.ts`)**
+- [x] **Step 4: The new memo (`src/ui/editorModel.ts`)**
 
 Below `BodyFieldMemoV1` add:
 
@@ -8823,7 +8823,7 @@ describe('BodyFieldMemo (multi-person)', () => {
 
 (import `BodyFieldMemo`, `type BodyFieldInput`.)
 
-- [ ] **Step 5: Bench row BF and run**
+- [x] **Step 5: Bench row BF and run**
 
 `src/bench/multiFace.ts`, append:
 
@@ -8869,7 +8869,7 @@ Expected: PASS (the snapshot of Step 1 still matches: one person byte-equal).
 Run: `npm run build && npx playwright test tests/e2e/body.spec.ts tests/e2e/parity.spec.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/body/field.ts src/body/field.test.ts src/body/__snapshots__ src/body/straightness.test.ts src/ui/editorModel.ts src/ui/editorModel.test.ts src/ui/screens/Editor.tsx tests/harness/b1 tests/harness/b2/harness.ts tests/e2e/pages/parity.ts src/bench/multiFace.ts

@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { StillSession } from '../../app/still';
 import { heightBandStretch } from '../../body/bands';
-import { buildBodyField } from '../../body/field';
+import { buildBodyFieldV1 } from '../../body/field';
 import { measureBody, paramAvailability } from '../../body/measure';
 import { boxScore, primaryBody } from '../../detect/cache';
 import { buildFaceProtect } from '../../tracking/faceProtect';
@@ -45,7 +45,7 @@ import { reportError } from '../debug';
 import { deps, type UndoLike } from '../deps';
 import {
   ANY_FIELD,
-  BodyFieldMemo,
+  BodyFieldMemoV1,
   bodyPanelContext,
   bodyToPersist,
   cachedBodyFits,
@@ -152,7 +152,7 @@ export function Editor({ source }: { source: EditorSource }) {
   };
   /** the detection (or "no person") is in the history entry already */
   const bodyStored = useRef(bodyDet.phase === 'done');
-  const [fieldMemo] = useState(() => new BodyFieldMemo(buildBodyField));
+  const [fieldMemo] = useState(() => new BodyFieldMemoV1(buildBodyFieldV1));
   /** draft vs full 美體 field: a draft (at most once per frame) only for a drag step's own params change */
   const [fieldDraft] = useState(() => new FieldDraftGate());
   /** generation of the field the session holds (bumped on every change): part of what an export was made from */
@@ -520,13 +520,13 @@ export function Editor({ source }: { source: EditorSource }) {
   const measureRef = useRef(measure);
   measureRef.current = measure;
 
-  /** Bring the field up to date with the current params / measure (BodyFieldMemo: only the body subset counts). */
+  /** Bring the field up to date with the current params / measure (BodyFieldMemoV1: only the body subset counts). */
   const applyField = (draft: boolean) => {
-    let r: ReturnType<BodyFieldMemo['update']>;
+    let r: ReturnType<BodyFieldMemoV1['update']>;
     try {
       r = fieldMemo.update(measureRef.current, paramsRef.current, bodyAspect, draft);
     } catch (e) {
-      reportError(e, 'buildBodyField');
+      reportError(e, 'buildBodyFieldV1');
       return;
     }
     if (!r.changed) return;
@@ -573,7 +573,7 @@ export function Editor({ source }: { source: EditorSource }) {
     return f ? { ...f, data: f.data.slice() } : null;
   };
 
-  // rebuilt only when the body params / band / 背景保護 or the measure change (BodyFieldMemo). A commit or a
+  // rebuilt only when the body params / band / 背景保護 or the measure change (BodyFieldMemoV1). A commit or a
   // measure change builds the full field now, before the render effect below draws these params (and bumps
   // fieldTick: the encode / autosave re-arms); only a drag step's own params change builds a draft, in a later
   // animation frame (the latest params win, intermediate steps are dropped). A measure change during a drag

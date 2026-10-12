@@ -150,7 +150,7 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
   // own classes (styled in bench/main.ts STYLE like the 美體偵測 box): tests/harness/b3/bench.mjs locates '.body-bench'
   // and tests/harness/t8/run-bench.mjs '.gate .note', and this section sits in .gate, so reusing either breaks them
   section.className = 'multi-bench';
-  section.innerHTML = '<h3>多臉</h3><p class="multi-note">D：多臉偵測（選 group_faces.png）　B：多人美體（選 group_people.jpg）　GL：GPU 上限　R：多臉美型 GPU 時間　F：每張臉的瘦臉限制建構時間（R、F 需開發伺服器的 /tests/fixtures）</p>';
+  section.innerHTML = '<h3>多臉</h3><p class="multi-note">D：多臉偵測（選 group_faces.png）　B：多人美體（選 group_people.jpg）　GL：GPU 上限　R：多臉美型 GPU 時間　F：每張臉的瘦臉限制建構時間　BF：四人美體場建構時間（R、F、BF 需開發伺服器的 /tests/fixtures）</p>';
   const note = document.createElement('pre');
   note.className = 'multi-note';
   const pick = (accept: string) =>
@@ -170,7 +170,7 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
   const run = async (id: string) => {
     note.textContent = `${id}…`;
     try {
-      // only D and B take a picked photo: GL measures the GPU alone, R, F and later rows load their own fixtures
+      // only D and B take a picked photo: GL measures the GPU alone, R, F, BF and later rows load their own fixtures
       const photo = id === 'D' || id === 'B' ? await pick('image/*') : null;
       const blob = photo ?? new Blob();
       const got = await RUNNERS[id]({ faces: blob, people: blob });
@@ -180,7 +180,7 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
       note.textContent = `${id}: ${e instanceof Error ? e.message : String(e)}`;
     }
   };
-  for (const id of ['D', 'B', 'GL', 'R', 'F']) {
+  for (const id of ['D', 'B', 'GL', 'R', 'F', 'BF']) {
     const b = document.createElement('button');
     b.textContent = id;
     b.addEventListener('click', () => void run(id));
@@ -312,3 +312,44 @@ export async function rowF(): Promise<MultiRow[]> {
   return out;
 }
 addRunner('F', () => rowF());
+
+/**
+ * BF: buildBodyField with 4 persons (group_people's two measures plus their mirrored copies, masks mirrored too),
+ * every person edited: a full build, a draft, and a drag step (one person's value changed, the others' parts reused)
+ */
+export async function rowBF(): Promise<MultiRow[]> {
+  const { buildBodyField } = await import('../body/field');
+  const { measureBody } = await import('../body/measure');
+  const res = await fetch('/tests/fixtures/group_people.pose.json');
+  if (!res.ok) throw new Error(`BF needs /tests/fixtures/group_people.pose.json (the dev server): ${res.status}`);
+  type MaskJson = { width: number; height: number; data: string };
+  const j = (await res.json()) as { width: number; height: number; poses: { points: number[]; mask: MaskJson | null }[] };
+  const dec = (m: MaskJson | null) => (m ? { width: m.width, height: m.height, data: Uint8Array.from(atob(m.data), (c) => c.charCodeAt(0)) } : null);
+  const half = j.poses.map((p) => ({ pose: { points: new Float32Array(p.points) }, mask: dec(p.mask) }));
+  const mirrored = half.map((b) => {
+    const pts = b.pose.points.slice();
+    for (let i = 0; i < 33; i++) pts[i * 4] = 1 - pts[i * 4];
+    const m = b.mask;
+    const data = m ? new Uint8Array(m.data.length) : null;
+    if (m && data) for (let y = 0; y < m.height; y++) for (let x = 0; x < m.width; x++) data[y * m.width + x] = m.data[y * m.width + m.width - 1 - x];
+    return { pose: { points: pts }, mask: m && data ? { width: m.width, height: m.height, data } : null };
+  });
+  const all = [...half, ...mirrored].slice(0, 4);
+  const measures = all.map((b) => measureBody({ pose: b.pose, mask: b.mask, people: 1, width: j.width, height: j.height }, null));
+  const values = { 'body.slim': 0.6, 'body.waist': 0.8, 'body.whr': 0, 'body.hip': 0.5, 'body.legSlim': 0.5, 'body.arms': 0.5, 'body.shoulder': 0, 'body.neck': 0, 'body.head': 0 };
+  const input = (waist0: number) => ({
+    edited: measures.map((m, i) => ({ id: `b${i}`, measure: m, values: i === 0 ? { ...values, 'body.waist': waist0 } : values })),
+    masks: all.flatMap((b, i) => (b.mask ? [{ id: `b${i}`, mask: b.mask }] : [])),
+    heightBand: null,
+    legs: { value: 0, measure: null },
+    bodyProtect: true,
+    aspect: j.width / j.height,
+  });
+  const time = (waist0: number, edge?: number) => {
+    const t0 = performance.now();
+    buildBodyField(input(waist0), null, edge);
+    return Math.round(performance.now() - t0);
+  };
+  return [{ row: 'BF', config: '4 persons', values: { full_ms: time(0.8), draft_ms: time(0.8, 128), drag_ms: time(0.7, 128) } }];
+}
+addRunner('BF', () => rowBF());

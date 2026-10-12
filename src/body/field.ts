@@ -7,7 +7,11 @@
 // a summed-k·a bound, each part multiplied by its own 背景保護 weight, its background re-solved as a screened membrane
 // (relax.ts: the ring's stretch spread evenly, person texels untouched), and finally checked numerically
 // (fieldMinJacobian) with the local part scaled back if anything still came out below MIN_DET.
-import type { BeautyParams, BodyField, ParamId, PersonMask } from '../types';
+//
+// Several persons (S §4.6): one field. Each edited person's L_p is limited against the other persons' masks (0 inside
+// them, against another edited person from the halfway line) and fold-guarded on its own; the sum is relaxed once
+// with every person held fixed. One person with no other mask is the v0.3 builder bit for bit (buildBodyFieldV1).
+import type { BeautyParams, BodyField, HeightBand, ParamId, PersonId, PersonMask } from '../types';
 import { neutralValue, paramsInGroup, signed } from '../engine/params';
 import { backwardY, forwardY, heightBand, legsBand, type Band } from './bands';
 import { clamp, dot, fieldSize, mid, mul, perp, segDist, smoothstep, sub, type V2 } from './geom';
@@ -89,38 +93,133 @@ export function bodyActive(params: BeautyParams): boolean {
 
 let versionCounter = 0;
 
+// ───────────────────────── the multi-person builder (S §4.6) ─────────────────────────
+
+/** the per-person 美體 items (長腿 is a photo-level row band) */
+export type LocalBodyId = Exclude<Extract<ParamId, `body.${string}`>, 'body.legs'>;
+
+export interface BodyPersonInput {
+  id: PersonId;
+  measure: BodyMeasure;
+  values: Readonly<Record<LocalBodyId, number>>;
+}
+
+export interface BodyFieldInput {
+  /** body persons with a non-neutral local item, or every body person while 增高 / 長腿 is on (hands-rigid term) */
+  edited: readonly BodyPersonInput[];
+  /** every body person's mask, edited or not (the other persons each edited person must not move) */
+  masks: readonly { id: PersonId; mask: PersonMask }[];
+  heightBand: HeightBand | null;
+  /** 長腿, measured on the anchor person */
+  legs: { value: number; measure: BodyMeasure | null };
+  bodyProtect: boolean;
+  aspect: number;
+}
+
 /**
- * Build the field for these params. `measure` may be null (no detection yet / failed): then only the
- * manual 增高 band applies. Returns null when nothing would move. `aspect` = source W/H.
- * Reuses `prev`'s buffer when the size matches (the version still increments).
+ * Build one field for every person (S §4.6). Each edited person's local part is built on its own (its terms, its own
+ * 背景保護 weights), limited in magnitude against the other persons' masks (a budget that is 0 inside them), and
+ * fold-guarded on its own when two or more persons are edited; the parts are summed, the background relaxed once
+ * with every person held fixed, kept inside the frame, assembled through the bands, and the global fold guard runs
+ * last (`bodyFieldCacheStats.lambdaGlobal`). With one person and no other mask it is v0.3's builder exactly.
+ * Returns null when nothing would move. Reuses `prev`'s buffer when the size matches (the version still increments).
  * `longEdge` below BODY_FIELD_LONG_EDGE builds a draft (a drag step's preview: the field is in UV units, so any
  * size samples the same warp, only coarser), which also runs a coarser fold-guard bisection.
  */
-export function buildBodyField(
-  measure: BodyMeasure | null,
-  params: BeautyParams,
-  aspect: number,
-  prev?: BodyField | null,
-  longEdge: number = BODY_FIELD_LONG_EDGE,
-): BodyField | null {
-  if (!bodyActive(params)) return null;
+export function buildBodyField(input: BodyFieldInput, prev?: BodyField | null, longEdge: number = BODY_FIELD_LONG_EDGE): BodyField | null {
+  bodyFieldCacheStats.lambdaGlobal = 1;
   const edge = Number.isFinite(longEdge) ? Math.max(8, Math.round(longEdge)) : BODY_FIELD_LONG_EDGE;
-  const [w, h] = fieldSize(aspect, edge);
-  const A = measure?.aspect ?? (Number.isFinite(aspect) && aspect > 0 ? aspect : 1);
-  const v = params.values;
+  const [w, h] = fieldSize(input.aspect, edge);
+  const A = input.edited[0]?.measure.aspect ?? input.legs.measure?.aspect ?? (Number.isFinite(input.aspect) && input.aspect > 0 ? input.aspect : 1);
 
   const bands: Band[] = [];
-  const hb = params.heightBand ? heightBand(params.heightBand.top, params.heightBand.bottom, params.heightBand.amount) : null;
+  const hb = input.heightBand ? heightBand(input.heightBand.top, input.heightBand.bottom, input.heightBand.amount) : null;
   if (hb) bands.push(hb);
-  if (measure?.legs && v['body.legs'] > EPS) {
-    const L = measure.legs;
-    const lb = legsBand(L.hipY, L.kneeY, L.feetY, v['body.legs'] * L.vis, bands, L.ankleY);
+  const lm = input.legs.measure;
+  if (lm?.legs && input.legs.value > EPS) {
+    const L = lm.legs;
+    const lb = legsBand(L.hipY, L.kneeY, L.feetY, input.legs.value * L.vis, bands, L.ankleY);
     if (lb) bands.push(lb);
   }
 
-  const local = measure ? localField(measure, params, w, h, bands) : null;
+  let local: LocalGrid | null = null;
+  // `edited` is trusted as given: the editor lists a person with a non-neutral local item, or any body person while a
+  // band is on (today's hands-rigid term rides with the bands); fieldInputV1 always lists its one person
+  const edited = input.edited;
+  if (edited.length === 1 && input.masks.every((m) => m.id === edited[0].id || m.mask === edited[0].measure.mask)) {
+    // one person (nobody else to protect): today's builder exactly
+    const m = edited[0].measure;
+    const terms = personTerms(m, edited[0].values, input.bodyProtect, w, h, bands);
+    if (terms) {
+      // (the same cached grid personTerms used: no extra maskGrids miss, as today)
+      const grid = m.mask ? maskGrid(m, m.mask, w, h) : null;
+      local = finishLocal(terms.gx, terms.gy, grid?.inside ?? null, () => grid!.dist(), input.bodyProtect && !!grid, w, h, m.aspect);
+    }
+  } else if (edited.length) {
+    const N = w * h;
+    const grids = new Map(input.masks.map((m) => [m.id, maskOnGrid(new MaskSampler(m.mask, A), w, h, A)]));
+    const gx = new Float32Array(N);
+    const gy = new Float32Array(N);
+    const bandsKey = JSON.stringify(bands);
+    // λ_p only once two or more persons are edited; with one, the global guard below is enough (S §4.6 item 4)
+    const guardEach = edited.length >= 2;
+    const editedIds = new Set(edited.map((p) => p.id));
+    const union = (ms: readonly { id: PersonId }[]) => {
+      const u = new Uint8Array(N);
+      for (const o of ms) {
+        const g = grids.get(o.id)!;
+        for (let i = 0; i < N; i++) u[i] |= g[i];
+      }
+      return u;
+    };
+    for (const p of edited) {
+      const own = input.masks.find((m) => m.id === p.id);
+      const others = input.masks.filter((m) => m.id !== p.id && m.mask !== p.measure.mask);
+      // the other edited persons: their own parts reach into the gap from the other side
+      const rivals = others.filter((m) => editedIds.has(m.id));
+      const othersKey = others.map((o) => `${maskId(o.mask)}${editedIds.has(o.id) ? 'e' : ''}`).join(',');
+      const key = `${JSON.stringify(p.values)}|${w}x${h}|${own ? maskId(own.mask) : 0}|${othersKey}|${input.bodyProtect}|${bandsKey}|${guardEach}`;
+      let byKey = personCache.get(p.measure);
+      if (!byKey) personCache.set(p.measure, (byKey = new Map()));
+      let L = byKey.get(key);
+      if (!L) {
+        bodyFieldCacheStats.personBuilds++;
+        const t = personTerms(p.measure, p.values, input.bodyProtect, w, h, bands);
+        if (!t) continue;
+        if (others.length) {
+          const d = distanceOutside(union(others), w, h);
+          if (rivals.length) {
+            // Two edited persons' budgets facing each other across a gap would add their slopes (2 × 0.45 folds):
+            // against an edited person the budget is measured from the halfway line instead, (d_q − d_p) / 2 (a
+            // 1-Lipschitz distance to the bisector, ≤ 0 on q's side), so in the gap only one person's part is ever
+            // non-zero (the faces' Voronoi cells, faceProtect.ts)
+            const dRivals = distanceOutside(union(rivals), w, h);
+            const dOwn = own ? distanceOutside(grids.get(p.id)!, w, h) : null;
+            for (let i = 0; i < N; i++) d[i] = Math.min(d[i], Math.max(0, dRivals[i] - (dOwn ? dOwn[i] : 0)) / 2);
+          }
+          budgetOthers(t.gx, t.gy, d, h);
+        }
+        const lambda = guardEach ? personGuard(t.gx, t.gy, bands, w, h, A, edge < BODY_FIELD_LONG_EDGE ? GUARD_STEPS_DRAFT : GUARD_STEPS_FULL) : 1;
+        if (lambda < 1) for (let i = 0; i < N; i++) (t.gx[i] *= lambda), (t.gy[i] *= lambda);
+        L = t;
+        if (byKey.size >= PERSON_FIELDS_PER_MEASURE) byKey.delete(byKey.keys().next().value!);
+        byKey.set(key, L);
+      }
+      for (let i = 0; i < N; i++) {
+        gx[i] += L.gx[i];
+        gy[i] += L.gy[i];
+      }
+    }
+    const inside = new Uint8Array(N);
+    for (const g of grids.values()) for (let i = 0; i < N; i++) inside[i] |= g[i];
+    local = finishLocal(gx, gy, grids.size ? inside : null, () => distanceOutside(inside, w, h), input.bodyProtect && grids.size > 0, w, h, A);
+  }
   if (!bands.length && !local) return null;
+  return assembleGuarded(local, bands, w, h, A, edge, prev);
+}
 
+/** bands ∘ local into the backward field; the global fold guard scales the local part back (λ_global, S §4.6 item 7) */
+function assembleGuarded(local: LocalGrid | null, bands: readonly Band[], w: number, h: number, A: number, edge: number, prev?: BodyField | null): BodyField | null {
   const data = prev && prev.width === w && prev.height === h ? prev.data : new Float32Array(w * h * 2);
   const gy = new Float64Array(h);
   for (let y = 0; y < h; y++) gy[y] = backwardY(bands, (y + 0.5) / h);
@@ -157,10 +256,89 @@ export function buildBodyField(
       else hi = m;
     }
     assemble(lo);
+    bodyFieldCacheStats.lambdaGlobal = lo;
   }
   let any = false;
   for (let i = 0; i < data.length && !any; i++) any = Math.abs(data[i]) > 1e-9;
   return any ? field : null;
+}
+
+/** magnitude budget of L_p against the other persons: |L| ← smin(|L|, 0.45 · d_others), smooth-min width 2 texels (S §4.6 item 3) */
+function budgetOthers(gx: Float32Array, gy: Float32Array, dOthers: Float32Array, h: number): void {
+  const k = 2 / h;
+  for (let i = 0; i < gx.length; i++) {
+    const L = Math.hypot(gx[i], gy[i]);
+    if (L === 0) continue;
+    const B = 0.45 * (dOthers[i] / h);
+    const hh = Math.max(k - Math.abs(L - B), 0) / k;
+    const Ln = Math.max(Math.min(L, B) - 0.25 * hh * hh * k, 0);
+    if (Ln >= L) continue;
+    gx[i] *= Ln / L;
+    gy[i] *= Ln / L;
+  }
+}
+
+/** λ_p: bisect this person's term alone, assembled through the bands, when its own field folds (S §4.6 item 4) */
+function personGuard(gx: Float32Array, gy: Float32Array, bands: readonly Band[], w: number, h: number, A: number, steps: number): number {
+  const data = new Float32Array(w * h * 2);
+  const fill = (lambda: number) => {
+    for (let y = 0; y < h; y++) {
+      const sy = backwardY(bands, (y + 0.5) / h);
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        const lx = bands.length ? sampleGrid(gx, w, h, (x + 0.5) / w, sy) : gx[i];
+        const ly = bands.length ? sampleGrid(gy, w, h, (x + 0.5) / w, sy) : gy[i];
+        data[i * 2] = (lambda * lx) / A;
+        data[i * 2 + 1] = sy - (y + 0.5) / h + lambda * ly;
+      }
+    }
+  };
+  const field = { width: w, height: h, data, version: 0 };
+  fill(1);
+  if (fieldMinJacobian(field) >= MIN_DET) return 1;
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < steps; i++) {
+    const m = (lo + hi) / 2;
+    fill(m);
+    if (fieldMinJacobian(field) >= MIN_DET) lo = m;
+    else hi = m;
+  }
+  return lo;
+}
+
+const maskIds = new WeakMap<PersonMask, number>();
+let maskSeq = 0;
+const maskId = (m: PersonMask) => {
+  let v = maskIds.get(m);
+  if (v === undefined) maskIds.set(m, (v = ++maskSeq));
+  return v;
+};
+/** budgeted, guarded L_p per (person measure, values, others, grid, protect, bands) — a draft reuses the others' */
+const personCache = new WeakMap<BodyMeasure, Map<string, { gx: Float32Array; gy: Float32Array }>>();
+/** L_p kept per measure: a few recent values at the draft and the full size */
+const PERSON_FIELDS_PER_MEASURE = 8;
+
+/** the v0.3 input: one person (id 'p0') with `params`' local values; its mask is the only mask */
+export function fieldInputV1(measure: BodyMeasure | null, params: BeautyParams, aspect: number): BodyFieldInput {
+  const values = Object.fromEntries(BODY_DEFS.filter((d) => d.id !== 'body.legs').map((d) => [d.id, params.values[d.id]])) as Record<LocalBodyId, number>;
+  return {
+    edited: measure ? [{ id: 'p0', measure, values }] : [],
+    masks: measure?.mask ? [{ id: 'p0', mask: measure.mask }] : [],
+    heightBand: params.heightBand,
+    legs: { value: params.values['body.legs'], measure },
+    bodyProtect: params.bodyProtect,
+    aspect,
+  };
+}
+
+/**
+ * v0.3's one-person form (tests, harnesses): `params`' body values on `measure`. `measure` may be null (no detection
+ * yet / failed): then only the manual 增高 band applies. `aspect` = source W/H.
+ */
+export function buildBodyFieldV1(measure: BodyMeasure | null, params: BeautyParams, aspect: number, prev?: BodyField | null, longEdge?: number): BodyField | null {
+  if (!bodyActive(params)) return null;
+  return buildBodyField(fieldInputV1(measure, params, aspect), prev, longEdge);
 }
 
 /** Smallest Jacobian determinant of the backward map (debug / tests: must stay > 0.3, i.e. no fold-over). */
@@ -255,8 +433,16 @@ class TermBuf {
 /** reused across builds (a drag rebuilds the field every frame) */
 const termBufs: TermBuf[] = [];
 
-function localField(m: BodyMeasure, params: BeautyParams, w: number, h: number, bands: readonly Band[]): LocalGrid | null {
-  const terms = localTerms(m, params);
+/** one person's local displacement before relaxation: its terms, each × its own 背景保護 weights (S §4.6 item 2) */
+function personTerms(
+  m: BodyMeasure,
+  values: Readonly<Record<string, number>>,
+  bodyProtect: boolean,
+  w: number,
+  h: number,
+  bands: readonly Band[],
+): { gx: Float32Array; gy: Float32Array } | null {
+  const terms = localTerms(m, values);
   const handBand = bands.length ? handsRigidInBands(m.hands, bands) : null;
   if (handBand) terms.push(handBand);
   if (!terms.length) return null;
@@ -264,7 +450,7 @@ function localField(m: BodyMeasure, params: BeautyParams, w: number, h: number, 
   const N = w * h;
   const T = terms.length;
   const grid = m.mask ? maskGrid(m, m.mask, w, h) : null;
-  const protect = params.bodyProtect && grid;
+  const protect = bodyProtect && grid;
   // every term separately (背景保護 bands each part by its own Δ = its largest displacement on the silhouette)
   while (termBufs.length < T) termBufs.push(new TermBuf());
   const own = termBufs.slice(0, T);
@@ -310,15 +496,32 @@ function localField(m: BodyMeasure, params: BeautyParams, w: number, h: number, 
       gyy[i] += f * xy[2 * k + 1];
     }
   }
-  if (grid) {
+  return { gx, gy: gyy };
+}
+
+/**
+ * Relax the background once with every person (`inside`) held fixed, then keep inside the frame (S §4.6 items 6–7).
+ * `inside` null (no mask): nothing to relax.
+ */
+function finishLocal(
+  gx: Float32Array,
+  gy: Float32Array,
+  inside: Uint8Array | null,
+  dist: () => Float32Array,
+  protect: boolean,
+  w: number,
+  h: number,
+  A: number,
+): LocalGrid | null {
+  if (inside) {
     // the draft grid is coarser: α per texel² scales with the texel area, so both solve the same continuous problem
     const alphaScale = (BODY_FIELD_LONG_EDGE / Math.max(w, h)) ** 2;
-    bodyFieldCacheStats.relax = relaxBackground(gx, gyy, grid.inside, grid.dist(), w, h, texel, protect ? RELAX_PROTECT : RELAX_FREE, alphaScale);
+    bodyFieldCacheStats.relax = relaxBackground(gx, gy, inside, dist(), w, h, 1 / h, protect ? RELAX_PROTECT : RELAX_FREE, alphaScale);
   }
-  keepInFrame(gx, gyy, w, h, A);
+  keepInFrame(gx, gy, w, h, A);
   let any = false;
-  for (let i = 0; i < N && !any; i++) any = Math.abs(gx[i]) > 1e-9 || Math.abs(gyy[i]) > 1e-9;
-  return any ? { x: gx, y: gyy } : null;
+  for (let i = 0; i < w * h && !any; i++) any = Math.abs(gx[i]) > 1e-9 || Math.abs(gy[i]) > 1e-9;
+  return any ? { x: gx, y: gy } : null;
 }
 
 /** The measure-only part of 背景保護 on one field grid: depends on the measure's mask and the grid size alone. */
@@ -344,8 +547,17 @@ const MASK_GRIDS_PER_MEASURE = 4;
 /** protect weights kept per grid: one per part of the last build */
 const WEIGHTS_PER_GRID = 16;
 
-/** Debug / tests: how many mask grids were built (cache misses), and the last background relaxation's size. */
-export const bodyFieldCacheStats: { maskGrids: number; relax: RelaxStats } = { maskGrids: 0, relax: { unknowns: 0, iters: 0, rounds: 0 } };
+/**
+ * Debug / tests: how many mask grids were built (cache misses), the last background relaxation's size, the last
+ * build's global fold-guard scale (1 when it did not act, S §4.6 item 7) and how many per-person parts were built
+ * (cache misses of the multi-person path).
+ */
+export const bodyFieldCacheStats: { maskGrids: number; relax: RelaxStats; lambdaGlobal: number; personBuilds: number } = {
+  maskGrids: 0,
+  relax: { unknowns: 0, iters: 0, rounds: 0 },
+  lambdaGlobal: 1,
+  personBuilds: 0,
+};
 
 function maskGrid(m: BodyMeasure, mask: PersonMask, w: number, h: number): MaskGrid {
   let bySize = maskGrids.get(m);
@@ -415,8 +627,8 @@ function keepInFrame(gx: Float32Array, gy: Float32Array, w: number, h: number, A
 }
 
 /** The active local primitives as closures over precomputed geometry. */
-function localTerms(m: BodyMeasure, params: BeautyParams): Eval[] {
-  const v = params.values;
+function localTerms(m: BodyMeasure, values: Readonly<Record<string, number>>): Eval[] {
+  const v = values;
   const s = (id: ParamId) => clamp(v[id], 0, 1);
   const slim = s('body.slim');
   const waist = s('body.waist');

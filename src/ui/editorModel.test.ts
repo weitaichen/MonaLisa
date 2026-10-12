@@ -1,5 +1,6 @@
 // editorModel.ts: when the editor trusts a "no face", how often it re-detects, and 儲存 surviving a session swap.
 import { describe, expect, it, vi } from 'vitest';
+import type { BodyFieldInput } from '../body/field';
 import type { BodyMeasure } from '../body/measure';
 import { fakeBodyTracker, makeBodyDetection, makeBodyDetections, makeBodyField } from '../app/testFakes';
 import { applyPreset, setBodyProtect, setFilter, setHeightBand, setParam } from '../engine/params';
@@ -12,6 +13,8 @@ import {
   BODY_NONE_REASON,
   BODY_UNMEASURED_REASON,
   BodyFieldMemo,
+  BodyFieldMemoV1,
+  bodyInputKey,
   bodyPanelContext,
   bodyParamsKey,
   bodyToPersist,
@@ -380,7 +383,7 @@ describe('美體 decisions', () => {
     expect(suggestedBand(null)).toBeUndefined();
   });
 
-  it('BodyFieldMemo rebuilds only for body params / measure changes, passing the previous field', () => {
+  it('BodyFieldMemoV1 rebuilds only for body params / measure changes, passing the previous field', () => {
     let v = 0;
     const build = vi.fn((_m: BodyMeasure | null, p: BeautyParams, _a: number, prev?: BodyField | null) => {
       if (!needsBodyMeasure(p) && !p.heightBand) return null;
@@ -388,7 +391,7 @@ describe('美體 decisions', () => {
       f.version = ++v; // refills the same buffer
       return f;
     });
-    const memo = new BodyFieldMemo(build);
+    const memo = new BodyFieldMemoV1(build);
     const m = measure();
     expect(memo.update(m, base, 0.75)).toEqual({ field: null, changed: false });
     expect(build).toHaveBeenCalledTimes(1);
@@ -411,13 +414,13 @@ describe('美體 decisions', () => {
     expect(memo.update(m, base, 0.75)).toEqual({ field: null, changed: true });
   });
 
-  it('BodyFieldMemo: a drag step builds a draft; the commit with the same params rebuilds it at full resolution', () => {
+  it('BodyFieldMemoV1: a drag step builds a draft; the commit with the same params rebuilds it at full resolution', () => {
     const build = vi.fn((_m: BodyMeasure | null, _p: BeautyParams, _a: number, _prev?: BodyField | null, edge?: number) => {
       const f = makeBodyField(0.01);
       f.width = edge ?? 256;
       return f;
     });
-    const memo = new BodyFieldMemo(build);
+    const memo = new BodyFieldMemoV1(build);
     const m = measure();
     const slim = setParam(base, 'body.slim', 0.6);
     const draft = memo.update(m, slim, 0.75, true);
@@ -503,5 +506,35 @@ describe('美體 decisions', () => {
     expect(bodyToPersist({ phase: 'done', det }, true)).toBeUndefined();
     expect(bodyToPersist({ phase: 'working' }, false)).toBeUndefined();
     expect(bodyToPersist({ phase: 'error', message: 'x' }, false)).toBeUndefined();
+  });
+});
+
+describe('BodyFieldMemo (multi-person)', () => {
+  it('rebuilds only when the input key changes; a full build answers a later draft', () => {
+    const build = vi.fn((_i: BodyFieldInput, _p?: BodyField | null, _e?: number) => makeBodyField());
+    const memo = new BodyFieldMemo(build);
+    const m = {} as BodyMeasure;
+    const input = (waist: number): BodyFieldInput => ({ edited: [{ id: 'f0', measure: m, values: { 'body.waist': waist } as never }], masks: [], heightBand: null, legs: { value: 0, measure: null }, bodyProtect: true, aspect: 0.75 });
+    expect(memo.update(input(0.5)).changed).toBe(true);
+    expect(memo.update(input(0.5), true).changed).toBe(false);
+    expect(memo.update(input(0.6), true).changed).toBe(true);
+    expect(build.mock.calls.at(-1)![2]).toBe(BODY_DRAFT_LONG_EDGE);
+  });
+  it('bodyInputKey: equal inputs share a key; a measure, a mask, the band, 長腿 or its anchor, 背景保護 or the aspect change it', () => {
+    const m = {} as BodyMeasure;
+    const mask = { width: 1, height: 1, data: new Uint8Array(1) };
+    const base: BodyFieldInput = { edited: [{ id: 'f0', measure: m, values: { 'body.waist': 0.5 } as never }], masks: [{ id: 'f0', mask }], heightBand: null, legs: { value: 0, measure: null }, bodyProtect: true, aspect: 0.75 };
+    const k = bodyInputKey(base);
+    expect(bodyInputKey({ ...base, edited: [{ ...base.edited[0], values: { 'body.waist': 0.5 } as never }] })).toBe(k);
+    const variants: BodyFieldInput[] = [
+      { ...base, edited: [{ ...base.edited[0], measure: {} as BodyMeasure }] },
+      { ...base, masks: [{ id: 'f0', mask: { ...mask } }] },
+      { ...base, heightBand: { top: 0.3, bottom: 0.6, amount: 0.5 } },
+      { ...base, legs: { value: 0.4, measure: null } },
+      { ...base, legs: { value: 0, measure: m } },
+      { ...base, bodyProtect: false },
+      { ...base, aspect: 0.5 },
+    ];
+    for (const v of variants) expect(bodyInputKey(v)).not.toBe(k);
   });
 });

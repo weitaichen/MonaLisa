@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { BeautyParams, BodyDetection, Face, ParamId } from '../types';
-import { defaultParams, resetGroup, setBodyProtect, setHeightBand, setParam } from '../engine/params';
+import { applyPreset, defaultParams, paramDef, paramsInGroup, resetGroup, setBodyProtect, setHeightBand, setParam } from '../engine/params';
 import { warpImage, fieldAt } from './cpuWarp';
-import { bodyActive, BODY_FIELD_LONG_EDGE, bodyFieldCacheStats, buildBodyField, fieldMinJacobian, MIN_DET } from './field';
+import { bodyActive, BODY_FIELD_LONG_EDGE, bodyFieldCacheStats, buildBodyField, buildBodyFieldV1, fieldInputV1, fieldMinJacobian, MIN_DET, type BodyFieldInput } from './field';
 import { fieldSize } from './geom';
 import { loadPoseFixture } from './fixtures.node';
-import { MaskSampler } from './mask';
+import { MaskSampler, maskOnGrid } from './mask';
 import { measureBody, type BodyMeasure } from './measure';
 import { syntheticFigure } from './synthetic';
 
@@ -63,8 +63,8 @@ describe('bodyActive / neutral', () => {
     const p = defaultParams();
     expect(bodyActive(p)).toBe(false);
     const m = measureBody(scenes[0].det, scenes[0].face);
-    expect(buildBodyField(m, p, 2 / 3)).toBeNull();
-    expect(buildBodyField(null, p, 2 / 3)).toBeNull();
+    expect(buildBodyFieldV1(m, p, 2 / 3)).toBeNull();
+    expect(buildBodyFieldV1(null, p, 2 / 3)).toBeNull();
     expect(bodyActive(setParam(p, 'body.hip', 0.5))).toBe(false); // 美臀 is centre-zero
     expect(bodyActive(setParam(p, 'body.hip', 0.6))).toBe(true);
     expect(bodyActive(resetGroup(withMax(ALL), 'body'))).toBe(false);
@@ -72,29 +72,29 @@ describe('bodyActive / neutral', () => {
 
   it('a slider whose region is unavailable moves nothing', () => {
     const m = measureBody(syntheticFigure({ halfBody: true }).det, null);
-    expect(buildBodyField(m, withMax(['body.legs', 'body.legSlim']), 2 / 3)).toBeNull();
+    expect(buildBodyFieldV1(m, withMax(['body.legs', 'body.legSlim']), 2 / 3)).toBeNull();
   });
 });
 
-describe('buildBodyField', () => {
+describe('buildBodyFieldV1', () => {
   it('field size: ≈256 long edge matching the aspect', () => {
     const m = measureBody(scenes[0].det, scenes[0].face);
-    const f = buildBodyField(m, withMax(['body.waist']), 600 / 900)!;
+    const f = buildBodyFieldV1(m, withMax(['body.waist']), 600 / 900)!;
     expect([f.width, f.height]).toEqual([171, BODY_FIELD_LONG_EDGE]);
-    const l = buildBodyField(null, setHeightBand(defaultParams(), { top: 0.3, bottom: 0.6, amount: 1 }), 4 / 3)!;
+    const l = buildBodyFieldV1(null, setHeightBand(defaultParams(), { top: 0.3, bottom: 0.6, amount: 1 }), 4 / 3)!;
     expect([l.width, l.height]).toEqual([BODY_FIELD_LONG_EDGE, 192]);
   });
 
   it('increments the version and reuses the previous buffer', () => {
     const p = setHeightBand(defaultParams(), { top: 0.3, bottom: 0.6, amount: 1 });
-    const a = buildBodyField(null, p, 0.75)!;
-    const b = buildBodyField(null, { ...p, heightBand: { ...p.heightBand!, amount: 0.5 } }, 0.75, a)!;
+    const a = buildBodyFieldV1(null, p, 0.75)!;
+    const b = buildBodyFieldV1(null, { ...p, heightBand: { ...p.heightBand!, amount: 0.5 } }, 0.75, a)!;
     expect(b.data).toBe(a.data);
     expect(b.version).toBeGreaterThan(a.version);
   });
 
   it('manual 增高 works without any detection: rows above untouched, band stretched, frame size kept', () => {
-    const f = buildBodyField(null, setHeightBand(defaultParams(), { top: 0.4, bottom: 0.6, amount: 1 }), 0.75)!;
+    const f = buildBodyFieldV1(null, setHeightBand(defaultParams(), { top: 0.4, bottom: 0.6, amount: 1 }), 0.75)!;
     expect(f).not.toBeNull();
     expect(fieldAt(f, 0.5, 0.2)).toEqual([0, 0]);
     // well inside the band the backward slope is 1/1.15; below it the content is shifted down by 0.15·0.2
@@ -118,7 +118,7 @@ describe('buildBodyField', () => {
         setHeightBand(withMax(ALL), { top: 0.1, bottom: 0.9, amount: 1 }),
       ];
       for (const p of cases) {
-        const f = buildBodyField(m, p, aspect);
+        const f = buildBodyFieldV1(m, p, aspect);
         if (f) expect(fieldMinJacobian(f)).toBeGreaterThan(0.3);
       }
     });
@@ -128,7 +128,7 @@ describe('buildBodyField', () => {
     const fig = syntheticFigure();
     const m = measureBody(fig.det, fig.face);
     const local: ParamId[] = ['body.slim', 'body.waist', 'body.whr', 'body.legSlim', 'body.arms', 'body.shoulder', 'body.neck', 'body.head'];
-    const f = buildBodyField(m, setParam(withMax(local), 'body.hip', 1), fig.width / fig.height)!;
+    const f = buildBodyFieldV1(m, setParam(withMax(local), 'body.hip', 1), fig.width / fig.height)!;
     const s = new MaskSampler(fig.det.mask!, m.aspect);
     let outside = 0;
     let nonzero = 0;
@@ -159,7 +159,7 @@ describe('buildBodyField', () => {
     const H = 450;
     const img = new Uint8Array(W * H);
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) img[y * W + x] = x % 10 < 2 || y % 10 < 2 ? 0 : 255;
-    const f = buildBodyField(m, withMax(['body.slim', 'body.waist', 'body.head', 'body.shoulder']), fig.width / fig.height)!;
+    const f = buildBodyFieldV1(m, withMax(['body.slim', 'body.waist', 'body.head', 'body.shoulder']), fig.width / fig.height)!;
     const out = warpImage(img, W, H, 1, f);
     const s = new MaskSampler(fig.det.mask!, m.aspect);
     let changedFar = 0;
@@ -184,7 +184,7 @@ describe('buildBodyField', () => {
     it(`${sc.name}: 細腰 at max shrinks the measured mask waist by ≈ 10–15 % where the waist meets background`, () => {
       const m = measureBody(sc.det, sc.face);
       const mask = sc.det.mask!;
-      const f = buildBodyField(m, withMax(['body.waist']), sc.det.width / sc.det.height)!;
+      const f = buildBodyFieldV1(m, withMax(['body.waist']), sc.det.width / sc.det.height)!;
       const before = waistSides(m, mask.data, mask.width, mask.height);
       const after = waistSides(m, warpImage(mask.data, mask.width, mask.height, 1, f), mask.width, mask.height);
       const open = before.flatMap((b, k) => (b !== null && after[k] !== null ? [1 - after[k]! / b] : []));
@@ -214,7 +214,7 @@ describe('buildBodyField', () => {
     const shrink = (det: BodyDetection): number => {
       const m = measureBody(det, fig.face);
       const mask = det.mask!;
-      const f = buildBodyField(m, p, fig.width / fig.height)!;
+      const f = buildBodyFieldV1(m, p, fig.width / fig.height)!;
       expect(fieldMinJacobian(f)).toBeGreaterThan(0.3);
       return 1 - silhouetteWidth(m, warpImage(mask.data, mask.width, mask.height, 1, f), mask.width, mask.height) / silhouetteWidth(m, mask.data, mask.width, mask.height);
     };
@@ -239,7 +239,7 @@ describe('buildBodyField', () => {
   it('without background protection the capsules still vanish outside R (compact support)', () => {
     const fig = syntheticFigure();
     const m = measureBody(fig.det, fig.face);
-    const f = buildBodyField(m, setBodyProtect(withMax(['body.waist']), false), fig.width / fig.height)!;
+    const f = buildBodyFieldV1(m, setBodyProtect(withMax(['body.waist']), false), fig.width / fig.height)!;
     expect(fieldAt(f, 0.05, 0.4)).toEqual([0, 0]);
     expect(fieldAt(f, 0.95, 0.4)).toEqual([0, 0]);
   });
@@ -252,7 +252,7 @@ describe('buildBodyField', () => {
     const sets: ParamId[][] = [['body.head'], ['body.head', 'body.neck', 'body.shoulder', 'body.arms']];
     for (const [ids, protect] of sets.flatMap((ids) => [true, false].map((pr) => [ids, pr] as const))) {
       const p = setBodyProtect(withMax(ids), protect);
-      const f = buildBodyField(m, p, fig.width / fig.height)!;
+      const f = buildBodyFieldV1(m, p, fig.width / fig.height)!;
       expect(f).not.toBeNull();
       let worst = 0;
       for (let y = 0; y < f.height; y++) {
@@ -277,7 +277,7 @@ describe('buildBodyField', () => {
   it('pinning the frame edge never folds, so 小頭 near an edge leaves the other sliders at full strength', () => {
     // E3 regression: the edge limiter used to flatten the outermost rows (det J → 0), tripping the global fold
     // guard, which then scaled every local term (細腰 here) back by ~30 %.
-    const peakWaistDx = (m: BodyMeasure, f: NonNullable<ReturnType<typeof buildBodyField>>): number => {
+    const peakWaistDx = (m: BodyMeasure, f: NonNullable<ReturnType<typeof buildBodyFieldV1>>): number => {
       const t = m.trunk!;
       const wv = t.s[1] + t.u[1] * t.waistT * t.len;
       let peak = 0;
@@ -296,17 +296,17 @@ describe('buildBodyField', () => {
       const aspect = fig.width / fig.height;
       for (const pr of protect) {
         const waist = setBodyProtect(withMax(['body.waist']), pr);
-        const base = peakWaistDx(m, buildBodyField(m, waist, aspect)!);
+        const base = peakWaistDx(m, buildBodyFieldV1(m, waist, aspect)!);
         expect(base).toBeGreaterThan(0.005);
         for (const head of [0.5, 1]) {
-          const f = buildBodyField(m, setParam(waist, 'body.head', head), aspect)!;
+          const f = buildBodyFieldV1(m, setParam(waist, 'body.head', head), aspect)!;
           expect(peakWaistDx(m, f) / base, `${name} protect ${pr} 小頭 ${head}`).toBeGreaterThan(0.99);
           expect(fieldMinJacobian(f)).toBeGreaterThan(0.3);
         }
         // the edge pinning on its own keeps det J well clear of the guard's target (小頭 at the top edge, 瘦身's
         // trunk ring reaching the side edges of the half-body crop)
         for (const id of ['body.head', 'body.slim'] as ParamId[]) {
-          const h = buildBodyField(m, setBodyProtect(withMax([id]), pr), aspect)!;
+          const h = buildBodyFieldV1(m, setBodyProtect(withMax([id]), pr), aspect)!;
           expect(fieldMinJacobian(h), `${name} protect ${pr} ${id} alone`).toBeGreaterThan(MIN_DET + 0.05);
         }
       }
@@ -316,7 +316,7 @@ describe('buildBodyField', () => {
   it('長腿 stretches below the hips only and keeps the feet in frame', () => {
     const fig = syntheticFigure();
     const m = measureBody(fig.det, fig.face);
-    const f = buildBodyField(m, withMax(['body.legs']), fig.width / fig.height)!;
+    const f = buildBodyFieldV1(m, withMax(['body.legs']), fig.width / fig.height)!;
     expect(fieldAt(f, 0.5, 0.3)).toEqual([0, 0]);
     // the source row of the output row just inside the margin is at or below the feet (feet stay visible)
     const [, dy] = fieldAt(f, 0.5, 0.975);
@@ -329,7 +329,7 @@ describe('buildBodyField', () => {
     const m = fb ? measureBody(fb, null) : null;
     const aspect = fb ? fb.width / fb.height : 1;
     /** backward slope d(source row)/d(output row) on column u, for output rows whose source lies in [s0, s1] */
-    const slopes = (f: NonNullable<ReturnType<typeof buildBodyField>>, u: number, s0: number, s1: number): number[] => {
+    const slopes = (f: NonNullable<ReturnType<typeof buildBodyFieldV1>>, u: number, s0: number, s1: number): number[] => {
       const out: number[] = [];
       const src = (y: number) => y + fieldAt(f, u, y)[1];
       for (let y = 0.002; y < 0.998; y += 0.002) {
@@ -341,7 +341,7 @@ describe('buildBodyField', () => {
 
     it('長腿 stretches hips → ankles but moves the feet unscaled (no "big boots")', () => {
       const L = m!.legs!;
-      const f = buildBodyField(m, withMax(['body.legs']), aspect)!;
+      const f = buildBodyFieldV1(m, withMax(['body.legs']), aspect)!;
       const feet = slopes(f, 0.5, L.ankleY + 0.005, L.feetY);
       expect(feet.length).toBeGreaterThan(10);
       for (const k of feet) expect(k).toBeCloseTo(1, 2);
@@ -350,7 +350,7 @@ describe('buildBodyField', () => {
     });
 
     it('長腿 keeps the outstretched hand at hip height unstretched', () => {
-      const f = buildBodyField(m, withMax(['body.legs']), aspect)!;
+      const f = buildBodyFieldV1(m, withMax(['body.legs']), aspect)!;
       const hd = m!.hands.find((h) => h.a[1] > m!.legs!.hipY - 0.05)!;
       const u = (hd.a[0] + 0.8 * (hd.b[0] - hd.a[0])) / aspect;
       const y = hd.a[1] + 0.8 * (hd.b[1] - hd.a[1]);
@@ -360,7 +360,7 @@ describe('buildBodyField', () => {
     });
 
     it('torso sliders shift the hand on the belly rigidly instead of squeezing it', () => {
-      const f = buildBodyField(m, setParam(withMax(['body.slim', 'body.waist', 'body.whr']), 'body.hip', 1), aspect)!;
+      const f = buildBodyFieldV1(m, setParam(withMax(['body.slim', 'body.waist', 'body.whr']), 'body.hip', 1), aspect)!;
       const t = m!.trunk!;
       const belly = m!.hands.find((h) => Math.abs((h.a[0] + h.b[0]) / 2 - (t.s[0] + t.h[0]) / 2) < 0.08)!;
       const tip: [number, number] = [belly.a[0] + 1.6 * (belly.b[0] - belly.a[0]), belly.a[1] + 1.6 * (belly.b[1] - belly.a[1])];
@@ -375,7 +375,7 @@ describe('buildBodyField', () => {
     });
 
     it('細腰 slims both flanks of the visible waist (no lopsided pull)', () => {
-      const f = buildBodyField(m, withMax(['body.waist']), aspect)!;
+      const f = buildBodyFieldV1(m, withMax(['body.waist']), aspect)!;
       const mask = fb!.mask!;
       const t = m!.trunk!;
       const after = warpImage(mask.data, mask.width, mask.height, 1, f);
@@ -388,7 +388,7 @@ describe('buildBodyField', () => {
     });
 
     it('美臀 rounds the hip down into the thigh instead of a short lump that snaps back at the crotch', () => {
-      const f = buildBodyField(m, setParam(defaultParams(), 'body.hip', 1), aspect)!;
+      const f = buildBodyFieldV1(m, setParam(defaultParams(), 'body.hip', 1), aspect)!;
       const mask = new MaskSampler(fb!.mask!, aspect);
       const L = m!.legs!;
       // outward displacement of the image-right silhouette edge, row by row from the hip line to the knee
@@ -420,8 +420,8 @@ describe('draft builds (a drag step) and the per-measure mask cache', () => {
       const a = sc.det.width / sc.det.height;
       for (const ids of sets) {
         const p = withMax(ids);
-        const full = buildBodyField(m, p, a);
-        const draft = buildBodyField(m, p, a, full, DRAFT);
+        const full = buildBodyFieldV1(m, p, a);
+        const draft = buildBodyFieldV1(m, p, a, full, DRAFT);
         if (!full) {
           expect(draft).toBeNull();
           continue;
@@ -470,7 +470,7 @@ describe('draft builds (a drag step) and the per-measure mask cache', () => {
         setHeightBand(withMax(ALL), { top: 0.1, bottom: 0.9, amount: 1 }),
       ];
       for (const p of cases) {
-        const f = buildBodyField(m, p, a, null, DRAFT);
+        const f = buildBodyFieldV1(m, p, a, null, DRAFT);
         if (!f) continue;
         expect([f.width, f.height]).toEqual(fieldSize(a, DRAFT));
         expect(fieldMinJacobian(f)).toBeGreaterThan(0.3);
@@ -483,23 +483,23 @@ describe('draft builds (a drag step) and the per-measure mask cache', () => {
     const m = measureBody(fig.det, fig.face);
     const n0 = bodyFieldCacheStats.maskGrids;
     const waist = (x: number) => setParam(defaultParams(), 'body.waist', x);
-    const warm = buildBodyField(m, waist(0.5), aspect)!;
-    buildBodyField(m, waist(0.8), aspect);
-    buildBodyField(m, withMax(['body.slim', 'body.arms']), aspect);
+    const warm = buildBodyFieldV1(m, waist(0.5), aspect)!;
+    buildBodyFieldV1(m, waist(0.8), aspect);
+    buildBodyFieldV1(m, withMax(['body.slim', 'body.arms']), aspect);
     expect(bodyFieldCacheStats.maskGrids - n0).toBe(1);
     // 背景保護 off and the manual band alone never touch the mask
-    buildBodyField(m, setBodyProtect(waist(1), false), aspect);
-    buildBodyField(m, setHeightBand(defaultParams(), { top: 0.3, bottom: 0.6, amount: 1 }), aspect);
+    buildBodyFieldV1(m, setBodyProtect(waist(1), false), aspect);
+    buildBodyFieldV1(m, setHeightBand(defaultParams(), { top: 0.3, bottom: 0.6, amount: 1 }), aspect);
     expect(bodyFieldCacheStats.maskGrids - n0).toBe(1);
     // a draft is another grid size: one more, then reused too
-    buildBodyField(m, waist(0.6), aspect, null, DRAFT);
-    buildBodyField(m, waist(0.7), aspect, null, DRAFT);
+    buildBodyFieldV1(m, waist(0.6), aspect, null, DRAFT);
+    buildBodyFieldV1(m, waist(0.7), aspect, null, DRAFT);
     expect(bodyFieldCacheStats.maskGrids - n0).toBe(2);
     // a new detection is a new measure object: built afresh, and the cached build is bit-identical to it
     const fresh = { ...m };
-    const cold = buildBodyField(fresh, waist(0.5), aspect)!;
+    const cold = buildBodyFieldV1(fresh, waist(0.5), aspect)!;
     expect(bodyFieldCacheStats.maskGrids - n0).toBe(3);
-    const again = buildBodyField(m, waist(0.5), aspect)!;
+    const again = buildBodyFieldV1(m, waist(0.5), aspect)!;
     expect(bodyFieldCacheStats.maskGrids - n0).toBe(3);
     expect(Array.from(again.data)).toEqual(Array.from(cold.data));
     expect(Array.from(warm.data)).toEqual(Array.from(cold.data));
@@ -508,16 +508,16 @@ describe('draft builds (a drag step) and the per-measure mask cache', () => {
   it('the background relaxation runs on every grid with a mask: a draft solves about a quarter of the unknowns', () => {
     const m = measureBody(fig.det, fig.face);
     const p = withMax(['body.slim', 'body.waist']);
-    buildBodyField(m, p, aspect);
+    buildBodyFieldV1(m, p, aspect);
     const full = { ...bodyFieldCacheStats.relax };
-    buildBodyField(m, p, aspect, null, DRAFT);
+    buildBodyFieldV1(m, p, aspect, null, DRAFT);
     const draft = { ...bodyFieldCacheStats.relax };
     expect(full.unknowns).toBeGreaterThan(1000);
     expect(draft.unknowns / full.unknowns).toBeGreaterThan(0.15);
     expect(draft.unknowns / full.unknowns).toBeLessThan(0.35);
     // without a mask there is no person to keep fixed: nothing is relaxed
     bodyFieldCacheStats.relax = { unknowns: -1, iters: 0, rounds: 0 };
-    buildBodyField(measureBody({ ...fig.det, mask: null }, fig.face), p, aspect);
+    buildBodyFieldV1(measureBody({ ...fig.det, mask: null }, fig.face), p, aspect);
     expect(bodyFieldCacheStats.relax.unknowns).toBe(-1);
   });
 
@@ -531,19 +531,166 @@ describe('draft builds (a drag step) and the per-measure mask cache', () => {
       fn();
       t[k] = Math.min(t[k], performance.now() - t0);
     };
-    buildBodyField(m, setParam(defaultParams(), 'body.waist', 0.2), aspect); // warm the JIT and the cache
-    buildBodyField(m, setParam(defaultParams(), 'body.waist', 0.2), aspect, null, DRAFT);
+    buildBodyFieldV1(m, setParam(defaultParams(), 'body.waist', 0.2), aspect); // warm the JIT and the cache
+    buildBodyFieldV1(m, setParam(defaultParams(), 'body.waist', 0.2), aspect, null, DRAFT);
     for (let i = 0; i < RUNS; i++) {
       const p = setParam(defaultParams(), 'body.waist', 0.3 + (0.7 * i) / RUNS);
-      time('cold', () => buildBodyField({ ...m }, p, aspect)); // a measure the cache has never seen
-      time('warm', () => buildBodyField(m, p, aspect));
-      time('draft', () => buildBodyField(m, p, aspect, null, DRAFT));
+      time('cold', () => buildBodyFieldV1({ ...m }, p, aspect)); // a measure the cache has never seen
+      time('warm', () => buildBodyFieldV1(m, p, aspect));
+      time('draft', () => buildBodyFieldV1(m, p, aspect, null, DRAFT));
     }
     console.info(
-      `buildBodyField 細腰 (${fieldSize(aspect, BODY_FIELD_LONG_EDGE).join('×')} full / ${fieldSize(aspect, DRAFT).join('×')} draft), min of ${RUNS}: ` +
+      `buildBodyFieldV1 細腰 (${fieldSize(aspect, BODY_FIELD_LONG_EDGE).join('×')} full / ${fieldSize(aspect, DRAFT).join('×')} draft), min of ${RUNS}: ` +
         `cold ${t.cold.toFixed(2)} ms, warm ${t.warm.toFixed(2)} ms, draft ${t.draft.toFixed(2)} ms`,
     );
     expect(t.warm).toBeLessThan(t.cold);
     expect(t.draft).toBeLessThan(0.6 * t.warm);
+  });
+});
+
+/** FNV-1a 32 of the float bits */
+const bits = (a: Float32Array) => {
+  const u = new Uint32Array(a.buffer, a.byteOffset, a.length);
+  let h = 0x811c9dc5;
+  for (const x of u) {
+    h ^= x;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+};
+
+describe('one person ≡ v0.3 (byte-equal field, S §4.6)', () => {
+  it('every scene at every local item max, with and without 背景保護, plus bands', () => {
+    const out: string[] = [];
+    for (const sc of scenes) {
+      const m = measureBody(sc.det, sc.face);
+      for (const protect of [true, false]) {
+        const all = paramsInGroup('body').reduce((p, d) => setParam(p, d.id, d.bidirectional ? 0.8 : 1), applyPreset('natural', 1));
+        const p = setHeightBand({ ...all, bodyProtect: protect }, { top: 0.55, bottom: 0.85, amount: 0.5 });
+        const f = buildBodyFieldV1(m, p, sc.det.width / sc.det.height);
+        out.push(`${sc.name} ${protect} ${f ? bits(f.data) : 'null'}`);
+      }
+    }
+    expect(out).toMatchSnapshot();
+  });
+  it('the other paths: local items without a band, 長腿 alone, a band alone, and the same at draft size', () => {
+    const out: string[] = [];
+    const cases: [string, BeautyParams][] = [
+      ['local', paramsInGroup('body').filter((d) => d.id !== 'body.legs').reduce((p, d) => setParam(p, d.id, d.bidirectional ? 0.8 : 1), defaultParams())],
+      ['waist', setParam(defaultParams(), 'body.waist', 0.6)],
+      ['legs', setParam(defaultParams(), 'body.legs', 1)],
+      ['band', setHeightBand(defaultParams(), { top: 0.3, bottom: 0.7, amount: 1 })],
+    ];
+    for (const sc of scenes) {
+      const m = measureBody(sc.det, sc.face);
+      for (const [name, p] of cases)
+        for (const edge of [undefined, 128]) {
+          const f = buildBodyFieldV1(m, p, sc.det.width / sc.det.height, null, edge);
+          out.push(`${sc.name} ${name} ${edge ?? 'full'} ${f ? bits(f.data) : 'null'}`);
+        }
+    }
+    const band = buildBodyFieldV1(null, cases[3][1], 0.75);
+    out.push(`no measure band ${band ? bits(band.data) : 'null'}`);
+    expect(out).toMatchSnapshot();
+  });
+});
+
+/**
+ * Two copies of the synthetic figure on a canvas k× as wide: A at the left edge, B at the right edge, each with its
+ * own pose and mask (k = 2: side by side; k = 1.4: the outstretched hands overlap, "touching").
+ */
+function pairScene(k: number) {
+  const fig = syntheticFigure();
+  const m = fig.det.mask!;
+  const W = Math.round(m.width * k);
+  const place = (off: number) => {
+    const pts = fig.det.pose.points.slice();
+    for (let i = 0; i < 33; i++) pts[i * 4] = off + pts[i * 4] / k;
+    const data = new Uint8Array(W * m.height);
+    const ox = Math.round(off * W);
+    for (let y = 0; y < m.height; y++) for (let x = 0; x < m.width && ox + x < W; x++) data[y * W + ox + x] = m.data[y * m.width + x];
+    const det: BodyDetection = { pose: { points: pts }, mask: { width: W, height: m.height, data }, people: 1, width: Math.round(fig.det.width * k), height: fig.det.height };
+    return measureBody(det, null);
+  };
+  return { A: place(0), B: place(1 - 1 / k), aspect: (fig.det.width * k) / fig.det.height };
+}
+
+describe('multi-person field (S §4.6)', () => {
+  const LOCAL = ['body.slim', 'body.waist', 'body.whr', 'body.hip', 'body.legSlim', 'body.arms', 'body.shoulder', 'body.neck', 'body.head'] as const;
+  /** every one-way local item at v, the two-way ones neutral (0.5) */
+  const local = (v: number) => Object.fromEntries(LOCAL.map((id) => [id, paramDef(id).bidirectional ? 0.5 : v])) as BodyFieldInput['edited'][number]['values'];
+  const waist = (v: number) => ({ ...local(0), 'body.waist': v });
+  const sceneInput = (s: ReturnType<typeof pairScene>, edited: BodyFieldInput['edited'], masks = [{ id: 'A', mask: s.A.mask! }, { id: 'B', mask: s.B.mask! }]): BodyFieldInput => ({
+    edited,
+    masks,
+    heightBand: null,
+    legs: { value: 0, measure: null },
+    bodyProtect: true,
+    aspect: s.aspect,
+  });
+  const len = (f: { width: number; data: Float32Array }, i: number) => Math.hypot(f.data[i * 2], f.data[i * 2 + 1]);
+  const side = pairScene(2);
+  const touching = pairScene(1.4);
+
+  it('a second, unedited person far away changes nothing on the edited person', () => {
+    const multi = buildBodyField(sceneInput(side, [{ id: 'A', measure: side.A, values: waist(0.6) }]))!;
+    const single = buildBodyField(sceneInput(side, [{ id: 'A', measure: side.A, values: waist(0.6) }], [{ id: 'A', mask: side.A.mask! }]))!;
+    const inA = maskOnGrid(new MaskSampler(side.A.mask!, side.A.aspect), multi.width, multi.height, side.A.aspect);
+    let worst = 0;
+    for (let i = 0; i < inA.length; i++) if (inA[i]) worst = Math.max(worst, Math.abs(multi.data[i * 2] - single.data[i * 2]), Math.abs(multi.data[i * 2 + 1] - single.data[i * 2 + 1]));
+    expect(worst).toBeLessThan(1e-6);
+  });
+  it('细腰 on person B leaves person A’s texels at 0 displacement; no fold; λ_global = 1', () => {
+    const f = buildBodyField(sceneInput(touching, [{ id: 'B', measure: touching.B, values: waist(1) }]))!;
+    const inA = maskOnGrid(new MaskSampler(touching.A.mask!, touching.A.aspect), f.width, f.height, touching.A.aspect);
+    let worst = 0;
+    for (let i = 0; i < inA.length; i++) if (inA[i]) worst = Math.max(worst, len(f, i));
+    expect(worst).toBeLessThan(1e-6);
+    expect(fieldMinJacobian(f)).toBeGreaterThanOrEqual(MIN_DET);
+    expect(bodyFieldCacheStats.lambdaGlobal).toBe(1);
+  });
+  it('two touching persons with every local item at max: fold-free and λ_global = 1 (the per-person guards did the work)', () => {
+    const both = buildBodyField(sceneInput(touching, [{ id: 'A', measure: touching.A, values: local(1) }, { id: 'B', measure: touching.B, values: local(1) }]))!;
+    expect(fieldMinJacobian(both)).toBeGreaterThanOrEqual(MIN_DET);
+    expect(bodyFieldCacheStats.lambdaGlobal).toBe(1);
+  });
+  it('two touching persons at max: also a draft, 背景保護 off, and 增高 + 長腿 on (the budgets meet at the halfway line)', () => {
+    const both = sceneInput(touching, [{ id: 'A', measure: touching.A, values: local(1) }, { id: 'B', measure: touching.B, values: local(1) }]);
+    const variants: [string, BodyFieldInput, number | undefined][] = [
+      ['draft', both, 128],
+      ['protect off', { ...both, bodyProtect: false }, undefined],
+      ['bands', { ...both, heightBand: { top: 0.3, bottom: 0.8, amount: 1 }, legs: { value: 1, measure: touching.A } }, undefined],
+      ['bands draft, protect off', { ...both, bodyProtect: false, heightBand: { top: 0.3, bottom: 0.8, amount: 1 }, legs: { value: 1, measure: touching.A } }, 128],
+    ];
+    for (const [name, input, edge] of variants) {
+      const f = buildBodyField(input, null, edge)!;
+      expect(fieldMinJacobian(f), name).toBeGreaterThanOrEqual(MIN_DET);
+      expect(bodyFieldCacheStats.lambdaGlobal, name).toBe(1);
+    }
+  });
+  it('B at max does not scale A down: A’s strongest texel matches A edited alone', () => {
+    const aOnly = sceneInput(side, [{ id: 'A', measure: side.A, values: waist(0.6) }]);
+    const alone = buildBodyField(aOnly)!;
+    const both = buildBodyField({ ...aOnly, edited: [...aOnly.edited, { id: 'B', measure: side.B, values: local(1) }] })!;
+    const inA = maskOnGrid(new MaskSampler(side.A.mask!, side.A.aspect), alone.width, alone.height, side.A.aspect);
+    let at = -1;
+    for (let i = 0; i < inA.length; i++) if (inA[i] && (at < 0 || len(alone, i) > len(alone, at))) at = i;
+    expect(len(alone, at)).toBeGreaterThan(0);
+    expect(len(both, at)).toBeCloseTo(len(alone, at), 6);
+  });
+  it('a draft rebuilds only the dragged person', () => {
+    const two = (b: number) => sceneInput(side, [{ id: 'A', measure: side.A, values: waist(0.5) }, { id: 'B', measure: side.B, values: waist(b) }]);
+    buildBodyField(two(0.5), null, 128);
+    const n = bodyFieldCacheStats.personBuilds;
+    buildBodyField(two(0.6), null, 128);
+    expect(bodyFieldCacheStats.personBuilds).toBe(n + 1);
+  });
+  it('fieldInputV1: one person, its mask the only mask, 長腿 on it', () => {
+    const fig = syntheticFigure();
+    const m = measureBody(fig.det, fig.face);
+    const i = fieldInputV1(m, setParam(defaultParams(), 'body.legs', 0.4), 0.75);
+    expect(i.edited.map((p) => p.id)).toEqual(['p0']);
+    expect(i.masks).toEqual([{ id: 'p0', mask: m.mask }]);
+    expect(i.legs).toEqual({ value: 0.4, measure: m });
   });
 });

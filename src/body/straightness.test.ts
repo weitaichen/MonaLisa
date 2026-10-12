@@ -10,7 +10,7 @@ import { defaultParams, setBodyProtect, setHeightBand, setParam } from '../engin
 import { reshapeUniforms } from '../engine/passes/reshape';
 import { reshapeMapCpu } from '../engine/passes/reshapeCpu';
 import { adapt } from '../tracking/adapter111';
-import { buildBodyField, fieldMinJacobian, MIN_DET } from './field';
+import { buildBodyFieldV1, fieldMinJacobian, MIN_DET } from './field';
 import { loadPoseFixture } from './fixtures.node';
 import { measureBody } from './measure';
 import { portraitScene, sampleFaceScene, sampleWallScene } from './faceScenes.node';
@@ -435,8 +435,8 @@ describe('straightness ratchet: 美體 fields', () => {
       const misses: string[] = [];
       for (const [name, set] of Object.entries(CASES)) {
         const p = set(defaultParams());
-        const commit = buildBodyField(m, p, sc.aspect);
-        const draft = buildBodyField(m, p, sc.aspect, null, 128);
+        const commit = buildBodyFieldV1(m, p, sc.aspect);
+        const draft = buildBodyFieldV1(m, p, sc.aspect, null, 128);
         const r = bodyMetrics(an, commit);
         const minDet128 = draft ? +fieldMinJacobian(draft).toFixed(2) : 1;
         const got: BodyRow = [r.bendV, r.bendH, r.bendD45, r.bendD30, r.stretchMax, r.stretchP99, r.gapStretch, r.ringPx, r.minDet, minDet128, draftJumpPx(an, draft, commit)];
@@ -488,7 +488,7 @@ describe('straightness ratchet: 美體 fields', () => {
     expect(ls).toHaveLength(8);
     const lines: string[] = [];
     for (const name of ['waist', 'slim', 'slim+waist', 'arms']) {
-      const map = fieldMap(buildBodyField(m, CASES[name](defaultParams()), f.width / f.height));
+      const map = fieldMap(buildBodyFieldV1(m, CASES[name](defaultParams()), f.width / f.height));
       const got = [0.25, 0.5, 1, 2].map((k) =>
         +Math.max(...ls.filter((l) => l.tag.startsWith(`door+${k}W`)).map((l) => segmentBend(an, map, l.a, l.b))).toFixed(1),
       ) as [number, number, number, number];

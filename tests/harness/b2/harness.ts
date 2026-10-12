@@ -470,7 +470,7 @@ async function run(): Promise<B2Result> {
     // 長腿: legBand below the hip line (y≈0.50), S = 1.12 (feet stay in frame: 0.5 + 0.42/1.12 < 1)
     const legs = makeField(Math.round(256 * aspect), 256, (_u, v) => [0, legBand(v, 0.5, 0.04, 1.12) - v]);
     shots['8_legs'] = toPng(engine.renderToImageData(inp(body, W, H, orig, null, legs), { mirror: false }));
-    // 細腰 capsule on the torso axis (no background protection here — that is buildBodyField's mask)
+    // 細腰 capsule on the torso axis (no background protection here — that is buildBodyFieldV1's mask)
     const waist = makeField(Math.round(256 * aspect), 256, (u, v) => [capsuleDx(u, v, aspect, { cx: 0.5, y0: 0.22, y1: 0.5, R: 0.26, k: 0.25, tPeak: 0.62, sigma: 0.3 }), 0]);
     shots['8_waist'] = toPng(engine.renderToImageData(inp(body, W, H, orig, null, waist), { mirror: false }));
     const both = makeField(Math.round(256 * aspect), 256, (u, v) => [capsuleDx(u, v, aspect, { cx: 0.5, y0: 0.22, y1: 0.5, R: 0.26, k: 0.25, tPeak: 0.62, sigma: 0.3 }), legBand(v, 0.5, 0.04, 1.12) - v]);

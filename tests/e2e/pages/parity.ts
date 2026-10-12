@@ -4,7 +4,7 @@
 import landmarks from '../../fixtures/landmarks_sample_face.json';
 import pose from '../../fixtures/pose_fullbody.json';
 import { measureBody } from '../../../src/body/measure';
-import { buildBodyField } from '../../../src/body/field';
+import { buildBodyFieldV1 } from '../../../src/body/field';
 import { legacyFrame } from '../../../src/edit/frame';
 import { createEngine } from '../../../src/engine/index';
 import { applyPreset, PARAM_DEFS, setHeightBand, setParam, setShade } from '../../../src/engine/params';
@@ -61,7 +61,7 @@ window.runParity = async () => {
     height: pose.height,
   };
   const bodyParams = setHeightBand(setParam(setParam(applyPreset('natural', 1), 'body.waist', 1), 'body.legs', 1), { top: 0.55, bottom: 0.85, amount: 0.6 });
-  const field = buildBodyField(measureBody(det, null), bodyParams, body.width / body.height);
+  const field = buildBodyFieldV1(measureBody(det, null), bodyParams, body.width / body.height);
 
   const png = {} as Record<ParityCase, string>;
   png.natural = toPng(engine.renderToImageData(onFace(applyPreset('natural', 1)), { mirror: false }));

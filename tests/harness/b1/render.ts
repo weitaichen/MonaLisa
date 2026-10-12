@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { PNG } from 'pngjs';
 import type { BeautyParams, BodyDetection, BodyField, Face, ParamId } from '../../../src/types';
 import { defaultParams, setBodyProtect, setHeightBand, setParam } from '../../../src/engine/params';
-import { buildBodyField, fieldMinJacobian } from '../../../src/body/field';
+import { buildBodyFieldV1, fieldMinJacobian } from '../../../src/body/field';
 import { measureBody, paramAvailability, type BodyMeasure } from '../../../src/body/measure';
 import { warpImage, fieldAt } from '../../../src/body/cpuWarp';
 import { syntheticFigure, type BackgroundKind } from '../../../src/body/synthetic';
@@ -229,7 +229,7 @@ export function render(only?: string[]): Row[] {
     for (const c of CASES) {
       const p = c.set(defaultParams());
       const t0 = performance.now();
-      const field = buildBodyField(m, p, sc.w / sc.h);
+      const field = buildBodyFieldV1(m, p, sc.w / sc.h);
       const ms = performance.now() - t0;
       const after = warpImage(sc.rgba, sc.w, sc.h, 4, field);
       const maskAfter = maskW ? warpImage(maskW, sc.w, sc.h, 1, field) : undefined;
@@ -267,7 +267,7 @@ export function render(only?: string[]): Row[] {
         gapStretch: sm?.gapStretch ?? 0,
         ringPx: sm?.ringPx ?? 0,
         farMovePx: sm?.farMovePx ?? 0,
-        draftJumpPx: an ? draftJumpPx(an, buildBodyField(m, p, sc.w / sc.h, null, 128), field) : 0,
+        draftJumpPx: an ? draftJumpPx(an, buildBodyFieldV1(m, p, sc.w / sc.h, null, 128), field) : 0,
       });
     }
   }
@@ -315,6 +315,6 @@ export function glCase(): { w: number; h: number; rgba: number[]; cpu: number[];
   if (!existsSync(fb) || !existsSync(poseJson)) return null;
   const sc = fixtureScene('fullbody', fb, poseJson);
   const p = CASES.find((c) => c.name === 'all_max')!.set(defaultParams());
-  const field = buildBodyField(measureBody(sc.det!, null), p, sc.w / sc.h)!;
+  const field = buildBodyFieldV1(measureBody(sc.det!, null), p, sc.w / sc.h)!;
   return { w: sc.w, h: sc.h, rgba: Array.from(sc.rgba), cpu: Array.from(warpImage(sc.rgba, sc.w, sc.h, 4, field)), field: { width: field.width, height: field.height, data: Array.from(field.data) } };
 }

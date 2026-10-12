@@ -1,6 +1,7 @@
 // Editor face-detection / export / 美體 bookkeeping (spec §7.2.4, body research report §落地設計), kept pure so
 // it can be unit-tested without a DOM.
 import { hasValue, paramsInGroup } from '../engine/params';
+import type { BodyFieldInput } from '../body/field';
 import type { BodyMeasure } from '../body/measure';
 import type {
   BeautyParams,
@@ -221,7 +222,7 @@ export function bodyPanelContext(
       if (!det.det) return { status: 'none', availability: off(BODY_NONE_REASON), people: 0 };
       const band = suggestedBand(det.det);
       const extra = band ? { suggestedBand: band } : {};
-      // 背景保護 reads the measure's mask (buildBodyField): without a measure, or measured without a mask (the
+      // 背景保護 reads the measure's mask (buildBodyFieldV1): without a measure, or measured without a mask (the
       // CPU pose fallback has no segmentation), it would do nothing
       if (!measure) {
         return { status: 'ready', availability: off(BODY_UNMEASURED_REASON), people: det.det.people, hasMask: false, ...extra };
@@ -242,7 +243,7 @@ export const BODY_DRAFT_LONG_EDGE = 128;
  * export asks again without it, which rebuilds the same params at full resolution. A full field also answers a
  * later draft request for the same params.
  */
-export class BodyFieldMemo {
+export class BodyFieldMemoV1 {
   private key: string | null = null;
   private measure: BodyMeasure | null = null;
   private draft = false;
@@ -277,6 +278,52 @@ export class BodyFieldMemo {
     this.draft = draft && this.field !== null;
     const changed = this.field !== before || this.field?.version !== beforeVersion;
     return { field: this.field, changed };
+  }
+}
+
+const objIds = new WeakMap<object, number>();
+let objSeq = 0;
+/** a stable number per object (measure / mask identity: a new detection is a new object) */
+const objId = (o: object) => {
+  let v = objIds.get(o);
+  if (v === undefined) objIds.set(o, (v = ++objSeq));
+  return v;
+};
+
+/**
+ * What the multi-person field depends on (S §4.6 item 8): every edited person's values and measure, the masks, the
+ * band, 長腿 with its anchor's measure, 背景保護 and the aspect.
+ */
+export function bodyInputKey(i: BodyFieldInput): string {
+  return JSON.stringify([
+    i.edited.map((p) => [p.id, objId(p.measure), p.values]),
+    i.masks.map((m) => [m.id, objId(m.mask)]),
+    i.heightBand && [i.heightBand.top, i.heightBand.bottom, i.heightBand.amount],
+    i.legs.value,
+    i.legs.measure ? objId(i.legs.measure) : 0,
+    i.bodyProtect,
+    i.aspect,
+  ]);
+}
+
+/** BodyFieldMemoV1 for the multi-person input: the same draft / full rules, keyed on bodyInputKey */
+export class BodyFieldMemo {
+  private key: string | null = null;
+  private draft = false;
+  field: BodyField | null = null;
+
+  constructor(private readonly build: (input: BodyFieldInput, prev?: BodyField | null, longEdge?: number) => BodyField | null) {}
+
+  /** changed → hand `field` to the session (it may be the same object with a new version). */
+  update(input: BodyFieldInput, draft = false): { field: BodyField | null; changed: boolean } {
+    const key = bodyInputKey(input);
+    if (key === this.key && (draft || !this.draft)) return { field: this.field, changed: false };
+    const before = this.field;
+    const beforeVersion = before?.version;
+    this.field = draft ? this.build(input, before, BODY_DRAFT_LONG_EDGE) : this.build(input, before);
+    this.key = key;
+    this.draft = draft && this.field !== null;
+    return { field: this.field, changed: this.field !== before || this.field?.version !== beforeVersion };
   }
 }
 

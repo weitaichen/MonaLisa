@@ -39,6 +39,7 @@ import {
   protectRequests,
   rebaseStamp,
   RedetectBudget,
+  sessionPlan,
   shouldDetectBody,
   stampIs,
   suggestedBand,
@@ -83,6 +84,22 @@ describe('detectSession', () => {
 
   it('基本模式 (no tracker) is never unsure', () => {
     expect(detectSession(false, () => false, () => session(null, false)).unsure).toBe(false);
+  });
+
+  it('a cached answer is never unsure: "no face" reopened while the tracker is lost / failed is still "no face" (S §3.3 item 3)', () => {
+    const noFace = makeCache({ faces: [], persons: [] });
+    const plan = sessionPlan(noFace, true);
+    expect(plan).toEqual({ useCache: true, asks: false });
+    // the tracker is down before and after: the cached faces (none) are the answer, so no 「臉部偵測重新啟動中…」 note
+    expect(detectSession(plan.asks, () => false, () => session(null)).unsure).toBe(false);
+    // no upright scan cached (only a rotated one): the tracker is asked, and an unhealthy one cannot answer
+    const rotated = sessionPlan(makeCache({ faces: [], persons: [], faceScans: [{ quarter: 1, flipH: false }] }), true);
+    expect(rotated).toEqual({ useCache: false, asks: true });
+    expect(detectSession(rotated.asks, () => false, () => session(null)).unsure).toBe(true);
+    // no cache: the tracker is asked; 基本模式 uses any cache it has and asks nobody
+    expect(sessionPlan(null, true)).toEqual({ useCache: false, asks: true });
+    expect(sessionPlan(makeCache({ faceScans: [] }), false)).toEqual({ useCache: true, asks: false });
+    expect(sessionPlan(null, false)).toEqual({ useCache: false, asks: false });
   });
 });
 

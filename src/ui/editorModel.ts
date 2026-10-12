@@ -3,7 +3,7 @@
 import type { SessionFace } from '../app/still';
 import type { BodyFieldInput, BodyPersonInput } from '../body/field';
 import { MAX_EDIT_FACES } from '../config/limits';
-import { bodyBox } from '../detect/cache';
+import { bodyBox, scanned0 } from '../detect/cache';
 import type { HitCtx } from '../detect/persons';
 import type { FrameFaceIn } from '../edit/frame';
 import { personOf } from '../edit/state';
@@ -47,6 +47,17 @@ export function detectSession<S extends { faces: readonly unknown[]; faceKnown: 
   const s = create();
   const unsure = hasTracker && s.faces.length === 0 && (!before || !healthy() || !s.faceKnown);
   return { s, unsure };
+}
+
+/**
+ * Where the session's faces come from (S §3.3 item 3). A fitting cache with an upright answer (the photo's own, or one
+ * found before an engine recovery took the session) is used as is, also without a tracker (基本模式); anything else
+ * asks the tracker. `asks` is detectSession's hasTracker: only a session that asks the tracker can be unsure, so cached
+ * faces, none included, stay a definite answer whatever the tracker's health.
+ */
+export function sessionPlan(cache: DetectionCache | null, hasTracker: boolean): { useCache: boolean; asks: boolean } {
+  const useCache = cache !== null && (!hasTracker || scanned0(cache));
+  return { useCache, asks: hasTracker && !useCache };
 }
 
 /** non-answers in a row before the editor stops re-detecting; = tracker ESCALATE_AFTER, so repeated throws reach its instance replacement */

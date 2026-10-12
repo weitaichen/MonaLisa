@@ -22,7 +22,7 @@ import type { SessionFace, StillSession } from '../../app/still';
 import { forwardY, heightBandStretch } from '../../body/bands';
 import { bodyFieldCacheStats, buildBodyField, fieldBands } from '../../body/field';
 import { measureBody, paramAvailability } from '../../body/measure';
-import { bodyBox, personInfos, scanned0, withBodies } from '../../detect/cache';
+import { bodyBox, personInfos, withBodies } from '../../detect/cache';
 import { hitPerson } from '../../detect/persons';
 import { sanitizeParams } from '../../engine/params';
 import { takePersonsHint } from '../../store/settings';
@@ -67,6 +67,7 @@ import {
   protectRequests,
   rebaseStamp,
   RedetectBudget,
+  sessionPlan,
   shouldDetectBody,
   stampIs,
   thumbRect,
@@ -419,18 +420,18 @@ export function Editor({ source }: { source: EditorSource }) {
       }
       try {
         // a fitting cache with an upright answer (the photo's own, or one found before the session a lost engine took
-        // with it) is used as is, also without a tracker: cached faces are render inputs (S §3.3 item 3). Anything else
-        // detects once a tracker allows (openState's needsFaceDetect, without reading it)
+        // with it) is used as is, also without a tracker: cached faces are render inputs (S §3.3 item 3) and a definite
+        // answer, never unsure. Anything else detects once a tracker allows (openState's needsFaceDetect, without reading it)
         const cache = detectRef.current;
-        const useCache = cache !== null && (!tracker || scanned0(cache));
+        const { useCache, asks } = sessionPlan(cache, !!tracker);
         const { s, unsure } = detectSession(
-          !!tracker,
+          asks,
           () => svc.get().tracker === 'ok',
           () =>
             deps.createStillSession(target, tracker, source.bitmap, {
               ownsBitmap: false,
-              faces: useCache ? cache.faces : undefined,
-              obstacles: useCache ? cache.obstacles : undefined,
+              faces: useCache ? cache?.faces : undefined,
+              obstacles: useCache ? cache?.obstacles : undefined,
               body: fieldMemo.field,
             }),
         );

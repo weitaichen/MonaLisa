@@ -57,6 +57,13 @@ Test data in the repository only (not part of the deployed app):
     straight 1-2 px lines drawn on the background by scripts/gen-lines-fixture.mjs; fullbody_lines.json lists them.
   - tests/fixtures/sample_face.png: GPUPixel demo image (Apache-2.0, see GPUPixel above).
     tests/fixtures/sample_face.pose.json is this project's recorded Pose Landmarker result on it.
+  - tests/fixtures/group_faces.png and tests/fixtures/group6_faces.png: modified derivatives of sample_face.png
+    (Apache-2.0 §4(b) change notice): scaled, mirrored and cropped copies composed on a flat background by
+    scripts/gen-group-fixture.mjs. group_faces.landmarks.json / group_faces.pose.json are this project's recorded
+    Face / Pose Landmarker results on group_faces.png. The generated fake-camera clips group*.y4m derive from it.
+  - tests/fixtures/group_people.jpg: modified derivative of fullbody.jpg and fullbody_yoga.jpg (Apache-2.0 §4(b)
+    change notice): the two photos side by side at equal height (scripts/gen-group-fixture.mjs);
+    group_people.pose.json is this project's recorded Pose Landmarker result on it.
 
 Parameter design (ranges, defaults, presets) follows public SDK documentation of PixelFree,
 FaceUnity FULiveDemo and Alibaba Cloud Queen SDK; none of their code or assets is used.

@@ -3,6 +3,9 @@
 // landscape frame, face centred, pillarboxed with the photo's own edge colour, encoded as
 // YUV4MPEG2 4:2:0 (BT.601 limited range, which is how Chromium interprets I420 from a file).
 // Output is gitignored; regenerate with `node scripts/gen-y4m.mjs`.
+// Other clips (step-1 group fixtures): `--src <png> --out <y4m>` fits any other PNG with composeFitWidth;
+// `--noise <seed>` (per-frame sub-pixel shifts + ±2 levels of noise) or `--pan <FW/s>` (`--fw <px>`, `--frames <n>`)
+// make every frame distinct.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -170,24 +173,114 @@ export function encodeY4m({ Y, U, V }, w, h, frames) {
   return Buffer.concat([header, ...Array.from({ length: frames }, () => frame)]);
 }
 
+/**
+ * Any source other than sample_face: scaled to the frame width, bottom-aligned; the top is cropped, or padded with
+ * the top-left pixel's colour when the source is wider than 16:9. group_faces.png's copies stand on its bottom edge
+ * under plain background, so its faces keep the size they have in the photo (a "contain" fit shrinks them 0.84×,
+ * and Chromium's FaceLandmarker then misses C, and B too on the GPU delegate).
+ */
+export function composeFitWidth(png) {
+  const dh = Math.round((png.height * W) / png.width);
+  const img = resampleRgb(png.data, png.width, png.height, { x: 0, y: 0, w: png.width, h: png.height }, W, dh);
+  const fill = [png.data[0], png.data[1], png.data[2]];
+  const top = H - dh;
+  const rgb = new Float32Array(W * H * 3);
+  for (let y = 0; y < H; y++) {
+    const sy = y - top;
+    for (let x = 0; x < W; x++) {
+      const o = (y * W + x) * 3;
+      const i = (sy * W + x) * 3;
+      const inside = sy >= 0 && sy < dh;
+      rgb[o] = inside ? img[i] : fill[0];
+      rgb[o + 1] = inside ? img[i + 1] : fill[1];
+      rgb[o + 2] = inside ? img[i + 2] : fill[2];
+    }
+  }
+  return rgb;
+}
+
+/** mulberry32: a deterministic PRNG in [0, 1) */
+export function rng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** `rgb` (w×h) shifted by (sx, sy) px (bilinear, edge clamp) plus uniform noise of ±amp levels drawn from `rand`. */
+export function shiftFrame(rgb, sx, sy, rand, amp, w = W, h = H) {
+  const out = new Float32Array(w * h * 3);
+  const at = (x, y, k) => rgb[(Math.min(h - 1, Math.max(0, y)) * w + Math.min(w - 1, Math.max(0, x))) * 3 + k];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const fx = x - sx;
+      const fy = y - sy;
+      const x0 = Math.floor(fx);
+      const y0 = Math.floor(fy);
+      const ax = fx - x0;
+      const ay = fy - y0;
+      for (let k = 0; k < 3; k++) {
+        const v =
+          (at(x0, y0, k) * (1 - ax) + at(x0 + 1, y0, k) * ax) * (1 - ay) + (at(x0, y0 + 1, k) * (1 - ax) + at(x0 + 1, y0 + 1, k) * ax) * ay;
+        out[(y * w + x) * 3 + k] = amp > 0 ? v + (rand() - 0.5) * 2 * amp : v;
+      }
+    }
+  }
+  return out;
+}
+
+/** A clip of distinct frames (each `{Y, U, V}`), 30 fps. */
+export function encodeY4mFrames(planes, w, h) {
+  const header = Buffer.from(`YUV4MPEG2 W${w} H${h} F30:1 Ip A1:1 C420jpeg\n`, 'ascii');
+  const frameHeader = Buffer.from('FRAME\n', 'ascii');
+  return Buffer.concat([header, ...planes.flatMap((p) => [frameHeader, p.Y, p.U, p.V])]);
+}
+
+const arg = (name, fallback) => {
+  const i = process.argv.indexOf(name);
+  return i > 0 ? process.argv[i + 1] : fallback;
+};
+
 function main() {
-  const src = PNG.sync.read(readFileSync(join(root, 'tests', 'fixtures', 'sample_face.png')));
-  const rgb = composeFrame(src);
-  const planes = rgbToI420(rgb, W, H);
-  const out = join(root, 'tests', 'fixtures', 'face.y4m');
+  const srcRel = arg('--src', 'tests/fixtures/sample_face.png');
+  const outRel = arg('--out', 'tests/fixtures/face.y4m');
+  const noise = arg('--noise', null);
+  const pan = arg('--pan', null);
+  const src = PNG.sync.read(readFileSync(join(root, srcRel)));
+  const base = srcRel.endsWith('sample_face.png') ? composeFrame(src) : composeFitWidth(src);
+  const out = join(root, outRel);
   mkdirSync(dirname(out), { recursive: true });
-  const buf = encodeY4m(planes, W, H, FRAMES);
+  let buf;
+  if (noise === null && pan === null) {
+    buf = encodeY4m(rgbToI420(base, W, H), W, H, FRAMES);
+  } else {
+    const n = Number(arg('--frames', '60'));
+    // face width of group_faces.png's face A in the 1280×720 frame (0.42 × 619 px × 1280/1800)
+    const fwPx = Number(arg('--fw', '185'));
+    const rand = rng(Number(noise ?? 1));
+    const frames = [];
+    for (let f = 0; f < n; f++) {
+      const sx = pan !== null ? (Number(pan) * fwPx * f) / 30 : rand() - 0.5;
+      const sy = pan !== null ? 0 : rand() - 0.5;
+      frames.push(rgbToI420(shiftFrame(base, sx, sy, rand, noise !== null ? 2 : 0), W, H));
+    }
+    buf = encodeY4mFrames(frames, W, H);
+  }
   writeFileSync(out, buf);
-  console.log(`tests/fixtures/face.y4m ${W}x${H} ${FRAMES} frames (${(buf.length / 1e6).toFixed(1)} MB)`);
+  console.log(`${outRel} ${W}x${H} (${(buf.length / 1e6).toFixed(1)} MB)`);
 
   // Optional RGB preview of the composed frame (for eyeballing / the fake-camera check).
   const previewArg = process.argv.indexOf('--preview');
   if (previewArg > 0 && process.argv[previewArg + 1]) {
     const png = new PNG({ width: W, height: H });
     for (let i = 0; i < W * H; i++) {
-      png.data[i * 4] = clamp8(rgb[i * 3]);
-      png.data[i * 4 + 1] = clamp8(rgb[i * 3 + 1]);
-      png.data[i * 4 + 2] = clamp8(rgb[i * 3 + 2]);
+      png.data[i * 4] = clamp8(base[i * 3]);
+      png.data[i * 4 + 1] = clamp8(base[i * 3 + 1]);
+      png.data[i * 4 + 2] = clamp8(base[i * 3 + 2]);
       png.data[i * 4 + 3] = 255;
     }
     const p = process.argv[previewArg + 1];

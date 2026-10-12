@@ -4,6 +4,7 @@
 // Runs tasks-vision 0.10.35 from node_modules inside headless Chromium (Playwright), served by a
 // tiny static server so nothing depends on file:// or a running dev server.
 //   node scripts/record-landmarks.mjs [image.png] [out.json]
+//   node scripts/record-landmarks.mjs <image.png> <out.json> --faces <n>   (n > 1: every face, no mirrored copy)
 import { createReadStream, existsSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, extname, join, normalize, relative, resolve, sep } from 'node:path';
@@ -13,6 +14,8 @@ import { chromium } from '@playwright/test';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const imgPath = resolve(root, process.argv[2] ?? 'tests/fixtures/sample_face.png');
 const outPath = resolve(root, process.argv[3] ?? 'tests/fixtures/landmarks_sample_face.json');
+const facesAt = process.argv.indexOf('--faces');
+const numFaces = facesAt > 0 ? Number(process.argv[facesAt + 1]) : 1;
 const toUrl = (abs) => '/' + relative(root, abs).split(sep).join('/');
 
 const MIME = {
@@ -27,7 +30,7 @@ const MIME = {
 
 const PAGE = `<!doctype html><meta charset="utf-8"><body><script type="module">
 import { FilesetResolver, FaceLandmarker } from '/node_modules/@mediapipe/tasks-vision/vision_bundle.mjs';
-window.run = async (imgUrl) => {
+window.run = async (imgUrl, numFaces) => {
   const img = new Image();
   img.src = imgUrl;
   await img.decode();
@@ -37,10 +40,15 @@ window.run = async (imgUrl) => {
   const lm = await FaceLandmarker.createFromOptions(fileset, {
     baseOptions: { modelAssetBuffer: model, delegate: 'CPU' },
     runningMode: 'IMAGE',
-    numFaces: 1,
+    numFaces,
     outputFaceBlendshapes: false,
     outputFacialTransformationMatrixes: false,
   });
+  if (numFaces > 1) {
+    const faces = lm.detect(img).faceLandmarks.map((f) => f.flatMap((p) => [p.x, p.y, p.z]));
+    lm.close();
+    return { width: img.naturalWidth, height: img.naturalHeight, faces };
+  }
   const detect = (src) => {
     const face = lm.detect(src).faceLandmarks[0];
     if (!face) throw new Error('no face detected');
@@ -107,26 +115,45 @@ try {
   page.on('console', (m) => m.type() === 'error' && console.error('[page]', m.text()));
   await page.goto(`http://127.0.0.1:${port}/__record.html`);
   await page.waitForFunction(() => window.pageReady === true);
-  const result = await page.evaluate((u) => window.run(u), toUrl(imgPath));
-  for (const k of ['points', 'mirrored']) {
-    if (result[k].length !== 478 * 3) throw new Error(`${k}: expected 1434 values, got ${result[k].length}`);
+  const result = await page.evaluate(([u, n]) => window.run(u, n), [toUrl(imgPath), numFaces]);
+  if (numFaces > 1) {
+    const round = (a) => a.map((v) => Math.round(v * 1e6) / 1e6);
+    writeFileSync(
+      outPath,
+      JSON.stringify({
+        source: relative(root, imgPath).split(sep).join('/'),
+        width: result.width,
+        height: result.height,
+        tasksVision: '0.10.35',
+        model: 'face_landmarker.task float16/1',
+        delegate: 'CPU',
+        numFaces,
+        note: 'FaceLandmarker IMAGE mode, numFaces as given; faces = MediaPipe result order, each 478 x (x, y, z), unmirrored.',
+        faces: result.faces.map(round),
+      }) + '\n',
+    );
+    console.log(`wrote ${relative(root, outPath)} (${result.faces.length} faces)`);
+  } else {
+    for (const k of ['points', 'mirrored']) {
+      if (result[k].length !== 478 * 3) throw new Error(`${k}: expected 1434 values, got ${result[k].length}`);
+    }
+    const round = (a) => a.map((v) => Math.round(v * 1e6) / 1e6);
+    const fixture = {
+      source: relative(root, imgPath).split(sep).join('/'),
+      width: result.width,
+      height: result.height,
+      tasksVision: '0.10.35',
+      model: 'face_landmarker.task float16/1',
+      delegate: 'CPU',
+      note:
+        'MediaPipe FaceLandmarker IMAGE mode; points = 478 x (x, y, z) flattened; x,y normalized, top-left origin, unmirrored. ' +
+        'mirrored = same, detected on the horizontally flipped image (coordinates of the flipped image itself).',
+      points: round(result.points),
+      mirrored: round(result.mirrored),
+    };
+    writeFileSync(outPath, JSON.stringify(fixture) + '\n');
+    console.log(`wrote ${relative(root, outPath)} (${result.width}x${result.height}, 478 points)`);
   }
-  const round = (a) => a.map((v) => Math.round(v * 1e6) / 1e6);
-  const fixture = {
-    source: relative(root, imgPath).split(sep).join('/'),
-    width: result.width,
-    height: result.height,
-    tasksVision: '0.10.35',
-    model: 'face_landmarker.task float16/1',
-    delegate: 'CPU',
-    note:
-      'MediaPipe FaceLandmarker IMAGE mode; points = 478 x (x, y, z) flattened; x,y normalized, top-left origin, unmirrored. ' +
-      'mirrored = same, detected on the horizontally flipped image (coordinates of the flipped image itself).',
-    points: round(result.points),
-    mirrored: round(result.mirrored),
-  };
-  writeFileSync(outPath, JSON.stringify(fixture) + '\n');
-  console.log(`wrote ${relative(root, outPath)} (${result.width}x${result.height}, 478 points)`);
 } finally {
   await browser.close();
   server.close();

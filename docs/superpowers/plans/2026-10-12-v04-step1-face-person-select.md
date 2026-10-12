@@ -99,7 +99,7 @@ Lower-likelihood inputs keep their tests as ordinary task tests: degenerate Medi
 - Consumes: `resampleRgb`, `rgbToI420`, `encodeY4m`, `composeFrame`, `W`, `H`, `FRAMES` (`gen-y4m.mjs`); `downscaleMask`, `toPose33` (`src/tracking/bodyTracker.ts:186-228`).
 - Produces: `GROUP_FACES`, `GROUP6` (exported constants of `gen-group-fixture.mjs`); `composeContain(png)`, `rng(seed)`, `shiftFrame(rgb, sx, sy, rand, amp)`, `encodeY4mFrames(planes[], w, h)` (exported from `gen-y4m.mjs`); fixture JSON shapes: `group_faces.landmarks.json` = `{source, width, height, tasksVision, model, delegate, numFaces, note, faces: number[][] /* 478×3 each */}`; `*.pose.json` (multi) = `{source, width, height, tasksVision, model, delegate, numPoses, note, poses: {points: number[] /* 132 */, mask: {width, height, data /* base64 */} | null}[]}`.
 
-- [ ] **Step 1: Write the failing fixture test**
+- [x] **Step 1: Write the failing fixture test**
 
 ```js
 // tests/harness/t5/group-fixtures.test.mjs
@@ -182,12 +182,12 @@ describe('gen-y4m helpers', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run tests/harness/t5/group-fixtures.test.mjs`
 Expected: FAIL (`ENOENT … group_faces.png` and `composeContain is not a function` / not exported).
 
-- [ ] **Step 3: Write `scripts/gen-group-fixture.mjs`**
+- [x] **Step 3: Write `scripts/gen-group-fixture.mjs`**
 
 ```js
 // Builds the step-1 group fixtures from Apache-2.0 images already in tests/fixtures (LICENSES/NOTICE.txt):
@@ -333,7 +333,7 @@ try {
 }
 ```
 
-- [ ] **Step 4: Extend `scripts/gen-y4m.mjs` (CLI `--src --out --noise --pan --fw --frames`)**
+- [x] **Step 4: Extend `scripts/gen-y4m.mjs` (CLI `--src --out --noise --pan --fw --frames`)**
 
 Add these exports after `encodeY4m` (`gen-y4m.mjs:166-171`) and replace `main()` (`gen-y4m.mjs:173-198`; keep the `if (process.argv[1] && …) main();` guard of `:200`, which lets the unit test import the helpers without running the CLI). With no flags the output is byte-identical to today's `face.y4m` (same `composeFrame`, same `encodeY4m`).
 
@@ -455,7 +455,7 @@ function main() {
 }
 ```
 
-- [ ] **Step 5: Multi-face mode in `scripts/record-landmarks.mjs`**
+- [x] **Step 5: Multi-face mode in `scripts/record-landmarks.mjs`**
 
 1. After `outPath` (`:15`) add:
 
@@ -499,7 +499,7 @@ const numFaces = facesAt > 0 ? Number(process.argv[facesAt + 1]) : 1;
 
 and close that `else {` after the existing single-face block's `console.log(...)` with `}`.
 
-- [ ] **Step 6: Multi-pose mode in `scripts/record-pose.mjs` (CRLF)**
+- [x] **Step 6: Multi-pose mode in `scripts/record-pose.mjs` (CRLF)**
 
 1. After `variant` (`:16`) add `const posesAt = process.argv.indexOf('--poses'); const numPoses = posesAt > 0 ? Number(process.argv[posesAt + 1]) : 0;`.
 2. Extend `PAGE`'s module script (keep the existing `window.run`) with:
@@ -562,7 +562,7 @@ window.runAll = async (imgUrl, variant, numPoses) => {
 
 and close the `else {` after the single-pose block's final `console.log(...)`.
 
-- [ ] **Step 7: Generate everything**
+- [x] **Step 7: Generate everything**
 
 Run (one after the other):
 ```bash
@@ -578,7 +578,7 @@ Expected: `wrote tests/fixtures/group_faces.png`, `… group6_faces.png`, `… g
 
 **PD2 (S §6.3):** if the landmark JSON lacks the face at x ≈ 0.82 (C), set C's `scale` to `0.26` in `GROUP_FACES`, rerun the whole Step 7, and note it in the commit message. If A (0.22) or B (0.55) is missing, stop and report BLOCKED (the fixture cannot carry the e2e).
 
-- [ ] **Step 8: `.gitignore`, global setup and NOTICE**
+- [x] **Step 8: `.gitignore`, global setup and NOTICE**
 
 `.gitignore:14`: replace `tests/fixtures/face.y4m` with `tests/fixtures/*.y4m`.
 
@@ -603,12 +603,12 @@ Expected: `wrote tests/fixtures/group_faces.png`, `… group6_faces.png`, `… g
     group_people.pose.json is this project's recorded Pose Landmarker result on it.
 ```
 
-- [ ] **Step 9: Run the tests**
+- [x] **Step 9: Run the tests**
 
 Run: `npx vitest run tests/harness/t5`
 Expected: PASS (the new file and the existing `assets.test.mjs`, whose `face.y4m` checks prove the no-flag path is unchanged).
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add scripts/gen-group-fixture.mjs scripts/gen-y4m.mjs scripts/record-landmarks.mjs scripts/record-pose.mjs tests/harness/t5/group-fixtures.test.mjs tests/e2e/global-setup.ts .gitignore LICENSES/NOTICE.txt tests/fixtures/group_faces.png tests/fixtures/group6_faces.png tests/fixtures/group_people.jpg tests/fixtures/group_faces.landmarks.json tests/fixtures/group_faces.pose.json tests/fixtures/group_people.pose.json

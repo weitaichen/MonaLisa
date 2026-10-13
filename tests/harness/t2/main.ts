@@ -24,7 +24,8 @@ import {
   yawAttenuation,
 } from '../../../src/engine/passes/reshape';
 import type { ReshapeUniforms } from '../../../src/engine/passes/reshape';
-import { createMakeupPass, makeupUniforms } from '../../../src/engine/passes/makeup';
+import { createMakeupPass, makeupUniformsFor } from '../../../src/engine/passes/makeup';
+import { splitLegacy } from '../../../src/edit/legacy';
 import type { MakeupUniforms } from '../../../src/engine/passes/makeup';
 import { createMaskPass } from '../../../src/engine/passes/mask';
 import { maskBufferSize } from '../../../src/engine/uniforms';
@@ -191,7 +192,7 @@ async function main() {
     // src of a different size than dst: sampled by UV, no error, close to the source
     const fbS = createFramebuffer(gl, 600, 900);
     reshape.draw(srcTex, fbS, face, zeroR);
-    makeup.draw(srcTex, fbS, face, makeupUniforms(applyPreset('glow'), 1));
+    makeup.draw(srcTex, fbS, face, makeupUniformsFor(splitLegacy(applyPreset('glow')).person, 1));
     check('different src/dst sizes render without GL error', glErr() === gl.NO_ERROR, '600×900 dst from 1000×1500 src');
   }
 
@@ -617,7 +618,7 @@ async function main() {
       saveImage('makeup_mesh_wire', wire, around(P(109), 0.36 * W, 0.26 * H), 2);
     }
     const glow = applyPreset('glow');
-    saveRow('makeup_glow', [base, renderMakeup(makeupUniforms(glow, 1))], ['source', '氣色 makeup (豆沙 30 / 蜜桃 30)'], faceCrop, 0.7);
+    saveRow('makeup_glow', [base, renderMakeup(makeupUniformsFor(splitLegacy(glow).person, 1))], ['source', '氣色 makeup (豆沙 30 / 蜜桃 30)'], faceCrop, 0.7);
     check('makeup visuals rendered without GL error', glErr() === gl.NO_ERROR, 'see out/makeup_*.png');
   }
 
@@ -784,7 +785,7 @@ void main() { outColor = texture(uSrc, vec2(mix(vUv.x, 1.0 - vUv.x, uMirror), 1.
       return (performance.now() - t0) / 30;
     };
     metrics.ms_reshape_refined_1080x1920 = t(() => reshape.draw(srcTex, fb, face, u));
-    metrics.ms_makeup_glow_1080x1920 = t(() => makeup.draw(srcTex, fb, face, makeupUniforms(applyPreset('glow'), 1)));
+    metrics.ms_makeup_glow_1080x1920 = t(() => makeup.draw(srcTex, fb, face, makeupUniformsFor(splitLegacy(applyPreset('glow')).person, 1)));
     const mfb = createFramebuffer(gl, 270, 480, gl.R8);
     metrics.ms_mask_270x480 = t(() => mask.draw(mfb, face, 1));
     metrics.reshapeActive_natural = reshapeActive(reshapeUniforms(applyPreset('natural').values, 1));

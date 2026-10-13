@@ -5743,7 +5743,7 @@ Add these imports at the top of `src/engine/passes/reshapeCpu.test.ts` (merge `r
 ```ts
 import { reshapeMapCpuV03 } from './reshapeCpuV03';
 import { reshapeMapCpu, reshapeMapMulti } from './reshapeCpu';
-import { attenuate, boxCentre, capsFor, ovalBox, WHOLE, type TableFace } from './faceCap';
+import { attenuate, boxCentre, capsFor, influenceBox, ovalBox, WHOLE, type TableFace } from './faceCap';
 import type { ReshapeUniforms as RU } from './reshape';
 import { MIN_DET } from '../../body/field';
 import { syntheticPortrait } from '../../body/synthetic';
@@ -5770,20 +5770,37 @@ function placed(cx: number, cy: number, fw: number, yaw = 0): Face {
   return { pts111: iso(face.pts111), ext: iso(face.ext), oval: iso(face.oval), yaw };
 }
 
-function minDet(map: (x: number, y: number) => [number, number], box: [number, number, number, number], n = 41): number {
+/**
+ * Smallest forward-difference det J of `map` (aspect 1) on a square grid of step `h` (UV) covering `box` padded by one
+ * step, each sample mapped once; −∞ on a non-finite value. The fold check of the sweep runs it over every face's
+ * influence box (outside them the map is the identity) with h = 0.02 FW: a fold narrower than about 0.2 FW passed the
+ * old 41-point grid over the whole layout (steps up to 0.24 FW; Task 16 review).
+ */
+function minDetGrid(map: (x: number, y: number) => [number, number], box: readonly [number, number, number, number], h: number): number {
+  const x0 = box[0] - h;
+  const y0 = box[1] - h;
+  const nx = Math.ceil((box[2] + h - x0) / h);
+  const ny = Math.ceil((box[3] + h - y0) / h);
+  let prev: Float64Array | null = null;
   let min = Infinity;
-  const hx = (box[2] - box[0]) / (n - 1);
-  const hy = (box[3] - box[1]) / (n - 1);
-  for (let j = 0; j + 1 < n; j++)
-    for (let i = 0; i + 1 < n; i++) {
-      const x = box[0] + i * hx;
-      const y = box[1] + j * hy;
-      const a = map(x, y);
-      const bx = map(x + hx, y);
-      const by = map(x, y + hy);
-      if (![...a, ...bx, ...by].every(Number.isFinite)) return -Infinity;
-      min = Math.min(min, ((bx[0] - a[0]) / hx) * ((by[1] - a[1]) / hy) - ((bx[1] - a[1]) / hx) * ((by[0] - a[0]) / hy));
+  for (let j = 0; j <= ny; j++) {
+    const row = new Float64Array(2 * (nx + 1));
+    for (let i = 0; i <= nx; i++) {
+      const s = map(x0 + i * h, y0 + j * h);
+      if (!Number.isFinite(s[0]) || !Number.isFinite(s[1])) return -Infinity;
+      row[2 * i] = s[0];
+      row[2 * i + 1] = s[1];
     }
+    if (prev)
+      for (let i = 0; i < nx; i++) {
+        // the cell at (i, j − 1): a = prev[i], +x = prev[i + 1], +y = row[i]
+        const ax = prev[2 * i];
+        const ay = prev[2 * i + 1];
+        const det = ((prev[2 * i + 2] - ax) / h) * ((row[2 * i + 1] - ay) / h) - ((prev[2 * i + 3] - ay) / h) * ((row[2 * i] - ax) / h);
+        min = Math.min(min, det);
+      }
+    prev = row;
+  }
   return min;
 }
 
@@ -5825,7 +5842,20 @@ describe('N-face port (S §4.4)', () => {
         expect(s[1]).toBeCloseTo(ea[1] + eb[1] - y, 12);
       }
   });
-  it('fold and strength sweep: min det J ≥ MIN_DET; eyes / nose / mouth keep ≥ 0.9 at ≥ 1.2 FW', () => {
+  // Strength: the radius-cap trade-off measured at Task 16, ACCEPTED on 2026-10-13 (spec §4.4; the cap is unchanged).
+  // The binding measure is the plan's 8 pts111 landmarks (72, 73, 75, 76 on the eyes, 46, 47 on the nose, 98, 102 on
+  // the mouth): their mean |displacement| with the neighbours over the same face's alone. With 瘦臉 / V臉 / 窄臉 at max the
+  // contour warps carry the mouth about 0.10 FW, more than the cap budget holds 0.33 FW from the box centre at 1.2 FW
+  // spacing (cap 0.6 FW: B = 0.45 · (0.27 − 0.3 · 0.6) ≈ 0.081 FW), so the mean keeps 0.838 at 1.2 FW (the mouth
+  // landmarks 0.61–0.71; the mouth slider and 下巴 alone keep ≥ 0.99), 0.918 at 1.3 and 0.969 at 1.4: ≥ 0.9 from 1.3 FW,
+  // and 1.2 FW is pinned at ≥ 0.8 so the trade cannot get worse unnoticed. (For reference only, not asserted: the mean
+  // over the featurePolys interiors of faceProtect.test.ts, pooled, keeps 0.722 at 1.2 FW, 0.805 at 1.3, 0.875 at 1.4
+  // and 0.932 at 1.5; the mouth polygon alone 0.564 at 1.2.) 下巴 and 額頭 at the chin point pts111[16] and the forehead
+  // point ext[0] with the sweep's combined settings: 額頭 keeps ≥ 0.998 from 1.8 FW (pinned ≥ 0.9 from 2.0 FW); 下巴
+  // keeps 0.708 at 2.0 FW, 0.837 at 2.1 and 0.939 at 2.2 (the contour items carry the chin point about 0.15 FW; the 下巴
+  // slider alone keeps ≥ 0.995 from 1.8 FW): ≥ 0.9 from 2.2 FW, pinned ≥ 0.7 at 2.0–2.1 FW. The fold bound is never
+  // relaxed.
+  it('fold and strength sweep (accepted radius-cap trade-off, S §4.4): min det J ≥ MIN_DET on a 0.02 FW grid; the 8 eye / nose / mouth landmarks keep ≥ 0.9 from 1.3 FW (≥ 0.8 at 1.2 FW, measured 0.838); 額頭 ≥ 0.9 from 2.0 FW; 下巴 ≥ 0.9 from 2.2 FW (≥ 0.7 at 2.0 FW, measured 0.708)', () => {
     const FW = 0.12;
     const oneWay: ParamId[] = ['shape.eyeEnlarge', 'shape.faceSlim', 'shape.faceV', 'shape.faceNarrow', 'shape.noseSlim'];
     const bi: ParamId[] = ['shape.chin', 'shape.forehead', 'shape.mouthSize', 'shape.eyeDistance'];
@@ -5836,7 +5866,19 @@ describe('N-face port (S §4.4)', () => {
       for (const k of [72, 73, 75, 76, 46, 47, 98, 102]) s += Math.hypot(...(map(P[k * 2], P[k * 2 + 1]).map((v, i) => v - P[k * 2 + i]) as [number, number]));
       return s / 8;
     };
+    const moved = (map: (x: number, y: number) => [number, number], x: number, y: number) => {
+      const s = map(x, y);
+      return Math.hypot(s[0] - x, s[1] - y);
+    };
+    // 0.02 FW (0.0024 UV): worst 0.503 (3 faces 1.0 FW apart at 0°). A one-off run at 0.0125 FW (0.0015 UV, the Task 16
+    // review's grid) found 0.478 (2 faces 1.0 FW apart at 0°) but took 2.5× as long (23 s alone, about 48 s in the suite)
+    const FOLD_STEP = 0.02 * FW;
     let worst = Infinity;
+    let worstAt = '';
+    let featureWorst12 = Infinity;
+    let featureWorst13 = Infinity;
+    let chinWorst = Infinity;
+    let foreheadWorst = Infinity;
     for (const u of settings)
       for (const yaw of [0, 0.3])
         for (const deg of [0, 45, 90])
@@ -5847,17 +5889,42 @@ describe('N-face port (S §4.4)', () => {
               const faces = Array.from({ length: count }, (_, i) => placed(0.5 + (i - (count - 1) / 2) * dx, 0.5 + (i - (count - 1) / 2) * dy, FW, yaw));
               const centres = faces.map((f) => boxCentre(ovalBox(f)));
               const caps = capsFor(centres, [], 1);
-              const map = reshapeMapMulti(faces.map((f, i) => tf(f, u, { cap: caps[i] })), 1);
-              const box: [number, number, number, number] = [0.5 - (count * dFW * FW) / 2 - FW, 0.5 - (count * dFW * FW) / 2 - FW, 0.5 + (count * dFW * FW) / 2 + FW, 0.5 + (count * dFW * FW) / 2 + FW];
-              const m = minDet(map, box);
-              worst = Math.min(worst, m);
+              const table = faces.map((f, i) => tf(f, u, { cap: caps[i] }));
+              const map = reshapeMapMulti(table, 1);
+              // the fold check: every face's influence box on the fine grid (outside the boxes the map is the identity)
+              let m = Infinity;
+              for (const t of table) {
+                const box = influenceBox(t, 1);
+                if (box[0] <= box[2]) m = Math.min(m, minDetGrid(map, box, FOLD_STEP));
+              }
+              if (m < worst) {
+                worst = m;
+                worstAt = `${count} faces ${dFW.toFixed(1)} FW ${deg}° yaw ${yaw} end ${settings.indexOf(u)}`;
+              }
               expect(m, `${count} faces ${dFW.toFixed(1)} FW ${deg}° yaw ${yaw}`).toBeGreaterThanOrEqual(MIN_DET);
               if (dFW >= 1.2 - 1e-9) {
                 const alone = reshapeMapMulti([tf(faces[0], u)], 1);
-                expect(featureMean(map, faces[0]) / featureMean(alone, faces[0])).toBeGreaterThanOrEqual(0.9);
+                const kept = featureMean(map, faces[0]) / featureMean(alone, faces[0]);
+                if (dFW >= 1.3 - 1e-9) featureWorst13 = Math.min(featureWorst13, kept);
+                else featureWorst12 = Math.min(featureWorst12, kept);
+                expect(kept, `${count} faces ${dFW.toFixed(1)} FW ${deg}° yaw ${yaw}`).toBeGreaterThanOrEqual(dFW >= 1.3 - 1e-9 ? 0.9 : 0.8);
+                if (dFW >= 2.0 - 1e-9) {
+                  const P = faces[0].pts111;
+                  const E = faces[0].ext;
+                  const chin = moved(map, P[32], P[33]) / moved(alone, P[32], P[33]);
+                  const forehead = moved(map, E[0], E[1]) / moved(alone, E[0], E[1]);
+                  chinWorst = Math.min(chinWorst, chin);
+                  foreheadWorst = Math.min(foreheadWorst, forehead);
+                  expect(forehead, `額頭 ${count} faces ${dFW.toFixed(1)} FW ${deg}° yaw ${yaw}`).toBeGreaterThanOrEqual(0.9);
+                  expect(chin, `下巴 ${count} faces ${dFW.toFixed(1)} FW ${deg}° yaw ${yaw}`).toBeGreaterThanOrEqual(dFW >= 2.2 - 1e-9 ? 0.9 : 0.7);
+                }
               }
             }
-    console.log(`sweep worst min det J ${worst.toFixed(3)}`);
+    console.log(
+      `sweep worst min det J ${worst.toFixed(3)} (${worstAt}; grid step ${FOLD_STEP / FW} FW over each influence box); ` +
+        `the 8 landmarks keep ≥ ${featureWorst12.toFixed(3)} at 1.2 FW, ≥ ${featureWorst13.toFixed(3)} from 1.3 FW; ` +
+        `at ≥ 2.0 FW 下巴 keeps ≥ ${chinWorst.toFixed(3)}, 額頭 ≥ ${foreheadWorst.toFixed(3)}`,
+    );
   }, 180_000);
   it('touching faces (0.3 and 0.5 FW apart) stay finite and fold-free (Review Focus #2)', () => {
     const u = reshapeUniforms(params(['shape.faceSlim', 'shape.faceV', 'shape.eyeEnlarge', 'shape.chin']), 1);
@@ -5865,7 +5932,7 @@ describe('N-face port (S §4.4)', () => {
       const faces = [placed(0.5 - (d * 0.12) / 2, 0.5, 0.12), placed(0.5 + (d * 0.12) / 2, 0.5, 0.12)];
       const caps = capsFor(faces.map((f) => boxCentre(ovalBox(f))), [], 1);
       const map = reshapeMapMulti(faces.map((f, i) => tf(f, u, { cap: caps[i] })), 1);
-      expect(minDet(map, [0.3, 0.3, 0.7, 0.7])).toBeGreaterThanOrEqual(MIN_DET);
+      expect(minDetGrid(map, [0.3, 0.3, 0.7, 0.7], 0.0125 * 0.12)).toBeGreaterThanOrEqual(MIN_DET);
     }
   });
   it('an obstacle (a dropped face) that is the nearest neighbour sets the cap', () => {
@@ -5877,6 +5944,8 @@ describe('N-face port (S §4.4)', () => {
 ```
 
 (`params`, `reshapeUniforms`, `setParam`, `applyPreset`, `face`, `aspect` are already defined/imported at the top of `reshapeCpu.test.ts`.)
+
+> **Strength thresholds accepted (2026-10-13, step-1 follow-up).** The sweep above was first written with ≥ 0.9 at ≥ 1.2 FW for the eyes, nose and mouth and ≥ 0.9 at ≥ 2.0 FW for 下巴. The approved cap measured 0.838 at 1.2 FW (8 landmarks; 瘦臉 / V臉 / 窄臉 at max move the mouth about 0.10 FW against a cap budget of about 0.08 FW there) and 下巴 0.708 at 2.0 FW. The trade-off was accepted and the cap left unchanged: the binding measure is these 8 landmarks, ≥ 0.9 from 1.3 FW (≥ 0.8 at 1.2 FW), 額頭 ≥ 0.9 from 2.0 FW, 下巴 ≥ 0.9 from 2.2 FW (≥ 0.7 at 2.0 FW), as the block above and spec §4.4 now say. The fold check runs on a 0.02 FW grid over every face's influence box (worst 0.503; a one-off 0.0125 FW run found 0.478). The follow-up also added a 7-face case (the face the cap drops is the nearest neighbour of exactly one face and sets only that cap), `capBox` and the `influenceBox` y bounds at aspect 3 and 1/3, and a non-whole protect window (texel 74 = `x, y, 1/w, 1/h`; the CPU port reads a windowed layer as the whole-photo grid it was cut from).
 
 Run: `npx vitest run src/engine/passes/faceCap.test.ts src/engine/passes/reshapeCpu.test.ts`
 Expected: FAIL (missing exports).

@@ -38,8 +38,6 @@ export interface EditorSource {
   historyId: string | null;
   /** the entry's detection cache, trusted as is (openState checked cachedFits); null = none or dropped */
   detect: DetectionCache | null;
-  /** one face detection is owed (a tracker permitting): no cache, a 基本模式 cache, or a dropped one */
-  needsFaceDetect: boolean;
   /** a dropped cache: the old persons' face boxes (rematchByIoU, S §5.3) */
   rematch: Record<PersonId, Rect> | null;
   /** a v1 entry's cached bodies (b0), merged at the first face answer (A13) */

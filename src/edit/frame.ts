@@ -39,7 +39,7 @@ export function buildFrame(
 }
 
 /**
- * One face from v1 params (the camera until Task 25, unit tests, harnesses and e2e pages): the face at `weight`, the
+ * One face from v1 params (the bench, unit tests, harnesses and e2e pages): the face at `weight`, the
  * global skin of the same person faded to 1 − weight (A2), so a fading camera face is v0.3's mask exactly.
  */
 export function legacyFrame(params: BeautyParams, face: Face | null, weight: number, protect: FaceProtect | null = null): StillFrame {

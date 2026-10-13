@@ -109,13 +109,12 @@ export async function exportOnLatest<S, T>(
 // ───────────────────────── 美體 ─────────────────────────
 
 /**
- * What the editor knows about the person in this photo:
- * idle → not asked yet · cache → reading the history entry's cached detection · working → pose model download /
- * graph creation / detection · done → a detection (null = nobody in the photo) · error → retryable failure.
+ * What the editor knows about the bodies in this photo:
+ * idle → not asked yet · working → pose model download / graph creation / detection · done → detected (the bodies are
+ * in the DetectionCache; `det` is what the panel reads, null = nobody) · error → retryable failure.
  */
 export type BodyDet =
   | { phase: 'idle' }
-  | { phase: 'cache' }
   | { phase: 'working' }
   | { phase: 'done'; det: BodyDetection | null }
   | { phase: 'error'; message: string };
@@ -125,12 +124,6 @@ export const BODY_NONE_REASON = BODY_NONE_NOTE;
 export const BODY_LOADING_REASON = BODY_WAIT_REASON;
 
 const BODY_DEFS = paramsInGroup('body');
-
-/** The part of the params the 美體 field depends on (sliders, 背景保護, 增高 band). */
-export function bodyParamsKey(p: BeautyParams): string {
-  const band = p.heightBand;
-  return JSON.stringify([BODY_DEFS.map((d) => p.values[d.id]), p.bodyProtect, band && [band.top, band.bottom, band.amount]]);
-}
 
 /** Some 美體 slider is off neutral: the photo needs a detection to show it (the 增高 band works without one). */
 export function needsBodyMeasure(p: BeautyParams): boolean {
@@ -181,29 +174,6 @@ export function isRecovering(e: unknown): boolean {
 const RECOVER_TRIES = 20;
 const RECOVER_WAIT_MS = 500;
 
-/** A cached detection belongs to this photo when it was taken at the same aspect (normalized coordinates). */
-export function cachedBodyFits(det: BodyDetection | null, width: number, height: number): boolean {
-  if (!det) return true;
-  if (!(width > 0 && height > 0)) return false;
-  return Math.abs(det.width / det.height / (width / height) - 1) < 0.01;
-}
-
-/** Measure the detected person; a measure that throws only disables the detection-driven sliders. */
-export function measureSafe(
-  det: BodyDet,
-  face: Face | null,
-  measure: (d: BodyDetection, f: Face | null) => BodyMeasure,
-  onError: (e: unknown) => void,
-): BodyMeasure | null {
-  if (det.phase !== 'done' || !det.det) return null;
-  try {
-    return measure(det.det, face);
-  } catch (e) {
-    onError(e);
-    return null;
-  }
-}
-
 export const BODY_UNMEASURED_REASON = '無法量測人物輪廓，美體調整暫不可用';
 
 /**
@@ -236,7 +206,6 @@ export function bodyPanelContext(
   switch (det.phase) {
     case 'idle':
       return { status: 'idle', availability: off(BODY_LOADING_REASON), people: 0 };
-    case 'cache':
     case 'working': {
       // the download has started but reported nothing yet → 0 %, so the note says 下載 rather than 偵測
       const progress = tracker.state === 'loading' && tracker.step === 'model' ? (tracker.progress ?? 0) : undefined;
@@ -261,51 +230,6 @@ export function bodyPanelContext(
 
 /** long edge of a draft 美體 field (a drag step's preview): about a quarter of the full field's build cost */
 export const BODY_DRAFT_LONG_EDGE = 128;
-
-/**
- * The 美體 field, rebuilt only when the body subset of the params (sliders / band / 背景保護) or the measure
- * changes: a skin or filter edit reuses it, so the engine does not re-upload it. A drag step asks for a `draft`
- * (built at BODY_DRAFT_LONG_EDGE; the field is in UV units, so any size is a valid preview); the commit / an
- * export asks again without it, which rebuilds the same params at full resolution. A full field also answers a
- * later draft request for the same params.
- */
-export class BodyFieldMemoV1 {
-  private key: string | null = null;
-  private measure: BodyMeasure | null = null;
-  private draft = false;
-  field: BodyField | null = null;
-
-  constructor(
-    private readonly build: (
-      m: BodyMeasure | null,
-      p: BeautyParams,
-      aspect: number,
-      prev?: BodyField | null,
-      longEdge?: number,
-    ) => BodyField | null,
-  ) {}
-
-  /** changed → hand `field` to the session (it may be the same object with a new version). */
-  update(
-    measure: BodyMeasure | null,
-    params: BeautyParams,
-    aspect: number,
-    draft = false,
-  ): { field: BodyField | null; changed: boolean } {
-    const key = `${bodyParamsKey(params)}|${aspect}`;
-    if (key === this.key && measure === this.measure && (draft || !this.draft)) return { field: this.field, changed: false };
-    const before = this.field;
-    const beforeVersion = before?.version;
-    this.field = draft
-      ? this.build(measure, params, aspect, before, BODY_DRAFT_LONG_EDGE)
-      : this.build(measure, params, aspect, before);
-    this.key = key;
-    this.measure = measure;
-    this.draft = draft && this.field !== null;
-    const changed = this.field !== before || this.field?.version !== beforeVersion;
-    return { field: this.field, changed };
-  }
-}
 
 const objIds = new WeakMap<object, number>();
 let objSeq = 0;
@@ -332,7 +256,13 @@ export function bodyInputKey(i: BodyFieldInput): string {
   ]);
 }
 
-/** BodyFieldMemoV1 for the multi-person input: the same draft / full rules, keyed on bodyInputKey */
+/**
+ * The 美體 field, rebuilt only when its input changes (bodyInputKey): a skin or filter edit reuses it, so the engine does
+ * not re-upload it. A drag step asks for a `draft` (built at BODY_DRAFT_LONG_EDGE; the field is in UV units, so any size
+ * is a valid preview); the commit / an export asks again without it, which rebuilds the same input at full resolution.
+ * A full field also answers a later draft request for the same input. The previous field is passed to the build (it may
+ * refill the same buffer: `changed` then reads its version).
+ */
 export class BodyFieldMemo {
   private key: string | null = null;
   private draft = false;
@@ -413,15 +343,6 @@ export const ANY_FIELD = -1;
 /** `stamp` was made from these params and this field generation. */
 export function stampIs(stamp: OutputStamp | null | undefined, key: string, field: number): boolean {
   return !!stamp && stamp.key === key && (stamp.field === ANY_FIELD || stamp.field === field);
-}
-
-/**
- * The detection to cache in the history entry, or undefined when there is nothing (new) to store: not
- * detected yet, failed, or already stored (a cached one read back counts as stored).
- */
-export function bodyToPersist(det: BodyDet, stored: boolean): BodyDetection | null | undefined {
-  if (stored || det.phase !== 'done') return undefined;
-  return det.det;
 }
 
 // ───────────────────────── persons (S §3.3) ─────────────────────────

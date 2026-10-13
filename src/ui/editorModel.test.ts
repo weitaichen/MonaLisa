@@ -5,7 +5,7 @@ import type { BodyMeasure } from '../body/measure';
 import { fakeBodyTracker, makeBodyDetection, makeBodyDetections, makeBodyField, makeFace } from '../app/testFakes';
 import { personInfos } from '../detect/cache';
 import { cacheBody, makeCache } from '../detect/testCaches';
-import { applyPreset, setBodyProtect, setFilter, setHeightBand, setParam } from '../engine/params';
+import { applyPreset, setHeightBand, setParam } from '../engine/params';
 import type { BeautyParams, BodyField, EditState, Face, ParamId, PersonId, RegionStatus, Selection, TrackerState } from '../types';
 import { lensFor, P0_INFO } from '../edit/lens';
 import { editFromLegacy } from '../edit/legacy';
@@ -17,12 +17,8 @@ import {
   BODY_NONE_REASON,
   BODY_UNMEASURED_REASON,
   BodyFieldMemo,
-  BodyFieldMemoV1,
   bodyInputKey,
   bodyPanelContext,
-  bodyParamsKey,
-  bodyToPersist,
-  cachedBodyFits,
   changedPersons,
   detectBody,
   detectSession,
@@ -34,7 +30,6 @@ import {
   MAX_REDETECTS,
   measuredAvailable,
   measurePersons,
-  measureSafe,
   needsBodyMeasure,
   protectRequests,
   rebaseStamp,
@@ -204,16 +199,6 @@ describe('美體 decisions', () => {
   const avail = (m: BodyMeasure | null, id: ParamId): RegionStatus =>
     m ? (id === 'body.legs' ? m.regions.legs : m.regions.torso) : { ok: false, reason: 'no measure' };
 
-  it('bodyParamsKey follows sliders, band and 背景保護, not skin / filter / presets', () => {
-    const k = bodyParamsKey(base);
-    expect(bodyParamsKey(setParam(base, 'skin.smooth', 0.9))).toBe(k);
-    expect(bodyParamsKey(setFilter(base, 'mono'))).toBe(k);
-    expect(bodyParamsKey(applyPreset('glow', 0.3, base))).toBe(k);
-    expect(bodyParamsKey(setParam(base, 'body.waist', 0.4))).not.toBe(k);
-    expect(bodyParamsKey(setBodyProtect(base, false))).not.toBe(k);
-    expect(bodyParamsKey(setHeightBand(base, { top: 0.5, bottom: 0.8, amount: 0.5 }))).not.toBe(k);
-  });
-
   it('needsBodyMeasure: any slider off neutral (美臀 is centre-zero); the band alone needs no detection', () => {
     expect(needsBodyMeasure(base)).toBe(false);
     expect(needsBodyMeasure(setParam(base, 'body.hip', 0.5))).toBe(false);
@@ -228,7 +213,6 @@ describe('美體 decisions', () => {
     expect(shouldDetectBody(idle, { tabOpen: true, entered: true, params: base })).toBe(true);
     const edited = setParam(base, 'body.slim', 0.5);
     expect(shouldDetectBody(idle, { tabOpen: false, entered: false, params: edited })).toBe(true);
-    expect(shouldDetectBody({ phase: 'cache' }, { tabOpen: true, entered: true, params: edited })).toBe(false);
     expect(shouldDetectBody({ phase: 'working' }, { tabOpen: true, entered: true, params: base })).toBe(false);
     // a finished detection (cached or not, person or not) is never repeated
     for (const d of [det, null]) {
@@ -304,28 +288,6 @@ describe('美體 decisions', () => {
     expect(t.detect).not.toHaveBeenCalled();
   });
 
-  it('cachedBodyFits: same aspect only ("no person" always fits)', () => {
-    expect(cachedBodyFits(makeBodyDetection(1, 1536, 2048), 768, 1024)).toBe(true);
-    expect(cachedBodyFits(makeBodyDetection(1, 1536, 2048), 1024, 768)).toBe(false);
-    expect(cachedBodyFits(makeBodyDetection(1, 1536, 2048), 0, 0)).toBe(false);
-    expect(cachedBodyFits(null, 1024, 768)).toBe(true);
-  });
-
-  it('measureSafe: only a person gets a measure; a throwing measure is reported, not fatal', () => {
-    const m = measure();
-    const fn = vi.fn(() => m);
-    const onError = vi.fn();
-    expect(measureSafe({ phase: 'done', det }, null, fn, onError)).toBe(m);
-    expect(fn).toHaveBeenCalledWith(det, null);
-    expect(measureSafe({ phase: 'done', det: null }, null, fn, onError)).toBeNull();
-    expect(measureSafe({ phase: 'working' }, null, fn, onError)).toBeNull();
-    const boom = () => {
-      throw new Error('bad mask');
-    };
-    expect(measureSafe({ phase: 'done', det }, null, boom, onError)).toBeNull();
-    expect(onError).toHaveBeenCalledTimes(1);
-  });
-
   it('bodyPanelContext: loading with the model download progress', () => {
     const c = bodyPanelContext({ phase: 'working' }, { state: 'loading', step: 'model', progress: 0.42 }, null, avail);
     expect(c.status).toBe('loading');
@@ -335,7 +297,6 @@ describe('美體 decisions', () => {
     expect(creating.progress).toBeUndefined();
     const started = bodyPanelContext({ phase: 'working' }, { state: 'loading', step: 'model', progress: null }, null, avail);
     expect(started.progress).toBe(0);
-    expect(bodyPanelContext({ phase: 'cache' }, { state: 'idle' }, null, avail).status).toBe('loading');
     expect(bodyPanelContext({ phase: 'idle' }, { state: 'idle' }, null, avail).status).toBe('idle');
   });
 
@@ -414,63 +375,6 @@ describe('美體 decisions', () => {
     expect(suggestedBand(null)).toBeUndefined();
   });
 
-  it('BodyFieldMemoV1 rebuilds only for body params / measure changes, passing the previous field', () => {
-    let v = 0;
-    const build = vi.fn((_m: BodyMeasure | null, p: BeautyParams, _a: number, prev?: BodyField | null) => {
-      if (!needsBodyMeasure(p) && !p.heightBand) return null;
-      const f = prev ?? makeBodyField(0, 0);
-      f.version = ++v; // refills the same buffer
-      return f;
-    });
-    const memo = new BodyFieldMemoV1(build);
-    const m = measure();
-    expect(memo.update(m, base, 0.75)).toEqual({ field: null, changed: false });
-    expect(build).toHaveBeenCalledTimes(1);
-    expect(memo.update(m, setParam(base, 'skin.whiten', 0.9), 0.75).changed).toBe(false);
-    expect(build).toHaveBeenCalledTimes(1);
-
-    const slim = setParam(base, 'body.slim', 0.6);
-    const a = memo.update(m, slim, 0.75);
-    expect(a.changed).toBe(true);
-    expect(a.field?.version).toBe(1);
-    const b = memo.update(m, setParam(slim, 'body.slim', 0.7), 0.75);
-    expect(b.changed).toBe(true); // same object, new version
-    expect(b.field).toBe(a.field);
-    expect(build.mock.calls[2][3]).toBe(a.field);
-    expect(memo.update(m, setFilter(setParam(slim, 'body.slim', 0.7), 'warm'), 0.75).changed).toBe(false);
-
-    // a new measure (e.g. the face was found on a re-detect: head anchors) rebuilds
-    expect(memo.update(measure(), setParam(slim, 'body.slim', 0.7), 0.75).changed).toBe(true);
-    // back to neutral → no field
-    expect(memo.update(m, base, 0.75)).toEqual({ field: null, changed: true });
-  });
-
-  it('BodyFieldMemoV1: a drag step builds a draft; the commit with the same params rebuilds it at full resolution', () => {
-    const build = vi.fn((_m: BodyMeasure | null, _p: BeautyParams, _a: number, _prev?: BodyField | null, edge?: number) => {
-      const f = makeBodyField(0.01);
-      f.width = edge ?? 256;
-      return f;
-    });
-    const memo = new BodyFieldMemoV1(build);
-    const m = measure();
-    const slim = setParam(base, 'body.slim', 0.6);
-    const draft = memo.update(m, slim, 0.75, true);
-    expect(draft.changed).toBe(true);
-    expect(build.mock.calls[0][4]).toBe(BODY_DRAFT_LONG_EDGE);
-    // the next drag step at the same value: nothing to do
-    expect(memo.update(m, slim, 0.75, true).changed).toBe(false);
-    // the commit (or an export) at the same value: full resolution
-    const full = memo.update(m, slim, 0.75);
-    expect(full.changed).toBe(true);
-    expect(build).toHaveBeenCalledTimes(2);
-    expect(build.mock.calls[1][4]).toBeUndefined();
-    expect(full.field?.width).toBe(256);
-    // a full field answers a later draft request (a pending drag frame after the commit) and a repeated commit
-    expect(memo.update(m, slim, 0.75, true).changed).toBe(false);
-    expect(memo.update(m, slim, 0.75).changed).toBe(false);
-    expect(build).toHaveBeenCalledTimes(2);
-  });
-
   it('FieldDraftGate: only the params change of a drag step takes the draft path', () => {
     const gate = new FieldDraftGate();
     const pending = { phase: 'loading' };
@@ -531,13 +435,6 @@ describe('美體 decisions', () => {
     expect(stampIs(reopened, 'edited', 7)).toBe(false);
   });
 
-  it('bodyToPersist: a fresh detection (person or nobody) once; nothing while unknown or already stored', () => {
-    expect(bodyToPersist({ phase: 'done', det }, false)).toBe(det);
-    expect(bodyToPersist({ phase: 'done', det: null }, false)).toBeNull();
-    expect(bodyToPersist({ phase: 'done', det }, true)).toBeUndefined();
-    expect(bodyToPersist({ phase: 'working' }, false)).toBeUndefined();
-    expect(bodyToPersist({ phase: 'error', message: 'x' }, false)).toBeUndefined();
-  });
 });
 
 describe('BodyFieldMemo (multi-person)', () => {
@@ -550,6 +447,50 @@ describe('BodyFieldMemo (multi-person)', () => {
     expect(memo.update(input(0.5), true).changed).toBe(false);
     expect(memo.update(input(0.6), true).changed).toBe(true);
     expect(build.mock.calls.at(-1)![2]).toBe(BODY_DRAFT_LONG_EDGE);
+  });
+  it('a drag step builds a draft; the commit with the same input rebuilds it at full resolution; then neither rebuilds', () => {
+    const build = vi.fn((_i: BodyFieldInput, _p?: BodyField | null, edge?: number) => {
+      const f = makeBodyField(0.01);
+      f.width = edge ?? 256;
+      return f;
+    });
+    const memo = new BodyFieldMemo(build);
+    const input: BodyFieldInput = { edited: [{ id: 'f0', measure: {} as BodyMeasure, values: { 'body.slim': 0.6 } as never }], masks: [], heightBand: null, legs: { value: 0, measure: null }, bodyProtect: true, aspect: 0.75 };
+    expect(memo.update(input, true).changed).toBe(true);
+    expect(build.mock.calls[0][2]).toBe(BODY_DRAFT_LONG_EDGE);
+    // the next drag step at the same value: nothing to do
+    expect(memo.update(input, true).changed).toBe(false);
+    // the commit (or an export) at the same value: full resolution
+    const full = memo.update(input);
+    expect(full.changed).toBe(true);
+    expect(build).toHaveBeenCalledTimes(2);
+    expect(build.mock.calls[1][2]).toBeUndefined();
+    expect(full.field?.width).toBe(256);
+    // a full field answers a later draft request (a pending drag frame after the commit) and a repeated commit
+    expect(memo.update(input, true).changed).toBe(false);
+    expect(memo.update({ ...input }).changed).toBe(false);
+    expect(build).toHaveBeenCalledTimes(2);
+  });
+  it('the previous field is passed to the build: the same object refilled (a new version) is a change; null → null is not', () => {
+    let v = 0;
+    const build = vi.fn((i: BodyFieldInput, prev?: BodyField | null) => {
+      if (!i.edited.length) return null;
+      const f = prev ?? makeBodyField(0, 0);
+      f.version = ++v; // refills the same buffer
+      return f;
+    });
+    const memo = new BodyFieldMemo(build);
+    const none: BodyFieldInput = { edited: [], masks: [], heightBand: null, legs: { value: 0, measure: null }, bodyProtect: true, aspect: 0.75 };
+    const slim = (x: number): BodyFieldInput => ({ ...none, edited: [{ id: 'f0', measure: {} as BodyMeasure, values: { 'body.slim': x } as never }] });
+    expect(memo.update(none)).toEqual({ field: null, changed: false });
+    const a = memo.update(slim(0.6));
+    expect(a.changed).toBe(true);
+    expect(a.field?.version).toBe(1);
+    const b = memo.update(slim(0.7));
+    expect(b).toMatchObject({ changed: true, field: a.field }); // same object, new version
+    expect(build.mock.calls[2][1]).toBe(a.field);
+    // back to neutral → no field
+    expect(memo.update(none)).toEqual({ field: null, changed: true });
   });
   it('bodyInputKey: equal inputs share a key; a measure, a mask, the band, 長腿 or its anchor, 背景保護 or the aspect change it', () => {
     const m = {} as BodyMeasure;
@@ -591,8 +532,10 @@ describe('persons in the editor model (S §3.3)', () => {
     const boom = (): BodyMeasure => {
       throw new Error('bad mask');
     };
-    const none = measurePersons(cache, () => FACE, boom, () => undefined);
+    const onError = vi.fn();
+    const none = measurePersons(cache, () => FACE, boom, onError);
     expect(none.size).toBe(0);
+    expect(onError).toHaveBeenCalledTimes(2); // reported once per body person, never thrown
     const unmeasured = bodyPanelContext({ phase: 'done', det: makeBodyDetection(2) }, { state: 'ready' }, null, torso);
     for (const sel of [{ kind: 'all' }, { kind: 'person', id: 'f0' }, { kind: 'person', id: 'b1' }] as Selection[]) {
       expect(waist(lens(sel, none), unmeasured), JSON.stringify(sel)).toMatchObject({ disabled: true, reason: BODY_UNMEASURED_REASON });

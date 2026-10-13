@@ -1,5 +1,7 @@
 // Records the v0.3 parity goldens (RM §8.3): tests/e2e/pages/parity.html rendered by headless Chromium with the same
-// SwiftShader flags as the e2e suite, served by a Vite dev server on a free port. Run on 892ea61 only.
+// SwiftShader flags as the e2e suite, served by a Vite dev server on a free port. Run on 892ea61 only (or a commit whose
+// src is identical: face-body.png was recorded on f877881, where the four older goldens re-recorded byte-identical, with
+// the case quoted in tests/e2e/pages/parity.ts added to that commit's page).
 //   node scripts/record-parity.mjs
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

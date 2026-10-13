@@ -14,9 +14,10 @@ import {
   processingSize,
   sharpenTexel,
   skinMaxima,
-  skinUniforms,
   skinUniformsFor,
+  type SkinUniforms,
 } from './uniforms';
+import type { BeautyParams } from '../types';
 
 describe('processingSize', () => {
   it('caps the short edge per tier for a 1080p landscape video', () => {
@@ -99,9 +100,16 @@ describe('sharpen taps', () => {
   });
 });
 
-describe('skinUniforms (RB §5 engine mapping)', () => {
+/** the composite uniforms of one face drawn with `p` (its person and photo parts), as engine/index.ts job() builds them */
+function oneFace(p: BeautyParams, filterAvailable: boolean): SkinUniforms {
+  const { photo, person } = splitLegacy(p);
+  const m = skinMaxima([{ weight: 1, smooth: person.values['skin.smooth'], rosy: person.values['skin.rosy'] }], null);
+  return skinUniformsFor(photo, m.S, m.R, filterAvailable);
+}
+
+describe('skin uniforms of one face (RB §5 engine mapping: skinMaxima → skinUniformsFor)', () => {
   it('maps the 自然 preset', () => {
-    const u = skinUniforms(applyPreset('natural'), true);
+    const u = oneFace(applyPreset('natural'), true);
     expect(u.smooth).toBeCloseTo(0.55, 12);
     expect(u.whiten).toBeCloseTo(0.125, 12); // 0.5·v
     expect(u.sharpen).toBeCloseTo(0.4, 12); // 2·v
@@ -110,21 +118,21 @@ describe('skinUniforms (RB §5 engine mapping)', () => {
   });
 
   it('原圖 is all-zero (identity composite)', () => {
-    const u = skinUniforms(applyPreset('original'), true);
+    const u = oneFace(applyPreset('original'), true);
     expect(u).toEqual({ smooth: 0, sharpen: 0, whiten: 0, rosy: 0, filterAmount: 0 });
     expect(needsMean(u)).toBe(false);
   });
 
   it('applies the filter amount only when the LUT is available', () => {
     const p = setFilter(applyPreset('natural'), 'warm');
-    expect(skinUniforms(p, true).filterAmount).toBeCloseTo(0.5, 12);
-    expect(skinUniforms(p, false).filterAmount).toBe(0);
+    expect(oneFace(p, true).filterAmount).toBeCloseTo(0.5, 12);
+    expect(oneFace(p, false).filterAmount).toBe(0);
   });
 
   it('caps at the documented maxima', () => {
     let p = applyPreset('original');
     for (const id of ['skin.smooth', 'skin.whiten', 'skin.rosy', 'skin.sharpen'] as const) p = setParam(p, id, 1);
-    expect(skinUniforms(p, true)).toMatchObject({ smooth: 1, whiten: 0.5, sharpen: 2, rosy: 0.35 });
+    expect(oneFace(p, true)).toMatchObject({ smooth: 1, whiten: 0.5, sharpen: 2, rosy: 0.35 });
   });
 
   it('needs the mean for smoothing or rosy only', () => {
@@ -156,10 +164,5 @@ describe('skinMaxima (S §4.1 item 2, §4.2 clear)', () => {
     expect(m.S).toBe(0.8);
     expect(m.k[1]).toEqual([0.5, 1]);
     expect(m.k[0][1]).toBe(0);
-  });
-  it('skinUniformsFor = v1 skinUniforms for one person', () => {
-    const p = applyPreset('glow', 1);
-    const { photo } = splitLegacy(p);
-    expect(skinUniformsFor(photo, 0.55, 0.35 * 0.45, true)).toEqual(skinUniforms(p, true));
   });
 });

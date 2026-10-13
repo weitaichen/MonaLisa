@@ -1,6 +1,6 @@
-// Pure engine math: tier sizes, buffer sizes, mean-kernel geometry and the BeautyParams → skin
-// uniform mapping (RB §5 "Engine mapping" column). No GL here, so all of it is unit-tested.
-import type { BeautyParams, PhotoParams, RenderInput, Tier } from '../types';
+// Pure engine math: tier sizes, buffer sizes, mean-kernel geometry and the params → skin uniform mapping (RB §5
+// "Engine mapping" column: skinMaxima, skinUniformsFor). No GL here, so all of it is unit-tested.
+import type { PhotoParams, RenderInput, Tier } from '../types';
 import { fitShortEdge } from './gl/gl';
 
 export interface Size {
@@ -99,17 +99,6 @@ export const ROSY_TINT = '#FFB8C2';
 
 const clamp01 = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
 
-export function skinUniforms(params: BeautyParams, filterAvailable: boolean): SkinUniforms {
-  const v = params.values;
-  return {
-    smooth: clamp01(v['skin.smooth']),
-    sharpen: 2 * clamp01(v['skin.sharpen']),
-    whiten: 0.5 * clamp01(v['skin.whiten']),
-    rosy: ROSY_MAX_OPACITY * clamp01(v['skin.rosy']),
-    filterAmount: filterAvailable && params.filterId !== 'none' ? clamp01(v['filter.amount']) : 0,
-  };
-}
-
 /** Mean buffers are needed for smoothing and for the skin ramp `p` that weights rosy. */
 export function needsMean(u: SkinUniforms): boolean {
   return u.smooth > 0 || u.rosy > 0;
@@ -151,7 +140,7 @@ export function skinMaxima(
   return { S, R, k, clear };
 }
 
-/** composite uniforms from the photo layer and the frame maxima (v1 skinUniforms for one person) */
+/** composite uniforms from the photo layer and the frame maxima (one face: its own 磨皮 / 紅潤, v0.3's mapping) */
 export function skinUniformsFor(photo: PhotoParams, S: number, R: number, filterAvailable: boolean): SkinUniforms {
   const v = photo.values;
   return {

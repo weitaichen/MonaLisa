@@ -50,11 +50,6 @@ export function isContourEdit(key: string, before: number, after: number): boole
   return (CONTOUR_IDS as readonly string[]).includes(key) && before !== after;
 }
 
-/** a contour warp (the only warps the limit acts on) is drawn with these params */
-export function contourActive(p: BeautyParams): boolean {
-  return contourActiveValues(p.values);
-}
-
 /** a contour warp is drawn with these person values */
 export function contourActiveValues(values: Readonly<Record<string, number>>): boolean {
   const u = reshapeUniforms(values as Record<ParamId, number>, 1);
@@ -144,8 +139,6 @@ export interface ProtectRequest {
   /** everything but own / clipToCell */
   others: Omit<ProtectRegions, 'own' | 'clipToCell'>;
 }
-
-const NO_OTHERS: ProtectRequest['others'] = { otherCentres: [], otherOvals: [], otherMasks: [], window: null };
 
 /** a face's built limit and what it was built from */
 interface Entry {
@@ -238,11 +231,6 @@ export class FaceProtectSource {
     return this.asked;
   }
 
-  /** the limit for the (first) face, or null (unlimited): the one-face form */
-  get protect(): FaceProtect | null {
-    return this.entries.values().next().value?.protect ?? null;
-  }
-
   /** where the segmenter stands (tests, debugging) */
   get segPhase(): Seg['phase'] {
     return this.seg.phase;
@@ -322,27 +310,15 @@ export class FaceProtectSource {
   }
 
   /**
-   * One face (v0.3's API; the face is 'f0'): bring its limit up to date and return it (null = unlimited). `bodyMask`:
-   * the cached 美體 detection's mask (null when there is none, or it has none); `requested` as in updateAll.
-   */
-  update(face: Face | null, contour: boolean, bodyMask: PersonMask | null, requested: boolean): FaceProtect | null {
-    if (!face) {
-      if (requested) this.asked = true;
-      return null;
-    }
-    return this.updateAll([{ id: 'f0', face, contour, pose: bodyMask, others: NO_OTHERS }], requested).get('f0') ?? null;
-  }
-
-  /**
-   * What a history write of an output drawn with `drawn` (the session's limit at export time: one, or every face's by
-   * id) records, photo-level: the request, and the segmenter mask a drawn limit was built from, so a reopen rebuilds
-   * it with no model. Requested but not drawn (contour sliders neutral, no face found yet, a segmentation in flight)
+   * What a history write of an output drawn with `drawn` (the session's limits at export time, by face id) records,
+   * photo-level: the request, and the segmenter mask a drawn limit was built from, so a reopen rebuilds it with no
+   * model. Requested but not drawn (contour sliders neutral, no face found yet, a segmentation in flight)
    * still records the request: the limit cannot act yet, and an edit made meanwhile must not drop it for later
    * sessions. Only a limit settled as impossible for this photo (none built, and the segmenter unavailable, failing or
    * finding nobody) records "unlimited".
    */
-  record(drawn: FaceProtect | ReadonlyMap<string, FaceProtect> | null): FaceProtectRecord {
-    const list: FaceProtect[] = !drawn ? [] : 'data' in drawn ? [drawn] : [...drawn.values()];
+  record(drawn: ReadonlyMap<string, FaceProtect> | null): FaceProtectRecord {
+    const list: FaceProtect[] = drawn ? [...drawn.values()] : [];
     const segMask = this.seg.phase === 'done' ? this.seg.mask : null;
     if (list.length) {
       const fromSeg = !!segMask && [...this.entries.values()].some((e) => e.mask === segMask && list.includes(e.protect));

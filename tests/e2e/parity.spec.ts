@@ -7,7 +7,7 @@ import { decodeDataUrl, decodePng, expect, test } from './fixtures';
 const DEV_URL = 'http://127.0.0.1:5190';
 const GOLDEN = resolve(import.meta.dirname, '../fixtures/parity-v03');
 
-test('v0.3 parity: 自然, 精緻 + 美型 max, lip + blush shades, 細腰 + 長腿 + 增高', async ({ page }) => {
+test('v0.3 parity: 自然, 精緻 + 美型 max, lip + blush shades, 細腰 + 長腿 + 增高, one face + its body with 天鵝頸 + 小頭 through the editor path', async ({ page }) => {
   await page.goto(`${DEV_URL}/tests/e2e/pages/parity.html`);
   await page.waitForFunction(() => typeof window.runParity === 'function');
   const r = await page.evaluate(() => window.runParity!());

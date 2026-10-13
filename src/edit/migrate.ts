@@ -1,11 +1,12 @@
 // Reading a stored entry (lazy migration at open, RM §5.2, S §5.3): HistoryEntry → the edit to open with, the cache to
-// trust, and what detection is still owed. Nothing is rewritten in bulk; the first write after an open writes v2.
-// The answer-time half (pairing, the p0 hand-over, A13) is firstAnswer.
-import { aspectFits, boxScore, buildCache, cachedFits, noFaceCache, poseBox, rematchByIoU, scanned0, withFaces } from '../detect/cache';
-import { EMPTY_PREPARED, type PreparedFaces } from '../detect/faces';
+// trust, and what the first face answer merges or rematches (whether a detection runs is the editor's sessionPlan).
+// Nothing is rewritten in bulk; the first write after an open writes v2.
+// The answer-time half (pairing, the p0 hand-over, A13) is firstAnswer; a later 美體 detection's is bodyAnswer.
+import { aspectFits, boxScore, buildCache, cachedFits, noFaceCache, poseBox, rematchByIoU, withBodies, withFaces } from '../detect/cache';
+import { adaptCached, EMPTY_PREPARED, type PreparedFaces } from '../detect/faces';
 import { seedPrimary } from '../detect/persons';
 import { stableKey } from '../store/undo';
-import type { CachedBody, CameraLook, DetectionCache, EditState, FaceSeed, HistoryEntry, PersonId, PersonParams, Rect } from '../types';
+import type { BodyDetections, CachedBody, CameraLook, DetectionCache, EditState, FaceSeed, HistoryEntry, PersonId, PersonParams, Rect } from '../types';
 import { editFromLegacy, splitLegacy } from './legacy';
 import { assignPersons, neutralPerson, P0, renamePersons, sanitizeEditState, withPersons } from './state';
 
@@ -18,8 +19,6 @@ export interface OpenedState {
   edit: EditState;
   /** a cache that fits this photo (used as is), or null */
   detect: DetectionCache | null;
-  /** one face detection is wanted (a tracker permitting): no cache, a 基本模式 cache, or a dropped one */
-  needsFaceDetect: boolean;
   /** a dropped cache: old person id → face box (rematchByIoU) */
   rematch: Record<PersonId, Rect> | null;
   /** v1 body cache to merge at the first face answer; its person is the primary (A13) */
@@ -58,9 +57,9 @@ export function openState(entry: HistoryEntry, size: { width: number; height: nu
     if (d && fits) {
       // defensive: 0.4 always writes `edit` together with `detect`
       const ids = d.persons.map((p) => p.id);
-      return { edit: assignPersons(edit, ids, d.primary), detect: d, needsFaceDetect: !scanned0(d), rematch: null, v1Body: null, cacheDropped: false };
+      return { edit: assignPersons(edit, ids, d.primary), detect: d, rematch: null, v1Body: null, cacheDropped: false };
     }
-    return { edit, detect: null, needsFaceDetect: true, rematch: null, v1Body: v1BodiesOf(entry, size), cacheDropped: false };
+    return { edit, detect: null, rematch: null, v1Body: v1BodiesOf(entry, size), cacheDropped: false };
   }
   let edit = v2Edit;
   if (entry.paramsKey !== undefined && entry.paramsKey !== stableKey(entry.params)) {
@@ -74,16 +73,15 @@ export function openState(entry: HistoryEntry, size: { width: number; height: nu
     return {
       edit: sanitizeEditState(edit, d.persons.map((p) => p.id)),
       detect: d,
-      needsFaceDetect: !scanned0(d),
       rematch: null,
       v1Body: null,
       cacheDropped: entry.detectLost === true,
     };
   }
   if (d || entry.staleBoxes) {
-    return { edit, detect: null, needsFaceDetect: true, rematch: d ? boxesOf(d) : (entry.staleBoxes ?? {}), v1Body: null, cacheDropped: true };
+    return { edit, detect: null, rematch: d ? boxesOf(d) : (entry.staleBoxes ?? {}), v1Body: null, cacheDropped: true };
   }
-  return { edit, detect: null, needsFaceDetect: true, rematch: null, v1Body: v1BodiesOf(entry, size), cacheDropped: false };
+  return { edit, detect: null, rematch: null, v1Body: v1BodiesOf(entry, size), cacheDropped: false };
 }
 
 /** An imported photo starts from the camera look for everyone (RM §3.7, §12 Q2). */
@@ -175,4 +173,22 @@ export function firstAnswer(a: AnswerInput): Answer {
     return assignPersons(out, ids, primary, { discardP0 });
   };
   return { detect: cache, rebase, dropped: a.rematch !== null };
+}
+
+/**
+ * A 美體 detection's answer (S §3.3 item 6, §3.4 P4, §7): the bodies joined to the persons (withBodies), and the mapping
+ * every stored edit goes through (renamePersons for a vanished body's person, then assignPersons, which adds the new
+ * body-only persons from the template). The pairing reads the cache's own faces, adapted at the photo's size: exactly
+ * what a session built from this cache holds (still.ts fromCache), so it needs no session. During an engine recovery
+ * (or before the first session) there is none, and pairing against nothing would split every body off as a body-only
+ * person, for good: person ids are immutable once persisted.
+ */
+export function bodyAnswer(detect: DetectionCache, found: BodyDetections['bodies'], size: { width: number; height: number }): Omit<Answer, 'dropped'> {
+  const faceOf = (id: string) => {
+    const c = detect.faces.find((f) => f.id === id);
+    return c ? adaptCached(c, size.width, size.height) : null;
+  };
+  const r = withBodies(detect, found, faceOf);
+  const ids = r.cache.persons.map((p) => p.id);
+  return { detect: r.cache, rebase: (e) => assignPersons(renamePersons(e, r.renamed), ids, r.cache.primary) };
 }

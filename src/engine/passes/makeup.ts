@@ -10,7 +10,7 @@
 // sequential GPUPixel filters); base sampled by gl_FragCoord from the source texture; optional
 // shade tint through single-channel masks (RB §2.5); v0.4: one mesh per face, each reading the source, fragments
 // without makeup discarded so a later face never erases an earlier face's lip or blush (S §4.3).
-import type { BeautyParams, Face, PersonParams } from '../../types';
+import type { Face, PersonParams } from '../../types';
 import { shadeColor } from '../params';
 import {
   COPY_FS,
@@ -36,18 +36,6 @@ export interface MakeupUniforms {
 }
 
 const clamp01 = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
-
-export function makeupUniforms(params: BeautyParams, faceWeight: number): MakeupUniforms {
-  const w = clamp01(faceWeight);
-  const lipHex = shadeColor('lip', params.lipShade);
-  const blushHex = shadeColor('blush', params.blushShade);
-  return {
-    lip: clamp01(params.values['makeup.lip']) * w,
-    blush: clamp01(params.values['makeup.blush']) * w,
-    lipColor: lipHex ? hexToRgb(lipHex) : null,
-    blushColor: blushHex ? hexToRgb(blushHex) : null,
-  };
-}
 
 /** one person's makeup uniforms at a face weight (S §4.3) */
 export function makeupUniformsFor(person: PersonParams, weight: number): MakeupUniforms {

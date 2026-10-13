@@ -3,12 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { applyPreset, defaultParams, sanitizeParams, setParam } from '../engine/params';
 import { makeBodyDetection } from '../app/testFakes';
 import { prepareFaces } from '../detect/faces';
+import { withBodies } from '../detect/cache';
 import { cacheBody, makeCache } from '../detect/testCaches';
 import { stableKey } from '../store/undo';
-import type { HistoryEntry, Landmarks478 } from '../types';
+import type { Face, HistoryEntry, Landmarks478, Pose33 } from '../types';
 import { editFromLegacy, legacyProjection, splitLegacy } from './legacy';
-import { cameraShotEdit, firstAnswer, importEdit, openState } from './migrate';
+import { bodyAnswer, cameraShotEdit, firstAnswer, importEdit, openState } from './migrate';
 import { assignPersons, naturalPerson, neutralPerson, personFromPreset, withPersons } from './state';
+import { sessionPlan } from '../ui/editorModel';
 
 const SIZE = { width: 2048, height: 1536 };
 const v1 = (over: Partial<HistoryEntry> = {}): HistoryEntry => ({
@@ -34,7 +36,8 @@ describe('openState (S §5.3)', () => {
     expect(Object.keys(o.edit.persons)).toEqual(['p0']);
     expect(o.edit.primaryInit).toEqual(splitLegacy(applyPreset('refined', 1)).person);
     expect(o.edit.template).toEqual(neutralPerson());
-    expect(o).toMatchObject({ detect: null, needsFaceDetect: true, rematch: null, v1Body: null, cacheDropped: false });
+    expect(o).toMatchObject({ detect: null, rematch: null, v1Body: null, cacheDropped: false });
+    expect(sessionPlan(o.detect, true).asks).toBe(true);
     expect(legacyProjection(o.edit, 'p0')).toEqual(applyPreset('refined', 1));
   });
   it('v1 with a body: b0, complete for people = 1 and not for ≥ 2; body null = nobody, complete', () => {
@@ -55,31 +58,32 @@ describe('openState (S §5.3)', () => {
     const o = openState(v1({ detect: makeCache({ primary: 'f1' }) }), SIZE);
     expect(Object.keys(o.edit.persons).sort()).toEqual(['f0', 'f1']);
     expect(o.edit.persons.f1).toEqual(splitLegacy(applyPreset('refined', 1)).person);
-    expect(o.needsFaceDetect).toBe(false);
+    expect(sessionPlan(o.detect, true).asks).toBe(false);
   });
   it('v2 with a fitting cache: used as is, no detector (also at a 1440 decode)', () => {
     const o = openState(v2(), { width: 1440, height: 1080 });
     expect(o.detect).toEqual(makeCache());
-    expect(o.needsFaceDetect).toBe(false);
+    expect(sessionPlan(o.detect, true).asks).toBe(false);
     expect(Object.keys(o.edit.persons).sort()).toEqual(['f0', 'f1']);
   });
   it('v2 with a 基本模式 cache: the cache, plus one detection when a tracker exists', () => {
     const o = openState(v2({ detect: makeCache({ faceScans: [] }) }), SIZE);
     expect(o.detect).not.toBeNull();
-    expect(o.needsFaceDetect).toBe(true);
+    expect(sessionPlan(o.detect, true).asks).toBe(true);
   });
   it('v2 closed before an answer: the stored edit with p0, detection wanted', () => {
     const edit = editFromLegacy(setParam(defaultParams(), 'shape.eyeEnlarge', 0.8), { primaryInit: true });
     const o = openState(v1({ schema: 2, edit, params: legacyProjection(edit, 'p0') }), SIZE);
     expect(o.edit.persons.p0.values['shape.eyeEnlarge']).toBe(0.8);
-    expect(o.needsFaceDetect).toBe(true);
+    expect(sessionPlan(o.detect, true).asks).toBe(true);
   });
   it('v2 whose cache does not fit: dropped, persons kept for the rematch, toast', () => {
     const o = openState(v2(), { width: 1536, height: 2048 });
     expect(o.detect).toBeNull();
     expect(Object.keys(o.edit.persons).sort()).toEqual(['f0', 'f1']);
     expect(o.rematch).toEqual({ f0: makeCache().faces[0].box, f1: makeCache().faces[1].box });
-    expect(o).toMatchObject({ needsFaceDetect: true, cacheDropped: true });
+    expect(o).toMatchObject({ cacheDropped: true });
+    expect(sessionPlan(o.detect, true).asks).toBe(true);
   });
   it('v2 whose cache was corrupt: the stale boxes from normalizeEntry drive the rematch', () => {
     const o = openState(v2({ detect: undefined, staleBoxes: { f0: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } }, detectLost: true }), SIZE);
@@ -211,5 +215,75 @@ describe('firstAnswer (S §3.3 item 4, §5.3 answer-time rows, C2)', () => {
     const merged = firstAnswer({ ...base, detect: basic.detect, prepared: two });
     expect(merged.detect.persons.map((p) => p.id)).toContain('b0');
     expect(merged.detect.faceScans).toEqual([{ quarter: 0, flipH: false }]);
+  });
+});
+
+/** a pose whose face points sit on the face's own landmarks (a perfect pair); poseOnFace of src/detect/cache.test.ts */
+function poseOnFace(face: Face): Pose33 {
+  const P = face.pts111;
+  const points = new Float32Array(33 * 4);
+  const set = (i: number, k: number) => {
+    points[i * 4] = P[k * 2];
+    points[i * 4 + 1] = P[k * 2 + 1];
+    points[i * 4 + 3] = 0.99;
+  };
+  set(0, 46);
+  set(2, 105);
+  set(5, 104);
+  set(9, 90);
+  set(10, 84);
+  for (let i = 11; i < 33; i++) {
+    points[i * 4] = P[46 * 2];
+    points[i * 4 + 1] = P[46 * 2 + 1] + 0.05 + i * 0.01;
+    points[i * 4 + 3] = 0.99;
+  }
+  return { points };
+}
+
+describe('bodyAnswer (S §3.4 P4, §7): a 美體 detection joined to the persons', () => {
+  const size = { width: 1000, height: 1000 };
+  const two = prepareFaces([lmAt(0.3, 0.4, 0.2), lmAt(0.7, 0.4, 0.12)], 1000, 1000);
+  const base = { detect: null, size, v1Body: null, rematch: null, faceSeed: null } as const;
+  it('pairs against the cache’s own faces, so it needs no session (an engine recovery has none, Review Focus #4)', () => {
+    const a = firstAnswer({ ...base, prepared: two });
+    const onF1 = { pose: poseOnFace(two.faces[1].face), mask: null, score: 0.2 };
+    const lone = { pose: cacheBody('x', 0.95).pose, mask: null, score: 0.1 };
+    const b = bodyAnswer(a.detect, [onF1, lone], size);
+    expect(b.detect.persons).toEqual([
+      { id: 'f0', face: 'f0', body: null },
+      { id: 'f1', face: 'f1', body: 'b0' },
+      { id: 'b1', face: null, body: 'b1' },
+    ]);
+    // the answer pairing against the session's faces gives (a session built from the cache adapts the same landmarks)
+    expect(b.detect).toEqual(withBodies(a.detect, [onF1, lone], (id) => two.faces.find((f) => f.id === id)!.face).cache);
+    // what pairing against no session did: f1's own body split off as a body-only person, for good
+    expect(withBodies(a.detect, [onF1, lone], () => null).cache.persons.map((p) => p.id)).toEqual(['f0', 'f1', 'b0', 'b1']);
+    // the rebase: the new body-only person starts from the template, the others keep their params
+    const e = a.rebase(openState(v1(), SIZE).edit);
+    const e2 = b.rebase(e);
+    expect(Object.keys(e2.persons)).toEqual(['f0', 'f1', 'b1']);
+    expect(e2.persons.f0).toEqual(e.persons.f0);
+    expect(e2.persons.f1).toEqual(e.persons.f1);
+    expect(e2.persons.b1).toEqual(e.template);
+  });
+  it('the A13 split re-detected (v1 people ≥ 2, b0 unmatched): b0’s v0.3 美體 values move to the new primary body person', () => {
+    const p = setParam(applyPreset('refined', 1), 'body.waist', 0.7);
+    const first = firstAnswer({ ...base, prepared: two, v1Body: { bodies: [cacheBody('b0', 0.92)], complete: false } });
+    const e = first.rebase(openState(v1({ params: p }), SIZE).edit);
+    expect(first.detect.primary).toBe('f0');
+    expect(e.persons.b0.values['body.waist']).toBe(0.7);
+    // no pose matches b0 any more: one body pairs with f0, two stand alone (the central one scores best)
+    const onF0 = { pose: poseOnFace(two.faces[0].face), mask: null, score: 0.9 };
+    const edge = { pose: cacheBody('x', 0.08).pose, mask: null, score: 0.2 };
+    const central = { pose: cacheBody('x', 0.5).pose, mask: null, score: 0.1 };
+    const b = bodyAnswer(first.detect, [onF0, edge, central], size);
+    expect(b.detect.persons.map((x) => [x.id, x.body])).toEqual([['f0', 'b2'], ['f1', null], ['b1', 'b1'], ['b3', 'b3']]);
+    const e2 = b.rebase(e);
+    expect(Object.keys(e2.persons).sort()).toEqual(['b1', 'b3', 'f0', 'f1']);
+    // v0.3's body edit keeps rendering, on the body v0.3's selectPerson picks now; nobody else's params change
+    expect(e2.persons.b3).toEqual(e.persons.b0);
+    expect(e2.persons.b1).toEqual(e.template);
+    expect(e2.persons.f0).toEqual(e.persons.f0);
+    expect(e2.persons.f0.values['body.waist']).toBe(0);
   });
 });

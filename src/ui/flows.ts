@@ -13,9 +13,9 @@ function maxImportEdge(): number {
   return tier === 'L' ? 1440 : 2048;
 }
 
-/** A new photo's editor source (an import or a camera shot): nothing cached, one detection owed. */
+/** A new photo's editor source (an import or a camera shot): nothing cached (the editor detects once, sessionPlan). */
 export function freshSource(bitmap: ImageBitmap, edit: EditState, returnTo: EditorSource['returnTo'], faceSeed: FaceSeed = null): EditorSource {
-  return { bitmap, edit, historyId: null, detect: null, needsFaceDetect: true, rematch: null, v1Body: null, cacheDropped: false, faceSeed, returnTo };
+  return { bitmap, edit, historyId: null, detect: null, rematch: null, v1Body: null, cacheDropped: false, faceSeed, returnTo };
 }
 
 /** Decode a photo (file or history original) and open it in the editor; an entry goes through openState (S §5.3). */
@@ -27,7 +27,7 @@ export async function openInEditor(blob: Blob, opts: { entry?: HistoryEntry | nu
     let source: EditorSource;
     if (entry) {
       const o = openState(entry, { width: bitmap.width, height: bitmap.height });
-      source = { ...freshSource(bitmap, o.edit, opts.returnTo), historyId: entry.id, detect: o.detect, needsFaceDetect: o.needsFaceDetect, rematch: o.rematch, v1Body: o.v1Body, cacheDropped: o.cacheDropped };
+      source = { ...freshSource(bitmap, o.edit, opts.returnTo), historyId: entry.id, detect: o.detect, rematch: o.rematch, v1Body: o.v1Body, cacheDropped: o.cacheDropped };
       if (entry.faceProtect === true) source.faceProtect = true;
       if (entry.faceMask) source.faceMask = entry.faceMask;
     } else source = freshSource(bitmap, importEdit(app.get().look), opts.returnTo);

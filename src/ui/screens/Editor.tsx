@@ -7,9 +7,9 @@
 // person strip (全部 + one chip per person) and the drawn face boxes show (S §2.1); a chip or a photo tap selects a
 // person (hitPerson, S §2.3), and every panel write goes through the lens of that selection (or 全部).
 // 美體 (body research report §落地設計): the pose model loads the first time the 美體 tab opens; every body joins the
-// persons (withBodies) and is cached in the entry's detection, and the one multi-person displacement field is rebuilt
-// only when the 美體 inputs change (a drag previews a draft field, at most one build per frame; the commit and every
-// export use the full one).
+// persons (bodyAnswer: withBodies, paired against the cache's own faces) and is cached in the entry's detection, and
+// the one multi-person displacement field is rebuilt only when the 美體 inputs change (a drag previews a draft field, at
+// most one build per frame; the commit and every export use the full one).
 // 瘦臉 background limit (faceProtectModel.ts): the face contour warps are bounded by the person mask, the cached 美體
 // one or else the selfie segmenter's, once the limit is requested: the user moved a contour slider in this editor
 // (contourEdited), or the reopened entry was saved with the request (source.faceProtect). Every params write records
@@ -22,7 +22,7 @@ import type { SessionFace, StillSession } from '../../app/still';
 import { forwardY, heightBandStretch } from '../../body/bands';
 import { bodyFieldCacheStats, buildBodyField, fieldBands } from '../../body/field';
 import { measureBody, paramAvailability } from '../../body/measure';
-import { bodyBox, personInfos, withBodies } from '../../detect/cache';
+import { bodyBox, personInfos } from '../../detect/cache';
 import { hitPerson } from '../../detect/persons';
 import { sanitizeParams } from '../../engine/params';
 import { takePersonsHint } from '../../store/settings';
@@ -32,8 +32,8 @@ import type { BodyField, DetectionCache, EditState, Engine, FaceProtect, PersonI
 import { buildFrame } from '../../edit/frame';
 import { lensFor } from '../../edit/lens';
 import { legacyProjection } from '../../edit/legacy';
-import { firstAnswer } from '../../edit/migrate';
-import { assignPersons, editKey, P0, renamePersons } from '../../edit/state';
+import { bodyAnswer, firstAnswer } from '../../edit/migrate';
+import { editKey, P0 } from '../../edit/state';
 import { createWarpGuard } from '../../edit/warpGuard';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
 import { FaceBoxes, type FaceBoxItem } from '../components/FaceBoxes';
@@ -422,7 +422,7 @@ export function Editor({ source }: { source: EditorSource }) {
       try {
         // a fitting cache with an upright answer (the photo's own, or one found before the session a lost engine took
         // with it) is used as is, also without a tracker: cached faces are render inputs (S §3.3 item 3) and a definite
-        // answer, never unsure. Anything else detects once a tracker allows (openState's needsFaceDetect, without reading it)
+        // answer, never unsure. Anything else (no cache, a 基本模式 one, a dropped one) detects once a tracker allows
         const cache = detectRef.current;
         const { useCache, asks } = sessionPlan(cache, !!tracker);
         const { s, unsure } = detectSession(
@@ -621,15 +621,19 @@ export function Editor({ source }: { source: EditorSource }) {
         if (dets === undefined || unmounted.current) return;
         const cache = detectRef.current;
         if (!cache) return;
-        const s = sessionRef.current;
-        const faceOf = (id: string) => s?.faces.find((f) => f.id === id)?.face ?? null;
-        // pairing (P4), the body-only persons appended from the template, p0 handing over in a photo without faces
-        const r = withBodies(cache, dets?.bodies ?? [], faceOf);
-        const ids = r.cache.persons.map((p) => p.id);
-        rebaseOnDetect((e) => assignPersons(renamePersons(e, r.renamed), ids, r.cache.primary), r.cache);
-        setBodyDet({ phase: 'done', det: null });
-        // body-only persons made this a group photo: the strip mounts now, with the notices of a group answer
-        if (cache.persons.length < 2 && ids.length >= 2) showNotices(answerNotices(r.cache, ids.length, takePersonsHint()));
+        try {
+          // pairing (P4) against the cache's own faces (no session needed: an engine recovery has none), the body-only
+          // persons appended from the template, a vanished body's person handing over (p0 in a photo without faces)
+          const a = bodyAnswer(cache, dets?.bodies ?? [], photo);
+          rebaseOnDetect(a.rebase, a.detect);
+          setBodyDet({ phase: 'done', det: null });
+          // body-only persons made this a group photo: the strip mounts now, with the notices of a group answer
+          const n = a.detect.persons.length;
+          if (cache.persons.length < 2 && n >= 2) showNotices(answerNotices(a.detect, n, takePersonsHint()));
+        } catch (e) {
+          // never a spinner forever (or an unhandled rejection): 重試 runs the detection again
+          if (!unmounted.current) setBodyDet({ phase: 'error', message: reportError(e, 'body answer') });
+        }
       },
       (e: unknown) => {
         // a download / startup failure was reported by ensureBodyTracker and has a friendly hint; a failing

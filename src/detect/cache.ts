@@ -231,7 +231,10 @@ export function poseBox(points: Float32Array): Rect {
   return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
 }
 
-/** v0.3's choice among the detected bodies (selectPerson: the first best score) as the v1 shape; until Task 21 */
+/**
+ * v0.3's choice among the detected bodies (selectPerson: the first best score) as the v1 shape: the single-body view of
+ * the bench and the b3 harness
+ */
 export function primaryBody(d: BodyDetections | null): BodyDetection | null {
   if (!d || !d.bodies.length) return null;
   const best = d.bodies.reduce((a, b) => (b.score > a.score ? b : a));
@@ -388,7 +391,22 @@ export function withBodies(
   // nobody known (a no-face photo where 美體 found no body either): p0 stays (S §3.3)
   if (!persons.length) persons.push({ id: 'p0', face: null, body: null });
   const primary = survivors.has(cache.primary) ? cache.primary : primaryOf(persons, cache.faces, bodies);
-  for (const [from, to] of Object.entries(renamed)) if (to === null && from === cache.primary) renamed[from] = primary;
+  // a vanished body-only person's params move on (S §7): the primary's to the new primary; any other's (the A13 split's
+  // b0 beside faces) to the new primary body person, the best-scoring body-only person this detection added (the
+  // body v0.3's selectPerson would edit among them). Never to a person that already holds params: renamePersons keeps
+  // the first claim, so one person's values would silently replace the other's. Nobody left to take them: dropped.
+  const taken = new Set<PersonId>([...survivors, primary]);
+  for (const from of Object.keys(renamed)) {
+    if (from === cache.primary) {
+      renamed[from] = primary;
+      continue;
+    }
+    const fresh = persons.filter((p) => !taken.has(p.id) && p.face === null && p.body !== null);
+    if (!fresh.length) continue;
+    const to = primaryOf(fresh, [], bodies);
+    renamed[from] = to;
+    taken.add(to);
+  }
   return { cache: { ...cache, bodies, bodiesComplete: true, persons, primary }, renamed };
 }
 

@@ -199,6 +199,33 @@ describe('building the cache (S §3.3, §5.3)', () => {
     expect(r2.cache.primary).toBe('b1');
     expect(r2.renamed).toEqual({ b0: 'b1' });
   });
+  it('withBodies: an unmatched body-only old b0 that is not the primary (the A13 split) hands over to the best new body-only person, never to a person holding params (S §7)', () => {
+    const c = buildCache(size, two, null, { faceScans: scans });
+    const faceOf = (id: string) => two.faces.find((f) => f.id === id)!.face;
+    // v0.3 edited the body b0, which paired with no face: its person holds v0.3's local 美體 values; f0 / f1 the face part
+    const split = { ...c, bodies: [cacheBody('b0', 0.92)], bodiesComplete: false, persons: [...c.persons, { id: 'b0', face: null, body: 'b0' }] };
+    // re-detected (people ≥ 2): no pose matches b0 any more; one body pairs with f0, two stand alone
+    const onF0 = { pose: poseOnFace(two.faces[0].face), mask: null, score: 0.9 };
+    const edge = { pose: cacheBody('x', 0.08).pose, mask: null, score: 0.2 };
+    const central = { pose: cacheBody('x', 0.5).pose, mask: null, score: 0.1 };
+    const r = withBodies(split, [onF0, edge, central], faceOf);
+    expect(r.cache.bodies!.map((b) => b.id)).toEqual(['b1', 'b2', 'b3']);
+    expect(r.cache.persons).toEqual([
+      { id: 'f0', face: 'f0', body: 'b2' },
+      { id: 'f1', face: 'f1', body: null },
+      { id: 'b1', face: null, body: 'b1' },
+      { id: 'b3', face: null, body: 'b3' },
+    ]);
+    expect(r.cache.primary).toBe(c.primary);
+    // the new primary body person: selectPerson's score (area × centrality) among the body-only persons this detection
+    // added; f0's body scores no better here, and f0 holds params of its own anyway
+    expect(boxScore(poseBox(central.pose.points))).toBeGreaterThan(boxScore(poseBox(edge.pose.points)));
+    expect(r.renamed).toEqual({ b0: 'b3' });
+    // every new body paired with a face (each such person already holds params): nobody can take b0's values
+    const r2 = withBodies(split, [onF0], faceOf);
+    expect(r2.cache.persons.map((p) => p.id)).toEqual(['f0', 'f1']);
+    expect(r2.renamed).toEqual({ b0: null });
+  });
   it('withBodies keeps body ids within b0…b3 when every new id would be taken by an unmatched old body', () => {
     const old = makeCache({ faces: [], bodies: [cacheBody('b0', 0.9)], bodiesComplete: false, persons: [{ id: 'b0', face: null, body: 'b0' }], primary: 'b0' });
     const found = [0.1, 0.3, 0.5, 0.7].map((x) => ({ pose: cacheBody('x', x).pose, mask: null, score: 0.1 }));

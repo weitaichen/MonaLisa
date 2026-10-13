@@ -5601,7 +5601,7 @@ git commit -m "v0.4 step 2: e2e for 調節 and 質感 in the editor and the came
   - `runAdjustBench(): Promise<AdjustBenchResult>`; `probeGrainHash(): { checked: number; mismatches: number }`; `formatAdjustBench(r: AdjustBenchResult): string`
   - a gate button 「調節效能」 writing into `#adjust-bench` (class `adjust-note`; `data-state` = `running` | `done` | `failed`)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/bench/adjustBench.test.ts`:
 
@@ -5649,12 +5649,12 @@ test('bench.html: 調節效能 — base vs 調節 program, compile time, grain h
 });
 ```
 
-- [ ] **Step 2: Run the unit test to verify it fails**
+- [x] **Step 2: Run the unit test to verify it fails**
 
 Run: `npx vitest run src/bench/adjustBench.test.ts`
 Expected: FAIL — `Failed to resolve import "./adjustBench"`.
 
-- [ ] **Step 3: The bench module**
+- [x] **Step 3: The bench module**
 
 Create `src/bench/adjustBench.ts`:
 
@@ -5826,7 +5826,7 @@ export function formatAdjustBench(r: AdjustBenchResult): string {
 }
 ```
 
-- [ ] **Step 4: The gate button**
+- [x] **Step 4: The gate button**
 
 In `src/bench/main.ts` (CRLF — Edit tool):
 1. Add `import { formatAdjustBench, runAdjustBench } from './adjustBench';` with the other imports.
@@ -5872,12 +5872,12 @@ async function runAdjust(): Promise<void> {
 }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `npx vitest run src/bench/adjustBench.test.ts && npm run typecheck && npm run build && npx playwright test tests/e2e/bench.spec.ts`
 Expected: PASS — step 1's `多臉 section keeps its own classes` test included (`.gate .note` still counts 1); the console shows the row (SwiftShader timings), `顆粒雜湊 4096/4096 一致`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/bench/adjustBench.ts src/bench/adjustBench.test.ts src/bench/main.ts tests/e2e/bench.spec.ts

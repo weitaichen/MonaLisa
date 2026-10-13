@@ -25,3 +25,18 @@ test('bench.html: 多臉 section keeps its own classes (the 美體偵測 / gate-
   await expect(page.locator('.body-bench')).toHaveCount(0);
   await expect(page.locator('.gate .note')).toHaveCount(1);
 });
+
+test('bench.html: 調節效能 — base vs 調節 program, compile time, grain hash bit-exact on the GPU', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto('/bench.html');
+  await page.getByRole('button', { name: '調節效能', exact: true }).click();
+  const out = page.locator('#adjust-bench');
+  await expect(out).toHaveAttribute('data-state', 'done', { timeout: 150_000 });
+  const text = (await out.textContent()) ?? '';
+  console.log(text);
+  expect(text).toContain('顆粒雜湊 4096/4096 一致');
+  expect(text).toMatch(/neutral\s+[\d.]+ ms\n/);
+  expect(text).toMatch(/調節 ×12\s+[\d.]+ ms 調節/);
+  for (const id of ['film', 'ccd', 'flash', 'blue', 'cinema']) expect(text).toMatch(new RegExp(`質感 ${id}\\s+[\\d.]+ ms 調節`));
+  await shot(page, '41-bench-adjust');
+});

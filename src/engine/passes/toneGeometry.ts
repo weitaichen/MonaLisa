@@ -376,24 +376,36 @@ export function toneDrawsR(faces: readonly ToneFaceInput[], aspect: number): Ton
 }
 
 /**
- * Q: R 勻膚 strength · G skin coverage · B 膚色 around TONE_ZERO. Skin (as 磨皮): oval + 8 % fw ring MAX (phase 0), eye and
- * mouth holes MIN (phase 1), channels R and G. 膚色: oval + w_T ring and the same holes, channel B; a warm face draws MAX
- * then MIN holes, a cool face MIN then MAX holes, so a hole pulls toward neutral from either side (phases 2, 3).
+ * Q: R 勻膚 strength · G skin coverage · B 膚色 around TONE_ZERO.
+ * Skin, channels R and G, in mask.ts's order: every face's 8 % fw ring MAX (phase 0); every oval fan overwritten with
+ * its own strength, as a MIN (phase 1) and then a MAX (phase 2) at that constant, so a neighbour's ring never lifts a
+ * neutral face's oval (C §4.1: its skin mask writes 0) and where two fans overlap the stronger face wins; eye and mouth
+ * holes MIN (phase 3). For one face this writes exactly what ring + fan MAX would.
+ * 膚色, channel B: oval + w_T ring and the same holes; a warm face draws MAX then MIN holes, a cool face MIN then MAX
+ * holes, so a hole pulls toward neutral from either side (phases 2, 3; they share those phases with the skin draws,
+ * whose channel masks do not meet theirs).
  */
 export function toneDrawsQ(faces: readonly ToneFaceInput[], aspect: number): ToneDraw[] {
   const out: ToneDraw[] = [];
   const buf = new Float32Array(MASK_MAX_FLOATS);
   const parts = (face: Face, ringIso?: number) => {
-    const [count, base] = buildMaskGeometry(face, aspect, buf, ringIso);
-    return { base: buf.slice(0, base * 3), holes: buf.slice(base * 3, count * 3) };
+    const [count, base, fanEnd] = buildMaskGeometry(face, aspect, buf, ringIso);
+    return {
+      ring: buf.slice(fanEnd * 3, base * 3),
+      fans: buf.slice(0, fanEnd * 3),
+      base: buf.slice(0, base * 3),
+      holes: buf.slice(base * 3, count * 3),
+    };
   };
   for (const { face, values: v, weight, cap } of faces) {
     const w = weight > 0 ? Math.min(1, weight) : 0;
     if (w === 0) continue;
     const skin = parts(face);
     const str: Rgba = [w * v.even, 1, 0, 0];
-    out.push({ phase: 0, blend: 'max', mask: RG, off: NONE4, str, verts: skin.base });
-    out.push({ phase: 1, blend: 'min', mask: RG, off: NONE4, str, verts: skin.holes });
+    out.push({ phase: 0, blend: 'max', mask: RG, off: NONE4, str, verts: skin.ring });
+    out.push({ phase: 1, blend: 'min', mask: RG, off: NONE4, str, verts: skin.fans });
+    out.push({ phase: 2, blend: 'max', mask: RG, off: NONE4, str, verts: skin.fans });
+    out.push({ phase: 3, blend: 'min', mask: RG, off: NONE4, str, verts: skin.holes });
     const s = 2 * (v.warmth - 0.5) * w;
     if (s !== 0) {
       const g = parts(face, warmRingWidth(face, aspect, cap));

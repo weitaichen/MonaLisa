@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { adapt } from '../../tracking/adapter111';
 import type { Face } from '../../types';
 import {
+  centroid,
   crescentGeometry,
   dist,
   earOf,
@@ -15,14 +16,18 @@ import {
   mouthOpen,
   nasolabialGeometry,
   NEUTRAL_TONE,
+  Q_CLEAR,
   resampleChain,
   sideFade,
+  smoothstep,
   teethGate,
   toneDrawsQ,
   toneDrawsR,
   toneValuesOf,
   TONE_ZERO,
   warmRingWidth,
+  type Rgba,
+  type ToneDraw,
   type ToneFaceInput,
   type V2,
 } from './toneGeometry';
@@ -287,6 +292,56 @@ describe('膚色 ring width w_T', () => {
   });
 });
 
+/** the face moved by `dx` (uv) along the image x axis */
+function shiftedFace(f: Face, dx: number): Face {
+  const move = (a: Float32Array) => a.map((v, i) => (i % 2 === 0 ? v + dx : v));
+  return { pts111: move(f.pts111), ext: move(f.ext), oval: move(f.oval), yaw: f.yaw };
+}
+const ovalOf = (f: Face): V2[] => Array.from({ length: f.oval.length / 2 }, (_, i) => iso(f.oval[i * 2], f.oval[i * 2 + 1]));
+function inPolygon(p: V2, poly: readonly V2[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [a, b] = [poly[i], poly[j]];
+    if (a[1] > p[1] !== b[1] > p[1] && p[0] < ((b[0] - a[0]) * (p[1] - a[1])) / (b[1] - a[1]) + a[0]) inside = !inside;
+  }
+  return inside;
+}
+/** iso distance from `p` to the closed polygon's outline */
+function polygonDist(p: V2, poly: readonly V2[]): number {
+  let d = Infinity;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    const ab: V2 = [b[0] - a[0], b[1] - a[1]];
+    const l2 = ab[0] * ab[0] + ab[1] * ab[1];
+    const t = l2 > 0 ? Math.min(1, Math.max(0, ((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]) / l2)) : 0;
+    d = Math.min(d, dist(p, [a[0] + ab[0] * t, a[1] + ab[1] * t]));
+  }
+  return d;
+}
+/**
+ * What a draw list leaves at iso point `p`, from `clear`: every triangle that covers `p` blends its fragment
+ * off + str · smoothstep(0, 1, value) into the masked channels, in ascending phase, then list order (as toneMask.ts).
+ */
+function drawsAt(draws: readonly ToneDraw[], p: V2, clear: Rgba): number[] {
+  const acc = [...clear];
+  const order = draws.map((d, i) => ({ d, i })).sort((a, b) => a.d.phase - b.d.phase || a.i - b.i);
+  for (const { d } of order)
+    for (const t of triangles(d.verts)) {
+      const s = area2(t.a, t.b, t.c);
+      if (Math.abs(s) < 1e-18) continue;
+      const l = [area2(p, t.b, t.c) / s, area2(t.a, p, t.c) / s, area2(t.a, t.b, p) / s];
+      if (l.some((x) => x < -1e-12)) continue;
+      const m = smoothstep(0, 1, l[0] * t.v[0] + l[1] * t.v[1] + l[2] * t.v[2]);
+      for (let ch = 0; ch < 4; ch++) {
+        if (!d.mask[ch]) continue;
+        const out = d.off[ch] + d.str[ch] * m;
+        acc[ch] = d.blend === 'max' ? Math.max(acc[ch], out) : Math.min(acc[ch], out);
+      }
+    }
+  return acc;
+}
+
 describe('R and Q draw lists', () => {
   const one = (values = NEUTRAL_TONE, face = FACE): ToneFaceInput[] => [{ face, values, weight: 1, cap: null }];
 
@@ -295,7 +350,72 @@ describe('R and Q draw lists', () => {
     expect(toneDrawsQ(one(), ASPECT).map((d) => [d.phase, d.blend, d.str[1]])).toEqual([
       [0, 'max', 1],
       [1, 'min', 1],
+      [2, 'max', 1],
+      [3, 'min', 1],
     ]);
+  });
+
+  it("a neighbour's 勻膚 ring never lifts a neutral face's oval (C §4.1: its skin mask writes 0), in either list order", () => {
+    const xs = Array.from({ length: FACE.oval.length / 2 }, (_, i) => FACE.oval[i * 2]);
+    const fw = faceFrame(FACE, ASPECT).fw;
+    const ovalA = ovalOf(FACE);
+    const A: ToneFaceInput = { face: FACE, values: { ...NEUTRAL_TONE, even: 1 }, weight: 1, cap: null };
+    const ringA = toneDrawsQ([A], ASPECT).filter((d) => d.phase === 0); // A's 8 % fw ring alone
+    // B = the face moved by its oval width (the bounding boxes touch; the ovals come within ≈ 0.03 fw), then 0.03 fw further
+    for (const [gap, reach] of [[0, 0.5], [0.03, 0.1]] as const) {
+      const B = shiftedFace(FACE, Math.max(...xs) - Math.min(...xs) + gap * fw);
+      const ovalB = ovalOf(B);
+      const N: ToneFaceInput = { face: B, values: NEUTRAL_TONE, weight: 1, cap: null };
+      const soloB = toneDrawsQ([N], ASPECT);
+      // the points of B's oval within 0.08 fw of A's oval that A's ring lifts (and no hole of B's lowers)
+      const near: V2[] = [];
+      const x0 = Math.min(...ovalB.map((p) => p[0]));
+      for (let x = x0; x <= x0 + 0.08 * fw; x += 0.002 * fw)
+        for (let y = Math.min(...ovalB.map((p) => p[1])); y <= Math.max(...ovalB.map((p) => p[1])); y += 0.002 * fw) {
+          const p: V2 = [x, y];
+          if (!inPolygon(p, ovalB) || polygonDist(p, ovalA) >= 0.08 * fw) continue;
+          if (drawsAt(ringA, p, Q_CLEAR)[0] > 0.02 && drawsAt(soloB, p, Q_CLEAR)[1] === 1) near.push(p);
+        }
+      expect(near.length).toBeGreaterThan(10);
+      expect(Math.max(...near.map((p) => drawsAt(ringA, p, Q_CLEAR)[0]))).toBeGreaterThan(reach);
+      for (const list of [[A, N], [N, A]]) {
+        const draws = toneDrawsQ(list, ASPECT);
+        for (const p of near) {
+          const q = drawsAt(draws, p, Q_CLEAR);
+          expect(q[0]).toBe(0);
+          expect(q[1]).toBe(1);
+        }
+      }
+    }
+  });
+
+  it('inside its own oval a face writes its own 勻膚 strength; where two ovals overlap the stronger face wins', () => {
+    const xs = Array.from({ length: FACE.oval.length / 2 }, (_, i) => FACE.oval[i * 2]);
+    const B = shiftedFace(FACE, 0.5 * (Math.max(...xs) - Math.min(...xs)));
+    const fw = faceFrame(FACE, ASPECT).fw;
+    const mid = centroid(ovalOf(FACE));
+    // a point inside both ovals and 0.15 fw from every eye and lip point of both faces (no hole reaches it)
+    const features = [FACE, B].flatMap((f) => [...Array.from({ length: 12 }, (_, i) => 52 + i), ...Array.from({ length: 20 }, (_, i) => 84 + i)].map((i) => isoPt(f, i, ASPECT)));
+    let both: V2 | null = null;
+    for (let x = mid[0] - fw; x <= mid[0] + 2 * fw && !both; x += 0.01 * fw)
+      for (let y = mid[1] - fw; y <= mid[1] + fw && !both; y += 0.01 * fw) {
+        const p: V2 = [x, y];
+        if (inPolygon(p, ovalOf(FACE)) && inPolygon(p, ovalOf(B)) && Math.min(...features.map((q) => dist(p, q))) > 0.15 * fw) both = p;
+      }
+    if (!both) throw new Error('no point inside both ovals clear of the holes');
+    const A: ToneFaceInput = { face: FACE, values: { ...NEUTRAL_TONE, even: 0.3 }, weight: 1, cap: null };
+    const S: ToneFaceInput = { face: B, values: { ...NEUTRAL_TONE, even: 0.8 }, weight: 1, cap: null };
+    for (const list of [[A, S], [S, A]]) {
+      const draws = toneDrawsQ(list, ASPECT);
+      expect(drawsAt(draws, both, Q_CLEAR)[0]).toBeCloseTo(0.8, 12);
+      expect(drawsAt(draws, both, Q_CLEAR)[1]).toBe(1);
+    }
+    // a lone face: its strength inside, 0 well outside the ring
+    const lone = toneDrawsQ([A], ASPECT);
+    const p = centroid(ovalOf(FACE).slice(0, 4));
+    expect(inPolygon(p, ovalOf(FACE))).toBe(true);
+    expect(drawsAt(lone, p, Q_CLEAR)[0]).toBeCloseTo(0.3, 12);
+    expect(drawsAt(lone, [mid[0] + 2, mid[1]], Q_CLEAR)).toEqual([...Q_CLEAR]);
   });
 
   it('each tool writes only its own R channel, scaled by its gates', () => {

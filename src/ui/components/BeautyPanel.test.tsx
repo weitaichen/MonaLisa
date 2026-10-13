@@ -7,7 +7,9 @@ import { render, type ComponentChild } from 'preact';
 import { act } from 'preact/test-utils';
 import { lensFor, NO_FACE_NOTE, type Lens } from '../../edit/lens';
 import { defaultPhoto, naturalPerson, neutralPerson } from '../../edit/state';
-import type { EditState, LookId, PhotoParams } from '../../types';
+import { IDENTITY_GEOMETRY, rotateLeft, type CropLock } from '../../geometry/view';
+import type { EditState, Geometry, LookId, PhotoParams, Size } from '../../types';
+import type { CropAction } from '../cropPanel';
 import { INITIAL_SELECTION, type PanelSelection } from '../panelModel';
 
 // haptic() is a no-op in node (no HTMLInputElement): spy on it to see which taps buzz
@@ -156,7 +158,11 @@ interface Mounted {
 function mount(
   lens: Lens,
   s: PanelSelection,
-  extra: { faceNote?: string | null; lookFailed?: (id: LookId) => boolean } = {},
+  extra: {
+    faceNote?: string | null;
+    lookFailed?: (id: LookId) => boolean;
+    crop?: { geometry: Geometry; lock: CropLock; oSize: Size; onAction(a: CropAction): void };
+  } = {},
 ): Mounted {
   const root = new FakeElement('div');
   const onSel = vi.fn();
@@ -331,5 +337,62 @@ describe('≥ 2 persons: no per-person strip note on the photo-level tabs (step-
     expect(beauty.find('strip-note')?.text).toBe(NO_FACE_NOTE);
     expect(mount(bodyOnly(), sel({ tab: 'preset', presetPart: 'look' })).strip.find('strip-note')).toBeUndefined();
     expect(mount(bodyOnly(), sel({ tab: 'adjust' })).strip.find('strip-note')).toBeUndefined();
+  });
+});
+
+describe('裁切 (v0.4 step 3, S §2.1)', () => {
+  const O = { width: 1536, height: 2048 };
+  const cropOf = (geometry: Geometry = IDENTITY_GEOMETRY, lock: CropLock = 'free') => ({ geometry, lock, oSize: O, onAction: vi.fn() });
+  const tabs = (root: FakeElement) => root.all().filter((e) => e.attrs.role === 'tab');
+  const tabLabels = (root: FakeElement) => tabs(root).map((e) => e.find('tab-label')!.text);
+  const cropSel = sel({ tab: 'crop' });
+
+  it('the tab is listed only with the crop prop: 8 editor tabs with 裁切 last, the camera keeps 7', () => {
+    expect(tabLabels(mount(lensOf(editOf()), sel({})).root)).toEqual(['一鍵', '美膚', '美型', '美體', '濾鏡', '美妝', '調節']);
+    expect(tabLabels(mount(lensOf(editOf()), sel({}), { crop: cropOf() }).root)).toEqual(['一鍵', '美膚', '美型', '美體', '濾鏡', '美妝', '調節', '裁切']);
+  });
+
+  it('strip: 自由 · 原比例 · 1:1 · 3:4 · 4:3 · 9:16 · 16:9 │ 旋轉 · 翻轉 · 還原; the lock is selected, 還原 dimmed at identity', () => {
+    const { strip } = mount(lensOf(editOf()), cropSel, { crop: cropOf(IDENTITY_GEOMETRY, '1:1') });
+    expect(sequence(strip)).toEqual(['自由', '原比例', '1:1', '3:4', '4:3', '9:16', '16:9', '│', '旋轉', '翻轉', '還原']);
+    expect(button(strip, '1:1').attrs['aria-selected']).toBe('true');
+    expect(button(strip, '自由').attrs['aria-selected']).toBe('false');
+    expect(button(strip, '還原').attrs['aria-disabled']).toBe('true');
+    expect(button(strip, '旋轉').attrs['aria-disabled']).toBeUndefined();
+    const turned = mount(lensOf(editOf()), cropSel, { crop: cropOf(rotateLeft(IDENTITY_GEOMETRY)) }).strip;
+    expect(button(turned, '還原').attrs['aria-disabled']).toBeUndefined();
+  });
+
+  it('icons: 自由 is the dashed free square, a ratio a rectangle of its aspect, 旋轉 / 翻轉 / 還原 their own', () => {
+    const { strip } = mount(lensOf(editOf()), cropSel, { crop: cropOf() });
+    const svg = (label: string) => button(strip, label).find('item-tile')!.elements[0];
+    expect(shape(svg('自由'))).toBe(iconShape('free'));
+    expect(shape(svg('旋轉'))).toBe(iconShape('rotateLeft'));
+    expect(shape(svg('翻轉'))).toBe(iconShape('flipH'));
+    expect(shape(svg('還原'))).toBe(iconShape('reset'));
+    // each is its own drawing, not the fallback
+    for (const name of ['free', 'rotateLeft', 'flipH']) expect(iconShape(name), name).not.toBe(iconShape('none'));
+    const rect = (label: string) => svg(label).elements[0];
+    expect([rect('1:1').attrs.width, rect('1:1').attrs.height]).toEqual(['16', '16']);
+    expect([rect('16:9').attrs.width, rect('16:9').attrs.height]).toEqual(['16', '9']);
+    expect([rect('3:4').attrs.width, rect('3:4').attrs.height]).toEqual(['12', '16']);
+  });
+
+  it('a tap sends its crop action with a haptic (never onEdit / onSel); the dimmed 還原 does nothing', () => {
+    const crop = cropOf();
+    const m = mount(lensOf(editOf()), cropSel, { crop });
+    click(button(m.strip, '1:1'));
+    click(button(m.strip, '旋轉'));
+    click(button(m.strip, '還原'));
+    expect(crop.onAction.mock.calls.map((c) => c[0])).toEqual([{ type: 'ratio', lock: '1:1' }, { type: 'rotate' }]);
+    expect(haptic).toHaveBeenCalledTimes(2);
+    expect(m.onEdit).not.toHaveBeenCalled();
+    expect(m.onSel).not.toHaveBeenCalled();
+  });
+
+  it('the 裁切 tab dot shows while the geometry is not identity', () => {
+    const dot = (g: Geometry) => !!tabs(mount(lensOf(editOf()), sel({}), { crop: cropOf(g) }).root).at(-1)!.find('tab-dot');
+    expect(dot(IDENTITY_GEOMETRY)).toBe(false);
+    expect(dot(rotateLeft(IDENTITY_GEOMETRY))).toBe(true);
   });
 });

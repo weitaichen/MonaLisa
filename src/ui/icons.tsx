@@ -240,6 +240,22 @@ const P: Record<string, JSX.Element> = {
       <circle cx="9" cy="17" r="2" />
     </>
   ),
+  // ── 裁切 (v0.4 step 3; the ratio rectangles are BeautyPanel's RatioIcon) ──
+  rotateLeft: (
+    <>
+      <path d="M7.2 9.6H4.4V6.8" />
+      <path d="M4.6 9.4A8 8 0 1 1 6.3 17" />
+      <rect x="9.6" y="10.2" width="6.4" height="6.4" rx="1" />
+    </>
+  ),
+  flipH: (
+    <>
+      <path d="M12 3.6v16.8" stroke-dasharray="2 2" />
+      <path d="M9.4 6.4 4.2 17.6h5.2Z" />
+      <path d="M14.6 6.4l5.2 11.2h-5.2Z" />
+    </>
+  ),
+  free: <rect x="5" y="5" width="14" height="14" rx="1.5" stroke-dasharray="3 2.4" />,
   // ── 調節 (v0.4 step 2) ──
   brightness: (
     <>

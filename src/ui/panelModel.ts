@@ -3,9 +3,11 @@ import { BLUSH_SHADES, FILTERS, hasValue, LIP_SHADES, MAKEUP_PICK_DEFAULT, neutr
 import { lookDef, LOOKS, lookThumbUrl } from '../engine/looks';
 import { NO_BODY_NOTE, NO_FACE_NOTE, type Lens } from '../edit/lens';
 import { adjustIsNeutral, personOf } from '../edit/state';
+import type { CropLock } from '../geometry/view';
 import type { AdjustId, EditState, HeightBand, LookId, ParamDef, ParamId, PersonId, PersonParamId, PhotoParams, PresetId, RegionStatus } from '../types';
+import type { CropAction } from './cropPanel';
 
-export type TabId = 'preset' | 'skin' | 'shape' | 'body' | 'filter' | 'makeup' | 'adjust';
+export type TabId = 'preset' | 'skin' | 'shape' | 'body' | 'filter' | 'makeup' | 'adjust' | 'crop';
 export type MakeupPart = 'lip' | 'blush';
 /** what the 美體 strip has selected: one of the 10 body sliders, or the manual 增高 tool */
 export type BodySel = ParamId | 'height';
@@ -19,6 +21,9 @@ export const TABS: readonly { id: TabId; label: string }[] = [
   { id: 'makeup', label: '美妝' },
   { id: 'adjust', label: '調節' },
 ];
+
+/** the photo editor's tabs: the shared 7 plus 裁切 (C §2.1; the camera has none, C §2.4) */
+export const EDITOR_TABS: readonly { id: TabId; label: string }[] = [...TABS, { id: 'crop', label: '裁切' }];
 
 export const MAKEUP_PARTS: readonly { id: MakeupPart; label: string }[] = [
   { id: 'lip', label: '口紅' },
@@ -40,6 +45,8 @@ export interface PanelSelection {
   makeupPart: MakeupPart;
   adjust: AdjustId;
   presetPart: PresetPart;
+  /** the 裁切 ratio lock (UI state: derived from the crop on entering the tab and after ↶ ↷, S §2.1) */
+  crop: CropLock;
 }
 
 export const INITIAL_SELECTION: PanelSelection = {
@@ -50,6 +57,7 @@ export const INITIAL_SELECTION: PanelSelection = {
   makeupPart: 'lip',
   adjust: 'adjust.brightness',
   presetPart: 'beauty',
+  crop: 'free',
 };
 
 // ───────────── 美體 context (fed by the screen: Editor detects, Camera is unsupported) ─────────────
@@ -164,12 +172,12 @@ export interface PersonNote {
 }
 
 /**
- * S §2.4: a body-only person on a face tab. 美體 has bodyNoteFor; 濾鏡 is photo-level; 全部 has no person note.
+ * S §2.4: a body-only person on a face tab. 美體 has bodyNoteFor; 濾鏡 / 調節 / 裁切 are photo-level; 全部 has no person note.
  * A photo without a face has none either: the all-skin exception wins on 美膚 / 一鍵, and 美型 / 美妝 show the
  * Editor's photo-level faceNote.
  */
 export function personNote(tab: TabId, lens: Lens): PersonNote | null {
-  if (!multiPerson(lens) || lens.noFace || lens.sel.kind !== 'person' || tab === 'body' || tab === 'filter' || tab === 'adjust') return null;
+  if (!multiPerson(lens) || lens.noFace || lens.sel.kind !== 'person' || tab === 'body' || tab === 'filter' || tab === 'adjust' || tab === 'crop') return null;
   const id = lens.sel.id;
   const me = lens.persons.find((p) => p.id === id);
   if (!me || me.face) return null;
@@ -203,6 +211,8 @@ export function bodyNoteFor(body: BodyContext | undefined, lens: Lens, sel: Pane
 export function photoScoped(sel: PanelSelection, lens: Lens): boolean {
   if (photoTabLabel(sel) !== null) return true;
   if (sel.tab === 'filter') return true;
+  // 裁切 turns, flips and crops the whole photo (S §2.1 "Person strip: dimmed, with the caption 「整張照片」")
+  if (sel.tab === 'crop') return true;
   if (sel.tab === 'skin') return photoLike(lens, sel.skin);
   if (sel.tab === 'body') return sel.body === 'height' || sel.body === 'body.legs';
   return false;
@@ -278,7 +288,9 @@ export type ItemVisual =
   | { kind: 'icon'; icon: string }
   | { kind: 'thumb'; src: string; /** icon under the image (shown when it fails to load); default 'filter' */ fallback?: string }
   /** null colour = 原色 (GPUPixel texture) */
-  | { kind: 'swatch'; color: string | null };
+  | { kind: 'swatch'; color: string | null }
+  /** 裁切: a rectangle of the ratio's pixel aspect (width / height); null = 自由 (the dashed `free` icon) */
+  | { kind: 'ratio'; aspect: number | null };
 
 export type ItemAction =
   | { type: 'reset' }
@@ -292,7 +304,9 @@ export type ItemAction =
   /** 美體: toggle 背景保護 */
   | { type: 'protect' }
   /** 一鍵 › 質感: pick a look, or 無 (null) */
-  | { type: 'look'; id: LookId | null };
+  | { type: 'look'; id: LookId | null }
+  /** 裁切: a ratio, 旋轉, 翻轉 or 還原 (BeautyPanel hands it to the Editor through cropActivate, never to activate) */
+  | { type: 'crop'; crop: CropAction };
 
 export interface PanelItem {
   key: string;
@@ -631,6 +645,9 @@ export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext): P
     }
     case 'adjust':
       return adjustItems((id) => lens.get(id).value, sel);
+    case 'crop':
+      // BeautyPanel draws cropItems (they need the geometry and the O size, which the lens does not carry)
+      return [];
   }
 }
 
@@ -662,6 +679,9 @@ export function activate(item: PanelItem, lens: Lens, sel: PanelSelection, ctx: 
   if (item.disabled) return done(edit, sel, item.reason ?? undefined);
   switch (a.type) {
     case 'custom':
+      return done();
+    case 'crop':
+      // BeautyPanel sends 裁切 items to the Editor (cropActivate), never here
       return done();
     case 'look': {
       const r = lookActivation(a.id, lens.look(), (id) => ctx.lookFailed?.(id) ?? false);
@@ -714,24 +734,42 @@ export function activate(item: PanelItem, lens: Lens, sel: PanelSelection, ctx: 
   }
 }
 
-export interface SliderBinding {
+/** a slider's display scale (default: 0–100, or −50…+50 with snap ±3) */
+export interface SliderScale {
+  min: number;
+  max: number;
+  step: number;
+  /** bidirectional: snap to the centre within ± this many display units */
+  snap: number;
+  suffix: string;
+}
+
+/** what the slider row shows; SliderBinding adds how a value writes the edit */
+export interface SliderView {
   /** changes when the slider targets a different value (resets drag state) */
   key: string;
-  /** the ParamId the slider writes; null for 程度 and 增高 */
-  param: ParamId | null;
   label: string;
   /** aria-label (S §2.4): 「{label}，人物 {n}」 / 「{label}，全部」 / 「{label}，整張照片」; absent → label */
   aria?: string;
   bidirectional: boolean;
   value: number;
-  /** the targets disagree under 全部 (the label adds 各人不同, Task 22) */
-  mixed: boolean;
+  /** the targets disagree under 全部 (the label adds 各人不同) */
+  mixed?: boolean;
   /** recommended-default dot / double-tap target */
   defaultValue: number;
   /** 色溫 / 色調: a coloured track (CSS .track-temperature / .track-tint) */
   track?: 'temperature' | 'tint';
   /** no recommended-default dot (調節: neutral is the default) */
   hideDefault?: boolean;
+  /** absent → 0–100 / −50…+50 (拉直: −45.0°…+45.0°) */
+  scale?: SliderScale;
+}
+
+export interface SliderBinding extends SliderView {
+  /** the ParamId the slider writes; null for 程度 and 增高 */
+  param: ParamId | null;
+  /** the targets disagree under 全部 (the label adds 各人不同, Task 22) */
+  mixed: boolean;
   apply(lens: Lens, v: number): EditState;
 }
 
@@ -804,6 +842,9 @@ export function sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext): 
     }
     case 'adjust':
       return decorate(adjustSlider((id) => lens.get(id).value, sel), lens, true);
+    case 'crop':
+      // 拉直 is bound by the Editor (straightenView: it writes the geometry, not a param)
+      return null;
   }
 }
 
@@ -868,5 +909,8 @@ export function tabHasValue(lens: Lens, tab: TabId, body?: BodyContext): boolean
     case 'shape':
     case 'makeup':
       return lens.groupHasValue(tab);
+    case 'crop':
+      // BeautyPanel dots 裁切 from the geometry (not in the lens)
+      return false;
   }
 }

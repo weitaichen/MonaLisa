@@ -1,13 +1,17 @@
-// BeautyPanel (spec §7.3): tab row 一鍵 · 美膚 · 美型 · 美體 · 濾鏡 · 美妝 · 調節 over a horizontal item strip.
-// The value slider (and the 增高 band overlay) are rendered by the screen (floating in Camera, docked in Editor).
+// BeautyPanel (spec §7.3): tab row 一鍵 · 美膚 · 美型 · 美體 · 濾鏡 · 美妝 · 調節 (the editor adds 裁切, v0.4 step 3) over a
+// horizontal item strip. The value slider (and the 增高 band overlay) are rendered by the screen (floating in Camera,
+// docked in Editor).
 import { Fragment } from 'preact';
 import { useLayoutEffect, useRef } from 'preact/hooks';
 import type { Lens } from '../../edit/lens';
-import type { EditState, LookId } from '../../types';
+import { isIdentity, type CropLock } from '../../geometry/view';
+import type { EditState, Geometry, LookId, Size } from '../../types';
+import { cropItems, type CropAction } from '../cropPanel';
 import { Icon } from '../icons';
 import {
   activate,
   bodyNoteFor,
+  EDITOR_TABS,
   itemsFor,
   leadChip,
   partButtons,
@@ -53,13 +57,15 @@ interface Props {
   lookFailed?: (id: LookId) => boolean;
   /** the tapped look is selected but its LUT failed to load: retry it (step-2 spec §2.2; no edit, no undo step) */
   onRetryLook?(id: LookId): void;
+  /** the editor's 裁切 tab (absent in the camera: the tab is not listed) */
+  crop?: { geometry: Geometry; lock: CropLock; oSize: Size; onAction(a: CropAction): void };
   id?: string;
 }
 
 /** tabs whose effects need a detected face */
 export const FACE_TABS: readonly TabId[] = ['shape', 'makeup'];
 
-export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, body, photoTouched, lookFailed, onRetryLook, id }: Props) {
+export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, body, photoTouched, lookFailed, onRetryLook, crop, id }: Props) {
   const stripRef = useRef<HTMLDivElement>(null);
   const stripKey =
     sel.tab === 'makeup' ? `makeup.${sel.makeupPart}` : sel.tab === 'preset' ? `preset.${sel.presetPart}` : sel.tab;
@@ -77,7 +83,8 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
     }
   }, [stripKey]);
 
-  const items = itemsFor(lens, sel, body);
+  const tabs = crop ? EDITOR_TABS : TABS;
+  const items = sel.tab === 'crop' && crop ? cropItems(crop.geometry, crop.lock, crop.oSize) : itemsFor(lens, sel, body);
   const look = lens.look();
   const parts = partButtons(sel, { makeupOn: (p) => partHasValue(lens, p), look });
   const lead = leadChip(sel, look);
@@ -91,6 +98,13 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
   const bodyOff = body?.status === 'unsupported';
 
   const tapItem = (item: PanelItem) => {
+    // 裁切: the Editor applies it (cropActivate needs the O size; the ratio lock is its UI state)
+    if (item.action.type === 'crop') {
+      if (item.disabled || !crop) return;
+      haptic();
+      crop.onAction(item.action.crop);
+      return;
+    }
     const r = activate(item, lens, sel, { lookFailed });
     const text = tapToast(item, lens, r, photoTouched);
     // a notice keeps its longer stay; the first-touch line alone stays as long as the slider's (toast's default)
@@ -191,7 +205,7 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
           ))}
         </div>
         <div class="tabs" role="tablist">
-          {TABS.map((t) => {
+          {tabs.map((t) => {
             // stays tappable: a remembered selection may already be on it
             const unavailable = t.id === 'body' ? bodyOff : (!!faceNote || personNote(t.id, lens)?.dim === true) && FACE_TABS.includes(t.id);
             const why = t.id === 'body' ? bodyNoteFor(body, lens, sel)?.text : (faceNote ?? personNote(t.id, lens)?.text);
@@ -207,7 +221,9 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
               >
                 <span class="tab-label">
                   {t.label}
-                  {!unavailable && tabHasValue(lens, t.id, body) && <i class="tab-dot" aria-hidden="true" />}
+                  {!unavailable && (t.id === 'crop' ? !!crop && !isIdentity(crop.geometry) : tabHasValue(lens, t.id, body)) && (
+                    <i class="tab-dot" aria-hidden="true" />
+                  )}
                 </span>
               </button>
             );
@@ -258,7 +274,20 @@ function ItemVisual({ item }: { item: PanelItem }) {
   if (v.kind === 'thumb') return <Thumb src={v.src} fallback={v.fallback ?? 'filter'} />;
   if (v.kind === 'swatch')
     return <span class={`swatch${v.color ? '' : ' orig'}`} style={v.color ? { background: v.color } : undefined} />;
+  if (v.kind === 'ratio') return <RatioIcon aspect={v.aspect} />;
   return <Icon name={v.icon} />;
+}
+
+/** a rectangle drawn with the ratio's aspect; 自由 is the dashed-square `free` icon */
+function RatioIcon({ aspect }: { aspect: number | null }) {
+  if (aspect === null) return <Icon name="free" />;
+  const w = aspect >= 1 ? 16 : 16 * aspect;
+  const h = aspect >= 1 ? 16 / aspect : 16;
+  return (
+    <svg class="icon" width={24} height={24} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width={1.75} aria-hidden="true" focusable="false">
+      <rect x={12 - w / 2} y={12 - h / 2} width={w} height={h} rx={1.5} />
+    </svg>
+  );
 }
 
 /** Thumbnail over an icon (the filter icon, or the look icon), so a missing PNG degrades to the icon instead of a hole. */

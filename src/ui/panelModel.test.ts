@@ -29,6 +29,7 @@ import {
   bodyNoteFor,
   CAMERA_BODY,
   DEFAULT_BAND,
+  EDITOR_TABS,
   INITIAL_SELECTION,
   itemsFor,
   legsAnchorNote,
@@ -605,6 +606,10 @@ describe('persons in the panel (S §2.4, A9, A11)', () => {
     expect(photoScoped(bodySel('body.legs'), l)).toBe(true);
     expect(photoScoped(bodySel('body.waist'), l)).toBe(false);
   });
+  it('裁切 is photo-level with ≥ 2 persons: the chips dim, and a body-only person gets no person note (S §2.1)', () => {
+    expect(photoScoped(sel({ tab: 'crop' }), one('f1'))).toBe(true);
+    expect(personNote('crop', one('b1'))).toBeNull();
+  });
   it('A11 in a photo without a face: 磨皮 / 紅潤 act on all skin whoever is selected (「整張照片」), so the chips dim there too', () => {
     const bodies: PersonInfo[] = [
       { id: 'b0', face: false, body: true },
@@ -689,5 +694,21 @@ describe('persons in the panel (S §2.4, A9, A11)', () => {
     expect(waist(ALL)).toBe(true);
     expect(waist({ kind: 'person', id: 'f0' })).toBe(false);
     expect(waist({ kind: 'person', id: 'b1' })).toBe(true);
+  });
+});
+
+describe('裁切 tab (v0.4 step 3)', () => {
+  it('裁切 is the 8th editor tab; the shared (camera) tab list keeps 7; its selection starts at 自由', () => {
+    expect(EDITOR_TABS.map((t) => t.label).at(-1)).toBe('裁切');
+    expect(EDITOR_TABS).toHaveLength(8);
+    expect(EDITOR_TABS.slice(0, -1)).toEqual(TABS);
+    expect(TABS.some((t) => t.id === 'crop')).toBe(false);
+    expect(INITIAL_SELECTION.crop).toBe('free');
+  });
+
+  it('裁切 is photo-level: the person strip dims with 整張照片, no person note (S §2.1, C §2.2)', () => {
+    const l = lensOf(defaultParams());
+    expect(photoScoped(sel({ tab: 'crop' }), l)).toBe(true);
+    expect(personNote('crop', l)).toBeNull();
   });
 });

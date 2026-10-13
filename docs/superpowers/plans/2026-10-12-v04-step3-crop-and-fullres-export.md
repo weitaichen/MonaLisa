@@ -4685,7 +4685,7 @@ EOF
 - Produces (`Slider.tsx`): `displayOf(bi, v, scale?)`, `formatDisplay(bi, v, scale?)`, `dragValue(bi, startV, dx, width, scale?)` (no scale = today's exact output); `SliderRow` takes `binding: SliderView | null` and honours `scale`.
 - Produces (`BeautyPanel`): prop `crop?: { geometry: Geometry; lock: CropLock; oSize: Size; onAction(a: CropAction): void }` — without it the 裁切 tab is not listed (the camera keeps 7 tabs). Icons `rotateLeft`, `flipH`, `free` (S §3.8 names; the parametric `ratio` icon is BeautyPanel's `RatioIcon`, which draws 自由 with `free`).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/ui/cropPanel.test.ts`:
 
@@ -4823,12 +4823,12 @@ it('裁切 is photo-level: the person strip dims with 整張照片, no person no
 });
 ```
 
-- [ ] **Step 2: Run the tests to see them fail**
+- [x] **Step 2: Run the tests to see them fail**
 
 Run: `npx vitest run src/ui/cropPanel.test.ts src/ui/ui.test.ts src/ui/panelModel.test.ts`
 Expected: FAIL — `Failed to resolve import "./cropPanel"`; `EDITOR_TABS` is not exported.
 
-- [ ] **Step 3: Slider scale**
+- [x] **Step 3: Slider scale**
 
 In `src/ui/panelModel.ts` (CRLF) add before `SliderBinding` and make `SliderBinding` extend it:
 
@@ -4921,7 +4921,7 @@ In `SliderRow` (`Slider.tsx:51-196`): `const sc = binding.scale;` (after `const 
         }}
 ```
 
-- [ ] **Step 4: Panel model and `cropPanel.ts`**
+- [x] **Step 4: Panel model and `cropPanel.ts`**
 
 `src/ui/panelModel.ts`: `TabId` (`:8`) gains `| 'crop'`; `TABS` (`:13-21`) is unchanged and, after it,
 
@@ -5028,7 +5028,7 @@ export class StraightenGesture {
 }
 ```
 
-- [ ] **Step 5: BeautyPanel and icons**
+- [x] **Step 5: BeautyPanel and icons**
 
 `src/ui/components/BeautyPanel.tsx` (CRLF): import `cropItems, type CropAction` from `../cropPanel`, `isIdentity, type CropLock` from `../../geometry/view`, types `Geometry`, `Size` (joining the `EditState, LookId` type import, `:6`). Props (`interface Props`, `:30-57`; destructured at `:62`) gain:
 
@@ -5090,12 +5090,12 @@ function RatioIcon({ aspect }: { aspect: number | null }) {
   free: <rect x="5" y="5" width="14" height="14" rx="1.5" stroke-dasharray="3 2.4" />,
 ```
 
-- [ ] **Step 6: Run the tests to see them pass**
+- [x] **Step 6: Run the tests to see them pass**
 
 Run: `npx vitest run src/ui/`
 Expected: PASS (existing slider tests in `ui.test.ts` unchanged).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/ui/cropPanel.ts src/ui/cropPanel.test.ts src/ui/panelModel.ts src/ui/panelModel.test.ts src/ui/components/Slider.tsx src/ui/components/BeautyPanel.tsx src/ui/icons.tsx src/ui/ui.test.ts

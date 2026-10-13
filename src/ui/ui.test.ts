@@ -24,6 +24,23 @@ describe('slider maths', () => {
   });
 });
 
+describe('slider scale (拉直)', () => {
+  const deg = { min: -45, max: 45, step: 0.1, snap: 0.5, suffix: '°' };
+  it('display and text use the scale; no scale keeps today\'s output', () => {
+    expect(formatDisplay(true, (3.5 + 45) / 90, deg)).toBe('+3.5°');
+    expect(formatDisplay(true, (-12 + 45) / 90, deg)).toBe('−12.0°');
+    expect(formatDisplay(true, 0.5, deg)).toBe('0°');
+    expect(formatDisplay(true, 0.62)).toBe('+12');
+  });
+  it('drags quantize to the step and snap to 0 within ±0.5°', () => {
+    expect(dragValue(true, 0.5, 1, 900, deg)).toEqual({ v: 0.5, snapped: true });
+    const r = dragValue(true, 0.5, 10, 900, deg);
+    expect(r.snapped).toBe(false);
+    expect(Math.round((r.v * 90 - 45) * 10) / 10).toBe(1);
+    expect(dragValue(false, 0.5, 100, 200)).toEqual({ v: 1, snapped: false });
+  });
+});
+
 describe('capture crop', () => {
   it('centre crop to 3:4 / 1:1 / 9:16', () => {
     expect(centerCropRect(1920, 1080, 3 / 4)).toEqual({ x: 555, y: 0, width: 810, height: 1080 });

@@ -4,7 +4,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { render } from 'preact';
 import { act } from 'preact/test-utils';
-import type { SliderBinding } from '../panelModel';
+import type { SliderBinding, SliderView } from '../panelModel';
 import { SliderRow } from './Slider';
 
 class FakeNode {
@@ -76,8 +76,13 @@ class FakeElement extends FakeNode {
   getAttribute(k: string) {
     return this.attrs[k] ?? null;
   }
-  addEventListener() {}
-  removeEventListener() {}
+  listeners: Record<string, (e: unknown) => unknown> = {};
+  addEventListener(type: string, fn: (e: unknown) => unknown) {
+    this.listeners[type.toLowerCase()] = fn;
+  }
+  removeEventListener(type: string) {
+    delete this.listeners[type.toLowerCase()];
+  }
   all(): FakeElement[] {
     return [this, ...this.childNodes.flatMap((c) => (c instanceof FakeElement ? c.all() : []))];
   }
@@ -165,5 +170,50 @@ describe('SliderRow tints and the default dot (step-2 spec §2.1)', () => {
     expect(mount(eye()).find('slider-def')).toBeDefined();
     // bidirectional sliders keep the centre tick, hideDefault or not
     expect(mount(eye({ bidirectional: true, value: 0.5, defaultValue: 0.5, hideDefault: true })).find('slider-tick')).toBeDefined();
+  });
+});
+
+describe('SliderRow with a display scale (拉直, v0.4 step 3, S §2.1)', () => {
+  const deg = { min: -45, max: 45, step: 0.1, snap: 0.5, suffix: '°' };
+  const straighten = (value: number): SliderView => ({ key: 'crop.straighten', label: '拉直', bidirectional: true, value, defaultValue: 0.5, scale: deg });
+  const sliderOf = (root: FakeElement) => root.all().find((e) => e.attrs.role === 'slider')!;
+
+  it('the aria range, value and text read degrees', () => {
+    const root = new FakeElement('div');
+    act(() => {
+      render(<SliderRow binding={straighten((3.5 + 45) / 90)} onChange={() => undefined} onCommit={() => undefined} />, root as unknown as Element);
+    });
+    const slider = sliderOf(root);
+    expect([slider.attrs['aria-valuemin'], slider.attrs['aria-valuemax'], slider.attrs['aria-valuenow'], slider.attrs['aria-valuetext']]).toEqual([
+      '-45',
+      '45',
+      '3.5',
+      '+3.5°',
+    ]);
+    expect(root.find('slider-value')?.text).toBe('+3.5°');
+    // no scale: today's −50…+50
+    const plain = mount(eye({ bidirectional: true, value: 0.62, defaultValue: 0.5 }));
+    expect([sliderOf(plain).attrs['aria-valuemin'], sliderOf(plain).attrs['aria-valuemax'], sliderOf(plain).attrs['aria-valuenow']]).toEqual(['-50', '50', '12']);
+  });
+
+  it('an arrow key moves one 0.1° step (without a scale: 0.01)', () => {
+    const press = (binding: SliderView, keys: string[]) => {
+      const changes: number[] = [];
+      const commits: number[] = [];
+      const root = new FakeElement('div');
+      act(() => {
+        render(<SliderRow binding={binding} onChange={(v) => changes.push(v)} onCommit={(v) => commits.push(v)} />, root as unknown as Element);
+      });
+      for (const k of keys) {
+        act(() => {
+          const el = sliderOf(root);
+          el.listeners.keydown.call(el, { type: 'keydown', key: k, preventDefault() {} });
+        });
+      }
+      expect(commits).toEqual(changes);
+      return changes;
+    };
+    expect(press(straighten(0.5), ['ArrowRight', 'ArrowLeft']).map((v) => Math.round((v * 90 - 45) * 10) / 10)).toEqual([0.1, -0.1]);
+    expect(press(eye(), ['ArrowRight', 'ArrowDown'])).toEqual([0.21, 0.19]);
   });
 });

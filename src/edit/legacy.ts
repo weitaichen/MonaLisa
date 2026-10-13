@@ -1,6 +1,7 @@
 // v1 (BeautyParams, the 0.3 storage shape) ↔ v2 (EditState), RM §3.2 / §5. BeautyParams stays the shape of history v1
 // records and meiyan.params.v1, and of the legacy projection 0.4 keeps writing so a rollback to 0.3 still opens 0.4
 // entries with the primary person's look. New code never takes BeautyParams.
+import { neutralValue, paramsInGroup } from '../engine/params';
 import { IDENTITY_GEOMETRY } from '../geometry/view';
 import type { BeautyParams, EditState, ParamId, PersonId, PersonParamId, PersonParams, PhotoParamId, PhotoParams } from '../types';
 import { neutralPerson, P0, PERSON_IDS, PHOTO_IDS } from './state';
@@ -17,6 +18,9 @@ export function splitLegacy(p: BeautyParams): { photo: PhotoParams; person: Pers
   };
 }
 
+/** the 0.3 view carries no 膚質 edit (skin-cleanup spec §5 rollback): the six tone.* values, neutral */
+const TONE_NEUTRAL = Object.fromEntries(paramsInGroup('tone').map((d) => [d.id, neutralValue(d)]));
+
 /**
  * The 0.3 view of an edit: the photo plus one person (`primary`, else primaryInit, else the template). presetId stands
  * only while the person's preset and the photo's preset link agree; otherwise 'custom' with 程度 1 (dead data in 0.3).
@@ -27,7 +31,7 @@ export function legacyProjection(edit: EditState, primary: PersonId): BeautyPara
   const link = edit.photo.presetLink;
   const linked = ref !== 'custom' && link !== null && link.id === ref.id && link.amount === ref.amount;
   return {
-    values: { ...edit.photo.values, ...person.values } as Record<ParamId, number>,
+    values: { ...edit.photo.values, ...person.values, ...TONE_NEUTRAL } as Record<ParamId, number>,
     filterId: edit.photo.filterId,
     lipShade: person.shades.lip,
     blushShade: person.shades.blush,

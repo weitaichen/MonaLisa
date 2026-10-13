@@ -4,6 +4,7 @@ import type { BeautyParams, EditState } from '../types';
 import { editFromLegacy, legacyProjection, splitLegacy } from './legacy';
 import { LIVE_PERSONS, lensFor, NO_BODY_NOTE, NO_FACE_NOTE, P0_INFO, type PersonInfo } from './lens';
 import { assignPersons, cameraEdit, defaultPhoto, LIVE, lookOf, naturalPerson, neutralPerson, personFromPreset } from './state';
+import { TONE_COPY } from './toneCopy';
 
 const three: PersonInfo[] = [
   { id: 'f0', face: true, body: true },
@@ -158,5 +159,58 @@ describe('the camera lens: one person, live (RM §3.7)', () => {
     expect(e.photo).toBe(look.photo);
     expect(lookOf(l.set('skin.whiten', 1)).photo.values['skin.whiten']).toBe(1);
     expect(l.set('body.legs', 0.5).photo.legsAnchor).toBeNull();
+  });
+});
+
+describe('step 4 tone items (skin-cleanup spec §3.1, §3.6)', () => {
+  const persons = [
+    { id: 'f0', face: true, body: false },
+    { id: 'b0', face: false, body: true },
+  ];
+  const base = () => ({
+    v: 2 as const,
+    photo: { ...defaultPhoto(), spots: [{ x: 0.3, y: 0.3, r: 0.02, dx: 0, dy: 0, owner: 'f0' }] },
+    persons: { f0: neutralPerson(), b0: neutralPerson() },
+    template: neutralPerson(),
+    primaryInit: null,
+  });
+
+  it('a tone edit writes the selected person, marks it 自訂 and never touches presetLink', () => {
+    const e0 = base();
+    const e1 = lensFor(e0, { kind: 'person', id: 'f0' }, persons, 'f0').set('tone.even', 0.6);
+    expect(e1.persons.f0.values['tone.even']).toBe(0.6);
+    expect(e1.persons.f0.preset).toBe('custom');
+    expect(e1.photo.presetLink).toEqual(e0.photo.presetLink);
+  });
+
+  it('a person without a face refuses; under 全部 only face persons are written', () => {
+    const lens = lensFor(base(), { kind: 'person', id: 'b0' }, persons, 'f0');
+    expect(lens.applies('tone.darkCircle').ok).toBe(false);
+    const all = lensFor(base(), { kind: 'all' }, persons, 'f0').set('tone.darkCircle', 0.8);
+    expect(all.persons.f0.values['tone.darkCircle']).toBe(0.8);
+    expect(all.persons.b0.values['tone.darkCircle']).toBe(0);
+  });
+
+  it('a photo without any face refuses every tone item with 未偵測到臉部，膚質工具不會套用; 磨皮 keeps its all-skin exception', () => {
+    const e = { ...base(), persons: { p0: neutralPerson() } };
+    const lens = lensFor(e, { kind: 'person', id: 'p0' }, [{ id: 'p0', face: false, body: false }], 'p0');
+    for (const id of ['tone.even', 'tone.warmth', 'tone.darkCircle', 'tone.nasolabial', 'tone.teeth', 'tone.eyeBright'] as const) {
+      expect(lens.applies(id)).toEqual({ ok: false, reason: TONE_COPY.noFace });
+    }
+    expect(lens.applies('skin.smooth').ok).toBe(true);
+  });
+
+  it('a beauty preset resets the tone items to neutral (§12 #31)', () => {
+    const lens0 = lensFor(base(), { kind: 'person', id: 'f0' }, persons, 'f0');
+    const e1 = lens0.set('tone.warmth', 0.9);
+    const e2 = lensFor(e1, { kind: 'person', id: 'f0' }, persons, 'f0').applyPreset('natural', 1);
+    expect(e2.persons.f0.values['tone.warmth']).toBe(0.5);
+  });
+
+  it('⊘ of the 美膚 strip resets the tone items too, and keeps the spots', () => {
+    const e1 = lensFor(base(), { kind: 'person', id: 'f0' }, persons, 'f0').set('tone.teeth', 0.7);
+    const e2 = lensFor(e1, { kind: 'person', id: 'f0' }, persons, 'f0').resetGroup('skin');
+    expect(e2.persons.f0.values['tone.teeth']).toBe(0);
+    expect(e2.photo.spots).toEqual(e1.photo.spots);
   });
 });

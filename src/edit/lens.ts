@@ -5,6 +5,7 @@ import type {
   EditState,
   HeightBand,
   LookId,
+  ParamDef,
   ParamGroup,
   ParamId,
   PersonId,
@@ -17,6 +18,7 @@ import type {
   ShadePart,
 } from '../types';
 import { personOf, PRESET_PERSON_IDS, PRESET_PHOTO_IDS, resetAdjust, resetAll, setLook as setPhotoLook, withPersons, withPhoto } from './state';
+import { TONE_COPY } from './toneCopy';
 
 export const NO_FACE_NOTE = '這位人物未偵測到臉部，臉部效果不適用';
 export const NO_BODY_NOTE = '這位人物未偵測到身體，僅能使用增高、長腿';
@@ -80,6 +82,10 @@ const LINK_BREAKERS: ReadonlySet<ParamId> = new Set<ParamId>(['skin.whiten', 'sk
 const makeupKey = (part: ShadePart): PV => (part === 'lip' ? 'makeup.lip' : 'makeup.blush');
 /** presets match by id: 程度 differences do not make 全部 "mixed" for the strip (S §2.4) */
 const sameRef = (a: PresetRef | 'custom', b: PresetRef | 'custom') => (a === 'custom' ? b === 'custom' : b !== 'custom' && a.id === b.id);
+/** the defs a strip's ⊘, its no-op check and its dot cover: 美膚 also covers the six 膚質 items (skin-cleanup spec §2.1) */
+function stripDefs(group: ParamGroup): ParamDef[] {
+  return group === 'skin' ? [...paramsInGroup('skin'), ...paramsInGroup('tone')] : paramsInGroup(group);
+}
 
 export function lensFor(edit: EditState, sel: Selection, persons: readonly PersonInfo[], primary: PersonId, opts: LensOptions = {}): Lens {
   const info = new Map(persons.map((p) => [p.id, p]));
@@ -150,7 +156,7 @@ export function lensFor(edit: EditState, sel: Selection, persons: readonly Perso
     },
     applies(id) {
       if (isPhoto(id) || targets(id).length) return OK;
-      if (!isBody(id) && noFace) return no(NO_FACE_PHOTO_NOTE);
+      if (!isBody(id) && noFace) return no(paramDef(id).group === 'tone' ? TONE_COPY.noFace : NO_FACE_PHOTO_NOTE);
       if (selected && isBody(id) && selected.body) return no('此照片無法使用這個效果');
       return no(isBody(id) ? NO_BODY_NOTE : NO_FACE_NOTE);
     },
@@ -226,7 +232,7 @@ export function lensFor(edit: EditState, sel: Selection, persons: readonly Perso
     resetGroup(group) {
       // 調節 is photo-level as a whole tab: ⊘ resets it under any selection (step-2 spec §3.4)
       if (group === 'adjust') return resetAdjust(edit);
-      const defs = paramsInGroup(group);
+      const defs = stripDefs(group);
       const personIds = defs.filter((d) => d.scope === 'person').map((d) => d.id);
       const who = [...new Set(personIds.flatMap((id) => targets(id)))];
       let e = withPersons(edit, who, (p) => {
@@ -253,7 +259,7 @@ export function lensFor(edit: EditState, sel: Selection, persons: readonly Perso
       return e;
     },
     groupNeutral(group) {
-      for (const d of paramsInGroup(group)) {
+      for (const d of stripDefs(group)) {
         if (d.scope === 'photo') {
           if (photoToo && hasValue(d, edit.photo.values[d.id as PhV])) return false;
         } else if (targets(d.id).some((pid) => hasValue(d, person(pid).values[d.id as PV]))) return false;
@@ -261,7 +267,7 @@ export function lensFor(edit: EditState, sel: Selection, persons: readonly Perso
       return !(group === 'body' && photoToo && edit.photo.heightBand !== null);
     },
     groupHasValue(group) {
-      return paramsInGroup(group).some((d) => {
+      return stripDefs(group).some((d) => {
         if (d.scope === 'photo') return hasValue(d, edit.photo.values[d.id as PhV]);
         const t = targets(d.id);
         return (t.length ? t : [shownOf(t)]).some((pid) => hasValue(d, person(pid).values[d.id as PV]));

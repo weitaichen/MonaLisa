@@ -4,7 +4,7 @@ import { isLookId } from '../engine/looks';
 import { applyPreset, BLUSH_SHADES, FILTERS, LIP_SHADES, neutralValue, PARAM_DEFS, paramsInGroup, PRESETS, sanitizeBand } from '../engine/params';
 import { clampStraighten, cropConstrain, cropValid, flipView, IDENTITY_GEOMETRY, isIdentity, rotateLeft } from '../geometry/view';
 import { stableKey } from '../store/undo';
-import { sanitizeSpots } from './spots';
+import { remapSpotOwners, sanitizeSpots } from './spots';
 import type {
   AdjustId,
   CameraLook,
@@ -121,7 +121,7 @@ export function assignPersons(edit: EditState, ids: readonly PersonId[], primary
   return { ...edit, photo, persons, primaryInit: null };
 }
 
-/** old → new person ids (null = drop); persons absent from `map` keep their id; the 長腿 anchor follows (S §5.3) */
+/** old → new person ids (null = drop); persons absent from `map` keep their id; the 長腿 anchor and the spot owners follow (S §5.3, C §5.2) */
 export function renamePersons(edit: EditState, map: Readonly<Record<PersonId, PersonId | null>>): EditState {
   const persons: Record<PersonId, PersonParams> = {};
   for (const [id, p] of Object.entries(edit.persons)) {
@@ -130,7 +130,10 @@ export function renamePersons(edit: EditState, map: Readonly<Record<PersonId, Pe
   }
   const la = edit.photo.legsAnchor;
   const legsAnchor = la === null ? null : la in map ? map[la] : la;
-  return { ...edit, persons, photo: legsAnchor === la ? edit.photo : { ...edit.photo, legsAnchor } };
+  const spots = remapSpotOwners(edit.photo.spots, (id) => (id in map ? map[id] : id));
+  const spotsSame = spots.every((s, i) => s.owner === edit.photo.spots[i].owner);
+  if (legsAnchor === la && spotsSame) return { ...edit, persons };
+  return { ...edit, persons, photo: { ...edit.photo, legsAnchor, spots: spotsSame ? edit.photo.spots : spots } };
 }
 
 /** 重置 (RM §3.4): the 自然 photo part, every person 自然; the template stays. One undo step. */

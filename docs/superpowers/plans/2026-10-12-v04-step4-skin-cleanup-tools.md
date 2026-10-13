@@ -604,7 +604,7 @@ git commit -m "v0.4 step 4 (2/20): spot list edits and sanitizer" -m "Co-Authore
   //       resetGroup('skin'), groupNeutral('skin') and groupHasValue('skin') also cover the 'tone' group.
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/edit/lens.test.ts` (imports: `lensFor` from `./lens`; `defaultPhoto`, `neutralPerson` from `./state`; `TONE_COPY` from `./toneCopy`):
 ```ts
@@ -752,12 +752,12 @@ describe('step 4: a v2 entry keeps spots and tone values (§5)', () => {
 ```
 (`rawPut` writes raw records through a second connection and `validRecord` is a valid v1 record of 10 × 20 px, both helpers of this file (`history.test.ts:68-99`); `normalizeEntry` passes `personIds` null, so every stored person (here `f3`) is kept and so is an owner among them, until `openState` filters them against the detection cache. `sanitizeEditState` always hands `sanitizePhoto` the set of persons it keeps, so an owner that is not a stored person becomes null even here.)
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `npx vitest run src/edit/lens.test.ts src/edit/state.test.ts src/edit/legacy.test.ts src/store/history.test.ts`
 Expected: FAIL — `Failed to resolve import "./toneCopy"`; once that exists: the no-face reason, the ⊘ reset, the owner rename and the legacy projection (it still carries the person's `tone.*` values). Both history tests already pass: step 3 hands `normalizeEntry`'s sanitizer the entry's O size, and Task 2's spot sanitizer is in place.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/edit/toneCopy.ts`:
 ```ts
@@ -819,12 +819,12 @@ and replace that `values:` line with
 
 `src/store/history.ts` needs no change: step 3 already wrote `normalizeEntry`'s line as `if (isEditStateRecord(r.edit)) entry.edit = sanitizeEditState(r.edit, null, { width, height });` (`history.ts:213`, the entry's validated O size), which is what keeps the spots on load (skin-cleanup spec §5; C §3.2 `oSize`; step 6 relies on the same argument for its strokes).
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/edit src/detect src/store && npm run typecheck`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/edit/toneCopy.ts src/edit/lens.ts src/edit/state.ts src/edit/legacy.ts src/edit/lens.test.ts src/edit/state.test.ts src/edit/legacy.test.ts src/store/history.test.ts

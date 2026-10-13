@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { applyPreset, BLUSH_SHADES, defaultParams, FILTERS, LIP_SHADES, PARAM_DEFS, PRESETS, sanitizeParams } from '../engine/params';
+import { applyPreset, BLUSH_SHADES, defaultParams, FILTERS, LIP_SHADES, neutralValue, PARAM_DEFS, paramsInGroup, PRESETS, sanitizeParams } from '../engine/params';
 import type { BeautyParams } from '../types';
 import { editFromLegacy, legacyProjection, splitLegacy } from './legacy';
+import { defaultPhoto, neutralPerson } from './state';
 
 /** presetAmount is dead data while custom (setPresetAmount ignores it, a preset tap overwrites it) */
 const canon = (p: BeautyParams): BeautyParams => (p.presetId === 'custom' ? { ...p, presetAmount: 1 } : p);
@@ -31,7 +32,7 @@ describe('splitLegacy / legacyProjection (RM §3.2)', () => {
     const pick = <T>(xs: readonly T[]) => xs[Math.floor(r() * xs.length)];
     for (let i = 0; i < 500; i++) {
       const raw = {
-        values: Object.fromEntries(PARAM_DEFS.map((d) => [d.id, r()])),
+        values: Object.fromEntries(PARAM_DEFS.map((d) => [d.id, d.group === 'tone' ? neutralValue(d) : r()])),
         filterId: pick(FILTERS).id,
         lipShade: pick([null, ...LIP_SHADES.map((s) => s.id)]),
         blushShade: pick([null, ...BLUSH_SHADES.map((s) => s.id)]),
@@ -64,5 +65,21 @@ describe('splitLegacy / legacyProjection (RM §3.2)', () => {
     const e = editFromLegacy(applyPreset('refined', 1), { primaryInit: true });
     expect(e.primaryInit).toBe(e.persons.p0);
     expect(e.template.preset).toEqual({ id: 'original', amount: 1 });
+  });
+});
+
+describe('step 4: the legacy projection drops tone values and spots (§5 rollback)', () => {
+  it('writes every tone.* value neutral into BeautyParams, and no spots', () => {
+    const p = neutralPerson();
+    const e = {
+      v: 2 as const,
+      photo: { ...defaultPhoto(), spots: [{ x: 0.5, y: 0.5, r: 0.02, dx: 0, dy: 0, owner: null }] },
+      persons: { f0: { ...p, values: { ...p.values, 'tone.even': 0.7, 'tone.warmth': 0.9 } } },
+      template: neutralPerson(),
+      primaryInit: null,
+    };
+    const legacy = legacyProjection(e, 'f0');
+    for (const d of paramsInGroup('tone')) expect(legacy.values[d.id], d.id).toBe(neutralValue(d));
+    expect('spots' in legacy).toBe(false);
   });
 });

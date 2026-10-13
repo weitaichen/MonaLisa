@@ -313,3 +313,27 @@ describe('step 4: sanitizeEditState keeps valid spots', () => {
     expect(resetAll(withSpot).photo.spots).toEqual([]);
   });
 });
+
+describe('step 4: renamePersons remaps spot owners (C §5.2)', () => {
+  it('renames each owner through the map, nulls a dropped one, keeps an unmapped one', () => {
+    const e = {
+      v: 2 as const,
+      photo: {
+        ...defaultPhoto(),
+        spots: [
+          { x: 0.1, y: 0.1, r: 0.01, dx: 0, dy: 0, owner: 'f0' },
+          { x: 0.2, y: 0.2, r: 0.01, dx: 0, dy: 0, owner: 'f1' },
+          { x: 0.3, y: 0.3, r: 0.01, dx: 0, dy: 0, owner: null },
+        ],
+      },
+      persons: { f0: neutralPerson(), f1: neutralPerson() },
+      template: neutralPerson(),
+      primaryInit: null,
+    };
+    const next = renamePersons(e, { f0: 'f3', f1: null });
+    expect(next.photo.spots.map((s) => s.owner)).toEqual(['f3', null, null]);
+    expect(next.photo.spots.map((s) => s.x)).toEqual([0.1, 0.2, 0.3]);
+    const kept = renamePersons(e, { f1: 'f2' });
+    expect(kept.photo.spots.map((s) => s.owner)).toEqual(['f0', 'f2', null]);
+  });
+});

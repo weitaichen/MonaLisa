@@ -864,3 +864,38 @@ describe('source file (HistoryEntry.source, step 3)', () => {
     }
   });
 });
+
+describe('step 4: a v2 entry keeps spots and tone values (§5)', () => {
+  it('round-trips edit.photo.spots and person tone values', async () => {
+    const p = neutralPerson();
+    const edit = {
+      v: 2 as const,
+      photo: { ...defaultPhoto(), spots: [{ x: 0.25, y: 0.5, r: 0.02, dx: 0.06, dy: 0, owner: 'f0' }] },
+      persons: { f0: { ...p, values: { ...p.values, 'tone.even': 0.5, 'tone.warmth': 0.3 } } },
+      template: neutralPerson(),
+      primaryInit: null,
+    };
+    const id = await addEntry({ ...entry('tone'), schema: 2, edit });
+    const back = await getEntry(id);
+    expect(back?.edit?.photo.spots).toEqual(edit.photo.spots);
+    expect(back?.edit?.persons.f0.values['tone.warmth']).toBe(0.3);
+  });
+
+  it('loading sanitizes stored spots: a corrupt one goes, a valid one stays with its owner (kept for the rematch)', async () => {
+    const good = { x: 0.4, y: 0.4, r: 0.02, dx: 0, dy: 0, owner: 'f3' };
+    await rawPut([
+      {
+        ...validRecord('spots', 5),
+        schema: 2,
+        edit: {
+          v: 2,
+          photo: { ...defaultPhoto(), spots: [good, { x: Infinity, y: 0, r: 0.02, dx: 0, dy: 0, owner: null }] },
+          persons: { f3: neutralPerson() },
+          template: neutralPerson(),
+          primaryInit: null,
+        },
+      },
+    ]);
+    expect((await getEntry('spots'))?.edit?.photo.spots).toEqual([good]);
+  });
+});

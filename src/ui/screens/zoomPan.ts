@@ -36,6 +36,8 @@ export interface ZoomPanOptions {
    * double tap's fit, with the UV of the transformed layer (right at any zoom) and that rect.
    */
   onTap?(uv: [number, number], layer: DOMRect): void;
+  /** 裁切 open: zoom and pan back to identity */
+  resetWhen?: boolean;
 }
 
 export function useZoomPan(
@@ -143,4 +145,17 @@ export function useZoomPan(
       stage.removeEventListener('pointercancel', up);
     };
   }, [enabled]);
+
+  // 裁切 mode shows the whole photo: zoom and pan return to identity when it opens (S §2.1)
+  useEffect(() => {
+    if (!opts.resetWhen) return;
+    view.current = { s: 1, x: 0, y: 0 };
+    const layer = layerRef.current;
+    if (layer) {
+      layer.style.transition = 'none';
+      layer.style.transform = '';
+      // step 1's face boxes keep 2 px strokes through --zs (zoomPan apply): back to zoom 1 as well
+      layer.style.setProperty('--zs', '1');
+    }
+  }, [opts.resetWhen]);
 }

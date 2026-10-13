@@ -2,9 +2,12 @@
 // screen's slider sets the amount. The lines mark the band where it is SEEN — the stretched rows of the
 // output, so the lower line sits at top + (bottom − top)·stretch — and dragging maps back to the source band
 // the field builder stretches. Place it inside the box the photo fills (the zoom layer in the Editor): all
-// maths uses this element's own client rect, so it follows pinch-zoom.
+// maths uses this element's own client rect, so it follows pinch-zoom, unless `yAt` maps a client point to
+// its E row (a cropped / straightened view: the lines then sit in a BandPlane).
+import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { HeightBand } from '../../types';
+import { bandPlane } from '../../geometry/view';
+import type { Geometry, HeightBand } from '../../types';
 
 /**
  * stretch factor inside the band per unit amount, for the uncapped defaultStretch only: the field builder caps
@@ -214,9 +217,11 @@ interface Props {
   onChange(band: HeightBand, commit: boolean): void;
   /** must match the field builder's stretch: pass bands.ts heightBandStretch (as the Editor does); the default is uncapped */
   stretch?: BandStretch;
+  /** E-normalized row under a client point (client → V → E, C §3.5); default: this element's own rect */
+  yAt?: (clientX: number, clientY: number) => number;
 }
 
-export function HeightBandOverlay({ band, onChange, stretch = defaultStretch }: Props) {
+export function HeightBandOverlay({ band, onChange, stretch = defaultStretch, yAt }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   /** display edges while dragging (the band the parent echoes back may lag a frame) and the dragged line */
   const [{ live, active }, setView] = useState<{ live: Edges | null; active: Edge | null }>({ live: null, active: null });
@@ -229,7 +234,8 @@ export function HeightBandOverlay({ band, onChange, stretch = defaultStretch }: 
   // `view` only draws (clamped to the frame); every edit starts from the real edges (bandEdges `model`)
   const { view } = bandEdges(band, stretch, live);
 
-  const yOf = (clientY: number) => {
+  const yOf = (clientX: number, clientY: number) => {
+    if (yAt) return yAt(clientX, clientY);
     const r = rootRef.current?.getBoundingClientRect();
     return r && r.height > 0 ? (clientY - r.top) / r.height : 0;
   };
@@ -240,10 +246,10 @@ export function HeightBandOverlay({ band, onChange, stretch = defaultStretch }: 
     if (drag.dragging) return;
     e.preventDefault();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    drag.down(edge, e.pointerId, yOf(e.clientY), e.clientY);
+    drag.down(edge, e.pointerId, yOf(e.clientX, e.clientY), e.clientY);
   };
   const onMove = (e: PointerEvent) => {
-    if (drag.move(e.pointerId, yOf(e.clientY), e.clientY)) e.stopPropagation();
+    if (drag.move(e.pointerId, yOf(e.clientX, e.clientY), e.clientY)) e.stopPropagation();
   };
   const end = (e: PointerEvent) => {
     if (drag.end(e.pointerId)) e.stopPropagation();
@@ -297,6 +303,22 @@ export function HeightBandOverlay({ band, onChange, stretch = defaultStretch }: 
       <div class="hband-shade" style={{ top: pct(view.bottom), bottom: 0 }} />
       {line('top', '增高範圍上緣')}
       {line('bottom', '增高範圍下緣')}
+    </div>
+  );
+}
+
+/** the E frame inside the V frame (rotated by θ, cropped): 增高 lines are E rows (S §2.2); identity = the frame itself */
+export function BandPlane({ geometry, children }: { geometry: Geometry; children: ComponentChildren }) {
+  const p = bandPlane(geometry);
+  const plain = p.rotate === 0 && p.left === 0 && p.top === 0 && p.width === 100 && p.height === 100;
+  return (
+    <div class={`hband-clip${plain ? '' : ' clipped'}`}>
+      <div
+        class="hband-plane"
+        style={{ left: `${p.left}%`, top: `${p.top}%`, width: `${p.width}%`, height: `${p.height}%`, transform: p.rotate ? `rotate(${p.rotate}deg)` : undefined }}
+      >
+        {children}
+      </div>
     </div>
   );
 }

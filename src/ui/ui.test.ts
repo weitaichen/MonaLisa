@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { h, render } from 'preact';
+import { act } from 'preact/test-utils';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cameraErrorCopy } from './cameraErrors';
 import { dragValue, formatDisplay } from './components/Slider';
 import { progressFraction, progressText } from './format';
 import { centerCropRect, cropPixels, shotSeed } from './imaging';
-import { clampView, pinchView } from './screens/zoomPan';
+import { clampView, pinchView, useZoomPan, type ZoomPanOptions } from './screens/zoomPan';
 
 describe('slider maths', () => {
   it('relative drag maps px to value and clamps', () => {
@@ -69,6 +71,82 @@ describe('zoom maths', () => {
     expect(v.y + v.s * 10).toBeCloseTo(10);
     const moved = pinchView({ s: 2, x: 10, y: 0 }, { x: 0, y: 0 }, { x: 30, y: 0 }, 1);
     expect(moved).toEqual({ s: 2, x: 40, y: 0 });
+  });
+});
+
+describe('zoomPan reset (裁切 opens, S §2.1)', () => {
+  // Preact's render compares its parent with `document`; the harness renders no DOM, so an empty stand-in will do
+  let saved: unknown;
+  beforeAll(() => {
+    saved = (globalThis as { document?: unknown }).document;
+    (globalThis as { document?: unknown }).document = {};
+  });
+  afterAll(() => {
+    (globalThis as { document?: unknown }).document = saved;
+  });
+
+  /** the stage and layer the hook writes to: listeners, capture, rects and the layer's style */
+  function rig() {
+    const listeners: Record<string, (e: unknown) => void> = {};
+    const rect = { left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100 };
+    const stage = {
+      addEventListener: (t: string, fn: (e: unknown) => void) => (listeners[t] = fn),
+      removeEventListener: (t: string) => delete listeners[t],
+      setPointerCapture: () => undefined,
+      getBoundingClientRect: () => rect,
+    };
+    const style: Record<string, string> & { setProperty(k: string, v: string): void } = {
+      setProperty(k: string, v: string) {
+        style[k] = v;
+      },
+    } as never;
+    const layer = { style, offsetWidth: 100, offsetHeight: 100, getBoundingClientRect: () => rect };
+    const stageRef = { current: stage as unknown as HTMLElement };
+    const layerRef = { current: layer as unknown as HTMLElement };
+    const root = { childNodes: [], firstChild: null } as unknown as Element;
+    function Harness({ enabled, opts }: { enabled: boolean; opts: ZoomPanOptions }) {
+      useZoomPan(stageRef, layerRef, enabled, opts);
+      return null;
+    }
+    const show = (enabled: boolean, opts: ZoomPanOptions = {}) => act(() => render(h(Harness, { enabled, opts }), root));
+    const target = { closest: () => null };
+    const fire = (type: string, pointerId: number, x: number, y: number) =>
+      act(() => listeners[type]({ type, pointerId, clientX: x, clientY: y, target }));
+    return { style, show, fire };
+  }
+
+  it('opening 裁切 puts a zoomed layer back to identity (transform, --zs) and the next pan starts from scale 1', () => {
+    const r = rig();
+    r.show(true);
+    r.fire('pointerdown', 1, 40, 50);
+    r.fire('pointerdown', 2, 60, 50);
+    r.fire('pointermove', 2, 80, 50); // pinch ×2
+    r.fire('pointerup', 2, 80, 50);
+    r.fire('pointerup', 1, 40, 50);
+    expect(r.style.transform).toContain('scale(2)');
+    expect(r.style['--zs']).toBe('2');
+    r.show(false, { resetWhen: true });
+    expect(r.style.transform).toBe('');
+    expect(r.style.transition).toBe('none');
+    expect(r.style['--zs']).toBe('1');
+    // back in normal mode: one finger at scale 1 does not pan (the hook's own view was reset too)
+    r.show(true, { resetWhen: false });
+    r.fire('pointerdown', 1, 50, 50);
+    r.fire('pointermove', 1, 80, 50);
+    r.fire('pointerup', 1, 80, 50);
+    expect(r.style.transform).toBe('');
+  });
+
+  it('resetWhen false leaves the zoom alone', () => {
+    const r = rig();
+    r.show(true);
+    r.fire('pointerdown', 1, 40, 50);
+    r.fire('pointerdown', 2, 60, 50);
+    r.fire('pointermove', 2, 80, 50);
+    r.fire('pointerup', 2, 80, 50);
+    r.fire('pointerup', 1, 40, 50);
+    r.show(true, { resetWhen: false });
+    expect(r.style.transform).toContain('scale(2)');
   });
 });
 

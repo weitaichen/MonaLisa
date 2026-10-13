@@ -1637,6 +1637,127 @@ button:focus-visible {
   transform-origin: 50% 50%;
   will-change: transform;
 }
+/* 裁切 mode (S §2.1): the frame fills the stage, so a 拉直 corner stays visible under the scrim */
+.editor-stage .frame.crop-mode {
+  width: 100cqw;
+  height: 100cqh;
+  transition: none;
+}
+.crop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  touch-action: none;
+}
+.crop-box {
+  position: absolute;
+  outline: 1px solid #fff;
+  box-shadow: 0 0 0 200vmax rgba(0, 0, 0, 0.55);
+}
+.crop-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(to right, transparent calc(33.333% - 0.25px), rgba(255, 255, 255, 0.5) calc(33.333% - 0.25px), rgba(255, 255, 255, 0.5) calc(33.333% + 0.25px), transparent calc(33.333% + 0.25px), transparent calc(66.667% - 0.25px), rgba(255, 255, 255, 0.5) calc(66.667% - 0.25px), rgba(255, 255, 255, 0.5) calc(66.667% + 0.25px), transparent calc(66.667% + 0.25px)),
+    linear-gradient(to bottom, transparent calc(33.333% - 0.25px), rgba(255, 255, 255, 0.5) calc(33.333% - 0.25px), rgba(255, 255, 255, 0.5) calc(33.333% + 0.25px), transparent calc(33.333% + 0.25px), transparent calc(66.667% - 0.25px), rgba(255, 255, 255, 0.5) calc(66.667% - 0.25px), rgba(255, 255, 255, 0.5) calc(66.667% + 0.25px), transparent calc(66.667% + 0.25px));
+}
+.crop-handle {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  padding: 0;
+  background: transparent;
+}
+.crop-handle.corner.tl,
+.crop-handle.edge.left,
+.crop-handle.corner.bl {
+  left: 0;
+}
+.crop-handle.corner.tr,
+.crop-handle.edge.right,
+.crop-handle.corner.br {
+  left: 100%;
+}
+.crop-handle.corner.tl,
+.crop-handle.edge.top,
+.crop-handle.corner.tr {
+  top: 0;
+}
+.crop-handle.corner.bl,
+.crop-handle.edge.bottom,
+.crop-handle.corner.br {
+  top: 100%;
+}
+.crop-handle.edge.top,
+.crop-handle.edge.bottom {
+  left: 50%;
+}
+.crop-handle.edge.left,
+.crop-handle.edge.right {
+  top: 50%;
+}
+.crop-handle::before {
+  content: '';
+  position: absolute;
+  left: 22px;
+  top: 22px;
+  border: 0 solid #fff;
+}
+.crop-handle.corner::before {
+  width: 20px;
+  height: 20px;
+}
+.crop-handle.corner.tl::before {
+  margin: -3px 0 0 -3px;
+  border-width: 3px 0 0 3px;
+}
+.crop-handle.corner.tr::before {
+  margin: -3px 0 0 -17px;
+  border-width: 3px 3px 0 0;
+}
+.crop-handle.corner.bl::before {
+  margin: -17px 0 0 -3px;
+  border-width: 0 0 3px 3px;
+}
+.crop-handle.corner.br::before {
+  margin: -17px 0 0 -17px;
+  border-width: 0 3px 3px 0;
+}
+.crop-handle.edge.top::before,
+.crop-handle.edge.bottom::before {
+  width: 24px;
+  height: 3px;
+  margin: -1.5px 0 0 -12px;
+  background: #fff;
+}
+.crop-handle.edge.left::before,
+.crop-handle.edge.right::before {
+  width: 3px;
+  height: 24px;
+  margin: -12px 0 0 -1.5px;
+  background: #fff;
+}
+/* 增高 lines are E rows: in a straightened or cropped view they live in the E box (BandPlane) */
+.hband-clip {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.hband-clip.clipped {
+  overflow: hidden;
+}
+.hband-plane {
+  position: absolute;
+  transform-origin: 50% 50%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .editor-stage .canvas-host {
+    transition: none !important;
+  }
+}
 .editor-stage .display-canvas {
   object-fit: contain;
 }

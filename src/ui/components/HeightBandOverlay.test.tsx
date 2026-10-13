@@ -15,11 +15,13 @@ import { act } from 'preact/test-utils';
 import { heightBandStretch, HEIGHT_MAX_CROP } from '../../body/bands';
 import { defaultParams, setHeightBand, setParam } from '../../engine/params';
 import { UndoStack } from '../../store/undo';
-import type { BeautyParams, HeightBand } from '../../types';
+import type { BeautyParams, Geometry, HeightBand } from '../../types';
 import { editFromLegacy } from '../../edit/legacy';
+import { IDENTITY_GEOMETRY } from '../../geometry/view';
 import { bandOrSuggested } from '../panelModel';
 import {
   BandDrag,
+  BandPlane,
   bandEdges,
   bandToDisplay,
   defaultStretch,
@@ -459,5 +461,77 @@ describe('BandDrag', () => {
     expect(bandToDisplay(seen[2][0], heightBandStretch).bottom).toBeCloseTo(0.4 + 0.4 * 1.09, 6);
     d.abort(); // nothing pending
     expect(seen).toHaveLength(3);
+  });
+});
+
+// ───────────── step 3: the 增高 lines are E rows (S §2.2) ─────────────
+
+describe('增高 lines in the E plane', () => {
+  const band = { top: 0.4, bottom: 0.8, amount: 0.6 };
+
+  function mountWith(yAt?: (clientX: number, clientY: number) => number) {
+    const root = new FakeElement('div');
+    const seen: [HeightBand, boolean][] = [];
+    act(() => render(<HeightBandOverlay band={band} onChange={(b, c) => seen.push([b, c])} yAt={yAt} />, root as unknown as Element));
+    const top = root.all().filter((e) => e.attrs.role === 'slider')[0];
+    const drag = (from: number, to: number) => {
+      fire(top, 'pointerdown', { pointerId: 1, clientX: 15, clientY: from });
+      fire(top, 'pointermove', { pointerId: 1, clientX: 15, clientY: to });
+      fire(top, 'pointerup', { pointerId: 1, clientX: 15, clientY: to });
+    };
+    return { seen, drag };
+  }
+
+  it('a line drag reads its rows through yAt (client → V → E) when one is given', () => {
+    const calls: [number, number][] = [];
+    const ui = mountWith((x, y) => {
+      calls.push([x, y]);
+      return y / 200;
+    });
+    ui.drag(80, 60);
+    expect(calls).toEqual([
+      [15, 80],
+      [15, 60],
+    ]);
+    const [last, commit] = ui.seen[ui.seen.length - 1];
+    expect(commit).toBe(true);
+    expect(last.top).toBeCloseTo(0.3, 9);
+  });
+
+  it('without yAt the rows come from the overlay rect, as before', () => {
+    const ui = mountWith();
+    ui.drag(80, 60);
+    expect(ui.seen[ui.seen.length - 1][0].top).toBeCloseTo(0.2, 9);
+  });
+
+  function plane(geometry: Geometry) {
+    const root = new FakeElement('div');
+    act(() =>
+      render(
+        <BandPlane geometry={geometry}>
+          <i />
+        </BandPlane>,
+        root as unknown as Element,
+      ),
+    );
+    const clip = root.childNodes[0] as FakeElement;
+    const inner = clip.childNodes[0] as FakeElement;
+    return { clip, inner };
+  }
+
+  it('BandPlane at identity is the frame itself: no clip, no turn', () => {
+    const { clip, inner } = plane(IDENTITY_GEOMETRY);
+    expect(clip.attrs.class).toBe('hband-clip');
+    expect(inner.attrs.class).toBe('hband-plane');
+    expect([inner.style.left, inner.style.top, inner.style.width, inner.style.height]).toEqual(['0%', '0%', '100%', '100%']);
+    expect(inner.style.transform || '').toBe('');
+    expect((inner.childNodes[0] as FakeElement).localName).toBe('i');
+  });
+
+  it('BandPlane under a crop and a 拉直 is the E frame: clipped, scaled out and turned by θ', () => {
+    const { clip, inner } = plane({ ...IDENTITY_GEOMETRY, straighten: 3.5, crop: { x: 0.25, y: 0.1, w: 0.5, h: 0.8 } });
+    expect(clip.attrs.class).toBe('hband-clip clipped');
+    expect([inner.style.left, inner.style.top, inner.style.width, inner.style.height]).toEqual(['-50%', '-12.5%', '200%', '125%']);
+    expect(inner.style.transform).toBe('rotate(3.5deg)');
   });
 });

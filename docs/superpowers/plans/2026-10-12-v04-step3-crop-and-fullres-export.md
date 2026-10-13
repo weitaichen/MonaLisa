@@ -5120,7 +5120,7 @@ EOF
 - Consumes: Task 1 (`CropLayout`, `CropLock`, `bandPlane`), Task 2 (`dragCorner`, `dragEdge`, `dragMove`, `Corner`, `Edge`); step 1's `useZoomPan(stage, layer, enabled, opts?: { onTap? })`.
 - Produces: `type Handle = { kind: 'corner'; corner: Corner } | { kind: 'edge'; edge: Edge } | { kind: 'move' }`; `interface CropDragHost { geometry: Geometry; lock: CropLock; oSize: Size; eBox: { w: number; h: number }; onChange(g: Geometry, commit: boolean): void }`; `class CropDrag { dragging: boolean; down(handle, id, x, y): void; move(id, x, y): boolean; end(id): boolean; abort(): void }`; `CropOverlay(props: { layout: CropLayout; geometry: Geometry; lock: CropLock; oSize: Size; grid: boolean; onChange(g: Geometry, commit: boolean): void })`; `useZoomPan` option `resetWhen?: boolean`; `CanvasHost` prop `style?: JSX.CSSProperties`; `HeightBandOverlay` prop `yAt?: (clientX: number, clientY: number) => number`; `BandPlane({ geometry, children })`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/ui/components/CropOverlay.test.ts`:
 
@@ -5174,12 +5174,12 @@ describe('CropDrag (one undo step per gesture)', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to see it fail**
+- [x] **Step 2: Run the test to see it fail**
 
 Run: `npx vitest run src/ui/components/CropOverlay.test.ts`
 Expected: FAIL — `Failed to resolve import "./CropOverlay"`.
 
-- [ ] **Step 3: Implement `CropOverlay.tsx`**
+- [x] **Step 3: Implement `CropOverlay.tsx`**
 
 ```tsx
 // 裁切 mode box (S §2.1): the scrim (a large box-shadow), a 1 pt border, corner L handles, edge bars (自由 only) and the
@@ -5324,7 +5324,7 @@ export function CropOverlay({ layout, geometry, lock, oSize, grid, onChange }: P
 }
 ```
 
-- [ ] **Step 4: CSS, zoomPan reset, CanvasHost style, the band plane**
+- [x] **Step 4: CSS, zoomPan reset, CanvasHost style, the band plane**
 
 `src/ui/theme.css` (CRLF), in the Editor block after `.zoom-layer`:
 
@@ -5509,12 +5509,12 @@ export function BandPlane({ geometry, children }: { geometry: Geometry; children
 
 (imports: `type { ComponentChildren } from 'preact'`, `bandPlane` from `../../geometry/view`, `Geometry` type.) `.hband` keeps `position: absolute; inset: 0`, so it fills the plane; the clip wrapper is inert (`pointer-events: none`; the lines keep their own pointer events as today).
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `npx vitest run src/ui/components/`
 Expected: PASS (`HeightBandOverlay.test.tsx` unchanged: no `yAt` means today's mapping).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/ui/components/CropOverlay.tsx src/ui/components/CropOverlay.test.ts src/ui/theme.css src/ui/screens/zoomPan.ts src/ui/components/CanvasHost.tsx src/ui/components/HeightBandOverlay.tsx

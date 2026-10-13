@@ -28,6 +28,20 @@ test('three faces: auto beautifies the largest; tap B; 全部套用; tap C; the 
   await page.getByRole('button', { name: /拍攝/ }).click();
   await page.getByRole('button', { name: '點擊開啟相機' }).click();
   await expect.poll(async () => (await debugState(page)).faces, { timeout: 120_000, intervals: [500] }).toBe(3);
+  // the face marker keeps its nodes across frames: one dot above the beautified face, the same node every frame
+  const marker = await page.evaluate(async () => {
+    const m = document.querySelector('.cam-marker')!;
+    const seen = new Set<Element>();
+    let most = 0;
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => requestAnimationFrame(r));
+      Array.from(m.children).forEach((c) => seen.add(c));
+      most = Math.max(most, m.children.length);
+    }
+    const dots = Array.from(m.querySelectorAll<HTMLElement>('.cam-dot')).filter((d) => d.style.display !== 'none');
+    return { nodes: seen.size, most, dots: dots.length };
+  });
+  expect(marker).toEqual({ nodes: 1, most: 1, dots: 1 });
   // a photo-level look of zero, so an unselected face is untouched pixel for pixel
   await page.getByRole('tab', { name: '美膚' }).click();
   for (const item of ['美白', '銳化']) {

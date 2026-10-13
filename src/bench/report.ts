@@ -238,3 +238,79 @@ export function formatMultiRows(rows: readonly MultiRow[]): string {
     })
     .join('\n\n');
 }
+
+/** step-1 spec §6.3 camera rows: PL1 (3 faces in view) and PL2 (one face in view, the cost numFaces 3 adds to a selfie) */
+export const PL1_MAX_P50_MS = 20;
+export const PL1_MIN_FPS = 24;
+export const PL2_MAX_DELTA_MS = 5;
+
+/** one L measurement: every detectVideo time (ms) of one delegate at one numFaces */
+export interface LiveRun {
+  delegate: string;
+  numFaces: number;
+  times: readonly number[];
+  fps: number;
+  /** most faces one inference returned */
+  faces: number;
+  /** the first inference after each switch to this count (setOptions rebuilds the graph), ms */
+  switchMs?: readonly number[];
+}
+
+const r1 = (v: number) => Math.round(v * 10) / 10;
+const p95 = (xs: readonly number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length * 0.95)];
+
+/**
+ * L rows (p50 / p95 / fps per delegate and numFaces; switch_ms, the slowest first inference after a switch to that count,
+ * when measured), then the §6.3 verdicts. The faces in view are the most any run of that delegate found. One face in
+ * view → PL2: p50 at the largest count minus p50 at numFaces 1, pass ≤ 5 ms. Three or more → PL1 per count ≥ 2
+ * (numFaces 2 is the fallback's own measurement): pass at p50 ≤ 20 ms and fps ≥ 24.
+ */
+export function liveRows(runs: readonly LiveRun[]): MultiRow[] {
+  const out: MultiRow[] = runs.map((r) => ({
+    row: 'L',
+    config: `${r.delegate} numFaces ${r.numFaces}`,
+    values: {
+      ...(r.times.length
+        ? { p50_ms: r1(median(r.times)), p95_ms: r1(p95(r.times)), fps: r1(r.fps), faces: r.faces, frames: r.times.length }
+        : { p50_ms: 'n/a', p95_ms: 'n/a', fps: r1(r.fps), faces: r.faces, frames: 0 }),
+      ...(r.switchMs?.length ? { switch_ms: r1(Math.max(...r.switchMs)) } : {}),
+    },
+  }));
+  const delegates = [...new Set(runs.map((r) => r.delegate))];
+  for (const d of delegates) {
+    const mine = runs.filter((r) => r.delegate === d && r.times.length > 0);
+    const inView = Math.max(0, ...mine.map((r) => r.faces));
+    const one = mine.find((r) => r.numFaces === 1);
+    const top = mine.reduce<LiveRun | null>((a, r) => (a === null || r.numFaces > a.numFaces ? r : a), null);
+    if (inView === 1 && one && top && top !== one) {
+      const delta = median(top.times) - median(one.times);
+      out.push({
+        row: 'PL2',
+        config: d,
+        values: {
+          delta_p50_ms: r1(delta),
+          delta_p95_ms: r1(p95(top.times) - p95(one.times)),
+          delta_pct: r1((delta / median(one.times)) * 100),
+          limit_ms: PL2_MAX_DELTA_MS,
+          verdict: delta <= PL2_MAX_DELTA_MS ? 'pass' : 'fail',
+        },
+      });
+    }
+    if (inView >= 3) {
+      for (const r of mine.filter((x) => x.numFaces >= 2)) {
+        const p50 = median(r.times);
+        out.push({
+          row: 'PL1',
+          config: `${d} numFaces ${r.numFaces}`,
+          values: {
+            p50_ms: r1(p50),
+            fps: r1(r.fps),
+            limit: `p50 ≤ ${PL1_MAX_P50_MS} ms, fps ≥ ${PL1_MIN_FPS}`,
+            verdict: p50 <= PL1_MAX_P50_MS && r.fps >= PL1_MIN_FPS ? 'pass' : 'fail',
+          },
+        });
+      }
+    }
+  }
+  return out;
+}

@@ -10,9 +10,22 @@ export const EDIT_DETECT_FACES = MAX_EDIT_FACES + 2;
 export const MAX_RENDER_FACES = 6;
 /** numPoses of the 美體 detection (§6.3 PB1, PM1) */
 export const MAX_EDIT_BODIES = 4;
-/** faces the camera tracks; 1 hides the camera's 選臉 and bypasses the smoother (§6.3 PL1, PL2, PJ1) */
+/**
+ * faces the camera tracks; 1 hides the camera's 選臉 and bypasses the smoother (§6.3 PL1, PL2, PJ1). Desktop 2026-10-13
+ * (S §6.4, bench L): with one face in view, numFaces 3 adds 3.5–4.2 ms per detection on the GPU delegate (p50 about
+ * 12.4 → 16.3 ms, +28–35 %) and 1.9–2.1 ms on CPU, within PL2's 5 ms. With three faces in view p50 is about 31 ms
+ * (numFaces 2: about 22 ms), over PL1's 20 ms on that desktop. §6.3 applies both rows to the slowest iPhone, so this
+ * default ships until the iPhone rows exist (RM §12); the bench prints the PL1 / PL2 verdicts (bench/report.ts liveRows).
+ */
 export const MAX_LIVE_FACES = 3;
-/** numFaces the camera requests: every live instance is built with it and the camera never toggles it (T1) */
+/**
+ * numFaces the camera requests: every live instance is built with it and the camera never toggles it (T1). A count
+ * switch rebuilds the graph, and its first inference took 145–165 ms on the desktop's GPU delegate (33–49 ms on CPU),
+ * a visible hitch each time a second face came or went. Nor does a lone selfie at numFaces 1 give a cheap sign of a
+ * second face: in VIDEO mode MediaPipe runs its face detector only while it tracks fewer faces than numFaces (its
+ * documented tracking; not checked in the 0.10.35 source), which is also where PL2's cost comes from (bench L agrees:
+ * with one face in view numFaces 2 and 3 cost the same).
+ */
 export const LIVE_DETECT_FACES = MAX_LIVE_FACES;
 /** a face box narrower than this fraction of the short edge is not selectable and gets no face effects */
 export const MIN_FACE_FRAC = 0.03;

@@ -4,14 +4,14 @@
 // fixtures by URL so scripts/bench-multiface.mjs can drive it; on a phone the rows take a picked photo.
 import { FaceLandmarker, FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import { LandmarkSmoother } from '../app/oneEuro';
-import { EDIT_DETECT_FACES } from '../config/limits';
+import { EDIT_DETECT_FACES, LIVE_DETECT_FACES } from '../config/limits';
 import { ENGINE_PATHS, loadEngineAssets, loadPoseModel } from '../engine/assets';
 import { probeFaceTable, probeR16FArray, readGlLimits } from '../engine/glProbe';
 import { ovalBox } from '../engine/passes/faceCap';
 import { adapt } from '../tracking/adapter111';
 import { downscaleMask } from '../tracking/bodyTracker';
-import type { Landmarks478, Tracker } from '../types';
-import { formatMultiRows, median, type MultiRow } from './report';
+import type { Delegate, Landmarks478, Tracker } from '../types';
+import { formatMultiRows, liveRows, type LiveRun, median, type MultiRow } from './report';
 
 const rows: MultiRow[] = [];
 const now = () => performance.now();
@@ -154,7 +154,7 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
   // own classes (styled in bench/main.ts STYLE like the 美體偵測 box): tests/harness/b3/bench.mjs locates '.body-bench'
   // and tests/harness/t8/run-bench.mjs '.gate .note', and this section sits in .gate, so reusing either breaks them
   section.className = 'multi-bench';
-  section.innerHTML = '<h3>多臉</h3><p class="multi-note">D：多臉偵測（選 group_faces.png）　B：多人美體（選 group_people.jpg）　GL：GPU 上限　R：多臉美型 GPU 時間　F：每張臉的瘦臉限制建構時間　BF：四人美體場建構時間　PE：多臉編輯每格時間　M：多人美體偵測記憶體（頁面被終止時，下次開啟會回報）　L：相機多臉追蹤時間　J／J2：相機平滑的抖動／延遲（L、J、J2 用相機）（R、F、BF、PE、M 需開發伺服器的 /tests/fixtures）</p>';
+  section.innerHTML = '<h3>多臉</h3><p class="multi-note">D：多臉偵測（選 group_faces.png）　B：多人美體（選 group_people.jpg）　GL：GPU 上限　R：多臉美型 GPU 時間　F：每張臉的瘦臉限制建構時間　BF：四人美體場建構時間　PE：多臉編輯每格時間　M：多人美體偵測記憶體（頁面被終止時，下次開啟會回報）　L：相機多臉追蹤時間（GPU／CPU，numFaces 1–3；鏡頭前一張臉得 PL2，三張臉得 PL1）　J／J2：相機平滑的抖動／延遲（L、J、J2 用相機）（R、F、BF、PE、M 需開發伺服器的 /tests/fixtures）</p>';
   // a page killed during M (out of memory) left its breadcrumb: report it first
   const killed = staleKill();
   if (killed) rows.push(killed);
@@ -475,35 +475,103 @@ function eachFrame(video: HTMLVideoElement, ms: number, frame: (now: number) => 
   });
 }
 
-async function liveTracker(): Promise<Tracker> {
+async function liveTracker(delegate: 'auto' | Delegate = 'auto'): Promise<Tracker> {
   const { createTracker } = await import('../tracking/tracker');
   const { modelBuffer } = await loadEngineAssets();
-  return createTracker({ modelBuffer, wasmBase: ENGINE_PATHS.wasmBase, delegate: 'auto' });
+  return createTracker({ modelBuffer, wasmBase: ENGINE_PATHS.wasmBase, delegate });
 }
 
-/** L: detectVideo at numFaces 1 and 3 on the camera for 10 s each (phone: point it at group_faces.png; desktop: --video group.y4m) */
+/** warm-up after each numFaces switch: setOptions rebuilds the graph and the first GPU inferences take about a second */
+const L_WARM_MS = 2000;
+/** measured time per (delegate, count) and round; two rounds, the second in reverse order */
+const L_ROUND_MS = 5000;
+
+/**
+ * L: detectVideo at numFaces 1, 2 and 3 on the camera, on the GPU and the CPU delegate, then the §6.3 verdicts
+ * (report.ts liveRows): PL2 with one face in view (phone: point it at one face; desktop: --video face.y4m), PL1 with
+ * three (group_faces.png on a second screen; desktop: --video group.y4m). One tracker per delegate switches its count in
+ * place, as the camera's single instance would (tracker.ts setMode). Rounds 1 2 3 then 3 2 1 put any drift (heat,
+ * other tabs) on every count alike.
+ */
 export async function rowL(): Promise<MultiRow[]> {
   const cam = await cameraVideo();
-  const out: MultiRow[] = [];
+  const runs: LiveRun[] = [];
   try {
-    for (const n of [1, 3]) {
-      const t = await liveTracker();
-      const times: number[] = [];
-      let faces = 0;
-      const fps = await eachFrame(cam.video, 10_000, (now) => {
-        const t0 = performance.now();
-        const r = t.detectVideo(cam.video, now, { maxFaces: n });
-        times.push(performance.now() - t0);
-        faces = Math.max(faces, r?.length ?? 0);
-      });
-      t.close();
-      times.sort((a, b) => a - b);
-      out.push({ row: 'L', config: `numFaces ${n}`, values: { p50_ms: r1(times[times.length >> 1]), p95_ms: r1(times[Math.floor(times.length * 0.95)]), fps: r1(fps), faces } });
+    for (const d of ['GPU', 'CPU'] as const) {
+      let t: Tracker;
+      try {
+        t = await liveTracker(d);
+      } catch {
+        runs.push({ delegate: `${d} (unavailable)`, numFaces: 1, times: [], fps: 0, faces: 0 });
+        continue;
+      }
+      const counts = [1, 2, 3];
+      const acc = new Map(counts.map((n) => [n, { times: [] as number[], fps: [] as number[], faces: 0, switchMs: [] as number[] }]));
+      // the tracker is built at LIVE_DETECT_FACES; its very first inferences (graph start, about 1.6 s on the desktop's GPU)
+      // run untimed here, so every switch_ms is a count switch on a running graph, as the camera would make
+      let current = LIVE_DETECT_FACES;
+      const skip = (now: number, n: number) => {
+        try {
+          t.detectVideo(cam.video, now, { maxFaces: n });
+        } catch {
+          /* skipped */
+        }
+      };
+      try {
+        await eachFrame(cam.video, L_WARM_MS, (now) => skip(now, current));
+        for (const order of [counts, [...counts].reverse()]) {
+          for (const n of order) {
+            const a = acc.get(n)!;
+            let first = n !== current;
+            current = n;
+            // a throw inside the frame callback would end eachFrame's chain: a failed inference is skipped (the tracker
+            // rebuilds its graph on the next call), never timed
+            await eachFrame(cam.video, L_WARM_MS, (now) => {
+              try {
+                const t0 = performance.now();
+                const r = t.detectVideo(cam.video, now, { maxFaces: n });
+                if (first && r !== null) {
+                  a.switchMs.push(performance.now() - t0);
+                  first = false;
+                }
+              } catch {
+                /* skipped */
+              }
+            });
+            a.fps.push(
+              await eachFrame(cam.video, L_ROUND_MS, (now) => {
+                try {
+                  const t0 = performance.now();
+                  const r = t.detectVideo(cam.video, now, { maxFaces: n });
+                  if (r === null) return; // no inference (throttled rebuild): nothing to time
+                  a.times.push(performance.now() - t0);
+                  a.faces = Math.max(a.faces, r.length);
+                } catch {
+                  /* skipped */
+                }
+              }),
+            );
+          }
+        }
+      } finally {
+        t.close();
+      }
+      for (const n of counts) {
+        const a = acc.get(n)!;
+        runs.push({
+          delegate: t.delegate === d ? d : `${d}→${t.delegate}`,
+          numFaces: n,
+          times: a.times,
+          fps: a.fps.reduce((x, y) => x + y, 0) / a.fps.length,
+          faces: a.faces,
+          switchMs: a.switchMs,
+        });
+      }
     }
   } finally {
     cam.stop();
   }
-  return out;
+  return liveRows(runs);
 }
 
 /** the largest face's pts111 (UV) of a detection */

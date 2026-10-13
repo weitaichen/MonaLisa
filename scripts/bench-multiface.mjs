@@ -2,6 +2,7 @@
 // the GPU first (timings), falls back to headless SwiftShader (marked "not representative").
 //   node scripts/bench-multiface.mjs D B GL
 //   node scripts/bench-multiface.mjs --video tests/fixtures/group.y4m L   (the camera rows L, J, J2 read a fake camera fed by a y4m)
+//   node scripts/bench-multiface.mjs --video tests/fixtures/face.y4m L    (one face in view: L gives PL2; group.y4m gives PL1)
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';

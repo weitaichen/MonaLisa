@@ -901,7 +901,7 @@ Six faces × 5.7 KB, eight obstacles × 300 B, and four bodies × (528 B pose + 
    - **PG2:** a 2-layer R16F `TEXTURE_2D_ARRAY` with LINEAR filtering, sampled with `textureLod` at the midpoint between texels of layer 1.
 3. **Bench rows** (`src/bench/main.ts`, a new 「多臉」 section; results also go to the copy-results report, `bench/report.ts`). `/bench.html` deliberately has no fixed photo URL (`bench/main.ts:410-411`), so the procedure is: save `group_faces.png`, `group6_faces.png` and `group_people.jpg` to the phone's Photos and pick them; for the camera rows, show `group_faces.png` full screen on a second screen and point the phone at it.
    - **D:** `detectImage` on `group_faces.png` at decodes 2048 and 1440, with `numFaces` 1/4/6/8, on GPU and CPU. Columns: first call, median of 5 warm calls, faces found, whether the order matches across the two decodes.
-   - **L:** `detectForVideo` on the camera at `numFaces` 1 and 3, with 1 and with 3 faces in view, at tier H. Columns: detection p50/p95, fps over 10 s.
+   - **L:** `detectForVideo` on the camera at `numFaces` 1, 2 and 3, with 1 and with 3 faces in view, at tier H, on the GPU and the CPU delegate. One tracker per delegate switches its count in place (as the camera's single instance would), warms up 2 s after each switch, and is timed for 5 s per count in two rounds, 1 2 3 then 3 2 1. Columns: detection p50/p95, fps (the detection-only frame rate), faces found, frames, and `switch_ms` (the slowest first inference after a switch to that count). The bench then prints the verdict rows (`bench/report.ts` `liveRows`): **PL2** per delegate when one face was in view, **PL1** per count ≥ 2 when three were.
    - **J (jitter):** a static scene, on the device (phone on a stand) or on `group_noise.y4m` (seeded per-frame landmark-scale noise; today's y4m repeats one identical frame, `gen-y4m.mjs:165-170`, so raw jitter there is about 0 and the comparison means nothing). The RMS over 2 s of every `pts111` point's deviation from its mean, in px scaled to a 1080-px frame height. Variants: `numFaces` 1 (MediaPipe smoothing), `numFaces` 3 raw, `numFaces` 3 with the app smoother.
    - **J2 (lag):** a panning clip (the phone panned slowly across the second screen, or `group_pan.y4m`, whose faces translate 0.5 face widths per second). The mean delay of the `pts111` centroid behind the raw detections, time-aligned, for `numFaces` 1 (MediaPipe smoothing) and `numFaces` 3 with the app smoother.
    - **B:** body detection on `group_people.jpg` with `numPoses` 2 and 4. Columns: detection time, readback and downscale time per person, persons found, and the peak JS heap during the readback (`performance.memory` where available).
@@ -1056,11 +1056,54 @@ Sub-step 1e (Task 25), same desktop and Chrome as above (the heading date is the
 Desktop readings against §6.3, for orientation only:
 - PJ1: app 0.3 px ≤ max(0.4, 1.25 × 0.3). PJ2: app 4 ms ≤ 1.25 × 16.3 ms.
 - PBF: full 88 ≤ 120 ms and draft 15 ≤ 16 ms. PM1: 3 of 3 runs completed.
-- PL1: p50 30.3 ms at 3 faces is above the 20 ms target on this desktop's GPU delegate. PL2 needs a one-face scene and was not measured here.
+- PL1: p50 30.3 ms at 3 faces is above the 20 ms target on this desktop's GPU delegate. PL2 needs a one-face scene and was not measured here (it was on 2026-10-13, below).
 - PF: f0, the first call, is 16.6 ms; the other faces are 6.6 to 9.6 ms.
 - PE1: there is no v0.3 one-face drag baseline in this run.
 
 Decisions: none taken (desktop only; PL1/PL2/PJ1/PJ2/PB1/PBF/PF/PE1/PM1 need the iPhone rows, RM §12: the §3.5 defaults ship).
+
+#### 2026-10-13 desktop Chrome (GPU), rows L / PL2 / PL1 — ANGLE (Intel, Intel(R) UHD Graphics 770 (0x0000A780) Direct3D11 vs_5_0 ps_5_0, D3D11)
+
+Step-1 follow-up (the whole-step review's `limits.ts` P3). Same desktop: Windows 11 Pro 10.0.22631, Intel Core i7-14700, 32 GB, Chrome 154.0.8037.57 headed with the GPU, `npm run dev` build of `/bench.html?fixtures=1`. Row L as now described in §6.2 (GPU and CPU delegates, `numFaces` 1 / 2 / 3, interleaved rounds). `node scripts/bench-multiface.mjs --video tests/fixtures/face.y4m L` (one face in view: PL2), then `--video tests/fixtures/group.y4m L` (A, B and C in view: PL1). Chrome's fake camera plays each 1280 × 720 clip at 30 fps. The bench times `detectForVideo` alone, with no render, so its fps is the detection-only frame rate and not the camera's.
+
+One face in view (`face.y4m`):
+
+| Row | Config | Values |
+|---|---|---|
+| L | GPU numFaces 1 | p50_ms 12.1, p95_ms 16.8, fps 30, faces 1, frames 301, switch_ms 146.5 |
+| L | GPU numFaces 2 | p50_ms 16.4, p95_ms 21.4, fps 28.7, faces 1, frames 287, switch_ms 146.9 |
+| L | GPU numFaces 3 | p50_ms 16.4, p95_ms 21.4, fps 29.7, faces 1, frames 298, switch_ms 144.6 |
+| L | CPU numFaces 1 | p50_ms 13.7, p95_ms 17.3, fps 30, faces 1, frames 301, switch_ms 36.5 |
+| L | CPU numFaces 2 | p50_ms 15.8, p95_ms 19.2, fps 29.4, faces 1, frames 294, switch_ms 34.5 |
+| L | CPU numFaces 3 | p50_ms 15.8, p95_ms 18.8, fps 29.6, faces 1, frames 297, switch_ms 32.7 |
+| PL2 | GPU | delta_p50_ms 4.2, delta_p95_ms 4.6, delta_pct 35.1, limit_ms 5, verdict pass |
+| PL2 | CPU | delta_p50_ms 2.1, delta_p95_ms 1.5, delta_pct 15.3, limit_ms 5, verdict pass |
+
+Three earlier runs of the same one-face scene, timed the same way: PL2 GPU Δp50 3.9 / 3.5 / 3.9 ms (+31.5 / +27.6 / +32 %), CPU 2.1 / 1.9 / 1.9 ms (+15.2 / +13.8 / +13.8 %). In those runs `switch_ms` either was not yet measured or still included the tracker's first inference ever (1583 ms on the GPU), which the bench now runs untimed during a 2 s warm-up.
+
+Three faces in view (`group.y4m`):
+
+| Row | Config | Values |
+|---|---|---|
+| L | GPU numFaces 1 | p50_ms 12.6, p95_ms 17.7, fps 30, faces 1, frames 301, switch_ms 162.6 |
+| L | GPU numFaces 2 | p50_ms 21.5, p95_ms 26.2, fps 28.3, faces 2, frames 283, switch_ms 165 |
+| L | GPU numFaces 3 | p50_ms 30.7, p95_ms 36.4, fps 22.9, faces 3, frames 230, switch_ms 165.1 |
+| L | CPU numFaces 1 | p50_ms 13.6, p95_ms 18.4, fps 29.9, faces 1, frames 300, switch_ms 37.4 |
+| L | CPU numFaces 2 | p50_ms 22.4, p95_ms 24.8, fps 29.9, faces 2, frames 300, switch_ms 42.9 |
+| L | CPU numFaces 3 | p50_ms 31.6, p95_ms 35.7, fps 20.6, faces 3, frames 208, switch_ms 49.3 |
+| PL1 | GPU numFaces 2 | p50_ms 21.5, fps 28.3, limit p50 ≤ 20 ms, fps ≥ 24, verdict fail |
+| PL1 | GPU numFaces 3 | p50_ms 30.7, fps 22.9, limit p50 ≤ 20 ms, fps ≥ 24, verdict fail |
+| PL1 | CPU numFaces 2 | p50_ms 22.4, fps 29.9, limit p50 ≤ 20 ms, fps ≥ 24, verdict fail |
+| PL1 | CPU numFaces 3 | p50_ms 31.6, fps 20.6, limit p50 ≤ 20 ms, fps ≥ 24, verdict fail |
+
+Two earlier three-face runs gave GPU p50 21.3 / 21.5 ms (n2) and 30.8 / 30.5 ms (n3), CPU 22.1 / 22.2 ms and 31.5 / 31.6 ms.
+
+Readings:
+- PL2 passes on this desktop in all four runs. A lone selfie pays 3.5–4.2 ms more per detection at `numFaces` 3 on the GPU delegate (+28–35 % of v0.3's `numFaces` 1 p50) and 1.9–2.1 ms on CPU, against the 5 ms tolerance. With one face, `numFaces` 2 costs the same as 3. That fits MediaPipe's documented VIDEO-mode tracking, where the face detector runs only while fewer faces than `numFaces` are tracked (not checked in the 0.10.35 source).
+- The cheaper alternative was not adopted: run `numFaces` 1 until a second face appears. At `numFaces` 1 the graph stops detecting once it tracks the face, so its output gives no sign of a second face. Raising the count when one appears needs a graph rebuild, whose first inference took 145–165 ms on the GPU (33–49 ms on CPU): a visible hitch each time a second face came or went. A second detector instance would break the single-instance rule (`tracker.ts:3-5`). T1 therefore stands: the camera keeps `LIVE_DETECT_FACES = MAX_LIVE_FACES` and never toggles the count. Instead, PL2 is pinned as a bench verdict (`PL2_MAX_DELTA_MS = 5` in `bench/report.ts`, unit-tested), so the iPhone run prints pass or fail directly.
+- PL1 fails on this desktop at `numFaces` 3 (p50 about 31 ms, detection-only fps 20.6–23.9 across the three runs). It also fails at `numFaces` 2 (p50 21.3–22.4 ms, just over the 20 ms limit), on both delegates. If this desktop were the deciding device, §6.3 would fall back to `MAX_LIVE_FACES = 1`.
+
+Decisions: none taken. §6.3 applies PL1 and PL2 to the slowest iPhone measured, and under RM §12 the §3.5 defaults ship until those rows exist, so `MAX_LIVE_FACES` stays 3. The iPhone L rows decide (pointed at one face for PL2, at `group_faces.png` on a second screen for PL1). PL2 fail → 1. PL1 fail at 3 → the bench's `numFaces` 2 verdict picks 2 or 1.
 
 ---
 
@@ -1197,7 +1240,7 @@ Every other change is a mechanical signature port in the same commit: `face` →
 | Risk | Impact | Mitigation |
 |---|---|---|
 | BlazeFace short-range misses small or distant faces (MediaPipe #4698) | A face the user cannot select | `MIN_FACE_FRAC` and the toast; PD2 measured; re-detect is out of scope |
-| Camera cost, jitter or lag with `numFaces` 3 (no MediaPipe smoothing) | Lower fps or a shaky or trailing warp, including for a lone selfie | MediaPipe's own smoother replicated; PL1, PL2, PJ1 and PJ2 fall back to 1 face (v0.3, smoother bypassed) |
+| Camera cost, jitter or lag with `numFaces` 3 (no MediaPipe smoothing) | Lower fps or a shaky or trailing warp, including for a lone selfie | MediaPipe's own smoother replicated; PL1, PL2, PJ1 and PJ2 fall back to 1 face (v0.3, smoother bypassed). Desktop 2026-10-13 (§6.4): a lone selfie pays +3.5–4.2 ms per detection on the GPU delegate and +1.9–2.1 ms on CPU, so PL2 (≤ 5 ms) passes. Three faces miss PL1 (p50 about 31 ms; about 22 ms at `numFaces` 2). The count is not switched at run time: each switch is a graph rebuild whose first inference takes 145–165 ms on the GPU. The bench prints the PL1 and PL2 verdicts for the iPhone run that decides. |
 | The `BeautyParams` → `EditState` port through the 881-line `Editor.tsx` | Regressions in autosave, the 瘦臉 limit or 美體 timing | 1b lands alone, behaviour unchanged, with parity goldens and every existing e2e |
 | The summed displacements of close faces fold | Visible artefacts between faces | Disjoint cap discs; the cap is the 瘦臉 limit's slope-bounded budget; the fold sweep; the editor's λ_f safety net |
 | The radius cap weakens 下巴 and 額頭 in tight group shots | Less effect than the user expects | Measured by the strength sweep; §11 Q5 offers the cell-shaped cap |

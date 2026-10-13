@@ -5076,12 +5076,12 @@ git commit -m "v0.4 step 2: 調節 icons, 一鍵 part row, strip dividers, 質�
   - `noteAdjustFailure(engine: Pick<Engine, 'adjustUnavailable'>): boolean`
   - `useAdjustFailureNotice(engine: Engine | null, photo: Pick<PhotoParams, 'values' | 'look'>): void`
 
-- [ ] **Step 0: Find the step-1 hooks to extend**
+- [x] **Step 0: Find the step-1 hooks to extend**
 
 Run: `grep -n "useFilterLoader\|<BeautyPanel\|photoScoped\|photoTouchToast\|PERSON_TABS.has" src/ui/screens/Editor.tsx src/ui/screens/Camera.tsx; grep -n "startLiveLoop({" -A9 src/ui/screens/Camera.tsx`
 Expected: the two `useFilterLoader` calls; the `<BeautyPanel` elements with step 1's `lens` / `onEdit` props; in the editor `const scope = multi && photoScoped(sel, lens);` (chips and boxes dim), `photoTouchToast(b, …)` in `slide` and the two `PERSON_TABS.has(sel.tab)` gates (photo taps, face boxes); the live-loop deps object.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/ui/screens/hooks.test.ts`:
 
@@ -5122,12 +5122,12 @@ describe('failure notices', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run src/ui/screens/hooks.test.ts`
 Expected: FAIL — `requestLut` / `noteAdjustFailure` are not exported.
 
-- [ ] **Step 3: hooks.ts**
+- [x] **Step 3: hooks.ts**
 
 Replace `useFilterLoader` (lines 5-17) in `src/ui/screens/hooks.ts` and widen the imports:
 
@@ -5195,7 +5195,7 @@ export function useAdjustFailureNotice(engine: Engine | null, photo: Pick<PhotoP
 
 (The `useHold` hook below stays unchanged.)
 
-- [ ] **Step 4: Editor**
+- [x] **Step 4: Editor**
 
 In `src/ui/screens/Editor.tsx`:
 1. Import line 97: `import { useFilterLoader, useHold } from './hooks';` → `import { requestLut, useAdjustFailureNotice, useHold, useLutLoader } from './hooks';`; add `photoTabLabel` to the `../panelModel` import (lines 80-92).
@@ -5217,7 +5217,7 @@ In `src/ui/screens/Editor.tsx`:
    and use `personTab` in place of `PERSON_TABS.has(sel.tab)` in the `tapsOn` condition (line 1018) and the `boxItems` condition (line 1060). (Declare `personTab` before both uses; `sel` is in scope there.)
 5. First-touch toast: nothing to add in the Editor. Its `slide()` already calls step 1's `photoTouchToast(b, lens, touchedPhoto.current)` for every slider step and commit, and `BeautyPanel` calls `tapToast(item, lens, r, photoTouched)` for every tile tap; Task 12 made those say 「調節套用於整張照片」 once for the 12 items (seen key `'adjust'`) and 「質感套用於整張照片」 once for a look pick or its 程度 (seen key `'look'`), with ≥ 2 persons, once per editor session (the `touchedPhoto` set).
 
-- [ ] **Step 5: Camera**
+- [x] **Step 5: Camera**
 
 In `src/ui/screens/Camera.tsx` (CRLF — Edit tool):
 1. Imports: `import { useFilterLoader, useHold } from './hooks';` (line 28) → `import { requestLut, useAdjustFailureNotice, useHold, useLutLoader } from './hooks';`; add `normalizedCropRect` to the `../imaging` import (line 22); `RATIO_VALUE` and `app` are already imported from `../state` (line 26).
@@ -5237,17 +5237,17 @@ In `src/ui/screens/Camera.tsx` (CRLF — Edit tool):
 
 4. `<BeautyPanel …>` (lines 455-464): add the props `lookFailed={(id) => bundle?.engine.lutState('look', id) === 'failed'}` and `onRetryLook={(id) => bundle && requestLut(bundle.engine, 'look', id)}`.
 
-- [ ] **Step 6: Run the tests, typecheck and build**
+- [x] **Step 6: Run the tests, typecheck and build**
 
 Run: `npx vitest run src/ui/screens/hooks.test.ts && npm run typecheck && npm test && npm run build`
 Expected: PASS; `tsc` exits 0; `vite build` succeeds. `grep -rn "useFilterLoader" src` prints nothing.
 
-- [ ] **Step 7: Existing screen e2e still green**
+- [x] **Step 7: Existing screen e2e still green**
 
 Run: `npx playwright test tests/e2e/editor.spec.ts tests/e2e/camera.spec.ts`
 Expected: PASS (一鍵 opens on 美顏, so 原圖／自然 are found as before; the camera's tab loop is unchanged).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/ui/screens/hooks.ts src/ui/screens/hooks.test.ts src/ui/screens/Editor.tsx src/ui/screens/Camera.tsx

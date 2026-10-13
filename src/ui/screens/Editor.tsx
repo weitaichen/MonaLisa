@@ -83,6 +83,7 @@ import {
   INITIAL_SELECTION,
   personNumber,
   photoScoped,
+  photoTabLabel,
   photoTouchToast,
   showsHeightBand,
   sliderEmptyText,
@@ -94,7 +95,7 @@ import { haptic } from '../platform';
 import { ensureBodyTracker, ensureEngine, ensureFaceSegmenter, svc } from '../services';
 import { go, setPendingHistory, showSaveFallback, toast, type EditorSource } from '../state';
 import { useStore } from '../store';
-import { useFilterLoader, useHold } from './hooks';
+import { requestLut, useAdjustFailureNotice, useHold, useLutLoader } from './hooks';
 import { useZoomPan } from './zoomPan';
 
 const ENCODE_DEBOUNCE_MS = 400;
@@ -768,7 +769,8 @@ export function Editor({ source }: { source: EditorSource }) {
     setFieldTick((n) => n + 1);
   }, [session, detect, edit, protectTick, limitRequested]);
 
-  useFilterLoader(bundle?.engine ?? null, edit.photo.filterId);
+  useLutLoader(bundle?.engine ?? null, edit.photo);
+  useAdjustFailureNotice(bundle?.engine ?? null, edit.photo);
 
   useEffect(() => {
     if (!session) return;
@@ -1015,7 +1017,9 @@ export function Editor({ source }: { source: EditorSource }) {
   const binding = sliderFor(lens, sel, bodyCtx);
 
   // ── persons UI (S §2): photo taps, the strip, the face boxes ──
-  const tapsOn = !!session && multi && PERSON_TABS.has(sel.tab) && !showsHeightBand(sel, bodyCtx);
+  /** 調節 and 一鍵 › 質感 act on the whole photo, like 濾鏡: no face boxes, no photo taps (step-2 spec §2.1–2.2) */
+  const personTab = PERSON_TABS.has(sel.tab) && photoTabLabel(sel) === null;
+  const tapsOn = !!session && multi && personTab && !showsHeightBand(sel, bodyCtx);
   useZoomPan(stageRef, layerRef, !!session, {
     onTap: tapsOn
       ? (uv, rect) => {
@@ -1057,7 +1061,7 @@ export function Editor({ source }: { source: EditorSource }) {
   const bands = detect && multi ? fieldBands(fieldInputOf(edit, detect, measures, bodyAspect)) : [];
   const layerW = layerRef.current?.getBoundingClientRect().width ?? 0;
   const boxItems: FaceBoxItem[] =
-    detect && multi && PERSON_TABS.has(sel.tab)
+    detect && multi && personTab
       ? detect.persons.flatMap((p, i): FaceBoxItem[] => {
           const f = p.face ? detect.faces.find((x) => x.id === p.face) : undefined;
           const b = !f && sel.tab === 'body' && p.body ? detect.bodies?.find((x) => x.id === p.body) : undefined;
@@ -1165,6 +1169,8 @@ export function Editor({ source }: { source: EditorSource }) {
           faceNote={faceNote}
           body={bodyCtx}
           photoTouched={touchedPhoto.current}
+          lookFailed={(id) => bundle?.engine.lutState('look', id) === 'failed'}
+          onRetryLook={(id) => bundle && requestLut(bundle.engine, 'look', id)}
         />
       </div>
       <div class="editor-bottom-pad" />

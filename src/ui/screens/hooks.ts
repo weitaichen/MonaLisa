@@ -1,19 +1,61 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { Engine } from '../../types';
+import { adjustWanted } from '../../engine/adjustMath';
+import { photoLuts } from '../../engine/looks';
+import type { Engine, LutKind, PhotoParams } from '../../types';
 import { reportError } from '../debug';
+import { lookFailedNotice } from '../panelModel';
+import { toast } from '../state';
 
-/** Make sure the selected LUT is uploaded (the engine lazy-loads; we ask early so the swap is instant). */
-export function useFilterLoader(engine: Engine | null, filterId: string): void {
-  useEffect(() => {
-    if (!engine || filterId === 'none') return;
-    let p: Promise<void>;
-    try {
-      p = engine.loadFilter(filterId);
-    } catch (e) {
-      p = Promise.reject(e);
+/** looks whose load failure was already announced in this page session (step-2 spec §2.4: once per look) */
+const lookFailNoted = new Set<string>();
+let adjustFailNoted = false;
+
+/**
+ * Ask the engine for a LUT now (it lazy-loads; asking early makes the swap instant). An explicit call also retries a
+ * failed one (the re-tap of a selected look). A 質感 that cannot load is announced once per look per session.
+ */
+export function requestLut(engine: Engine, kind: LutKind, id: string): void {
+  let p: Promise<void>;
+  try {
+    p = engine.loadLut(kind, id);
+  } catch (e) {
+    p = Promise.reject(e);
+  }
+  p.catch((e: unknown) => {
+    reportError(e, `loadLut(${kind}, ${id})`);
+    if (kind === 'look' && !lookFailNoted.has(id)) {
+      lookFailNoted.add(id);
+      toast(lookFailedNotice(id), 3200);
     }
-    p.catch((e: unknown) => reportError(e, `loadFilter(${filterId})`));
-  }, [engine, filterId]);
+  });
+}
+
+/** The photo's 濾鏡 and 質感 LUTs, requested whenever they change. */
+export function useLutLoader(engine: Engine | null, photo: Pick<PhotoParams, 'filterId' | 'look'>): void {
+  const filterId = photo.filterId;
+  const lookId = photo.look?.id ?? null;
+  useEffect(() => {
+    if (!engine) return;
+    for (const r of photoLuts({ filterId, look: lookId === null ? null : { id: lookId } })) requestLut(engine, r.kind, r.id);
+  }, [engine, filterId, lookId]);
+}
+
+/** 「調節效果暫時無法使用」 once per page session, when the engine could not build the 調節 program (step-2 spec §7). */
+export function noteAdjustFailure(engine: Pick<Engine, 'adjustUnavailable'>): boolean {
+  if (adjustFailNoted || !engine.adjustUnavailable) return false;
+  adjustFailNoted = true;
+  toast('調節效果暫時無法使用', 3200);
+  return true;
+}
+
+/** Checks after the frame that asked for 調節 or 質感 has been drawn (sessions draw on the next animation frame). */
+export function useAdjustFailureNotice(engine: Engine | null, photo: Pick<PhotoParams, 'values' | 'look'>): void {
+  const wanted = adjustWanted(photo.values, photo.look);
+  useEffect(() => {
+    if (!engine || !wanted || adjustFailNoted) return;
+    const t = window.setTimeout(() => noteAdjustFailure(engine), 250);
+    return () => clearTimeout(t);
+  });
 }
 
 /**

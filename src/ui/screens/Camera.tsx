@@ -19,13 +19,13 @@ import { reportError } from '../debug';
 import { deps } from '../deps';
 import { openInEditor, pickPhoto } from '../flows';
 import { Icon } from '../icons';
-import { cropImageData, grabOriginalFrame, shotSeed } from '../imaging';
+import { cropImageData, grabOriginalFrame, normalizedCropRect, shotSeed } from '../imaging';
 import { CAMERA_BODY, INITIAL_SELECTION, sliderFor, type BodyContext, type PanelSelection } from '../panelModel';
 import { haptic, isStandalone } from '../platform';
 import { ensureEngine, getCamera, stopCamera, svc } from '../services';
 import { app, go, RATIO_VALUE, RATIOS, setLook, TIMERS, toast } from '../state';
 import { useStore } from '../store';
-import { useFilterLoader, useHold } from './hooks';
+import { requestLut, useAdjustFailureNotice, useHold, useLutLoader } from './hooks';
 
 let lastSel: PanelSelection = INITIAL_SELECTION;
 /** 美體 is photo-only: its note offers the import right where the user looked for it */
@@ -103,7 +103,8 @@ export function Camera() {
     if (svc.get().engine.state !== 'unsupported') ensureEngine().catch(() => undefined);
   }, []);
 
-  useFilterLoader(bundle?.engine ?? null, look.photo.filterId);
+  useLutLoader(bundle?.engine ?? null, look.photo);
+  useAdjustFailureNotice(bundle?.engine ?? null, look.photo);
 
   useEffect(() => {
     if (engine.state !== 'ready' || !engine.note || notedBundle === engine.bundle) return;
@@ -136,6 +137,8 @@ export function Camera() {
         getLook: () => lookRef.current,
         getAll: () => app.get().cameraAll,
         getPrefs: () => prefsRef.current,
+        // the picture the shutter keeps (captureFrom crops to the same ratio): vignette and grain follow it
+        getFrame: () => normalizedCropRect(ctrl.video.videoWidth, ctrl.video.videoHeight, RATIO_VALUE[app.get().ratio]),
         onStats,
       });
     } catch (e) {
@@ -461,6 +464,8 @@ export function Camera() {
         collapsed={collapsed}
         faceNote={faceNote}
         body={cameraBody}
+        lookFailed={(id) => bundle?.engine.lutState('look', id) === 'failed'}
+        onRetryLook={(id) => bundle && requestLut(bundle.engine, 'look', id)}
       />
 
       <div class="cam-controls">

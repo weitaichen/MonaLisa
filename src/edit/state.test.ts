@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyPreset, PARAM_DEFS } from '../engine/params';
-import { cropConstrain, IDENTITY_GEOMETRY, rotateLeft } from '../geometry/view';
+import { cropConstrain, cropValid, IDENTITY_GEOMETRY, rotateLeft } from '../geometry/view';
 import type { EditState, Geometry } from '../types';
 import {
   assignPersons,
@@ -249,9 +249,14 @@ describe('geometry in the edit state (step 3)', () => {
     const small: Geometry = { flipH: false, quarter: 0, straighten: 99, crop: { x: 0.4, y: 0.4, w: 0.2, h: 0.2 } };
     expect(sanitizeGeometry(small, OSIZE).straighten).toBe(45);
     expect(sanitizeGeometry({ ...ok, quarter: 7, flipH: 'yes' }, OSIZE)).toMatchObject({ quarter: 0, flipH: false });
-    const noisy = { ...ok, crop: { ...ok.crop, w: ok.crop.w + 5e-5 } };
+    // a crop on the valid region's edge, nudged 5e-5 past it: invalid as stored, so only the ≤ 1e-4 rule keeps it (S §5)
+    const edge = cropConstrain({ flipH: false, quarter: 0, straighten: 10, crop: { x: 0, y: 0, w: 1, h: 1 } }, OSIZE);
+    const noisy = { ...edge, crop: { ...edge.crop, w: edge.crop.w + 5e-5 } };
+    expect(cropValid(noisy, OSIZE)).toBe(false);
     const fixed = sanitizeGeometry(noisy, OSIZE);
     expect(fixed).not.toEqual(IDENTITY_GEOMETRY);
+    expect(cropValid(fixed, OSIZE)).toBe(true);
+    expect(fixed.straighten).toBe(10);
     expect(fixed.crop.w).toBeLessThanOrEqual(noisy.crop.w);
     expect(sanitizeGeometry({ ...ok, crop: { x: 0.6, y: 0.6, w: 0.9, h: 0.9 } }, OSIZE)).toEqual(IDENTITY_GEOMETRY);
     expect(sanitizeGeometry({ ...ok, crop: { x: Number.NaN, y: 0, w: 1, h: 1 } }, OSIZE)).toEqual(IDENTITY_GEOMETRY);

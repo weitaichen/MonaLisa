@@ -1315,7 +1315,7 @@ git commit -m "v0.4 step 4 (4/20): tone region geometry — gates, crescents, na
   ```
   A draw writes `off + str · smoothstep(0, 1, value)` through its channel `mask` with blend equation `blend`; draws run in ascending `phase`, then in list order. (This is S §4.2's shader `uStr · smoothstep(…)`, and for Q.B `0.5 + 0.5·uWarm·smoothstep(…)`, with the neutral point stored as `TONE_ZERO` = 128/255 so it decodes to exactly 0.)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add inside the existing `describe('buildMaskGeometry')` of `src/engine/passes/mask.test.ts`:
 ```ts
@@ -1463,12 +1463,12 @@ describe('R and Q draw lists', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `npx vitest run src/engine/passes/toneGeometry.test.ts src/engine/passes/mask.test.ts`
 Expected: FAIL — `mouthGeometry is not a function` (missing exports) and the ring-width test (the fourth argument is ignored).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/engine/passes/mask.ts` (CRLF) — line 81 gains the parameter and line 118 uses it:
 ```ts
@@ -1663,12 +1663,12 @@ export function toneDrawsQ(faces: readonly ToneFaceInput[], aspect: number): Ton
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/engine/passes && npm run typecheck`
 Expected: PASS (the existing `mask.test.ts` cases are unchanged).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/engine/passes/toneGeometry.ts src/engine/passes/toneGeometry.test.ts src/engine/passes/mask.ts src/engine/passes/mask.test.ts

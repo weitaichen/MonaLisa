@@ -6,15 +6,24 @@ import {
   crescentGeometry,
   dist,
   earOf,
+  eyeGeometry,
   eyeOpen,
   faceFrame,
   farSide,
   isoPt,
+  mouthGeometry,
   mouthOpen,
   nasolabialGeometry,
+  NEUTRAL_TONE,
   resampleChain,
   sideFade,
   teethGate,
+  toneDrawsQ,
+  toneDrawsR,
+  toneValuesOf,
+  TONE_ZERO,
+  warmRingWidth,
+  type ToneFaceInput,
   type V2,
 } from './toneGeometry';
 
@@ -184,5 +193,138 @@ describe('crescents and nasolabial bands', () => {
     }
     expect(eyeOpen(d, 'L', ASPECT)).toBe(0);
     expect(dist([0, 0], [3, 4])).toBe(5);
+  });
+});
+
+const area2 = (a: V2, b: V2, c: V2) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+function triangles(g: Float32Array): { a: V2; b: V2; c: V2; v: number[] }[] {
+  const out: { a: V2; b: V2; c: V2; v: number[] }[] = [];
+  for (let i = 0; i < g.length; i += 9) out.push({ a: iso(g[i], g[i + 1]), b: iso(g[i + 3], g[i + 4]), c: iso(g[i + 6], g[i + 7]), v: [g[i + 2], g[i + 5], g[i + 8]] });
+  return out;
+}
+/** every triangle has a non-zero area and they all share one orientation (nothing folds) */
+function noFold(g: Float32Array): boolean {
+  const s = triangles(g).map((t) => area2(t.a, t.b, t.c));
+  return s.every((x) => Math.abs(x) > 1e-14) && (s.every((x) => x > 0) || s.every((x) => x < 0));
+}
+/** the recorded face with the image-left eye squeezed to EAR `ear` and the inner lips closed to mouthOpen `open` */
+function squint(ear: number, open: number): Face {
+  const f = { ...FACE, pts111: new Float32Array(FACE.pts111) };
+  const fr = faceFrame(FACE, ASPECT);
+  const squeeze = (ids: number[], centre: V2, k: number) => {
+    for (const i of ids) {
+      const p = isoPt(FACE, i, ASPECT);
+      const along = (p[0] - centre[0]) * fr.yhat[0] + (p[1] - centre[1]) * fr.yhat[1];
+      f.pts111[i * 2] = p[0] - fr.yhat[0] * along * (1 - k);
+      f.pts111[i * 2 + 1] = (p[1] - fr.yhat[1] * along * (1 - k)) * ASPECT;
+    }
+  };
+  squeeze([53, 72, 54, 56, 73, 57], isoPt(FACE, 74, ASPECT), ear / earOf(FACE, 'L', ASPECT));
+  const a = isoPt(FACE, 98, ASPECT);
+  const b = isoPt(FACE, 102, ASPECT);
+  squeeze([97, 98, 99, 101, 102, 103], [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], open / mouthOpen(FACE, ASPECT));
+  return f;
+}
+
+describe('mouth and eye fans', () => {
+  it('the value-1 area of the mouth equals the inner-lip polygon within 1 %', () => {
+    const poly = [96, 97, 98, 99, 100, 101, 102, 103].map((i) => isoPt(FACE, i, ASPECT));
+    let shoelace = 0;
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i];
+      const q = poly[(i + 1) % poly.length];
+      shoelace += p[0] * q[1] - q[0] * p[1];
+    }
+    const polyArea = Math.abs(shoelace) / 2;
+    const fan = triangles(mouthGeometry(FACE, ASPECT)).filter((t) => t.v.every((v) => v === 1));
+    const fanArea = fan.reduce((s, t) => s + Math.abs(area2(t.a, t.b, t.c)) / 2, 0);
+    expect(Math.abs(fanArea - polyArea) / polyArea).toBeLessThan(0.01);
+  });
+
+  it('a squint (EAR 0.15) and an almost closed mouth (0.01) still give positive-area, unfolded triangles', () => {
+    const f = squint(0.15, 0.01);
+    expect(earOf(f, 'L', ASPECT)).toBeCloseTo(0.15, 2);
+    expect(mouthOpen(f, ASPECT)).toBeCloseTo(0.01, 2);
+    expect(noFold(eyeGeometry(f, 'L', ASPECT))).toBe(true);
+    expect(noFold(mouthGeometry(f, ASPECT))).toBe(true);
+    expect(noFold(eyeGeometry(FACE, 'R', ASPECT))).toBe(true);
+  });
+
+  it('the mirrored face gives the mirrored fans', () => {
+    const m = mirrorFace(FACE);
+    expect(sameMirroredVertices(eyeGeometry(FACE, 'L', ASPECT), eyeGeometry(m, 'R', ASPECT))).toBe(true);
+    expect(sameMirroredVertices(mouthGeometry(FACE, ASPECT), mouthGeometry(m, ASPECT))).toBe(true);
+  });
+});
+
+describe('膚色 ring width w_T', () => {
+  const fw = faceFrame(FACE, ASPECT).fw;
+  const ovalIso = (): V2[] => Array.from({ length: FACE.oval.length / 2 }, (_, i): V2 => [FACE.oval[i * 2], FACE.oval[i * 2 + 1] / ASPECT]);
+  const boxCentre = (): V2 => {
+    const xs = ovalIso().map((p) => p[0]);
+    const ys = ovalIso().map((p) => p[1] * ASPECT);
+    return [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+  };
+
+  it('is 0.30 fw for a lone face (no cap, or cap −1)', () => {
+    expect(warmRingWidth(FACE, ASPECT, null)).toBeCloseTo(0.3 * fw, 12);
+    expect(warmRingWidth(FACE, ASPECT, { c: [0.5, 0.5], r: -1 })).toBeCloseTo(0.3 * fw, 12);
+  });
+
+  it('shrinks toward 0.08 fw as a neighbour comes close, and never passes the midpoint when there is room', () => {
+    const c = boxCentre();
+    const cIso: V2 = [c[0], c[1] / ASPECT];
+    const rOval = Math.max(...ovalIso().map((p) => dist(p, cIso)));
+    let prev = Infinity;
+    for (const gapFw of [3, 2.5, 2, 1.6, 1.3, 1.1]) {
+      const cap = { c, r: (gapFw * fw) / 2 };
+      const w = warmRingWidth(FACE, ASPECT, cap);
+      expect(w).toBeLessThanOrEqual(prev + 1e-12);
+      expect(w).toBeGreaterThanOrEqual(0.08 * fw - 1e-12);
+      if (cap.r - rOval >= 0.08 * fw) expect(rOval + w).toBeLessThanOrEqual(cap.r + 1e-12);
+      prev = w;
+    }
+  });
+});
+
+describe('R and Q draw lists', () => {
+  const one = (values = NEUTRAL_TONE, face = FACE): ToneFaceInput[] => [{ face, values, weight: 1, cap: null }];
+
+  it('neutral values draw nothing into R; Q always carries the skin coverage (G = 1)', () => {
+    expect(toneDrawsR(one(), ASPECT)).toEqual([]);
+    expect(toneDrawsQ(one(), ASPECT).map((d) => [d.phase, d.blend, d.str[1]])).toEqual([
+      [0, 'max', 1],
+      [1, 'min', 1],
+    ]);
+  });
+
+  it('each tool writes only its own R channel, scaled by its gates', () => {
+    const v = { ...NEUTRAL_TONE, darkCircle: 1, nasolabial: 1, teeth: 1, eyeBright: 1 };
+    const draws = toneDrawsR(one(v), ASPECT);
+    for (const d of draws) {
+      expect(d.blend).toBe('max');
+      expect(d.str.filter((s) => s > 0)).toHaveLength(1);
+    }
+    expect(Math.max(...draws.map((d) => d.str[2]))).toBe(1); // 白牙: mouth open 0.042 → gate 1; |yaw| < 0.25 → no fade
+    const closed = toneDrawsR(one(v, squint(0.1, 0.005)), ASPECT);
+    expect(closed.some((d) => d.str[2] > 0)).toBe(false); // 白牙 off on a closed mouth
+    expect(closed.filter((d) => d.str[3] > 0)).toHaveLength(1); // 亮眼 only on the open image-right eye
+  });
+
+  it('膚色: a warm face draws MAX, then MIN holes into B around TONE_ZERO; a cool face the opposite', () => {
+    const warm = toneDrawsQ(one({ ...NEUTRAL_TONE, warmth: 1 }), ASPECT).filter((d) => d.mask[2]);
+    expect(warm.map((d) => [d.phase, d.blend, d.off[2], d.str[2]])).toEqual([
+      [2, 'max', TONE_ZERO, 0.5],
+      [3, 'min', TONE_ZERO, 0.5],
+    ]);
+    const cool = toneDrawsQ(one({ ...NEUTRAL_TONE, warmth: 0 }), ASPECT).filter((d) => d.mask[2]);
+    expect(cool.map((d) => [d.blend, d.str[2]])).toEqual([
+      ['min', -0.5],
+      ['max', -0.5],
+    ]);
+  });
+
+  it('reads PersonParams values, turning junk into neutral and clamping to 0..1', () => {
+    expect(toneValuesOf({ 'tone.even': 0.4, 'tone.warmth': Number.NaN, 'tone.teeth': 7 })).toEqual({ ...NEUTRAL_TONE, even: 0.4, teeth: 1 });
   });
 });

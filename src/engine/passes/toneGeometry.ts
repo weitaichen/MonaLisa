@@ -2,7 +2,8 @@
 // built from one adapted face, plus the gates folded into each region's strength. Pure, no GL; toneMask.ts draws them.
 // Every distance is iso (fractions of the image width on both axes, as mask.ts:70): the iso point of a uv is
 // (x, y / aspect). pts111 indices follow src/tracking/adapter111.ts; image-left = GPUPixel left. Original work.
-import type { Face } from '../../types';
+import type { Face, ParamId } from '../../types';
+import { buildMaskGeometry, MASK_MAX_FLOATS } from './mask';
 
 export type V2 = [number, number];
 /** image-left / image-right half of the face */
@@ -194,4 +195,213 @@ export function nasolabialGeometry(face: Face, side: Side, aspect: number): Floa
     tr.quad(mid[i], val[i], mid[i + 1], val[i + 1], hi[i + 1], 0, hi[i], 0);
   }
   return tr.uv(aspect);
+}
+
+/** 8-bit zero point of the signed targets Q.B and Δ8: 128/255 is stored exactly, so neutral decodes to exactly 0 */
+export const TONE_ZERO = 128 / 255;
+
+/** O-normalized rectangle a target covers: x, y, w, h (the preview covers the whole O) */
+export type Win = readonly [number, number, number, number];
+export const IDENTITY_WIN: Win = [0, 0, 1, 1];
+export type Rgba = readonly [number, number, number, number];
+export type ChannelMask = readonly [boolean, boolean, boolean, boolean];
+export const R_CLEAR: Rgba = [0, 0, 0, 0];
+export const Q_CLEAR: Rgba = [0, 0, TONE_ZERO, 0];
+
+export interface ToneValues {
+  even: number;
+  /** 0..1, 0.5 neutral (−50 冷 … +50 暖) */
+  warmth: number;
+  darkCircle: number;
+  nasolabial: number;
+  teeth: number;
+  eyeBright: number;
+}
+export const NEUTRAL_TONE: ToneValues = { even: 0, warmth: 0.5, darkCircle: 0, nasolabial: 0, teeth: 0, eyeBright: 0 };
+
+const v01 = (v: number | undefined, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : d);
+export function toneValuesOf(v: Readonly<Partial<Record<ParamId, number>>>): ToneValues {
+  return {
+    even: v01(v['tone.even'], 0),
+    warmth: v01(v['tone.warmth'], 0.5),
+    darkCircle: v01(v['tone.darkCircle'], 0),
+    nasolabial: v01(v['tone.nasolabial'], 0),
+    teeth: v01(v['tone.teeth'], 0),
+    eyeBright: v01(v['tone.eyeBright'], 0),
+  };
+}
+/** the items the tone field P0c serves (S §4.1: 勻膚, 膚色, 黑眼圈 or 法令紋) */
+export function fieldActive(t: ToneValues): boolean {
+  return t.even > 0 || t.warmth !== 0.5 || t.darkCircle > 0 || t.nasolabial > 0;
+}
+export function toneActive(t: ToneValues): boolean {
+  return fieldActive(t) || t.teeth > 0 || t.eyeBright > 0;
+}
+
+/** step 1's influence cap of one face (face-table texel 73): centre in UV, radius iso; r < 0 = no cap */
+export interface ToneCap {
+  c: V2;
+  r: number;
+}
+export interface ToneFaceInput {
+  face: Face;
+  values: ToneValues;
+  /** RenderFace.weight (1 in the editor) */
+  weight: number;
+  cap: ToneCap | null;
+}
+/** one draw into R or Q: writes off + str · smoothstep(0, 1, value) through `mask` with blend equation `blend` */
+export interface ToneDraw {
+  /** draws run in ascending phase, then in list order */
+  phase: 0 | 1 | 2 | 3;
+  blend: 'max' | 'min';
+  mask: ChannelMask;
+  off: Rgba;
+  str: Rgba;
+  /** x, y (O-normalized uv), value — a triangle list */
+  verts: Float32Array;
+}
+
+/** `p` moved by `d` along the ray from `c` (d < 0: toward c) */
+const away = (p: V2, c: V2, d: number): V2 => add(p, mul(unit(sub(p, c)), d));
+
+// Both rings run corner, upper ×3, corner, lower ×3: [c0, U1, U2, U3, c4, L3, L2, L1], so point i (1…3, 5…7) faces its
+// rung partner 8 − i across the opening.
+const INNER_LIP = [96, 97, 98, 99, 100, 101, 102, 103];
+const EYE_RING: Record<Side, readonly number[]> = { L: [52, 53, 72, 54, 55, 56, 73, 57], R: [58, 59, 75, 60, 61, 62, 76, 63] };
+
+/**
+ * The centre ring point i moves toward (inset) or away from (outset): the midpoint of its rung, and for a corner the
+ * midpoint of the nearest rung. A thin, curved opening (an almost closed mouth, a squint) is not star-shaped about its
+ * centroid — the recorded face's inner lip already is not — so moving every point toward one centroid folds the ring.
+ */
+function rungCentre(ring: readonly V2[], i: number): V2 {
+  const k = i === 0 ? 1 : i === 4 ? 3 : i;
+  return mul(add(ring[k], ring[8 - k]), 0.5);
+}
+
+/** a, b, c, d in order around the quad, split along the diagonal that keeps both halves one way round (the shorter one when both do) */
+function quadSplit(t: Tris, a: V2, av: number, b: V2, bv: number, c: V2, cv: number, d: V2, dv: number): void {
+  const s = (p: V2, q: V2, r: V2) => Math.sign((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]));
+  const okAC = s(a, b, c) !== 0 && s(a, b, c) === s(a, c, d);
+  const okBD = s(a, b, d) !== 0 && s(a, b, d) === s(b, c, d);
+  if (okBD && (!okAC || dist(b, d) < dist(a, c))) {
+    t.tri(a, av, b, bv, d, dv);
+    t.tri(b, bv, c, cv, d, dv);
+  } else t.quad(a, av, b, bv, c, cv, d, dv);
+}
+
+/** the polygon of an 8-point ring at value `v`, triangulated as a ladder of its rungs (exact for any simple opening) */
+function ladder(t: Tris, p: readonly V2[], v: number): void {
+  t.tri(p[0], v, p[1], v, p[7], v);
+  quadSplit(t, p[1], v, p[2], v, p[6], v, p[7], v);
+  quadSplit(t, p[2], v, p[3], v, p[5], v, p[6], v);
+  t.tri(p[3], v, p[4], v, p[5], v);
+}
+
+/** 白牙 (R.B): 1 on the inner-lip polygon, falling to 0 over an outward ring of 0.04·mouthW */
+export function mouthGeometry(face: Face, aspect: number): Float32Array {
+  const f = faceFrame(face, aspect);
+  const poly = INNER_LIP.map((i) => isoPt(face, i, aspect));
+  const outer = poly.map((p, i) => away(p, rungCentre(poly, i), 0.04 * f.mouthW));
+  const t = new Tris();
+  ladder(t, poly, 1);
+  for (let i = 0; i < poly.length; i++) {
+    const j = (i + 1) % poly.length;
+    quadSplit(t, outer[i], 0, outer[j], 0, poly[j], 1, poly[i], 1);
+  }
+  return t.uv(aspect);
+}
+
+/**
+ * 亮眼 (R.A): each eye-ring point moved toward its rung centre c — value 0 at an inset of min(0.04·eyeW, 0.25|c − p|),
+ * value 1 at min(0.12·eyeW, 0.5|c − p|), 1 inside. The capped insets never cross the opening's midline (S §4.2), and
+ * the lid skin stays out.
+ */
+export function eyeGeometry(face: Face, side: Side, aspect: number): Float32Array {
+  const w = faceFrame(face, aspect).eyeW[side];
+  const ring = EYE_RING[side].map((i) => isoPt(face, i, aspect));
+  const inset = (k: number, cap: number) =>
+    ring.map((p, i) => {
+      const c = rungCentre(ring, i);
+      return away(p, c, -Math.min(k * w, cap * dist(c, p)));
+    });
+  const a = inset(0.04, 0.25);
+  const b = inset(0.12, 0.5);
+  const t = new Tris();
+  ladder(t, b, 1);
+  for (let i = 0; i < ring.length; i++) {
+    const j = (i + 1) % ring.length;
+    quadSplit(t, a[i], 0, a[j], 0, b[j], 1, b[i], 1);
+  }
+  return t.uv(aspect);
+}
+
+/**
+ * Width w_T of 膚色's outer ring: 0.30 fw without a cap; otherwise clamp(cap − r_oval, 0.08 fw, 0.30 fw), r_oval being
+ * the largest iso distance from the cap centre to an oval point, so the ring stops about halfway to the next face.
+ */
+export function warmRingWidth(face: Face, aspect: number, cap: ToneCap | null): number {
+  const fw = faceFrame(face, aspect).fw;
+  if (!cap || !(cap.r >= 0)) return 0.3 * fw;
+  const c: V2 = [cap.c[0], cap.c[1] / aspect];
+  let rOval = 0;
+  for (let i = 0; i < face.oval.length; i += 2) rOval = Math.max(rOval, dist(c, [face.oval[i], face.oval[i + 1] / aspect]));
+  return Math.min(0.3 * fw, Math.max(0.08 * fw, cap.r - rOval));
+}
+
+const ALL: ChannelMask = [true, true, true, true];
+const RG: ChannelMask = [true, true, false, false];
+const BLUE: ChannelMask = [false, false, true, false];
+const NONE4: Rgba = [0, 0, 0, 0];
+
+/** R: R 黑眼圈 · G 法令紋 · B 白牙 · A 亮眼, every region MAX (overlaps keep the strongest face); zero strengths are skipped */
+export function toneDrawsR(faces: readonly ToneFaceInput[], aspect: number): ToneDraw[] {
+  const out: ToneDraw[] = [];
+  const put = (str: Rgba, geometry: () => Float32Array) => {
+    if (str[0] > 0 || str[1] > 0 || str[2] > 0 || str[3] > 0) out.push({ phase: 0, blend: 'max', mask: ALL, off: NONE4, str, verts: geometry() });
+  };
+  for (const { face, values: v, weight } of faces) {
+    const w = weight > 0 ? Math.min(1, weight) : 0;
+    if (w === 0) continue;
+    for (const side of SIDES) {
+      const fade = sideFade(face, side);
+      put([w * v.darkCircle * fade, 0, 0, 0], () => crescentGeometry(face, side, aspect));
+      put([0, w * v.nasolabial * fade, 0, 0], () => nasolabialGeometry(face, side, aspect));
+      put([0, 0, 0, w * v.eyeBright * eyeOpen(face, side, aspect) * fade], () => eyeGeometry(face, side, aspect));
+    }
+    put([0, 0, w * v.teeth * teethGate(face, aspect), 0], () => mouthGeometry(face, aspect));
+  }
+  return out;
+}
+
+/**
+ * Q: R 勻膚 strength · G skin coverage · B 膚色 around TONE_ZERO. Skin (as 磨皮): oval + 8 % fw ring MAX (phase 0), eye and
+ * mouth holes MIN (phase 1), channels R and G. 膚色: oval + w_T ring and the same holes, channel B; a warm face draws MAX
+ * then MIN holes, a cool face MIN then MAX holes, so a hole pulls toward neutral from either side (phases 2, 3).
+ */
+export function toneDrawsQ(faces: readonly ToneFaceInput[], aspect: number): ToneDraw[] {
+  const out: ToneDraw[] = [];
+  const buf = new Float32Array(MASK_MAX_FLOATS);
+  const parts = (face: Face, ringIso?: number) => {
+    const [count, base] = buildMaskGeometry(face, aspect, buf, ringIso);
+    return { base: buf.slice(0, base * 3), holes: buf.slice(base * 3, count * 3) };
+  };
+  for (const { face, values: v, weight, cap } of faces) {
+    const w = weight > 0 ? Math.min(1, weight) : 0;
+    if (w === 0) continue;
+    const skin = parts(face);
+    const str: Rgba = [w * v.even, 1, 0, 0];
+    out.push({ phase: 0, blend: 'max', mask: RG, off: NONE4, str, verts: skin.base });
+    out.push({ phase: 1, blend: 'min', mask: RG, off: NONE4, str, verts: skin.holes });
+    const s = 2 * (v.warmth - 0.5) * w;
+    if (s !== 0) {
+      const g = parts(face, warmRingWidth(face, aspect, cap));
+      const off: Rgba = [0, 0, TONE_ZERO, 0];
+      const ws: Rgba = [0, 0, 0.5 * s, 0];
+      out.push({ phase: 2, blend: s > 0 ? 'max' : 'min', mask: BLUE, off, str: ws, verts: g.base });
+      out.push({ phase: 3, blend: s > 0 ? 'min' : 'max', mask: BLUE, off, str: ws, verts: g.holes });
+    }
+  }
+  return out;
 }

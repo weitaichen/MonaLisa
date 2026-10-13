@@ -55,6 +55,14 @@ describe('buildMaskGeometry', () => {
     expect([...ring].sort()).toEqual([0, 1]);
   });
 
+  it('an explicit ring width moves the ring vertices that far out (膚色 wide ring, skin-cleanup spec §4.2)', () => {
+    const out = new Float32Array(MASK_MAX_FLOATS);
+    const [, base] = buildMaskGeometry(face(), 1, out, 0.12);
+    let minRing = Infinity;
+    for (let v = 0; v < base; v++) if (out[v * 3 + 2] === 0) minRing = Math.min(minRing, Math.hypot(out[v * 3] - 0.5, out[v * 3 + 1] - 0.47));
+    expect(minRing).toBeGreaterThan(0.21 + 0.12 * 0.99);
+  });
+
   /**
    * CPU raster of the 磨皮 channel in MaskPass.drawFaces' order (S §4.2): every ring with MAX, every fan with blending
    * off, every hole with MIN, each fragment k · smoothstep(0, 1, v) over a clear of 0 (the editor: no globalSkin).

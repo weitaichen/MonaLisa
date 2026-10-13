@@ -77,8 +77,9 @@ type V2 = [number, number];
  * Triangle list (x, y, value) for the mask, written into `out` from index 0. `aspect` = W/H; offsets are isotropic.
  * Returns [vertexCount, base, fanEnd]: fans [0, fanEnd), ring [fanEnd, base), holes [base, vertexCount) (the holes are
  * drawn with MIN blending; MaskPass.drawFaces draws every face's ring, then every fan, then every hole).
+ * `ringIso`: the outer ring's width in iso units (default `MASK_FEATHER.ring · fw`; 膚色 passes w_T, skin-cleanup spec §4.2).
  */
-export function buildMaskGeometry(face: Face, aspect: number, out: Float32Array): [number, number, number] {
+export function buildMaskGeometry(face: Face, aspect: number, out: Float32Array, ringIso?: number): [number, number, number] {
   let n = 0;
   const push = (p: V2, v: number) => {
     out[n++] = p[0];
@@ -115,7 +116,7 @@ export function buildMaskGeometry(face: Face, aspect: number, out: Float32Array)
   for (let i = 0; i < face.oval.length; i += 2) oval.push([face.oval[i], face.oval[i + 1]]);
   const oc = centroid(oval);
   const faceW = isoDist(P(0), P(32));
-  const ring = MASK_FEATHER.ring * faceW;
+  const ring = ringIso ?? MASK_FEATHER.ring * faceW;
   for (let i = 0; i < oval.length; i++) tri(oc, 1, oval[i], 1, oval[(i + 1) % oval.length], 1);
   const fanEnd = n / 3;
   for (let i = 0; i < oval.length; i++) {

@@ -10,11 +10,28 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-12-adjust-and-looks-design.md` (called **S** below). Contract: `docs/superpowers/specs/2026-10-12-v04-roadmap.md` (called **C**; accepted, every §12 question at its recommended default). Names consumed from step 1: `docs/superpowers/specs/2026-10-12-face-person-select-design.md` (called **S1**).
 
+## Reconciliation (step 2)
+
+Checked against the code at `9eec432` (step 1 fully committed, its follow-ups included; `npm run typecheck` is green there). Every step-1 name in the table below exists with the shape this plan assumed (`ParamDef.scope/live`, `PhotoParamId`, `RenderInput`, `lensFor` / `Lens`, `itemsFor` / `activate` / `sliderFor` / `tabHasValue`, `SliderBinding`, `LiveDeps.getLook`, `loadLook` / `LOOK_KEY`, v2 history), and the line endings listed under Global Constraints were re-verified. These edits were made:
+
+- **Line anchors** of every task were moved to `9eec432` (types, params, composite, pipeline, index, still, live, testFakes, t7 fakes, panelModel, BeautyPanel, Slider, Editor, Camera, bench). `gen-luts.mjs`, `assets.test.mjs`, `NOTICE.txt`, `Settings.tsx`, `icons.tsx` and `theme.css` anchors already matched.
+- **Step-1 names table:** `StillFrame` lives in `src/types.ts` (still.ts only imports it); `LiveDeps` also has a required `getAll()`; `FakeEngine` is at `t7/fakes.ts:90`; the photo-scope rule and the first-touch toasts are step 1's `photoScoped`, `personNote`, `photoTouchToast`, `tapToast` and `sliderEmptyText` in `src/ui/panelModel.ts` (Editor / BeautyPanel only call them), and the face boxes / photo taps are gated by `PERSON_TABS` (`src/ui/editorModel.ts:535`); `BeautyPanel` has the extra prop `photoTouched?`.
+- **Task 3:** `settings.test.ts` already imports `loadLook`, `LOOK_KEY`, `PARAMS_KEY`, `PARAM_DEFS`, `applyPreset`; `history.test.ts` already imports `EditState` and has an `../edit/state` import to extend.
+- **Task 6:** the local `shaderHash` of `reshapeCpu.test.ts` is at `:19-27`; the step-1 composite measured `0cc1e52b` at `9eec432` (re-measure in Step 1 all the same).
+- **Task 7:** `run()` plans through step 1's `planFrame(job, makeupReady, bodyOn)`, so `adjustOn` is added there (its `job` type gains `adjust: { on: boolean }`) and the three `planFrame` tests are ported with the `planPasses` ones.
+- **Task 11:** the still test imports `StillFrame` from `../types`; both new live tests pass `getAll: () => false` (required by `LiveDeps`; without it `step()` throws before drawing); `render` / `exportImageData` name their frame `f`; `imaging.ts` already has a `../types` type import to extend.
+- **Task 12:** step 1 keeps the photo-level rules in panelModel, so the plan's `firstTouchLabel` (meant for Editor code that does not exist) is replaced by teaching step 1's `photoScoped`, `personNote`, `photoTouchToast`, `TILE_ITEMS` and `sliderEmptyText` the 調節 tab and 一鍵 › 質感 (one new test); the two new sliders go through step 1's `decorate` (photo form with ≥ 2 persons; unchanged with one person, so the dispatch test's `'look.film'` stands).
+- **Task 13:** the 美妝 part dot keeps step 1's `partHasValue(lens, part)` (under 全部: any face person's), not `lens.shade(part).on`; the strip's person note is skipped on 調節 and 一鍵 › 質感 (S §2.2 "no per-person strip notes").
+- **Task 14:** Editor Step 4 is rewritten for the real step-1 code: the chip dimming and both toasts come from Task 12; Editor only hides the face boxes and photo taps on the two photo-level tabs (`PERSON_TABS.has(sel.tab) && !photoTabLabel(sel)`, as 濾鏡 already is).
+- **Task 16:** the 調節效能 output box uses its own class `adjust-note` (step 1's bench test and `tests/harness/t8/run-bench.mjs` require `.gate .note` to be unique).
+- **Task 17:** `BASE` is the step base commit `9eec432` (the workflow's messages read `v0.4 step 2 task <N>: …`, which `--grep='^v0.4 step 2:'` would not find).
+- **Commits:** the `git commit -m "v0.4 step 2: …"` lines show each task's file list and intent; the workflow's own message format (`v0.4 step 2 task <N>: <title>`, fixes `v0.4 step 2 task <N> fix: …`, written to a file and committed with `git commit -F`) replaces them. Task 9's second paragraph (the tuning-sheet path) goes into that message's body.
+
 ## Global Constraints
 
 - Branch `feat/meiyan-pwa`; commits are LOCAL ONLY (never `git push`, never deploy). Every commit message ends with the trailer line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - `package.json` `"version"` stays `0.3.0` (step 6's release task bumps it). No new npm dependency (S §4.8). MediaPipe stays `0.10.35`; CSP stays `connect-src 'self'`.
-- Line endings: files keep their existing endings. CRLF files touched here (at `892ea61`; re-check with `file <path>` before editing): `src/types.ts`, `src/ui/panelModel.ts`, `src/engine/shaders/composite.ts`, `src/engine/pipeline.ts`, `src/engine/index.ts`, `src/app/live.ts`, `src/app/live.test.ts`, `src/app/testFakes.ts`, `src/ui/components/BeautyPanel.tsx`, `src/ui/components/Slider.tsx`, `src/ui/screens/Camera.tsx`, `src/ui/icons.tsx`, `src/ui/theme.css`, `scripts/gen-luts.mjs`, `src/bench/main.ts`. Edit them with the Edit tool (never rewrite a CRLF file with Write); after each task run `git diff --numstat` and confirm no file shows a whole-file rewrite. New files are LF (`.gitattributes`: `* text=auto eol=lf`).
+- Line endings: files keep their existing endings. CRLF files touched here (re-verified at `9eec432`; re-check with `file <path>` before editing): `src/types.ts`, `src/ui/panelModel.ts`, `src/engine/shaders/composite.ts`, `src/engine/pipeline.ts`, `src/engine/index.ts`, `src/app/live.ts`, `src/app/live.test.ts`, `src/app/testFakes.ts`, `src/ui/components/BeautyPanel.tsx`, `src/ui/components/Slider.tsx`, `src/ui/screens/Camera.tsx`, `src/ui/icons.tsx`, `src/ui/theme.css`, `scripts/gen-luts.mjs`, `src/bench/main.ts`. Edit them with the Edit tool (never rewrite a CRLF file with Write); after each task run `git diff --numstat` and confirm no file shows a whole-file rewrite. New files are LF (`.gitattributes`: `* text=auto eol=lf`).
 - `npm run typecheck` is `tsc --noEmit` over `src` **and** `tests` (`tsconfig.json:20`), harnesses included: a change to a shared type (`Engine`, `PhotoParams`, `PanelSelection`, `ParamId`) ports `tests/harness/**` and `tests/e2e/pages/**` in the same commit (`tests/harness/t7/fakes.ts` has `class FakeEngine implements Engine`). The gitignored, generated `tests/harness/b2/baseline/` is never edited: if a stale copy on disk fails typecheck, delete the directory (`rm -rf tests/harness/b2/baseline`; `make-baseline.mjs` regenerates it).
 - Tabs: the editor and the camera both get 7 tabs `一鍵 · 美膚 · 美型 · 美體 · 濾鏡 · 美妝 · 調節` (C §2.1, §2.4). No 9th tab may ever be added (C §2.1).
 - Naming: this step's code says `adjust` (`adjustMath.ts`, `ADJUST_GLSL`, `adjustStage()`, `uAdjustOn`), never `tone` (step 4 owns `tone.*`) (S §1.4 "Naming").
@@ -59,13 +76,13 @@ Step 1 is implemented before this plan runs (its plan: `docs/superpowers/plans/2
 | `splitLegacy(p) → {photo, person}`, `legacyProjection(edit, primary)` | `src/edit/legacy.ts` | 3 |
 | `lensFor(edit, sel, persons, primary, opts?): Lens` with `readonly edit`, `get(id) → {value, mixed}`, `set`, `applyPreset`, `setFilter(filterId)`, `resetGroup`, `reset()` (重置 → `resetAll`), `shade(part)`; `PersonInfo {id, face, body}`, `P0_INFO` | `src/edit/lens.ts` | 3, 12, 13 |
 | the step-1 unit assertions that list the photo-level ids literally: `src/edit/state.test.ts` 'scope table' (`[...PHOTO_IDS].sort()`), `src/edit/legacy.test.ts` 'splits photo items …' (`Object.keys(photo.values).sort()`) | `src/edit/*.test.ts` (step-1 plan Task 4) | 1 |
-| `class FakeEngine implements Engine` (the T7 visual harness) | `tests/harness/t7/fakes.ts:74` | 8 |
-| `itemsFor(lens, sel, body?)`, `activate(item, lens, sel)` → `ActivateResult {edit, sel, changed, notice?}` (local `done(next = edit, nextSel = sel, notice?)`), `sliderFor(lens, sel, body?)`, `tabHasValue(lens, tab, body?)`, `SliderBinding {key, param, label, bidirectional, value, mixed, defaultValue, apply(lens, v) → EditState}`; `BeautyPanel` props `{lens, sel, onSel, onEdit, collapsed?, faceNote?, body?, id?}` | `src/ui/panelModel.ts`, `src/ui/components/BeautyPanel.tsx` (step-1 plan Task 10) | 12, 13 |
-| `StillFrame = Omit<RenderInput, 'source' \| 'width' \| 'height' \| 'body'>`; `render(frame)`, `prepareExport(frame)`, `exportReady(frame)`, `exportImageData(frame, body?)` | `src/app/still.ts` | 11 |
-| the `LiveDeps` accessor for the camera look (port of `getParams`, `live.ts:29`; this plan calls it `getLook(): CameraLook`), `capture()` returning `{image, seed} \| null` | `src/app/live.ts` | 11, 14 |
+| `class FakeEngine implements Engine` (the T7 visual harness) | `tests/harness/t7/fakes.ts:90` | 8 |
+| `itemsFor(lens, sel, body?)`, `activate(item, lens, sel)` → `ActivateResult {edit, sel, changed, notice?}` (local `done(next = edit, nextSel = sel, notice?)`), `sliderFor(lens, sel, body?)` (≥ 2 persons: wrapped by the local `decorate(b, lens, photo)`), `tabHasValue(lens, tab, body?)`, `SliderBinding {key, param, label, aria?, bidirectional, value, mixed, defaultValue, apply(lens, v) → EditState}`; `BeautyPanel` props `{lens, sel, onSel, onEdit, collapsed?, faceNote?, body?, photoTouched?, id?}` | `src/ui/panelModel.ts`, `src/ui/components/BeautyPanel.tsx` (step-1 plan Task 10) | 12, 13 |
+| `StillFrame = Omit<RenderInput, 'source' \| 'width' \| 'height' \| 'body'>` (`src/types.ts:432`); `render(frame)`, `prepareExport(frame)`, `exportReady(frame)`, `exportImageData(frame, body?)` | `src/types.ts`, `src/app/still.ts` | 11 |
+| `LiveDeps.getLook(): CameraLook` (`live.ts:43`; `getAll(): boolean` is required too), `capture()` returning `{image, seed} \| null` | `src/app/live.ts` | 11, 14 |
 | `LOOK_KEY = 'meiyan.look.v1'`, `loadLook(): CameraLook` (step-1 plan Task 11) | `src/store/settings.ts` | 3 |
 | `addEntry`/`getEntry` with `schema: 2, edit` | `src/store/history.ts` | 3 |
-| the person-strip photo-scope rule (A11) and the first-touch toast 「{label}套用於整張照片」 | `src/ui/screens/Editor.tsx` | 14 |
+| the photo-scope rule (A11: `photoScoped(sel, lens)` dims the person chips and the face boxes), `personNote(tab, lens)`, the first-touch toasts 「{label}套用於整張照片」 (`photoTouchToast(b, lens, seen)` for sliders, `tapToast(item, lens, r, seen)` + `TILE_ITEMS` for tiles, keyed in the Editor's `touchedPhoto` set), `sliderEmptyText(lens, sel)`; the face boxes and photo taps show on `PERSON_TABS` only | `src/ui/panelModel.ts`; `PERSON_TABS` in `src/ui/editorModel.ts:535` (used by `src/ui/screens/Editor.tsx:1018, 1060`) | 12, 13, 14 |
 | `tests/e2e/parity.spec.ts`, `tests/fixtures/parity-v03/*.png` | e2e | 17 |
 
 ## File Structure
@@ -91,9 +108,9 @@ Step 1 is implemented before this plan runs (its plan: `docs/superpowers/plans/2
 | `LICENSES/NOTICE.txt`, `src/ui/screens/Settings.tsx` | modify | original-work and hash-prospector lines; credits sentence |
 | `tests/e2e/pages/composite.{html,ts}`, `tests/e2e/composite.spec.ts` | create | GPU vs `compositeCpu` harness |
 | `src/app/still.ts`, `src/app/live.ts`, `src/app/testFakes.ts`, `src/ui/imaging.ts` | modify | `ensureLuts`, `exportReady` via `lutState`; `pictureFrame`, `grainSeed`; fake engine LUT states; `normalizedCropRect` |
-| `src/ui/panelModel.ts` | modify | `'adjust'` tab, `PresetPart`, adjust/look items, sliders, activation, dots, parts, lead chip, `photoTabLabel` |
+| `src/ui/panelModel.ts` | modify | `'adjust'` tab, `PresetPart`, adjust/look items, sliders, activation, dots, parts, lead chip, `photoTabLabel`; step 1's `photoScoped`, `personNote`, `photoTouchToast`, `TILE_ITEMS`, `sliderEmptyText` learn the two photo-level tabs |
 | `src/ui/icons.tsx`, `src/ui/components/BeautyPanel.tsx`, `src/ui/components/Slider.tsx`, `src/ui/theme.css` | modify | 13 icons; part row for 一鍵, dividers, lead chip, thumb fallback, retry; slider tints; styles |
-| `src/ui/screens/hooks.ts`, `Editor.tsx`, `Camera.tsx` | modify | `useLutLoader`, `requestLut`, `useAdjustFailureNotice`; wiring; `getFrame` |
+| `src/ui/screens/hooks.ts`, `Editor.tsx`, `Camera.tsx` | modify | `useLutLoader`, `requestLut`, `useAdjustFailureNotice`; wiring; no face boxes / photo taps on the photo-level tabs; `getFrame` |
 | `tests/e2e/adjust.spec.ts` | create | editor + camera e2e |
 | `src/bench/adjustBench.ts`, `src/bench/main.ts`, `tests/e2e/bench.spec.ts` | create/modify | 調節 cost row, grain-hash probe, smoke test |
 
@@ -102,8 +119,8 @@ Step 1 is implemented before this plan runs (its plan: `docs/superpowers/plans/2
 ### Task 1: 調節 parameters in the schema
 
 **Files:**
-- Modify: `src/types.ts:6` (`ParamGroup`), `src/types.ts:8-34` (`ParamId`), step 1's `PhotoParamId` (C §3.2), new type exports after `ParamDef` (`src/types.ts:36-47`)
-- Modify: `src/engine/params.ts:4-37` (`PARAM_DEFS`, after the 美妝 entries)
+- Modify: `src/types.ts:6` (`ParamGroup`), `src/types.ts:8-34` (`ParamId`), step 1's `PhotoParamId` (`src/types.ts:117`, C §3.2), new type exports after `ParamDef` (`src/types.ts:38-53`)
+- Modify: `src/engine/params.ts:4-38` (`PARAM_DEFS`, after the 美妝 entries)
 - Test: `src/engine/params.adjust.test.ts` (create); `src/engine/params.test.ts`, step 1's `src/edit/state.test.ts` and `src/edit/legacy.test.ts` (mechanical ports of the counts and photo-id lists)
 
 **Interfaces:**
@@ -247,7 +264,7 @@ export type LutState = 'none' | 'loading' | 'ready' | 'failed';
 
 - [ ] **Step 4: Add the 12 defs**
 
-In `src/engine/params.ts`, after the `makeup.blush` entry of `PARAM_DEFS` (line 36), add (the `scope`/`live` fields are step 1's; keep the field order step 1 uses for the other entries):
+In `src/engine/params.ts`, after the `makeup.blush` entry of `PARAM_DEFS` (line 37), add (the `scope`/`live` fields are step 1's; keep the field order step 1 uses for the other entries):
 
 ```ts
   // 調節 — photo-level and live; neutral by default and never part of a beauty preset (step-2 spec §3.1)
@@ -265,7 +282,7 @@ In `src/engine/params.ts`, after the `makeup.blush` entry of `PARAM_DEFS` (line 
   { id: 'adjust.vignette', label: '暗角', group: 'adjust', bidirectional: false, default: 0, icon: 'vignette', scope: 'photo', live: true },
 ```
 
-`PRESETS` builds its `values` from `neutralValues()` / `defaultValues()` over `PARAM_DEFS` (`params.ts:86-96`), so every preset gets the neutral adjust values without further edits.
+`PRESETS` builds its `values` from `neutralValues()` / `defaultValues()` over `PARAM_DEFS` (`params.ts:87-97`), so every preset gets the neutral adjust values without further edits.
 
 - [ ] **Step 5: Port the schema assertions that count params (mechanical, C §1.1)**
 
@@ -312,7 +329,7 @@ git commit -m "v0.4 step 2: 調節 params in the schema (12 photo-level, live, n
 - Test: `src/engine/looks.test.ts`
 
 **Interfaces:**
-- Consumes: `LookDef`, `LookId`, `LutKind`, `ParamDef` (Task 1); `PARAM_DEFS`, `paramDef`, `fromDisplay`, `signed` (`src/engine/params.ts:258-271`, test only).
+- Consumes: `LookDef`, `LookId`, `LutKind`, `ParamDef` (Task 1); `PARAM_DEFS`, `paramDef`, `fromDisplay`, `signed` (`src/engine/params.ts:265-272`, test only).
 - Produces:
   - `const LOOK_IDS: readonly LookId[]` = `['film', 'ccd', 'flash', 'blue', 'cinema']`
   - `const LOOKS: readonly LookDef[]`
@@ -512,7 +529,7 @@ git commit -m "v0.4 step 2: 質感 look table (5 looks, offsets, LUT refs)" -m "
 - Test: `src/edit/adjust.test.ts` (create); append to `src/store/settings.test.ts` and `src/store/history.test.ts`
 
 **Interfaces:**
-- Consumes: Task 1 (`AdjustId`, `LookId`, adjust defs); Task 2 (`isLookId`, `lookDef`); step 1's `EditState`, `PhotoParams`, `defaultPhoto()`, `naturalPerson()`, `neutralPerson()`, `sanitizeEditState(raw, personIds | null, oSize?)`, `editKey(edit)`, `splitLegacy(p)`, `legacyProjection(edit, primary)`, `lensFor(edit, sel, persons, primary)` with `get/set/applyPreset/setFilter/resetGroup/reset`; step 1's `loadLook()`/`LOOK_KEY` (`meiyan.look.v1`) in `src/store/settings.ts`; step 1's v2 `addEntry`/`getEntry`.
+- Consumes: Task 1 (`AdjustId`, `LookId`, adjust defs); Task 2 (`isLookId`, `lookDef`); step 1's `EditState`, `PhotoParams`, `defaultPhoto()`, `naturalPerson()`, `neutralPerson()`, `sanitizeEditState(raw, personIds | null)`, `editKey(edit)`, `splitLegacy(p)`, `legacyProjection(edit, primary)`, `lensFor(edit, sel, persons, primary)` with `get/set/applyPreset/setFilter/resetGroup/reset`; step 1's `loadLook()`/`LOOK_KEY` (`meiyan.look.v1`) in `src/store/settings.ts`; step 1's v2 `addEntry`/`getEntry`.
 - Produces:
   - `PhotoParams.look: { id: LookId; amount: number } | null` (C §3.2)
   - `setLook(edit: EditState, id: LookId | null, amount: number): EditState`
@@ -714,7 +731,7 @@ describe('sanitize, keys and legacy (step-2 spec §5)', () => {
 });
 ```
 
-Append to `src/store/settings.test.ts` (it already stubs `localStorage` with `MemoryStorage` in `beforeEach`; import `loadLook` and `LOOK_KEY` from `./settings` next to the existing imports):
+Append to `src/store/settings.test.ts` (it already stubs `localStorage` with `MemoryStorage` in `beforeEach`, and already imports `loadLook`, `LOOK_KEY`, `PARAMS_KEY` from `./settings` and `applyPreset`, `PARAM_DEFS` from `../engine/params`: no new import):
 
 ```ts
 describe('camera look: 調節 and 質感 (step-2 spec §5)', () => {
@@ -770,7 +787,7 @@ describe('v2 entries with 調節 and 質感 (step-2 spec §5)', () => {
 });
 ```
 
-(add `import { defaultPhoto, naturalPerson, neutralPerson } from '../edit/state';` and `EditState` to the `../types` type import.)
+(add `defaultPhoto, naturalPerson, neutralPerson` to its existing `import { assignPersons, renamePersons } from '../edit/state';`; `EditState` is already in its `../types` type import.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -791,7 +808,7 @@ In `src/types.ts`, in step 1's `PhotoParams` after `filterId: string;` add:
 In `src/edit/state.ts`:
 1. In `defaultPhoto()`'s returned object add `look: null,` (the 12 adjust values are already neutral: step 1 fills them from `PHOTO_IDS`, the photo-scope `PARAM_DEFS`, via the 自然 preset).
 2. In step 1's `sanitizePhoto(raw, persons)` (the stored-photo sanitizer `sanitizeEditState` calls), add `look: sanitizePhotoLook(r.look),` to the `PhotoParams` literal it builds (`r` is its raw record). The adjust values need no new code: its loop clamps every id of `PHOTO_IDS` (finite → clamp01, else the 自然 default), and `PHOTO_IDS` now holds the 12 adjust ids.
-3. Add (imports: `paramsInGroup`, `neutralValue`, `hasValue` from `../engine/params`; `isLookId` from `../engine/looks`; `AdjustId`, `LookId` types):
+3. Add (imports: `paramsInGroup`, `neutralValue` into the existing `../engine/params` import; `isLookId` from `../engine/looks`; `AdjustId`, `LookId` into the existing `../types` type import):
 
 ```ts
 const clampAmount = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
@@ -833,7 +850,7 @@ export function sanitizePhotoLook(raw: unknown): PhotoParams['look'] {
 - [ ] **Step 5: Lens**
 
 In `src/edit/lens.ts`:
-1. Import `resetAdjust` and `setLook as setPhotoLook` from `./state` and `LookId` from `../types`; add to the `Lens` interface (step 1 does not have these yet; C §3.3 lists `setLook`):
+1. Add `resetAdjust` and `setLook as setPhotoLook` to the existing `./state` import and `LookId` to the `../types` type import; add to the `Lens` interface (step 1 does not have these yet; C §3.3 lists `setLook`):
 
 ```ts
   /** 一鍵 › 質感 of the photo (step-2 spec §3.4) */
@@ -1878,8 +1895,8 @@ git commit -m "v0.4 step 2: 調節 stages, effective values, picture frame and u
 
 **Files:**
 - Create: `src/engine/shaders/adjust.ts`, `src/engine/shaderHash.ts`, `src/engine/compositeCpu.ts`
-- Modify: `src/engine/shaders/composite.ts:9-16` (Modified list), `:47-59` (units), `:61` (`COMPOSITE_FS` → `compositeFs`), `:72` (uniforms), `:156-158` (library splice), `:196-201` (call splice)
-- Modify: `src/engine/passes/reshapeCpu.test.ts:9-17` (use the moved `shaderHash`)
+- Modify: `src/engine/shaders/composite.ts:9-15` (Modified list), `:46-59` (units), `:61` (`COMPOSITE_FS` → `compositeFs`), `:72` (uniforms), `:156-158` (library splice), `:199-204` (call splice)
+- Modify: `src/engine/passes/reshapeCpu.test.ts:19-27` (use the moved `shaderHash`)
 - Test: `src/engine/compositeCpu.test.ts`
 
 **Interfaces:**
@@ -1904,7 +1921,7 @@ console.log(h.toString(16).padStart(8, '0'));
 "
 ```
 
-Expected: 8 hex digits. v0.3's text (`892ea61`) hashes to `c960b9db`; step 1 is expected to change it (per-face 磨皮／紅潤 strengths, C §3.8 `composite.ts:158-201`), but whatever is printed is the value to pin — it is measured, not designed. Call the printed value `STEP1_COMPOSITE_HASH`; Step 2 pastes it.
+Expected: 8 hex digits. v0.3's text (`892ea61`) hashes to `c960b9db`; step 1 changed it (per-face 磨皮／紅潤 strengths, C §3.8 `composite.ts:158-201`): at `9eec432` it prints `0cc1e52b`. Whatever is printed is the value to pin — it is measured, not designed. Call the printed value `STEP1_COMPOSITE_HASH`; Step 2 pastes it.
 
 If Node cannot import the file (step 1 gave `composite.ts` an extensionless runtime import), measure it in Vitest instead, still before any edit: create `src/engine/compositeBase.tmp.test.ts` with
 
@@ -2042,7 +2059,7 @@ export function shaderHash(src: string): string {
 }
 ```
 
-In `src/engine/passes/reshapeCpu.test.ts` delete the local `/** FNV-1a 32 of the shader with whitespace collapsed */ function shaderHash(src: string): string {…}` (lines 9-17 at `892ea61`) and add `import { shaderHash } from '../shaderHash';` with the other imports. The reshape pin keeps its value.
+In `src/engine/passes/reshapeCpu.test.ts` delete the local `/** FNV-1a 32 of the shader with whitespace collapsed */ function shaderHash(src: string): string {…}` (lines 19-27 at `9eec432`) and add `import { shaderHash } from '../shaderHash';` with the other imports. The reshape pin keeps its value.
 
 - [ ] **Step 5: The 調節 GLSL**
 
@@ -2384,8 +2401,8 @@ git commit -m "v0.4 step 2: 調節 composite variant, CPU port and hash pins (ba
 
 **Files:**
 - Create: `src/engine/compositePrograms.ts`
-- Modify: `src/engine/pipeline.ts` (imports `:9-44`; `FrameJob` `:53-75`; `PassPlanInput`/`PassPlan`/`planPasses` `:83-112`; `Pipeline` `:114-128`; program setup `:207-226`; composite draw `:442-467`; `dispose` `:492-511`)
-- Modify: `src/engine/index.ts` `job()` (`:174-194`; step 1 rewrote its face fields) — an interim `adjust` with user values only
+- Modify: `src/engine/pipeline.ts` (header `:1-11`; imports `:12-49`; `FrameJob` `:77-101`; `PassPlanInput`/`PassPlan`/`planPasses`/`planFrame` `:109-166`; `Pipeline` `:187-201`; program setup `:280-299`; composite draw `:467-492`; `dispose` `:517-533`)
+- Modify: `src/engine/index.ts` `job()` (`:205-244`; step 1 rewrote its face fields) — an interim `adjust` with user values only
 - Test: `src/engine/compositePrograms.test.ts` (create); `src/engine/pipeline.test.ts` (extend + mechanical port)
 
 **Interfaces:**
@@ -2395,14 +2412,14 @@ git commit -m "v0.4 step 2: 調節 composite variant, CPU port and hash pins (ba
   - `createCompositePrograms(gl: GL): CompositePrograms`
   - `uploadAdjust(gl: GL, p: Program, a: AdjustUniforms, lookResident: boolean): void`
   - `FrameJob.adjust: AdjustUniforms`, `FrameJob.lookLut: Texture | null`
-  - `PassPlanInput.adjustOn: boolean`, `PassPlan.adjust: boolean`
+  - `PassPlanInput.adjustOn: boolean`, `PassPlan.adjust: boolean` (`planFrame` reads `job.adjust.on`)
   - `Pipeline.adjustFailed: boolean` (getter)
   - the frame's `passes` gain `'adjust'` (right after `'composite'`) exactly when the 調節 program drew
 
 - [ ] **Step 0: Confirm the step-1 shapes**
 
 Run: `grep -n "export interface FrameJob\|export interface PassPlanInput\|export interface PassPlan\b\|compProg\|for (let unit" src/engine/pipeline.ts; grep -n "function job" -A30 src/engine/index.ts | head -40`
-Expected: `compProg` is created and its samplers set as at `892ea61` (`pipeline.ts:209, 217-226`), drawn at the end of `run()`; `job()` returns the `FrameJob`.
+Expected: `compProg` is created and its samplers set (`pipeline.ts:282, 290-299` at `9eec432`), drawn at the end of `run()`; `run()` plans the frame through `planFrame(job, makeupReady, body !== null)` (`:406`), which builds the `planPasses` input; `job()` returns the `FrameJob`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2621,7 +2638,7 @@ export function uploadAdjust(gl: GL, p: Program, a: AdjustUniforms, lookResident
 
 In `src/engine/pipeline.ts` (CRLF — Edit tool):
 1. Imports: replace `import { COMPOSITE_FS, COMPOSITE_UNITS } from './shaders/composite';` with `import { COMPOSITE_UNITS } from './shaders/composite';`, add `import type { AdjustUniforms } from './adjustMath';` and `import { createCompositePrograms, uploadAdjust } from './compositePrograms';`, and remove `hexToRgb` from the `./gl/gl` import list and `ROSY_TINT` from the `./uniforms` list (both now live in `compositePrograms.ts`; `noUnusedLocals` is on).
-2. Header comment (lines 1-8): add the line `// P5 has two programs (step 2): the base composite and the 調節 one (質感 LUT + 調節 stages), compiled on first need.`
+2. Header comment (lines 1-11): add the line `// P5 has two programs (step 2): the base composite and the 調節 one (質感 LUT + 調節 stages), compiled on first need.`
 3. `FrameJob`: after `filterLut: Texture | null;` add
 
 ```ts
@@ -2631,10 +2648,10 @@ In `src/engine/pipeline.ts` (CRLF — Edit tool):
   lookLut: Texture | null;
 ```
 
-4. `PassPlanInput`: add `/** the frame needs the 調節 program (FrameJob.adjust.on) */ adjustOn: boolean;`. `PassPlan`: add `adjust: boolean;`. In `planPasses` add `adjust: i.adjustOn,` to the returned object.
+4. `PassPlanInput`: add `/** the frame needs the 調節 program (FrameJob.adjust.on) */ adjustOn: boolean;`. `PassPlan`: add `adjust: boolean;`. In `planPasses` add `adjust: i.adjustOn,` to the returned object. In step 1's `planFrame` (the pure planner `run()` calls), widen its `job` parameter type to `{ faces: readonly Pick<FrameFace, 'weight' | 'makeup' | 'reshape'>[] } & Pick<FrameJob, 'maskClear' | 'matchGpupixel' | 'skin'> & { adjust: { on: boolean } }` and add `adjustOn: job.adjust.on,` to its `planPasses({ … })` argument.
 5. `Pipeline`: add `/** the 調節 program failed to compile on this context */ readonly adjustFailed: boolean;`.
-6. In `createPipeline`, replace `const compProg = createProgram(gl, PRESENT_VS, COMPOSITE_FS, 'composite');` with `const comp = createCompositePrograms(gl);`, change `const programs: Program[] = [meanProg, compProg, presentProg];` to `const programs: Program[] = [meanProg, presentProg];`, and delete the `compProg.use();` block that sets the composite samplers and `uRosyTint` (lines 217-226 at `892ea61`).
-7. In `run()`, add `adjustOn: job.adjust.on,` to the `planPasses({ … })` argument. Replace the composite section, from `compProg.use();` through the unbind loop, with:
+6. In `createPipeline`, replace `const compProg = createProgram(gl, PRESENT_VS, COMPOSITE_FS, 'composite');` with `const comp = createCompositePrograms(gl);`, change `const programs: Program[] = [meanProg, compProg, presentProg];` to `const programs: Program[] = [meanProg, presentProg];`, and delete the `compProg.use();` block that sets the composite samplers and `uRosyTint` (lines 290-299 at `9eec432`).
+7. In `run()` (its `planFrame(job, makeupReady, body !== null)` call needs no change: item 4 reads `job.adjust`), replace the composite section, from `compProg.use();` through the unbind loop (lines 470-491), with:
 
 ```ts
       const prog = comp.pick(plan.adjust);
@@ -2690,7 +2707,7 @@ In `src/engine/index.ts` add `import { adjustUniforms, frameFor } from './adjust
 
 - [ ] **Step 6: Port the existing plan assertions (mechanical)**
 
-In `src/engine/pipeline.test.ts`: add `adjustOn: false,` to the shared `base: PassPlanInput` object, and add `adjust: false` to every object literal passed to `toEqual(...)` on a `planPasses(...)` result (the `toMatchObject` ones need no change). Run `grep -n "planPasses(.*toEqual" src/engine/pipeline.test.ts` to find them.
+In `src/engine/pipeline.test.ts`: add `adjustOn: false,` to the shared `base: PassPlanInput` object, and add `adjust: false` to every object literal passed to `toEqual(...)` on a `planPasses(...)` or `planFrame(...)` result (the `toMatchObject` ones need no change). Run `grep -n "plan\(Passes\|Frame\)(.*toEqual" src/engine/pipeline.test.ts` to find them (five `planPasses` lines, three `planFrame` lines at `9eec432`). In the `describe('planFrame …')` block, the local `job(weights, maskClear)` helper gains `adjust: { on: false },`.
 
 - [ ] **Step 7: Run the tests**
 
@@ -2714,10 +2731,10 @@ git commit -m "v0.4 step 2: lazily compiled 調節 program in P5; base program f
 ### Task 8: Engine LUT cache for 濾鏡 and 質感, frame uniforms with picture frame and grain seed
 
 **Files:**
-- Modify: `src/types.ts:276-292` (`RenderInput`), `:303-328` (`Engine`)
-- Modify: `src/engine/index.ts:26-28` (constants), `:46-49` (filter maps), `:80-88` (`dropGlState`), `:122-167` (`loadFilter`, `filterFor`), `:174-194` (`job()`), `:218` (`loadFilter` export), `:260-273` (`dispose`)
-- Modify: `tests/harness/t7/fakes.ts:8-24, 74-94` (`class FakeEngine implements Engine` gains the three new members) — LF
-- Test: `src/engine/index.test.ts` (extend; one mechanical change at `:57`)
+- Modify: `src/types.ts:408-429` (`RenderInput`), `:443-468` (`Engine`)
+- Modify: `src/engine/index.ts:32-34` (constants), `:60-63` (filter maps), `:111-119` (`dropGlState`), `:153-198` (`loadFilter`, `filterFor`), `:205-244` (`job()`), `:268` (`loadFilter` export), `:310-323` (`dispose`)
+- Modify: `tests/harness/t7/fakes.ts:9-28, 90-110` (`class FakeEngine implements Engine` gains the three new members) — LF
+- Test: `src/engine/index.test.ts` (extend; one mechanical change at `:58`)
 
 **Interfaces:**
 - Consumes: Task 1 (`LutKind`, `LutState`); Task 2 (`lookDef`); Task 5 (`adjustUniforms`, `frameFor`, `ADJUST_IDS`, `seedMix`, `AdjustUniforms`); Task 7 (`FrameJob.adjust/lookLut`, `Pipeline.adjustFailed`); step 1's `RenderInput.photo`, `defaultPhoto()` (tests).
@@ -2730,11 +2747,11 @@ git commit -m "v0.4 step 2: lazily compiled 調節 program in P5; base program f
 - [ ] **Step 0: Confirm the step-1 shapes**
 
 Run: `grep -n "filterFor\|filterTex\|filterLoads\|filterFailed" src/engine/index.ts`
-Expected: the v0.3 filter cache (`index.ts:46-49, 84-86, 122-167, 175, 270`) with `input.photo.filterId` in `job()`.
+Expected: the v0.3 filter cache (`index.ts:60-63, 115-117, 153-198, 206, 320` at `9eec432`) with `input.photo.filterId` in `job()`.
 
 - [ ] **Step 1: Write the failing tests**
 
-In `src/engine/index.test.ts`, change the `beforeEach` mock (line 57) so look LUTs are 512² too:
+In `src/engine/index.test.ts`, change the `beforeEach` mock (line 58) so look LUTs are 512² too:
 
 ```ts
   loadTex.mockImplementation(async (_gl, url) => {
@@ -2891,7 +2908,7 @@ describe('createEngine: 濾鏡 and 質感 LUT cache (step-2 spec §3.5)', () => 
 });
 ```
 
-(Merge these imports into the file's existing import lines: `MAX_RESIDENT_LUTS` into `import { createEngine } from './index';`, `PhotoParams` and `RenderInput` into `import type { BodyField } from '../types';`. The `filterUrl` helper already exists at line 52.)
+(Merge these imports into the file's existing import lines: `MAX_RESIDENT_LUTS` into `import { createEngine } from './index';`, `PhotoParams` and `RenderInput` into `import type { BodyField } from '../types';`; `FrameJob` and `createPipeline` are already imported from `./pipeline`. The `filterUrl` helper already exists at line 53.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -2927,7 +2944,7 @@ In `src/types.ts`, `RenderInput` (step 1's v0.4 form) gains (C §4.1):
 
 In `src/engine/index.ts`:
 1. Imports: add `LutKind`, `LutState` to the `../types` type import; add `import { ADJUST_IDS, adjustUniforms, frameFor, type AdjustFrame, type AdjustUniforms, type AdjustValues } from './adjustMath';` (replacing Task 7's narrower import) and `import { lookDef } from './looks';`. Add `LookDef` to the `../types` type import.
-2. Replace lines 27-28 (`FILTER_ID`, `FILTER_LUT_SIZE`) with:
+2. Replace lines 33-34 (`FILTER_ID`, `FILTER_LUT_SIZE`) with:
 
 ```ts
 const LUT_ID = /^[a-z0-9_-]+$/;
@@ -2949,7 +2966,7 @@ interface LutEntry {
 }
 ```
 
-3. Replace the three filter maps (lines 46-49) with:
+3. Replace the three filter maps (lines 60-63, with the comment on `filterFailed`) with:
 
 ```ts
   /** 濾鏡 and 質感 LUTs keyed `${kind}:${id}` (the filter 'film' and the look 'film' are different textures) */
@@ -2961,7 +2978,7 @@ interface LutEntry {
 ```
 
 4. In `dropGlState()` replace the three `filter….clear()` lines with `lutCache.clear();`, `frameLuts = new Set();`, `adjustMemo = null;`.
-5. Replace `loadFilter` and `filterFor` (lines 122-167) with:
+5. Replace `loadFilter` and `filterFor` (lines 153-198) with:
 
 ```ts
   const lutKey = (kind: LutKind, id: string) => `${kind}:${id}`;
@@ -3088,7 +3105,7 @@ interface LutEntry {
 - [ ] **Step 5: Run the tests**
 
 Run: `npx vitest run src/engine/index.test.ts`
-Expected: PASS (the two v0.3 context-loss tests at `index.test.ts:61-93` keep passing: a failure on a lost context leaves no mark; one on a live context is not retried implicitly).
+Expected: PASS (the two v0.3 context-loss tests at `index.test.ts:62-95` keep passing: a failure on a lost context leaves no mark; one on a live context is not retried implicitly).
 
 - [ ] **Step 6: Port the engine stand-ins that implement `Engine`**
 
@@ -3861,14 +3878,14 @@ git commit -m "v0.4 step 2: GPU composite harness vs compositeCpu (each item at 
 ### Task 11: Still and live sessions — both LUTs, export readiness, picture frame, moving grain
 
 **Files:**
-- Modify: `src/app/still.ts` (`:93-99` LUT bookkeeping, `:143-161` `ensureFilter`, `:183-197` `onRestored`, `:199-226` `prepare`, `:233-238` `render`, `:263-270` `exportReady`/`exportImageData`) — LF
-- Modify: `src/app/live.ts` (`:24-32` `LiveDeps`, `:67` requested set, `:120-127` `step`, `:176-179` `draw`, `:242-246` `ensureFilter`, `:323-337` `capture`) — CRLF
-- Modify: `src/app/testFakes.ts:105-151` (`FakeEngine`) — CRLF
+- Modify: `src/app/still.ts` (`:105-110` LUT bookkeeping, `:144-162` `ensureFilter`, `:184-198` `onRestored`, `:200-228` `prepare`, `:237-242` `render`, `:259-271` `exportReady`/`exportImageData`) — LF
+- Modify: `src/app/live.ts` (`:38-48` `LiveDeps`, `:101` requested set, `:139-190` `step`, `:202-205` `draw`, `:263-267` `ensureFilter`, `:353-365` `capture`) — CRLF
+- Modify: `src/app/testFakes.ts:121-167` (`FakeEngine`) — CRLF
 - Modify: `src/ui/imaging.ts` (new `normalizedCropRect`) — LF
 - Test: `src/app/still.test.ts`, `src/app/live.test.ts` (extend); `src/ui/imaging.frame.test.ts` (create)
 
 **Interfaces:**
-- Consumes: Task 2 (`photoLuts`), Task 8 (`Engine.loadLut`, `Engine.lutState`, `RenderInput.pictureFrame/grainSeed`); step 1's `StillFrame`, `render(frame)`, `prepareExport(frame)`, `exportReady(frame)`, `exportImageData(frame, body?)`; step 1's `LiveDeps` camera-look accessor (called `getLook` here) and `capture()`; `centerCropRect` (`src/ui/imaging.ts:12-23`).
+- Consumes: Task 2 (`photoLuts`), Task 8 (`Engine.loadLut`, `Engine.lutState`, `RenderInput.pictureFrame/grainSeed`); step 1's `StillFrame`, `render(frame)`, `prepareExport(frame)`, `exportReady(frame)`, `exportImageData(frame, body?)`; step 1's `LiveDeps` camera-look accessor `getLook` and `capture()`; `centerCropRect` (`src/ui/imaging.ts:13-24`).
 - Produces:
   - `LiveDeps.getFrame?: () => Rect` — read every frame; absent → whole frame
   - live `RenderInput.grainSeed` = a per-loop counter advanced once per drawn camera frame (not on redraw); `capture()` uses the current one
@@ -3908,7 +3925,7 @@ describe('normalizedCropRect: the camera picture frame (step-2 spec §4.5)', () 
 });
 ```
 
-Append to `src/app/still.test.ts` (it already has `bitmap()`, `fakeEngine`, `fakeTracker`, fake timers and `stubRaf`; add `import { defaultPhoto } from '../edit/state';`, `import type { PhotoParams } from '../types';` and `type StillFrame` to the `./still` import):
+Append to `src/app/still.test.ts` (it already has `bitmap()`, `fakeEngine`, `fakeTracker`, fake timers and `stubRaf`; add `import { defaultPhoto } from '../edit/state';` and add `PhotoParams, StillFrame` to its existing `import type { BeautyParams } from '../types';` — `StillFrame` is declared in `src/types.ts`, `./still` does not export it):
 
 ```ts
 describe('濾鏡 and 質感 LUTs in the still session (step-2 spec §3.5)', () => {
@@ -3970,7 +3987,7 @@ describe('濾鏡 and 質感 LUTs in the still session (step-2 spec §3.5)', () =
 });
 ```
 
-Append to `src/app/live.test.ts` (it has `installWorkClock`, `FakeVideo`, `fakeEngine`, `fakeCamera`, `makePrefs`; add `import { defaultPhoto, naturalPerson } from '../edit/state';` and `CameraLook`, `Rect` to the `../types` type import):
+Append to `src/app/live.test.ts` (it has `installWorkClock`, `FakeVideo`, `fakeEngine`, `fakeCamera`, `makePrefs` (`prefs as makePrefs`); add `import { defaultPhoto, naturalPerson } from '../edit/state';` and `CameraLook`, `Rect` to the `../types` type import; `LiveDeps.getAll` is required, as in its other `startLiveLoop` calls):
 
 ```ts
 describe('調節 and 質感 in the live loop (step-2 spec §2.3, §4.4–4.5)', () => {
@@ -3990,6 +4007,7 @@ describe('調節 and 質感 in the live loop (step-2 spec §2.3, §4.4–4.5)', 
       engine,
       tracker: null,
       getLook: () => look,
+      getAll: () => false,
       getPrefs: () => makePrefs(),
       getFrame: () => frame,
     });
@@ -4018,7 +4036,7 @@ describe('調節 and 質感 in the live loop (step-2 spec §2.3, §4.4–4.5)', 
     const video = new FakeVideo();
     const engine = fakeEngine(clock);
     const look = lookWith({ filterId: 'warm', look: { id: 'ccd', amount: 0.8 } });
-    const loop = startLiveLoop({ camera: fakeCamera(video), engine, tracker: null, getLook: () => look, getPrefs: () => makePrefs() });
+    const loop = startLiveLoop({ camera: fakeCamera(video), engine, tracker: null, getLook: () => look, getAll: () => false, getPrefs: () => makePrefs() });
     video.play();
     vi.advanceTimersByTime(33 * 5 + 1);
     expect(engine.loadLut.mock.calls.filter(([k, id]) => k === 'filter' && id === 'warm')).toHaveLength(1);
@@ -4084,7 +4102,7 @@ and in the object literal of `fakeEngine` (after `loadFilter: vi.fn(() => Promis
 and directly before `return e as unknown as FakeEngine;`:
 
 ```ts
-  // registered before any session's listener, as the real engine's own listener is (index.ts:113-114)
+  // registered before any session's listener, as the real engine's own listener is (index.ts:144-145)
   e.canvas.addEventListener('webglcontextrestored', () => {
     e.lutGen++;
     e.lutStates.clear();
@@ -4096,14 +4114,14 @@ and directly before `return e as unknown as FakeEngine;`:
 
 In `src/app/still.ts`:
 1. Add `import { photoLuts } from '../engine/looks';`.
-2. Replace the two sets (`requestedFilters`, `settledFilters`, lines 93-95) with:
+2. Replace the two sets (`requestedFilters`, `settledFilters` and its comment, lines 105-107) with:
 
 ```ts
   /** LUT loads this session waits on to redraw (`${kind}:${id}`); cleared on restore */
   const waiting = new Set<string>();
 ```
 
-3. Replace `ensureFilter` (lines 143-161) with:
+3. Replace `ensureFilter` (lines 144-162) with:
 
 ```ts
   /**
@@ -4132,8 +4150,8 @@ In `src/app/still.ts`:
   }
 ```
 
-4. In `onRestored` replace `requestedFilters.clear(); settledFilters.clear();` with `waiting.clear();` and the `ensureFilter(params.filterId)` call with `ensureLuts(frame.photo)` (guarded as step 1 guards it).
-5. Replace `prepare` (lines 199-226) with:
+4. In `onRestored` replace `requestedFilters.clear(); settledFilters.clear();` with `waiting.clear();` and `if (frame) ensureFilter(frame.photo.filterId);` with `if (frame) ensureLuts(frame.photo);`.
+5. Replace `prepare` (lines 200-228) with:
 
 ```ts
   function prepare(f: StillFrame, retries: number): Promise<void> {
@@ -4163,7 +4181,7 @@ In `src/app/still.ts`:
   }
 ```
 
-6. In `render(frame)` and `exportImageData(frame, …)` replace the `ensureFilter(frame.photo.filterId)` call with `ensureLuts(frame.photo)` (`frame` = step 1's name for the `StillFrame` argument).
+6. In `render(f)` and `exportImageData(f, b)` replace the `ensureFilter(f.photo.filterId)` call with `ensureLuts(f.photo)` (step 1 names the `StillFrame` argument `f` there; the session's latest frame is the variable `frame`).
 7. Replace `exportReady`'s body after its first guard line with:
 
 ```ts
@@ -4188,10 +4206,10 @@ In `src/app/live.ts` (CRLF — Edit tool):
   getFrame?: () => Rect;
 ```
 
-3. Delete `const requestedFilters = new Set<string>();` (line 67) and add next to the other per-loop state: `/** grain seed: advanced once per drawn camera frame (moving grain, C §12 #11); redraws and the capture reuse it */ let grainSeed = 0;`.
-4. In `step()`, replace the `ensureFilter(look.photo.filterId)` call with `ensureLuts(look.photo)` (`look` = the value step 1 reads from `deps.getLook()` each frame), and directly before the `draw(…)` call add `grainSeed = (grainSeed + 1) >>> 0;`.
+3. Delete `const requestedFilters = new Set<string>();` (line 101) and add next to the other per-loop state: `/** grain seed: advanced once per drawn camera frame (moving grain, C §12 #11); redraws and the capture reuse it */ let grainSeed = 0;`.
+4. In `step()`, replace the `ensureFilter(look.photo.filterId);` call (line 155) with `ensureLuts(look.photo);` (`look` = `deps.getLook()`, read each frame at line 152), and directly before the `draw(look, w, h);` call (line 171) add `grainSeed = (grainSeed + 1) >>> 0;`.
 5. In `draw(…)`, add to the `engine.render({ … })` input: `pictureFrame: deps.getFrame?.(), grainSeed,`.
-6. Replace `ensureFilter` (lines 242-246) with:
+6. Replace `ensureFilter` (lines 263-267) with:
 
 ```ts
   /** the photo's 濾鏡 and 質感 LUTs; the frame path draws each once resident, so only unasked LUTs need a request */
@@ -4207,7 +4225,7 @@ In `src/app/live.ts` (CRLF — Edit tool):
 
 - [ ] **Step 6: The normalized crop**
 
-In `src/ui/imaging.ts` add `import type { Rect as UvRect } from '../types';` at the top and after `centerCropRect`:
+In `src/ui/imaging.ts` change its type import `import type { FaceSeed } from '../types';` to `import type { FaceSeed, Rect as UvRect } from '../types';` (the module has its own pixel `Rect`) and add after `centerCropRect`:
 
 ```ts
 /** centerCropRect as normalized source UV (the camera's picture frame, step-2 spec §4.5); the whole frame when empty. */
@@ -4238,8 +4256,8 @@ git commit -m "v0.4 step 2: sessions load 濾鏡 and 質感 LUTs, export readine
 ### Task 12: Panel model — the 調節 tab and 一鍵 › 美顏／質感
 
 **Files:**
-- Modify: `src/ui/panelModel.ts` (`TabId`/`TABS` `:22-34`, `PanelSelection`/`INITIAL_SELECTION` `:41-55`, `ItemVisual`/`ItemAction`/`PanelItem` `:188-220`, `ActivateResult` `:387-394`, `SliderBinding` `:457-466`; new section; dispatch lines in step 1's `itemsFor` `:301`, `activate` `:400`, `sliderFor` `:480`, `tabHasValue` `:547`) — CRLF
-- Test: `src/ui/panelModel.adjust.test.ts` (create); `src/ui/panelModel.test.ts:201` (mechanical port)
+- Modify: `src/ui/panelModel.ts` (`TabId`/`TABS` `:7-19`, `PanelSelection`/`INITIAL_SELECTION` `:26-40`, `ItemVisual`/`ItemAction`/`PanelItem` `:263-297`, `ActivateResult` `:478-485`, `SliderBinding` `:543-558`; new section; dispatch lines in step 1's `itemsFor` `:400`, `activate` `:487`, `sliderFor` `:587`, `tabHasValue` `:669`; step 1's photo-level helpers `personNote` `:158`, `photoScoped` `:190`, `sliderEmptyText` `:627`, `photoTouchToast` `:642`, `TILE_ITEMS` `:654`) — CRLF
+- Test: `src/ui/panelModel.adjust.test.ts` (create); `src/ui/panelModel.test.ts:215-216` (mechanical port)
 
 **Interfaces:**
 - Consumes: Task 1 (`AdjustId`, `LookId`, the adjust defs), Task 2 (`LOOKS`, `lookDef`, `lookThumbUrl`), Task 3 (`Lens.look()`, `Lens.setLook`, `Lens.resetGroup('adjust')`, `adjustIsNeutral`); `paramDef`, `paramsInGroup`, `hasValue`, `neutralValue` (`src/engine/params.ts`); step 1's ported `itemsFor(lens, sel, body?)`, `activate(item, lens, sel)` → `{edit, sel, changed, notice?}` with its local `done(next = edit, nextSel = sel, notice?)`, `sliderFor(lens, sel, body?)`, `tabHasValue(lens, tab, body?)`, `SliderBinding {key, param, label, bidirectional, value, mixed, defaultValue, apply}` (step-1 plan Task 10).
@@ -4258,7 +4276,8 @@ git commit -m "v0.4 step 2: sessions load 濾鏡 and 質感 LUTs, export readine
   - `adjustTabHasValue(value: (id: AdjustId) => number): boolean`
   - `interface PartButton { id: string; label: string; icon: string; active: boolean; hasValue: boolean }`; `partButtons(sel, state: { makeupOn(part: MakeupPart): boolean; look: PhotoParams['look'] }): PartButton[] | null`; `selectPart(sel: PanelSelection, id: string): PanelSelection`
   - `leadChip(sel: PanelSelection, look: PhotoParams['look']): { label: string; target: PanelSelection } | null`
-  - `photoTabLabel(sel: PanelSelection): '調節' | '質感' | null`; `firstTouchLabel(sel: PanelSelection, itemLabel: string): string`
+  - `photoTabLabel(sel: PanelSelection): '調節' | '質感' | null`
+  - step 1's `photoScoped(sel, lens)` is true on both photo-level tabs; `personNote('adjust', lens)` is null; `photoTouchToast` gives one 「調節套用於整張照片」 for the 12 items (seen key `'adjust'`) and, like a look tile through `tapToast` (`TILE_ITEMS.look = '質感'`), one 「質感套用於整張照片」 for the 程度 slider (seen key `'look'`); `sliderEmptyText` is null on 一鍵 › 質感
   - `lookFailedNotice(id: string): string`
 
 - [ ] **Step 0: Confirm the step-1 panel API**
@@ -4282,7 +4301,6 @@ import {
   adjustItems,
   adjustSlider,
   adjustTabHasValue,
-  firstTouchLabel,
   INITIAL_SELECTION,
   itemsFor,
   leadChip,
@@ -4291,12 +4309,17 @@ import {
   lookItems,
   lookSlider,
   partButtons,
+  personNote,
+  photoScoped,
   photoTabLabel,
+  photoTouchToast,
   PRESET_PARTS,
   selectPart,
+  sliderEmptyText,
   sliderFor,
   tabHasValue,
   TABS,
+  tapToast,
   type PanelSelection,
 } from './panelModel';
 
@@ -4388,10 +4411,6 @@ describe('photo-level label, lead chip and notices', () => {
     expect(photoTabLabel(sel({ tab: 'preset', presetPart: 'look' }))).toBe('質感');
     expect(photoTabLabel(sel({ tab: 'preset', presetPart: 'beauty' }))).toBeNull();
     expect(photoTabLabel(sel({ tab: 'filter' }))).toBeNull();
-    // the step-1 first-touch toast: one label for the whole 調節 tab, one for every look
-    expect(firstTouchLabel(sel({ tab: 'adjust', adjust: 'adjust.grain' }), '顆粒')).toBe('調節');
-    expect(firstTouchLabel(sel({ tab: 'preset', presetPart: 'look' }), 'CCD')).toBe('質感');
-    expect(firstTouchLabel(sel({ tab: 'skin' }), '美白')).toBe('美白');
   });
 
   it('the 調節 lead chip shows 「質感：{label}」 only with a look, and opens 一鍵 › 質感', () => {
@@ -4464,10 +4483,44 @@ describe('step-1 panel functions dispatch to 調節 and 質感', () => {
     const r2 = activate(grain, lensOf(dirty), s, actCtx(false));
     expect(r2.sel.adjust).toBe('adjust.grain');
   });
+
+  it('≥ 2 persons: 調節 and 一鍵 › 質感 dim the chips, show no person note, and say 「調節／質感套用於整張照片」 once each', () => {
+    const persons = [
+      { id: 'f0', face: true, body: false },
+      { id: 'b0', face: false, body: true },
+    ];
+    const two = (e: EditState) => lensFor(e, { kind: 'person', id: 'b0' }, persons, 'f0');
+    const adj = sel({ tab: 'adjust', adjust: 'adjust.grain' });
+    const look = sel({ tab: 'preset', presetPart: 'look' });
+    const l = two(editOf());
+    expect(photoScoped(adj, l)).toBe(true);
+    expect(photoScoped(look, l)).toBe(true);
+    expect(photoScoped(sel({ tab: 'preset' }), l)).toBe(false);
+    expect(personNote('adjust', l)).toBeNull();
+    // 美顏 keeps step 1's note for a body-only person; BeautyPanel skips it on 一鍵 › 質感 (Task 13)
+    expect(personNote('preset', l)).not.toBeNull();
+    const seen = new Set<string>();
+    const grain = sliderFor(l, adj)!;
+    expect(grain).toMatchObject({ key: 'b0:adjust.grain', label: '顆粒 · 整張照片', aria: '顆粒，整張照片' });
+    expect(photoTouchToast(grain, l, seen)).toBe('調節套用於整張照片');
+    expect(photoTouchToast(sliderFor(l, sel({ tab: 'adjust', adjust: 'adjust.fade' }))!, l, seen)).toBeNull();
+    const film = itemsFor(l, look).find((i) => i.label === '膠片')!;
+    const r = activate(film, l, look, actCtx(false));
+    expect(tapToast(film, l, r, seen)).toBe('質感套用於整張照片');
+    const l2 = two(r.edit);
+    const amount = sliderFor(l2, look)!;
+    expect(amount).toMatchObject({ key: 'b0:look.film', aria: '程度，整張照片' });
+    expect(photoTouchToast(amount, l2, seen)).toBeNull();
+    // 全部 with different presets: 「各人不同」 under 美顏 only, never under 質感
+    const mixed: EditState = { ...editOf(), persons: { f0: naturalPerson(), f1: { ...naturalPerson(), preset: 'custom' } } };
+    const all = lensFor(mixed, { kind: 'all' }, [{ id: 'f0', face: true, body: false }, { id: 'f1', face: true, body: false }], 'f0');
+    expect(sliderEmptyText(all, sel({ tab: 'preset' }))).toBe('各人不同');
+    expect(sliderEmptyText(all, look)).toBeNull();
+  });
 });
 ```
 
-In `src/ui/panelModel.test.ts`, port the tab-order assertion (line 201 at `892ea61`) mechanically: `['一鍵', '美膚', '美型', '美體', '濾鏡', '美妝']` → `['一鍵', '美膚', '美型', '美體', '濾鏡', '美妝', '調節']` (the test title gains `· 調節`).
+In `src/ui/panelModel.test.ts`, port the tab-order assertion (lines 215-216 at `9eec432`) mechanically: `['一鍵', '美膚', '美型', '美體', '濾鏡', '美妝']` → `['一鍵', '美膚', '美型', '美體', '濾鏡', '美妝', '調節']` (the test title `sits after 美型: 一鍵 · 美膚 · 美型 · 美體 · 濾鏡 · 美妝` gains `· 調節`).
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -4477,7 +4530,7 @@ Expected: FAIL — `adjustItems` (and the other new names) are not exported.
 - [ ] **Step 3: Types and the new section**
 
 In `src/ui/panelModel.ts` (CRLF — Edit tool):
-1. Imports: add `neutralValue` to the `../engine/params` import; add `import { lookDef, LOOKS, lookThumbUrl } from '../engine/looks';`, `import { adjustIsNeutral } from '../edit/state';` and the types `AdjustId`, `LookId`, `PhotoParams` to the `../types` type import.
+1. Imports: add `neutralValue` to the `../engine/params` import; add `import { lookDef, LOOKS, lookThumbUrl } from '../engine/looks';`, `adjustIsNeutral` to the existing `import { personOf } from '../edit/state';` and the types `AdjustId`, `LookId`, `PhotoParams` to the `../types` type import.
 2. `export type TabId = 'preset' | 'skin' | 'shape' | 'body' | 'filter' | 'makeup' | 'adjust';`
 3. Append `{ id: 'adjust', label: '調節' },` to `TABS` (after `{ id: 'makeup', label: '美妝' },`).
 4. After `MAKEUP_PARTS`:
@@ -4497,7 +4550,7 @@ export const PRESET_PARTS: readonly { id: PresetPart; label: string; icon: strin
 8. `PanelItem` gains `/** a strip divider is drawn before this item (調節: light │ colour │ effects) */ divider?: 'before';`.
 9. `ActivateResult` gains `/** the tapped look is selected but its LUT failed: the screen retries the load (no edit, no undo step) */ retryLook?: LookId;`.
 10. `SliderBinding` gains `/** 色溫 / 色調: a coloured track (CSS .track-temperature / .track-tint) */ track?: 'temperature' | 'tint';` and `/** no recommended-default dot (調節: neutral is the default) */ hideDefault?: boolean;`.
-11. Add after `bodyItems(...)` (before `itemsFor`):
+11. Add after `bodyItems(...)` (before `shownPreset` / `itemsFor`):
 
 ```ts
 // ───────────── 調節 and 質感 (v0.4 step 2) ─────────────
@@ -4625,17 +4678,12 @@ export function leadChip(sel: PanelSelection, look: PhotoParams['look']): { labe
 
 /**
  * Tabs whose every item acts on the whole photo (調節, 一鍵 › 質感; step-2 spec §2.1–2.2): the person strip dims with
- * 「整張照片」, the face boxes hide, and step 1's first-touch toast uses this label. null → step 1's own rule.
+ * 「整張照片」 (photoScoped), the face boxes hide (Editor), no per-person strip note (BeautyPanel). null → step 1's rules.
  */
 export function photoTabLabel(sel: PanelSelection): '調節' | '質感' | null {
   if (sel.tab === 'adjust') return '調節';
   if (sel.tab === 'preset' && sel.presetPart === 'look') return '質感';
   return null;
-}
-
-/** The label of step 1's 「{label}套用於整張照片」 toast: one per photo-level tab here, else the item's own. */
-export function firstTouchLabel(sel: PanelSelection, itemLabel: string): string {
-  return photoTabLabel(sel) ?? itemLabel;
 }
 
 /** shown once per look per session when its LUT cannot load (hooks.ts requestLut) */
@@ -4658,7 +4706,14 @@ export interface ActivateContext {
 
    and give `activate` a fourth parameter: `export function activate(item: PanelItem, lens: Lens, sel: PanelSelection, ctx: ActivateContext = {}): ActivateResult {` (existing three-argument calls keep working).
 2. `itemsFor`: as the first statement of `case 'preset': {` add `if (sel.presetPart === 'look') return lookItems(lens.look());`, and add the case `case 'adjust': return adjustItems((id) => lens.get(id).value, sel);`.
-3. `sliderFor`: as the first statement of `case 'preset': {` add `if (sel.presetPart === 'look') return lookSlider(lens.look());`, and add `case 'adjust': return adjustSlider((id) => lens.get(id).value, sel);`.
+3. `sliderFor`: as the first statement of `case 'preset': {` add
+   ```ts
+      if (sel.presetPart === 'look') {
+        const b = lookSlider(lens.look());
+        return b && decorate(b, lens, true);
+      }
+   ```
+   and add `case 'adjust': return decorate(adjustSlider((id) => lens.get(id).value, sel), lens, true);` (see item 6).
 4. `tabHasValue`: `case 'preset': return false;` becomes `case 'preset': return lens.look() !== null;`; add `case 'adjust': return adjustTabHasValue((id) => lens.get(id).value);`.
 5. `activate` (`edit` is step 1's `const edit = lens.edit;`):
    - add a case:
@@ -4675,9 +4730,20 @@ export interface ActivateContext {
    - first line of `case 'reset':` — `if (sel.tab === 'adjust') return adjustIsNeutral(edit.photo) ? done(edit) : done(lens.resetGroup('adjust'));`
    - first line of `case 'param':` — `if (sel.tab === 'adjust') return done(edit, sel.adjust === a.id ? sel : { ...sel, adjust: a.id as AdjustId });`
 
-`tsc` now reports every other `switch (tab)` over `TabId` without an `'adjust'` case (TS2366/TS2322); give each the behaviour of 濾鏡 (photo-level, no person note, no face gating) — for example a per-tab note function returns `null` for `'adjust'`.
+`itemsFor`, `sliderFor` and `tabHasValue` are the only `switch` statements over `TabId` (at `9eec432`); with items 2–4 `tsc` reports none. The non-switch per-tab rules are item 7.
 
-6. Slider identity: step 1 makes `SliderBinding.key` selection-aware (`${selKey}:${id}`, S1 §2.4 "Slider identity"). If its `sliderFor` adds that prefix itself (rather than the screen), route the two new bindings through the same wrapper, so `sliderFor(lens, sel)` returns `${selKey}:adjust.temperature` / `${selKey}:look.film` like its other bindings, and change the expected `key` of the dispatch test above (`'look.film'`) to the prefixed form; `adjustSlider` / `lookSlider` themselves keep the bare keys their own tests check.
+6. Slider identity: step 1's `sliderFor` makes keys selection-aware itself, through its local `decorate(b, lens, photo)` (≥ 2 persons: key `${selKey}:…`, label `… · 整張照片`, aria `…，整張照片`; one person: the binding unchanged). Item 3 routes both new bindings through it as photo-level (`photo = true`, step-2 spec §2.1–2.2), so with ≥ 2 persons `sliderFor` returns `b0:adjust.grain` / `b0:look.film` and the aria `程度，整張照片` (the new multi-person test); with one person the dispatch test's `'look.film'` stands. `adjustSlider` / `lookSlider` themselves keep the bare keys their own tests check.
+7. Step 1's photo-level helpers learn the two photo-level tabs (S §2.1 "Persons", §2.2 "Persons", C §2.2):
+   - `photoScoped(sel, lens)`: first statement `if (photoTabLabel(sel) !== null) return true;` (the chips dim with 「整張照片」 and the face boxes dim, as on 濾鏡).
+   - `personNote(tab, lens)`: add `tab === 'adjust'` to its early return (`… || tab === 'body' || tab === 'filter' || tab === 'adjust'`); 一鍵 › 質感 is handled in BeautyPanel (Task 13), since `personNote` gets only the tab.
+   - `photoTouchToast(b, lens, seen)`: as its first statements
+     ```ts
+       // 調節 and 質感: one first touch per tab, not per item (step-2 spec §2.1–2.2)
+       if (b.param?.startsWith('adjust.')) return firstPhotoTouch(lens, seen, 'adjust', '調節');
+       if (b.param === null && /(^|:)look\./.test(b.key)) return firstPhotoTouch(lens, seen, 'look', '質感');
+     ```
+   - `TILE_ITEMS`: add `look: '質感'` (a look tile that changes the photo is the 質感 first touch; its seen key is the action type `'look'`, the same as the 程度 slider's).
+   - `sliderEmptyText(lens, sel)`: `sel.tab === 'preset' && …` → `sel.tab === 'preset' && sel.presetPart !== 'look' && …` (no 「各人不同」 under 質感 while it is 無).
 
 - [ ] **Step 5: Run the tests**
 
@@ -4701,13 +4767,13 @@ git commit -m "v0.4 step 2: panel model for the 調節 tab and 一鍵 › 美顏
 
 **Files:**
 - Modify: `src/ui/icons.tsx:236-243` (13 icons after `custom`) — CRLF
-- Modify: `src/ui/components/BeautyPanel.tsx` (props `:22-40`, `stripKey` `:47`, `tapItem` `:67-75`, part row `:93-120`, items `:121-142`, `ItemVisual`/`Thumb` `:204-228`) — CRLF
-- Modify: `src/ui/components/Slider.tsx:170-173` — CRLF
+- Modify: `src/ui/components/BeautyPanel.tsx` (imports `:3-24`, props `:26-49`, signature `:54`, `stripKey` `:56`, `pNote` `:73`, `tapItem` `:80-90`, part row `:113-140`, items `:141-167`, `ItemVisual`/`Thumb` `:232-256`) — CRLF
+- Modify: `src/ui/components/Slider.tsx:184-186` — CRLF
 - Modify: `src/ui/theme.css` (`.tabs` comment `:420-426`; after `.slider-track` `:727-736`) — CRLF
 - Test: `src/ui/icons.adjust.test.ts` (create)
 
 **Interfaces:**
-- Consumes: Task 12 (`partButtons`, `selectPart`, `leadChip`, `PRESET_PARTS`, `ActivateResult.retryLook`, `PanelItem.divider`, `ItemVisual.fallback`, `SliderBinding.track/hideDefault`), Task 3 (`Lens.look()`); step 1's `BeautyPanel` props (the lens and the edit callback that replaced `params`/`onParams`).
+- Consumes: Task 12 (`partButtons`, `selectPart`, `leadChip`, `photoTabLabel`, `PRESET_PARTS`, `ActivateResult.retryLook`, `PanelItem.divider`, `ItemVisual.fallback`, `SliderBinding.track/hideDefault`), Task 3 (`Lens.look()`); step 1's `BeautyPanel` props (`lens`, `onEdit`, `photoTouched`, …) and `partHasValue(lens, part)`.
 - Produces:
   - `BeautyPanel` props `lookFailed?: (id: LookId) => boolean` and `onRetryLook?(id: LookId): void`
   - icon keys `brightness`, `exposure`, `contrast`, `highlights`, `shadows`, `temperature`, `tint`, `saturation`, `vibrance`, `fade`, `grain`, `vignette`, `look`
@@ -4837,8 +4903,8 @@ In `src/ui/icons.tsx`, insert after the `custom: (…),` entry and before `// �
 
 In `src/ui/components/BeautyPanel.tsx` (CRLF — Edit tool):
 1. Header comment line 1: `tab row 一鍵 · 美膚 · 美型 · 美體 · 濾鏡 · 美妝` → `tab row 一鍵 · 美膚 · 美型 · 美體 · 濾鏡 · 美妝 · 調節`.
-2. Imports: add `import { Fragment } from 'preact';`; add `leadChip`, `partButtons`, `selectPart` to the `../panelModel` import and remove `MAKEUP_PARTS` from it if nothing else uses it; add `LookId` to the `../../types` type import.
-3. `Props`: add
+2. Imports: add `import { Fragment } from 'preact';`; add `leadChip`, `partButtons`, `photoTabLabel`, `selectPart` to the `../panelModel` import and remove `MAKEUP_PARTS` from it (nothing else uses it once item 7 lands; `partHasValue` stays); add `LookId` to the `../../types` type import (`import type { EditState, LookId } from '../../types';`).
+3. `Props`: after `photoTouched?: Set<string>;` add
 
 ```ts
   /** the 質感 LUT of this look failed to load (a re-tap of the selected look then retries it) */
@@ -4847,24 +4913,26 @@ In `src/ui/components/BeautyPanel.tsx` (CRLF — Edit tool):
   onRetryLook?(id: LookId): void;
 ```
 
-   and destructure `lookFailed` and `onRetryLook` in the component signature.
-4. `stripKey` (line 47):
+   and destructure `lookFailed` and `onRetryLook` in the component signature (line 54, next to `photoTouched`).
+4. `stripKey` (line 56):
 
 ```ts
   const stripKey =
     sel.tab === 'makeup' ? `makeup.${sel.makeupPart}` : sel.tab === 'preset' ? `preset.${sel.presetPart}` : sel.tab;
 ```
 
-5. After `const items = itemsFor(lens, sel, body);` add (the makeup dot is step 1's `lens.shade(p.id).on`):
+5. After `const items = itemsFor(lens, sel, body);` add (the makeup dot is step 1's `partHasValue(lens, part)`: the selected person's, or under 全部 any face person's):
 
 ```ts
   const look = lens.look();
-  const parts = partButtons(sel, { makeupOn: (p) => lens.shade(p).on, look });
+  const parts = partButtons(sel, { makeupOn: (p) => partHasValue(lens, p), look });
   const lead = leadChip(sel, look);
 ```
 
-6. `tapItem`: `const r = activate(item, lens, sel);` becomes `const r = activate(item, lens, sel, { lookFailed });`; after the notice toast line add `if (r.retryLook) onRetryLook?.(r.retryLook);`; extend the haptic line to `if (a === 'preset' || a === 'reset' || a === 'protect' || a === 'look') haptic();`.
-7. Replace the `{sel.tab === 'makeup' && ( <> {MAKEUP_PARTS.map(…)} <span class="strip-divider" /> </> )}` block (lines 93-120) with:
+   and change `const pNote = personNote(sel.tab, lens);` (line 73) to `const pNote = photoTabLabel(sel) ? null : personNote(sel.tab, lens);` (調節 and 一鍵 › 質感 show no per-person strip note, S §2.2).
+
+6. `tapItem`: `const r = activate(item, lens, sel);` becomes `const r = activate(item, lens, sel, { lookFailed });`; after the toast line (`if (text) toast(text, …);`, before `if (!r.changed) return;`) add `if (r.retryLook) onRetryLook?.(r.retryLook);`; extend the haptic line to `if (a === 'preset' || a === 'reset' || a === 'protect' || a === 'look') haptic();`.
+7. Replace the `{sel.tab === 'makeup' && ( <> {MAKEUP_PARTS.map(…)} <span class="strip-divider" /> </> )}` block (lines 113-140) with:
 
 ```tsx
           {parts && (
@@ -4905,7 +4973,7 @@ In `src/ui/components/BeautyPanel.tsx` (CRLF — Edit tool):
           )}
 ```
 
-8. Items map (lines 121-142): wrap each option in a keyed fragment so a divider can precede it — change `{items.map((item) => (` + `<button key={`${stripKey}:${item.key}`}` to:
+8. Items map (lines 141-167): wrap each option in a keyed fragment so a divider can precede it — change `{items.map((item) => (` + `<button key={`${stripKey}:${item.key}`}` to:
 
 ```tsx
           {items.map((item) => (
@@ -4929,7 +4997,7 @@ function Thumb({ src, fallback }: { src: string; fallback: string }) {
 
 - [ ] **Step 5: Slider tint and default dot**
 
-In `src/ui/components/Slider.tsx` replace lines 170-172:
+In `src/ui/components/Slider.tsx` replace lines 184-186:
 
 ```tsx
         <div class={`slider-track${binding.track ? ` track-${binding.track}` : ''}`} ref={trackRef}>
@@ -4990,12 +5058,12 @@ git commit -m "v0.4 step 2: 調節 icons, 一鍵 part row, strip dividers, 質�
 
 **Files:**
 - Modify: `src/ui/screens/hooks.ts:5-17` (`useFilterLoader` → `useLutLoader` + `requestLut` + `noteAdjustFailure` + `useAdjustFailureNotice`) — LF
-- Modify: `src/ui/screens/Editor.tsx` (import `:55`; `useFilterLoader` call `:600`; `<BeautyPanel>` `:869-876`; step 1's person-strip scope and first-touch toast) — LF
-- Modify: `src/ui/screens/Camera.tsx` (imports `:19-24`; `useFilterLoader` call `:90`; `startLiveLoop` deps `:115-122`; `<BeautyPanel>` `:385-394`) — CRLF
+- Modify: `src/ui/screens/Editor.tsx` (imports `:80-97`; `useFilterLoader` call `:771`; the `PERSON_TABS` gates `:1018`, `:1060`; `<BeautyPanel>` `:1160-1168`) — LF
+- Modify: `src/ui/screens/Camera.tsx` (imports `:22`, `:28`; `useFilterLoader` call `:106`; `startLiveLoop` deps `:132-140`; `<BeautyPanel>` `:455-464`) — CRLF
 - Test: `src/ui/screens/hooks.test.ts` (create)
 
 **Interfaces:**
-- Consumes: Task 2 (`photoLuts`), Task 5 (`adjustWanted`), Task 8 (`Engine.loadLut`, `Engine.lutState`, `Engine.adjustUnavailable`), Task 11 (`LiveDeps.getFrame`, `normalizedCropRect`), Task 12 (`lookFailedNotice`, `photoTabLabel`, `firstTouchLabel`), Task 13 (`BeautyPanel` props `lookFailed`, `onRetryLook`); `RATIO_VALUE`, `app` (`src/ui/state.ts:12`); step 1's editor `edit` state, camera look store, person-strip scope rule and first-touch toast.
+- Consumes: Task 2 (`photoLuts`), Task 5 (`adjustWanted`), Task 8 (`Engine.loadLut`, `Engine.lutState`, `Engine.adjustUnavailable`), Task 11 (`LiveDeps.getFrame`, `normalizedCropRect`), Task 12 (`lookFailedNotice`, `photoTabLabel`; the photo-level chip dimming and first-touch toasts already live in step 1's panelModel helpers), Task 13 (`BeautyPanel` props `lookFailed`, `onRetryLook`); `RATIO_VALUE`, `app` (`src/ui/state.ts:14`); step 1's editor `edit` state, camera look store (`look`, `Camera.tsx:40`) and `PERSON_TABS` (`src/ui/editorModel.ts:535`).
 - Produces (exports of `src/ui/screens/hooks.ts`):
   - `requestLut(engine: Engine, kind: LutKind, id: string): void`
   - `useLutLoader(engine: Engine | null, photo: Pick<PhotoParams, 'filterId' | 'look'>): void` (replaces `useFilterLoader`)
@@ -5004,8 +5072,8 @@ git commit -m "v0.4 step 2: 調節 icons, 一鍵 part row, strip dividers, 質�
 
 - [ ] **Step 0: Find the step-1 hooks to extend**
 
-Run: `grep -n "useFilterLoader\|<BeautyPanel\|套用於整張照片\|整張照片" src/ui/screens/Editor.tsx src/ui/screens/Camera.tsx src/ui/components/*.tsx | head -20; grep -n "startLiveLoop({" -A9 src/ui/screens/Camera.tsx`
-Expected: the two `useFilterLoader` calls; the `<BeautyPanel` elements with step 1's `lens` / `onEdit` props; in the editor the person-strip photo-scope condition (S1 A11) and the first-touch toast; the live-loop deps object.
+Run: `grep -n "useFilterLoader\|<BeautyPanel\|photoScoped\|photoTouchToast\|PERSON_TABS.has" src/ui/screens/Editor.tsx src/ui/screens/Camera.tsx; grep -n "startLiveLoop({" -A9 src/ui/screens/Camera.tsx`
+Expected: the two `useFilterLoader` calls; the `<BeautyPanel` elements with step 1's `lens` / `onEdit` props; in the editor `const scope = multi && photoScoped(sel, lens);` (chips and boxes dim), `photoTouchToast(b, …)` in `slide` and the two `PERSON_TABS.has(sel.tab)` gates (photo taps, face boxes); the live-loop deps object.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -5124,59 +5192,44 @@ export function useAdjustFailureNotice(engine: Engine | null, photo: Pick<PhotoP
 - [ ] **Step 4: Editor**
 
 In `src/ui/screens/Editor.tsx`:
-1. Import line 55: `import { useFilterLoader, useHold } from './hooks';` → `import { requestLut, useAdjustFailureNotice, useHold, useLutLoader } from './hooks';`; add `photoTabLabel`, `firstTouchLabel` to the `../panelModel` import.
-2. Replace `useFilterLoader(bundle?.engine ?? null, edit.photo.filterId);` (line 600 at `892ea61` read `params.filterId`; `edit` = step 1's `EditState` state variable) with:
+1. Import line 97: `import { useFilterLoader, useHold } from './hooks';` → `import { requestLut, useAdjustFailureNotice, useHold, useLutLoader } from './hooks';`; add `photoTabLabel` to the `../panelModel` import (lines 80-92).
+2. Replace `useFilterLoader(bundle?.engine ?? null, edit.photo.filterId);` (line 771; `edit` = step 1's `EditState` state variable) with:
 
 ```tsx
   useLutLoader(bundle?.engine ?? null, edit.photo);
   useAdjustFailureNotice(bundle?.engine ?? null, edit.photo);
 ```
 
-3. `<BeautyPanel …>`: add the props `lookFailed={(id) => bundle?.engine.lutState('look', id) === 'failed'}` and `onRetryLook={(id) => bundle && requestLut(bundle.engine, 'look', id)}`.
-4. Photo-level scope (S §2.1–2.2, C §2.2, S1 A11): step 1 dims the person strip with 「整張照片」 and hides the face boxes when the tab or the active item is photo-level, which today means 濾鏡. Add one flag next to step 1's condition and OR it into every place 濾鏡 is special-cased for persons:
+3. `<BeautyPanel …>` (lines 1160-1168): add the props `lookFailed={(id) => bundle?.engine.lutState('look', id) === 'failed'}` and `onRetryLook={(id) => bundle && requestLut(bundle.engine, 'look', id)}`.
+4. Photo-level scope (S §2.1–2.2, C §2.2, S1 A11). Step 1 keeps these rules in panelModel, and Task 12 / 13 already taught them the two tabs: the person chips and the face boxes dim through `const scope = multi && photoScoped(sel, lens);` (line 1047); the per-person strip note is skipped in BeautyPanel; the slider label / aria use step 1's photo form 「{label} · 整張照片」 / 「{label}，整張照片」 through `decorate`; the 「整張」 tile badge is not drawn on the 12 調節 tiles or the looks (C §2.1 marks none in 調節; `adjustItems` / `lookItems` do not call `badged`). What is left here: the face boxes hide and photo taps stop on both photo-level tabs, as on 濾鏡 (not in `PERSON_TABS`). 調節 is already outside `PERSON_TABS`; 一鍵 › 質感 is not (the 一鍵 tab is person-level for 美顏). Add next to the `tapsOn` line (line 1018):
 
 ```tsx
-  /** 調節 and 一鍵 › 質感 act on the whole photo, like 濾鏡 (step-2 spec §2.1–2.2) */
-  const photoLevelTab = photoTabLabel(sel) !== null;
+  /** 調節 and 一鍵 › 質感 act on the whole photo, like 濾鏡: no face boxes, no photo taps (step-2 spec §2.1–2.2) */
+  const personTab = PERSON_TABS.has(sel.tab) && photoTabLabel(sel) === null;
 ```
 
-   - the person-strip dimming (chips `aria-disabled`, caption 「整張照片」) and the face-box visibility: `… || photoLevelTab`;
-   - step 1's per-person strip note on 一鍵 (「這位人物未偵測到臉部，臉部效果不適用」 for a body-only person, S1 §2.4): not shown while `photoLevelTab` (S §2.2: "no per-person strip notes"), so pass `faceNote`/the note as `null` then;
-   - step 1's per-item 「整張」 badge (S1 A9) marks photo items inside person-level tabs only; it is not drawn on the 12 調節 tiles or the looks (C §2.1 marks none in 調節, as in 濾鏡);
-   - the slider aria-label with ≥ 2 persons uses step 1's photo form 「{label}，整張照片」 for 質感's 程度 too (its binding has `param: null`, so test `photoLevelTab`, not the param's scope).
-5. First-touch toast: where step 1 shows 「{label}套用於整張照片」 once per photo-level item per session (≥ 2 persons), compute the label with `firstTouchLabel` **and key step 1's once-per-session set by that label** (not by the item id), so the twelve 調節 items share one toast 「調節套用於整張照片」 and the five looks one 「質感套用於整張照片」:
-
-```ts
-    const label = firstTouchLabel(sel, itemLabel); // '調節' / '質感' on those tabs, else step 1's item label
-    // step 1's set of labels already announced in this editor session (its name may differ)
-    if (persons.length >= 2 && !photoTouchNoted.has(label)) {
-      photoTouchNoted.add(label);
-      toast(`${label}套用於整張照片`, 3200);
-    }
-```
-
-   Call it where step 1 calls its own for photo items, plus for a committed 調節 slider change (the `SliderRow` `onCommit` while `photoTabLabel(sel) === '調節'`) and for a look pick (the panel's `onEdit` while `photoTabLabel(sel) === '質感'`). `itemLabel`, `persons`, `photoTouchNoted` and the toast duration are step 1's — keep its names and timing.
+   and use `personTab` in place of `PERSON_TABS.has(sel.tab)` in the `tapsOn` condition (line 1018) and the `boxItems` condition (line 1060). (Declare `personTab` before both uses; `sel` is in scope there.)
+5. First-touch toast: nothing to add in the Editor. Its `slide()` already calls step 1's `photoTouchToast(b, lens, touchedPhoto.current)` for every slider step and commit, and `BeautyPanel` calls `tapToast(item, lens, r, photoTouched)` for every tile tap; Task 12 made those say 「調節套用於整張照片」 once for the 12 items (seen key `'adjust'`) and 「質感套用於整張照片」 once for a look pick or its 程度 (seen key `'look'`), with ≥ 2 persons, once per editor session (the `touchedPhoto` set).
 
 - [ ] **Step 5: Camera**
 
 In `src/ui/screens/Camera.tsx` (CRLF — Edit tool):
-1. Imports: `import { useFilterLoader, useHold } from './hooks';` → `import { requestLut, useAdjustFailureNotice, useHold, useLutLoader } from './hooks';`; add `normalizedCropRect` to the `../imaging` import; `RATIO_VALUE` and `app` are already imported from `../state` (line 22).
-2. Replace `useFilterLoader(bundle?.engine ?? null, look.photo.filterId);` (line 90 read `params.filterId`; `look` = step 1's `CameraLook` from the store) with:
+1. Imports: `import { useFilterLoader, useHold } from './hooks';` (line 28) → `import { requestLut, useAdjustFailureNotice, useHold, useLutLoader } from './hooks';`; add `normalizedCropRect` to the `../imaging` import (line 22); `RATIO_VALUE` and `app` are already imported from `../state` (line 26).
+2. Replace `useFilterLoader(bundle?.engine ?? null, look.photo.filterId);` (line 106; `look` = step 1's `CameraLook` from the store, line 40) with:
 
 ```tsx
   useLutLoader(bundle?.engine ?? null, look.photo);
   useAdjustFailureNotice(bundle?.engine ?? null, look.photo);
 ```
 
-   (`look` is step 1's camera look from the store, the port of `params` at line 36.)
-3. In the `deps.startLiveLoop({ … })` call (lines 115-122) add:
+3. In the `deps.startLiveLoop({ … })` call (lines 132-140, after `getPrefs`) add:
 
 ```tsx
         // the picture the shutter keeps (captureFrom crops to the same ratio): vignette and grain follow it
         getFrame: () => normalizedCropRect(ctrl.video.videoWidth, ctrl.video.videoHeight, RATIO_VALUE[app.get().ratio]),
 ```
 
-4. `<BeautyPanel …>`: add the props `lookFailed={(id) => bundle?.engine.lutState('look', id) === 'failed'}` and `onRetryLook={(id) => bundle && requestLut(bundle.engine, 'look', id)}`.
+4. `<BeautyPanel …>` (lines 455-464): add the props `lookFailed={(id) => bundle?.engine.lutState('look', id) === 'failed'}` and `onRetryLook={(id) => bundle && requestLut(bundle.engine, 'look', id)}`.
 
 - [ ] **Step 6: Run the tests, typecheck and build**
 
@@ -5531,16 +5584,16 @@ git commit -m "v0.4 step 2: e2e for 調節 and 質感 in the editor and the came
 
 **Files:**
 - Create: `src/bench/adjustBench.ts`, `src/bench/adjustBench.test.ts`
-- Modify: `src/bench/main.ts` (gate `:163-175`; a `runAdjust()` in the flow section after `bodyTest()` `:493-496`) — CRLF
+- Modify: `src/bench/main.ts` (STYLE `:139-140`; gate `:173-187`; a `runAdjust()` in the flow section after `bodyTest()` `:506-509`) — CRLF
 - Modify: `tests/e2e/bench.spec.ts` (new test)
 
 **Interfaces:**
-- Consumes: Task 4 (`lowbias32`, `seedMix`), Task 5 (`ADJUST_IDS`, `ADJUST_ONE_WAY`), Task 6 (`GRAIN_HASH_GLSL`), Task 8 (`createEngine`, `loadLut`), Task 2 (`LOOK_IDS`); step 1's `defaultPhoto()` and `RenderInput`; bench helpers `el`, `button`, `busy`, `showError`, `errText` (`src/bench/main.ts:138-151, 726-733`).
+- Consumes: Task 4 (`lowbias32`, `seedMix`), Task 5 (`ADJUST_IDS`, `ADJUST_ONE_WAY`), Task 6 (`GRAIN_HASH_GLSL`), Task 8 (`createEngine`, `loadLut`), Task 2 (`LOOK_IDS`); step 1's `defaultPhoto()` and `RenderInput`; bench helpers `el`, `button`, `busy`, `showError`, `errText` (`src/bench/main.ts:103, 148-162, 740-748`).
 - Produces:
   - `interface AdjustBenchRow { config: string; medianMs: number; adjust: boolean }`
   - `interface AdjustBenchResult { size: string; rows: AdjustBenchRow[]; compileMs: number; hash: { checked: number; mismatches: number } }`
   - `runAdjustBench(): Promise<AdjustBenchResult>`; `probeGrainHash(): { checked: number; mismatches: number }`; `formatAdjustBench(r: AdjustBenchResult): string`
-  - a gate button 「調節效能」 writing into `#adjust-bench` (`data-state` = `running` | `done` | `failed`)
+  - a gate button 「調節效能」 writing into `#adjust-bench` (class `adjust-note`; `data-state` = `running` | `done` | `failed`)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5775,8 +5828,11 @@ In `src/bench/main.ts` (CRLF — Edit tool):
 
 ```ts
 const gateAdjustBtn = button('調節效能', () => void runAdjust());
-const adjustOut = el('div', { className: 'note', id: 'adjust-bench' });
+// own class, not .note: tests/harness/t8/run-bench.mjs and bench.spec.ts need '.gate .note' to be gateProgress alone
+const adjustOut = el('div', { className: 'adjust-note', id: 'adjust-bench' });
 ```
+
+   and in `STYLE`, after the `.multi-note { … }` line (line 140), add `.adjust-note { color: #B8F02A; font: 12px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; text-align: left; }`.
 
 3. Append to the `gate` element's children (after `gateBodyBtn`):
 
@@ -5813,7 +5869,7 @@ async function runAdjust(): Promise<void> {
 - [ ] **Step 5: Run the tests**
 
 Run: `npx vitest run src/bench/adjustBench.test.ts && npm run typecheck && npm run build && npx playwright test tests/e2e/bench.spec.ts`
-Expected: PASS; the console shows the row (SwiftShader timings), `顆粒雜湊 4096/4096 一致`.
+Expected: PASS — step 1's `多臉 section keeps its own classes` test included (`.gate .note` still counts 1); the console shows the row (SwiftShader timings), `顆粒雜湊 4096/4096 一致`.
 
 - [ ] **Step 6: Commit**
 
@@ -5852,7 +5908,7 @@ Expected: every Playwright project and spec passes — step 1's specs (`parity`,
 5. Existing assertions untouched by step 2: run
 
 ```bash
-BASE=$(git log --format=%H --grep='^v0.4 step 2:' | tail -1)~1
+BASE=9eec432 # the step-2 base commit (the workflow's commits read "v0.4 step 2 task <N>: …")
 git diff --stat "$BASE"..HEAD -- tests/e2e/parity.spec.ts tests/e2e/engine.spec.ts tests/e2e/editor.spec.ts tests/e2e/camera.spec.ts tests/e2e/body.spec.ts tests/e2e/reshape.spec.ts tests/e2e/faceProtect.spec.ts tests/fixtures
 ```
 

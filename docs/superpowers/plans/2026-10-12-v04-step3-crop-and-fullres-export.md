@@ -3276,7 +3276,7 @@ EOF
 - Produces (`backMapCpu.ts`): `interface BackMapFrame { geometry: Geometry; oSize: Size; oMap: UvMap }`; `backMapCpu(v: Vec2, frame: BackMapFrame): [number, number]`; `backMapperCpu(frame): (v: Vec2) => [number, number]`.
 - Produces (`exportPlan.ts`): `interface SourceInfo { blob: Blob | null; width: number | null; height: number | null }`; `NO_SOURCE: SourceInfo`; `interface TileJob { out: PxRect; buf: PxRect; win: PxRect }`; `interface ExportPlan { mode: 'working' | 'tiled'; format; quality; width; height; decode: Size | null; fullShortEdge; tile; tiles: TileJob[]; fallback: 'noSource' | 'notLarger' | FullBlock }`; `interface FaceBound { box: readonly [number, number, number, number]; bound: number }`; `interface TileBounds { body: BodyField | null; faces: readonly FaceBound[]; liquifyMaxDisp?: (rectO: Rect) => number; spotWindowGrowth?: (winO: Rect) => Rect; oSpacePasses?: boolean }`; `interface TileGrid { V: Size; decode: Size; geometry: Geometry; oAspect: number; fullShortEdge: number }`; `TILE_SIZES`; `apronFor(fullShortEdge): number`; `planTiles(grid, bounds, T): TileJob[]`; `tileBytes(t, oSpace): number`; `chooseTile(grid, bounds, budgetBytes?): { tile: number; tiles: TileJob[] }`; `faceBoundsFor(faces: readonly RenderFace[], oAspect): FaceBound[]`; `bodyMaxDispPx(field, decode): number`; `planExport(edit: { photo: { geometry: Geometry } }, prefs: Pick<Prefs, 'exportFormat' | 'exportSize'>, source: SourceInfo, working: Size, env: ExportEnv, bounds: TileBounds, knob?: ExportDebugKnob): ExportPlan`; `shouldKeepSource(file: Blob, probed: Size | null, workingLong: number, estimate?): Promise<boolean>`; `sourceSizeRecord(probed: Size | null, workingLong: number): { sourceWidth: number; sourceHeight: number } | null`. Hooks for later steps: `TileBounds.liquifyMaxDisp` (step 6, its `maxDisp`, UV), `spotWindowGrowth` and `oSpacePasses` (step 4).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/engine/backMapCpu.test.ts`:
 
@@ -3569,12 +3569,12 @@ test('a TILE = 256 export equals the untiled render (warps, 磨皮, lip, body fi
 });
 ```
 
-- [ ] **Step 2: Run the unit tests to see them fail**
+- [x] **Step 2: Run the unit tests to see them fail**
 
 Run: `npx vitest run src/engine/backMapCpu.test.ts src/media/exportPlan.test.ts`
 Expected: FAIL — `Failed to resolve import "./backMapCpu"`, `planExport is not exported`.
 
-- [ ] **Step 3: Implement `backMapCpu.ts`**
+- [x] **Step 3: Implement `backMapCpu.ts`**
 
 ```ts
 // The one CPU copy of P2's backward map (S §4.6, C §4.2): a V point → the O position whose content P2 samples there.
@@ -3608,7 +3608,7 @@ export function backMapperCpu(frame: BackMapFrame): (v: Vec2) => [number, number
 }
 ```
 
-- [ ] **Step 4: Implement the planner in `exportPlan.ts`**
+- [x] **Step 4: Implement the planner in `exportPlan.ts`**
 
 Extend the imports and append:
 
@@ -3877,12 +3877,12 @@ export function sourceSizeRecord(probed: Size | null, workingLong: number): { so
 
 (Merge the type import with Task 4's: `import type { BodyField, ExportFormat, ExportSize, Geometry, ParamId, Prefs, PxRect, Rect, RenderFace, Size, Tier } from '../types';`.)
 
-- [ ] **Step 5: Run the unit tests to see them pass**
+- [x] **Step 5: Run the unit tests to see them pass**
 
 Run: `npx vitest run src/engine/backMapCpu.test.ts src/media/exportPlan.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: The tile-equivalence harness**
+- [x] **Step 6: The tile-equivalence harness**
 
 Create `tests/e2e/pages/export.html`:
 
@@ -4036,12 +4036,12 @@ window.runExportTiles = async () => {
 
 (The face is made from the fixture landmarks placed in the frame; `RenderFace.protect` is null: the 瘦臉 limit is a later concern. If step 1's `RenderFace` or `RenderInput` carry more required fields, fill them with the values `buildFrame` gives a one-face photo.)
 
-- [ ] **Step 7: Run the harness spec**
+- [x] **Step 7: Run the harness spec**
 
 Run: `npx playwright test tests/e2e/export.spec.ts`
 Expected: `1 passed`; four lines with `max channel diff` ≤ 1 (≤ 2 for 601 × 799).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/engine/backMapCpu.ts src/engine/backMapCpu.test.ts src/media/exportPlan.ts src/media/exportPlan.test.ts tests/e2e/pages/export.html tests/e2e/pages/export.ts tests/e2e/export.spec.ts

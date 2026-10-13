@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { legacyFrame } from '../edit/frame';
 import { defaultPhoto } from '../edit/state';
+import { glMat3, IDENTITY_GEOMETRY, IDENTITY_MAT3, rotateLeft, vToO } from '../geometry/view';
 import { seedMix } from './adjustMath';
 import { loadImageTexture } from './gl/gl';
 import { createEngine, MAX_RESIDENT_LUTS } from './index';
@@ -15,6 +16,7 @@ vi.mock('./gl/gl', async (importOriginal) => ({
   deleteTexture: vi.fn(),
   loadImageTexture: vi.fn(),
   resetGlCaches: vi.fn(),
+  shrinkTexture: vi.fn(),
   uploadSource: vi.fn(),
 }));
 
@@ -24,6 +26,7 @@ vi.mock('./pipeline', () => ({
     run: vi.fn(() => ({ passes: [], output: null })),
     drawOverlay: vi.fn(),
     drawSource: vi.fn(),
+    releaseBuffers: vi.fn(),
     dispose: vi.fn(),
   })),
 }));
@@ -38,6 +41,14 @@ function fakeCanvas() {
     MAX_VIEWPORT_DIMS: 3,
     isContextLost: () => false,
     getParameter: (p: number) => (p === 3 ? new Int32Array([4096, 4096]) : 4096),
+    readPixels: vi.fn(),
+    bindFramebuffer: vi.fn(),
+    viewport: vi.fn(),
+    drawingBufferWidth: 1,
+    drawingBufferHeight: 1,
+    FRAMEBUFFER: 1,
+    RGBA: 2,
+    UNSIGNED_BYTE: 3,
   };
   const canvas = {
     width: 0,
@@ -292,5 +303,102 @@ describe('createEngine: 濾鏡 and 質感 LUT cache (step-2 spec §3.5)', () => 
     expect(engine.adjustUnavailable).toBe(false);
     (vi.mocked(createPipeline).mock.results.at(-1)!.value as { adjustFailed?: boolean }).adjustFailed = true;
     expect(engine.adjustUnavailable).toBe(true);
+  });
+});
+
+describe('createEngine: geometry, windows and tiles (step 3)', () => {
+  const pipe = () => vi.mocked(createPipeline).mock.results.at(-1)!.value as {
+    run: ReturnType<typeof vi.fn>;
+    releaseBuffers: ReturnType<typeof vi.fn>;
+    drawSource: ReturnType<typeof vi.fn>;
+  };
+  const job = (): FrameJob => pipe().run.mock.calls.at(-1)![0] as FrameJob;
+  const input = (over: Partial<RenderInput> = {}): RenderInput => ({
+    source: {} as TexImageSource,
+    width: 640,
+    height: 480,
+    faces: [],
+    globalSkin: null,
+    photo: defaultPhoto(),
+    ...over,
+  });
+
+  it('identity: the source size, the identity mat3, fullShortEdge = min(size), no window', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    engine.render(input(), { still: true });
+    const j = job();
+    expect(j.size).toEqual({ width: 640, height: 480 });
+    expect(j.srcSize).toEqual({ width: 640, height: 480 });
+    expect(j.geoIdentity).toBe(true);
+    expect(j.windowed).toBe(false);
+    expect(j.geo).toBe(IDENTITY_MAT3);
+    expect(j.fullShortEdge).toBe(480);
+    expect(j.oAspect).toBe(640 / 480);
+  });
+
+  it('a quarter turn renders V (sides swapped) from the O source; the canvas takes the V size', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    const g = rotateLeft(IDENTITY_GEOMETRY);
+    engine.render(input({ geometry: g }), { still: true });
+    const j = job();
+    expect(j.size).toEqual({ width: 480, height: 640 });
+    expect(canvas.width).toBe(480);
+    expect(j.srcSize).toEqual({ width: 640, height: 480 });
+    expect(j.geoIdentity).toBe(false);
+    expect(Array.from(j.geo)).toEqual(Array.from(glMat3(vToO(g, { width: 640 / 480, height: 1 }))));
+    expect(j.fullShortEdge).toBe(480);
+  });
+
+  it('renderTile renders the output tile from the window and reads back only `read`', async () => {
+    vi.stubGlobal('ImageData', class {
+      constructor(readonly data: Uint8ClampedArray, readonly width: number, readonly height: number) {}
+    });
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    pipe().run.mockReturnValueOnce({ passes: [], output: { fbo: {} } });
+    const img = engine.renderTile(
+      input({
+        width: 1200,
+        height: 1100,
+        sourceWindow: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
+        output: { tile: { x: 0.25, y: 0, w: 0.25, h: 0.5 }, pixelSize: { width: 1088, height: 1152 }, fullShortEdge: 3072 },
+        oAspect: 4 / 3,
+      }),
+      { x: 64, y: 0, w: 1024, h: 1088 },
+    );
+    const j = job();
+    expect(j.target).toBe('fbo');
+    expect(j.size).toEqual({ width: 1088, height: 1152 });
+    expect(j.srcSize).toEqual({ width: 1200, height: 1100 });
+    expect(j.win).toEqual([0.1, 0.2, 0.3, 0.4]);
+    expect(j.tile).toEqual([0.25, 0, 0.25, 0.5]);
+    expect(j.windowed).toBe(true);
+    expect(j.oAspect).toBe(4 / 3);
+    expect(j.fullShortEdge).toBe(3072);
+    expect([img.width, img.height]).toEqual([1024, 1088]);
+    vi.unstubAllGlobals();
+  });
+
+  it('releaseBuffers shrinks the pipeline buffers and the source texture', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    engine.releaseBuffers();
+    expect(pipe().releaseBuffers).toHaveBeenCalledTimes(1);
+  });
+
+  it('renderOriginal draws through the geometry (按住對比 keeps the crop)', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    const g = rotateLeft(IDENTITY_GEOMETRY);
+    engine.renderOriginal({ source: {} as TexImageSource, width: 640, height: 480, geometry: g }, { still: true });
+    expect(canvas.width).toBe(480);
+    expect(Array.from(pipe().drawSource.mock.calls.at(-1)![2] as Float32Array)).toEqual(Array.from(glMat3(vToO(g, { width: 640, height: 480 }))));
   });
 });

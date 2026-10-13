@@ -2,14 +2,16 @@
 // tiers, and the render / capture / compare entry points. Pass logic lives in pipeline.ts.
 import { debugState } from '../app/debug';
 import { MAX_RENDER_FACES } from '../config/limits';
-import type { Engine, EngineOptions, LookDef, LutKind, LutState, RenderInput, RenderStats, Tier } from '../types';
-import { ADJUST_IDS, adjustUniforms, frameFor, type AdjustFrame, type AdjustUniforms, type AdjustValues } from './adjustMath';
+import { glMat3, IDENTITY_GEOMETRY, IDENTITY_MAT3, isIdentity, viewSize, vToO } from '../geometry/view';
+import type { Engine, EngineOptions, Geometry, LookDef, LutKind, LutState, Rect, RenderInput, RenderStats, Tier } from '../types';
+import { ADJUST_IDS, adjustUniforms, type AdjustFrame, type AdjustUniforms, type AdjustValues } from './adjustMath';
 import {
   createTexture,
   deleteTexture,
   type GL,
   loadImageTexture,
   resetGlCaches,
+  shrinkTexture,
   type Texture,
   uploadSource,
 } from './gl/gl';
@@ -19,7 +21,7 @@ import { boxCentre, ovalBox } from './passes/faceCap';
 import { makeupUniformsFor } from './passes/makeup';
 import { reshapeUniforms, type ReshapeUniforms } from './passes/reshape';
 import { createPipeline, type FrameFace, type FrameJob, type Pipeline, type StaticLuts } from './pipeline';
-import { processingSize, type Size, skinMaxima, skinUniformsFor } from './uniforms';
+import { adjustFrameFor, processingSize, type Size, skinMaxima, skinUniformsFor } from './uniforms';
 
 const CONTEXT_ATTRS: WebGLContextAttributes = {
   alpha: false,
@@ -262,7 +264,41 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
     if (canvas.height !== size.height) canvas.height = size.height;
   }
 
+  const rect4 = (r: Rect | undefined): [number, number, number, number] => (r ? [r.x, r.y, r.w, r.h] : [0, 0, 1, 1]);
+  const same4 = (a: readonly number[], b: readonly number[]) => a.every((v, i) => v === b[i]);
+
+  /** the V buffer size: the tile's, else (stills) the crop at the source density, else today's processing size */
+  function frameSize(input: RenderInput, still: boolean): Size {
+    if (input.output) return { width: input.output.pixelSize.width, height: input.output.pixelSize.height };
+    const g = input.geometry;
+    if (still && g && !isIdentity(g)) {
+      const v = viewSize(g, { width: input.width, height: input.height });
+      return processingSize(v.width, v.height, tier, true, maxSize);
+    }
+    return processingSize(input.width, input.height, tier, still, maxSize);
+  }
+
+  /**
+   * The job's view fields (step 3, S §4.1): at identity geometry without a window every O buffer is `size` and the
+   * kernels and the warps' aspect are today's (v0.3 parity); otherwise the O buffers take the source's own size, the
+   * warps the working bitmap's aspect (`oAspect`, tiles pass it) and the kernels the O short edge in output pixels.
+   */
+  function viewFields(input: RenderInput, size: Size) {
+    const g: Geometry = input.geometry ?? IDENTITY_GEOMETRY;
+    const geoIdentity = isIdentity(g);
+    const win = rect4(input.sourceWindow);
+    const tile = rect4(input.output?.tile);
+    const windowed = !same4(win, tile);
+    const plain = geoIdentity && !windowed;
+    const srcSize: Size = plain ? size : { width: input.width, height: input.height };
+    const oAspect = input.oAspect ?? srcSize.width / srcSize.height;
+    const fullShortEdge = input.output?.fullShortEdge ?? (plain ? Math.min(size.width, size.height) : Math.min(input.width, input.height));
+    const geo = geoIdentity ? IDENTITY_MAT3 : glMat3(vToO(g, { width: oAspect, height: 1 }));
+    return { win, tile, geo, geoIdentity, windowed, oAspect, srcSize, fullShortEdge };
+  }
+
   function job(input: RenderInput, src: Texture, size: Size, halfMean: boolean, target: FrameJob['target'], mirror: boolean): FrameJob {
+    const view = viewFields(input, size);
     frameLuts = new Set();
     const filterLut = lutFor('filter', input.photo.filterId);
     const listed = input.faces.slice(0, MAX_RENDER_FACES);
@@ -303,11 +339,13 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       luts,
       filterLut,
       // step 2: the look draws all-or-nothing, only once its LUT is resident (S §1.4)
-      adjust: adjustFor(input.photo.values, lookRef, lookLut !== null, frameFor(size, input.pictureFrame, input.grainSeed ?? 0)),
+      // step 3: a crop keeps the photo's grain cell, a tile gets its slice of the whole V (adjustFrameFor)
+      adjust: adjustFor(input.photo.values, lookRef, lookLut !== null, adjustFrameFor(input, size, view.fullShortEdge)),
       lookLut,
       matchGpupixel: options.matchGpupixel,
       target,
       mirror,
+      ...view,
     };
   }
 
@@ -347,7 +385,7 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       const t0 = performance.now();
       if (lost || disposed || !pipeline || !srcTex || input.width <= 0 || input.height <= 0) return emptyStats(t0);
       const still = opts?.still === true;
-      const size = processingSize(input.width, input.height, tier, still, maxSize);
+      const size = frameSize(input, still);
       uploadSource(gl, srcTex, input.source, input.width, input.height);
       sizeCanvas(size);
       const res = pipeline.run(job(input, srcTex, size, !still && tier === 'L', 'canvas', options.mirror));
@@ -361,7 +399,7 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
     renderToImageData(input, opts) {
       if (lost || disposed || !pipeline || !srcTex) throw new Error('renderToImageData: WebGL context unavailable');
       if (input.width <= 0 || input.height <= 0) throw new Error('renderToImageData: empty source');
-      const size = processingSize(input.width, input.height, tier, true, maxSize);
+      const size = frameSize(input, true);
       uploadSource(gl, srcTex, input.source, input.width, input.height);
       const res = pipeline.run(job(input, srcTex, size, false, 'fbo', opts.mirror));
       const out = res.output;
@@ -377,10 +415,41 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
 
     renderOriginal(input, opts) {
       if (lost || disposed || !pipeline || !srcTex || input.width <= 0 || input.height <= 0) return;
-      const size = processingSize(input.width, input.height, tier, opts?.still === true, maxSize);
+      const g = input.geometry;
+      // 按住對比 keeps the crop (C §12 #17): a still draws V through the geometry; the camera and identity as before
+      const turned = opts?.still === true && !!g && !isIdentity(g);
+      let size = processingSize(input.width, input.height, tier, opts?.still === true, maxSize);
+      if (turned) {
+        const v = viewSize(g, { width: input.width, height: input.height });
+        size = processingSize(v.width, v.height, tier, true, maxSize);
+      }
       uploadSource(gl, srcTex, input.source, input.width, input.height);
       sizeCanvas(size);
-      pipeline.drawSource(srcTex, options.mirror);
+      pipeline.drawSource(srcTex, options.mirror, turned ? glMat3(vToO(g, { width: input.width, height: input.height })) : IDENTITY_MAT3);
+    },
+
+    renderTile(input, read) {
+      if (lost || disposed || !pipeline || !srcTex) throw new Error('renderTile: WebGL context unavailable');
+      if (!input.output) throw new Error('renderTile: no output tile');
+      if (input.width <= 0 || input.height <= 0) throw new Error('renderTile: empty source');
+      const size = frameSize(input, true);
+      uploadSource(gl, srcTex, input.source, input.width, input.height);
+      const res = pipeline.run(job(input, srcTex, size, false, 'fbo', false));
+      const out = res.output;
+      if (!out) throw new Error('renderTile: no output buffer');
+      const pixels = new Uint8Array(read.w * read.h * 4);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, out.fbo);
+      // FBO row 0 = image top (gl.ts convention): the ImageData needs no flip
+      gl.readPixels(read.x, read.y, read.w, read.h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+      return new ImageData(new Uint8ClampedArray(pixels.buffer), read.w, read.h);
+    },
+
+    releaseBuffers() {
+      if (lost || disposed || !pipeline) return;
+      pipeline.releaseBuffers();
+      if (srcTex) shrinkTexture(gl, srcTex);
     },
 
     dispose() {

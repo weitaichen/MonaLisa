@@ -488,6 +488,20 @@ export interface RenderInput {
   grainSeed?: number;
   /** crop / rotate / straighten / flip, applied as the final transform in P2 (step 3); default identity */
   geometry?: Geometry;
+  /** O-normalized rect `source` covers (a tile's window); default [0,0,1,1] */
+  sourceWindow?: Rect;
+  /** a V tile at a given pixel size (renderTile); default: the whole V at the processing size */
+  output?: RenderOutput;
+  /** the working bitmap's width / height: the iso metric of every face warp; tiles pass it (never the decode's aspect) */
+  oAspect?: number;
+}
+
+/** the V tile a render writes (step 3, C §4.1): V-normalized rect, its pixel size, and the O short edge in output px */
+export interface RenderOutput {
+  tile: Rect;
+  pixelSize: Size;
+  /** kernel scale k = fullShortEdge / 720 (C §3.5); the same for the preview, a crop, a tile and the export */
+  fullShortEdge: number;
 }
 
 /** What a still session renders: the frame without its source, size and body field (the session adds those, S1). */
@@ -531,8 +545,15 @@ export interface Engine {
   render(input: RenderInput, opts?: { still?: boolean }): RenderStats;
   /** Render offscreen at full source resolution (ignores tier) and read back. Mirror per `mirror`. */
   renderToImageData(input: RenderInput, opts: { mirror: boolean }): ImageData;
-  /** Draw the unprocessed source to the display canvas (hold-to-compare). */
-  renderOriginal(input: Pick<RenderInput, 'source' | 'width' | 'height'>, opts?: { still?: boolean }): void;
+  /** Draw the unprocessed source to the display canvas (hold-to-compare), through `geometry` for stills (step 3). */
+  renderOriginal(input: Pick<RenderInput, 'source' | 'width' | 'height' | 'geometry'>, opts?: { still?: boolean }): void;
+  /**
+   * Render `input.output` (a V tile, at its pixelSize) offscreen from `input.source` (the window `sourceWindow`) and read
+   * back `read` (buffer pixels, row 0 = top). Synchronous. Throws when the context is unavailable or `output` is missing.
+   */
+  renderTile(input: RenderInput, read: PxRect): ImageData;
+  /** shrink every pipeline buffer and the source texture to 1 × 1 (after a tiled export, before encoding) */
+  releaseBuffers(): void;
   /** true after webglcontextlost until recreated */
   readonly lost: boolean;
   dispose(): void;

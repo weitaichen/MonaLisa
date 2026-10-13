@@ -24,6 +24,7 @@ import type {
   LutKind,
   LutState,
   Prefs,
+  PxRect,
   RenderInput,
   StillFrame,
   Tier,
@@ -151,6 +152,15 @@ class FakeEngine implements Engine {
     this.canvas.height = h;
     draw(this.ctx, input.source as CanvasImageSource, w, h, this.mirror, 'none');
   }
+  renderTile(input: RenderInput, read: PxRect) {
+    const c = document.createElement('canvas');
+    c.width = read.w;
+    c.height = read.h;
+    const ctx = c.getContext('2d', { willReadFrequently: true })!;
+    ctx.drawImage(input.source as CanvasImageSource, -read.x, -read.y);
+    return ctx.getImageData(0, 0, read.w, read.h);
+  }
+  releaseBuffers() {}
   dispose() {}
 }
 

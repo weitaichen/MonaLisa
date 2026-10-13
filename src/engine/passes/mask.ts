@@ -16,9 +16,15 @@ export interface MaskPass {
   /**
    * Clear `dst` (RGBA8, ¼ res) to `clear` = (gS, gR), then draw every face (S §4.2): all rings with MAX blending, all
    * oval fans with blending off (inside its own oval a face's strength always wins), all eye / mouth holes with MIN.
-   * R = 磨皮 strength, G = 紅潤 strength.
+   * R = 磨皮 strength, G = 紅潤 strength. `view` (step 3): `win` = the O rect `dst` covers (a tile's window), `aspect` =
+   * the iso metric of the feathers (the working bitmap's, oAspect); omitted = the whole image at dst's aspect (v0.3).
    */
-  drawFaces(dst: Framebuffer, faces: readonly MaskFace[], clear: readonly [number, number]): void;
+  drawFaces(
+    dst: Framebuffer,
+    faces: readonly MaskFace[],
+    clear: readonly [number, number],
+    view?: { win: readonly [number, number, number, number]; aspect?: number },
+  ): void;
   /** one face, v0.3's mask in both channels: 1 − w outside, 1 − w + w·m inside */
   draw(dst: Framebuffer, face: Face, faceWeight: number): void;
   /**
@@ -44,12 +50,14 @@ const EYE_R = [58, 59, 60, 61, 62, 63] as const;
 const MOUTH = [84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95] as const;
 
 const MASK_VS = /* glsl */ `#version 300 es
-in vec2 aPos;   // UV, top-left origin
+in vec2 aPos;   // O-space UV, top-left origin
 in float aVal;  // 1 = mask on, 0 = off
+uniform vec4 uWin; // the O rect the target covers (a tile's window); (0, 0, 1, 1) = the whole image
 out float vVal;
 void main() {
   vVal = aVal;
-  gl_Position = vec4(aPos * 2.0 - 1.0, 0.0, 1.0);
+  vec2 q = (aPos - uWin.xy) / uWin.zw;
+  gl_Position = vec4(q * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
 const MASK_FS = /* glsl */ `#version 300 es
@@ -169,7 +177,7 @@ export function createMaskPass(gl: GL): MaskPass {
   };
   const clamp01 = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
 
-  const drawFaces: MaskPass['drawFaces'] = (dst, faces, clear) => {
+  const drawFaces: MaskPass['drawFaces'] = (dst, faces, clear, view) => {
     const g: [number, number] = [clamp01(clear[0]), clamp01(clear[1])];
     clearTo(dst, g);
     const list = faces.filter((f) => f.face.oval.length >= 6);
@@ -178,7 +186,7 @@ export function createMaskPass(gl: GL): MaskPass {
     if (need > verts.length) verts = new Float32Array(need);
     const segs: { start: number; count: number; base: number; fanEnd: number; wk: [number, number] }[] = [];
     let at = 0;
-    const aspect = dst.width / dst.height;
+    const aspect = view?.aspect ?? dst.width / dst.height;
     for (const f of list) {
       const w = clamp01(f.weight);
       const [count, base, fanEnd] = buildMaskGeometry(f.face, aspect, verts.subarray(at * 3));
@@ -186,6 +194,8 @@ export function createMaskPass(gl: GL): MaskPass {
       at += count;
     }
     prog.use();
+    const win = view?.win ?? [0, 0, 1, 1];
+    gl.uniform4f(prog.u('uWin'), win[0], win[1], win[2], win[3]);
     gl.uniform2f(prog.u('uG'), g[0], g[1]);
     gl.bindVertexArray(vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);

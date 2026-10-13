@@ -136,6 +136,14 @@ export function uploadSource(gl: GL, tex: Texture, source: TexImageSource, width
   tex.height = height;
 }
 
+/** Free a texture's storage without deleting it (the next uploadSource reallocates). */
+export function shrinkTexture(gl: GL, tex: Texture): void {
+  gl.bindTexture(gl.TEXTURE_2D, tex.tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  tex.width = 1;
+  tex.height = 1;
+}
+
 /** Fetch a PNG and upload it as an RGBA8 LINEAR/CLAMP texture with no colour management. */
 export async function loadImageTexture(gl: GL, url: string): Promise<Texture> {
   const res = await fetch(url);

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { splitLegacy } from '../edit/legacy';
+import { frameFor } from './adjustMath';
 import { applyPreset, setFilter, setParam } from './params';
 import {
+  adjustFrameFor,
   maskBufferSize,
   meanBufferSize,
   meanScale,
@@ -89,7 +91,8 @@ describe('sharpen taps', () => {
       [{ width: 1920, height: 1080 }, { width: 1280, height: 720 }, { width: 960, height: 540 }],
       [{ width: 1080, height: 1920 }, { width: 720, height: 1280 }, { width: 540, height: 960 }],
     ]) {
-      const [ref, ...rest] = sizes.map(sharpenTexel);
+      // a lambda, not map(sharpenTexel): map's index would land in the optional fullShortEdge (step 3)
+      const [ref, ...rest] = sizes.map((s) => sharpenTexel(s));
       for (const t of rest) {
         expect(t[0]).toBeCloseTo(ref[0], 12);
         expect(t[1]).toBeCloseTo(ref[1], 12);
@@ -164,5 +167,42 @@ describe('skinMaxima (S §4.1 item 2, §4.2 clear)', () => {
     expect(m.S).toBe(0.8);
     expect(m.k[1]).toEqual([0.5, 1]);
     expect(m.k[0][1]).toBe(0);
+  });
+});
+
+describe('kernels scale with fullShortEdge (step 3)', () => {
+  it("equal today's values when fullShortEdge = min(size)", () => {
+    for (const s of [{ width: 2048, height: 1536 }, { width: 1001, height: 1501 }, { width: 720, height: 1280 }]) {
+      const m = Math.min(s.width, s.height);
+      expect(meanStep(s, 'h', m)).toEqual(meanStep(s, 'h'));
+      expect(meanStep(s, 'v', m)).toEqual(meanStep(s, 'v'));
+      expect(sharpenTexel(s, m)).toEqual(sharpenTexel(s));
+    }
+  });
+
+  it('a tile buffer uses the O short edge in output pixels, not its own size', () => {
+    const tile = { width: 1088, height: 1152 };
+    const [ux] = meanStep(tile, 'h', 3072);
+    const [, uy] = meanStep(tile, 'v', 3072);
+    expect(ux * tile.width).toBeCloseTo((4 * 3072) / 720, 9);
+    expect(uy * tile.height).toBeCloseTo((4 * 3072) / 720, 9);
+    const [kx, ky] = sharpenTexel(tile, 3072);
+    expect(kx * tile.width).toBeCloseTo(3072 / 720, 9);
+    expect(ky * tile.height).toBeCloseTo(3072 / 720, 9);
+  });
+});
+
+describe('adjustFrameFor (the composite V frame of 暗角 and 顆粒, S §4.2 P5)', () => {
+  it('without a tile it is step 2 frameFor, with the O short edge of the photo', () => {
+    expect(adjustFrameFor({}, { width: 2048, height: 1536 }, 1536)).toEqual(frameFor({ width: 2048, height: 1536 }));
+    // a crop preview: V buffer 1024 × 1536 at working density, the photo's short edge stays 1536
+    expect(adjustFrameFor({}, { width: 1024, height: 1536 }, 1536)).toEqual({ ...frameFor({ width: 1024, height: 1536 }), fullShortEdge: 1536 });
+    const cam = { x: 0.2, y: 0, w: 0.6, h: 1 };
+    expect(adjustFrameFor({ pictureFrame: cam, grainSeed: 9 }, { width: 1280, height: 720 }, 720)).toEqual(frameFor({ width: 1280, height: 720 }, cam, 9));
+  });
+
+  it('a tile maps buffer uv into the whole V; vSize is the whole V in output pixels', () => {
+    const f = adjustFrameFor({ output: { tile: { x: 0.25, y: 0.5, w: 0.25, h: 0.25 }, pixelSize: { width: 1024, height: 768 }, fullShortEdge: 3072 } }, { width: 1024, height: 768 }, 3072);
+    expect(f).toEqual({ vMap: [0.25, 0.25, 0.25, 0.5], vSize: [4096, 3072], fullShortEdge: 3072, seed: 0 });
   });
 });

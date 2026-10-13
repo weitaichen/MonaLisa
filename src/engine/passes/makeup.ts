@@ -121,8 +121,16 @@ export interface MakeupPass {
   readonly ready: Promise<void>;
   /** Copy `src` (any size, by UV) into `dst`, then draw makeup on top. `src` must not alias `dst`. */
   draw(src: Texture, dst: Framebuffer, face: Face, u: MakeupUniforms): void;
-  /** one copy of src, then one mesh per face whose makeup is active, each reading src (S §4.3) */
-  drawFaces(src: Texture, dst: Framebuffer, faces: readonly { face: Face; u: MakeupUniforms }[]): void;
+  /**
+   * one copy of src, then one mesh per face whose makeup is active, each reading src (S §4.3); `win` (step 3) = the O
+   * rect src and dst cover (a tile's window), default the whole image
+   */
+  drawFaces(
+    src: Texture,
+    dst: Framebuffer,
+    faces: readonly { face: Face; u: MakeupUniforms }[],
+    win?: readonly [number, number, number, number],
+  ): void;
   dispose(): void;
 }
 
@@ -195,7 +203,7 @@ export function createMakeupPass(gl: GL, assetBase = '/makeup/gp/'): MakeupPass 
     tex = { lip, lipMask, blush, blushMask };
   });
 
-  const drawFaces: MakeupPass['drawFaces'] = (src, dst, faces) => {
+  const drawFaces: MakeupPass['drawFaces'] = (src, dst, faces, win = [0, 0, 1, 1]) => {
     bindTarget(gl, dst);
     gl.disable(gl.BLEND);
     copy.use();
@@ -207,7 +215,12 @@ export function createMakeupPass(gl: GL, assetBase = '/makeup/gp/'): MakeupPass 
       if (!makeupActive(u)) continue;
       drew = true;
       const p = face.pts111;
-      for (let i = 0; i < 222; i++) pos[i] = p[i] * 2 - 1;
+      // the landmark mapped into the target window on the CPU (S §4.2 P1): at the whole image (p − 0) / 1 = p exactly,
+      // so the identity case is bit-identical (a shader round trip aPos·0.5 + 0.5 would round)
+      for (let i = 0; i < 222; i += 2) {
+        pos[i] = ((p[i] - win[0]) / win[2]) * 2 - 1;
+        pos[i + 1] = ((p[i + 1] - win[1]) / win[3]) * 2 - 1;
+      }
       mesh.use();
       gl.uniform2f(mesh.u('uInvDst'), 1 / dst.width, 1 / dst.height);
       gl.uniform1f(mesh.u('uLipI'), clamp01(u.lip));

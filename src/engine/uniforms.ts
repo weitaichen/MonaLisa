@@ -1,6 +1,7 @@
 // Pure engine math: tier sizes, buffer sizes, mean-kernel geometry and the params → skin uniform mapping (RB §5
 // "Engine mapping" column: skinMaxima, skinUniformsFor). No GL here, so all of it is unit-tested.
 import type { PhotoParams, RenderInput, Tier } from '../types';
+import { frameFor, type AdjustFrame } from './adjustMath';
 import { fitShortEdge } from './gl/gl';
 
 export interface Size {
@@ -52,22 +53,43 @@ export function meanScale(size: Size): number {
 }
 
 /**
- * UV step of one "offset unit" along `axis`, computed from the PROCESSING size (not the mean buffer
- * size), so the half-res mean of tier L covers the same image footprint.
+ * UV step of one "offset unit" along `axis`, from the PROCESSING size (not the mean buffer size), so the half-res mean
+ * of tier L covers the same image footprint. `fullShortEdge` (step 3) is the O short edge in output pixels: a crop or a
+ * tile keeps the kernel of the whole photo. Default = min(size): exactly today's arithmetic.
  */
-export function meanStep(size: Size, axis: 'h' | 'v'): [number, number] {
-  const unit = MEAN_SPACING * meanScale(size);
+export function meanStep(size: Size, axis: 'h' | 'v', fullShortEdge: number = Math.min(size.width, size.height)): [number, number] {
+  const unit = MEAN_SPACING * (fullShortEdge / MEAN_REFERENCE_SHORT_EDGE);
   return axis === 'h' ? [unit / size.width, 0] : [0, unit / size.height];
 }
 
 /**
- * UV step of the P5 sharpen taps: GPUPixel's 1 px at a 720 short edge, scaled by shortEdge/720
- * like the mean (unclamped, as meanStep), so the live tiers and the full-resolution capture
- * sharpen the same image footprint.
+ * UV step of the P5 sharpen taps: GPUPixel's 1 px at a 720 short edge, scaled by fullShortEdge/720 like the mean
+ * (unclamped, as meanStep), so the live tiers, the full-resolution capture, a crop and a tile sharpen the same image
+ * footprint. Default = min(size): exactly today's arithmetic.
  */
-export function sharpenTexel(size: Size): [number, number] {
-  const k = meanScale(size);
+export function sharpenTexel(size: Size, fullShortEdge: number = Math.min(size.width, size.height)): [number, number] {
+  const k = fullShortEdge / MEAN_REFERENCE_SHORT_EDGE;
   return [k / size.width, k / size.height];
+}
+
+/**
+ * The composite's picture frame (S2 §4.5, S §4.2 P5) as step 2's AdjustFrame: without a tile it is step 2's
+ * frameFor(size, pictureFrame, seed) with the O short edge of the photo (a crop keeps the grain cell of the whole
+ * photo); a tile maps its buffer uv into the whole V (vMap from output.tile) and vSize is the whole V in output pixels,
+ * so 暗角 and 顆粒 depend only on global V and tiles match the untiled render.
+ */
+export function adjustFrameFor(
+  input: Pick<RenderInput, 'output' | 'pictureFrame' | 'grainSeed'>,
+  size: Size,
+  fullShortEdge: number,
+): AdjustFrame {
+  const seed = input.grainSeed ?? 0;
+  const o = input.output;
+  if (!o) return { ...frameFor(size, input.pictureFrame, seed), fullShortEdge };
+  const t = o.tile;
+  // the seed as frameFor sanitizes it (a uint)
+  const s = Number.isFinite(seed) ? seed >>> 0 : 0;
+  return { vMap: [t.w, t.h, t.x, t.y], vSize: [o.pixelSize.width / t.w, o.pixelSize.height / t.h], fullShortEdge, seed: s };
 }
 
 /** Signed tap offsets in processing pixels along one axis (for tests / docs): {0, ±1.5, ±3.5}·4·scale. */

@@ -11,6 +11,7 @@
 // neighbours and the obstacles; one face is v0.3's frame.
 // P5 has two programs (step 2): the base composite and the 調節 one (質感 LUT + 調節 stages), compiled on first need.
 import { FACE_TABLE_CARRIER } from '../config/limits';
+import { IDENTITY_MAT3 } from '../geometry/view';
 import type { BodyField, Face, FaceProtect, PhotoParams } from '../types';
 import type { AdjustUniforms } from './adjustMath';
 import { createCompositePrograms, uploadAdjust } from './compositePrograms';
@@ -34,7 +35,7 @@ import { attenuate, capsFor, faceDrawn, WHOLE, type TableFace } from './passes/f
 import { createMakeupPass, makeupActive, type MakeupPass, type MakeupUniforms } from './passes/makeup';
 import { createMaskPass, type MaskPass } from './passes/mask';
 import { createLandmarkOverlay, type LandmarkOverlay } from './passes/overlay';
-import { createReshapePass, reshapeActive, type ReshapePass, type ReshapeUniforms } from './passes/reshape';
+import { createReshapePass, reshapeActive, type ReshapePass, type ReshapeUniforms, type ReshapeView } from './passes/reshape';
 import { COMPOSITE_UNITS } from './shaders/composite';
 import { MEAN_FS, MEAN_VS } from './shaders/mean';
 import { PRESENT_FS, PRESENT_VS } from './shaders/present';
@@ -103,6 +104,21 @@ export interface FrameJob {
   /** 'canvas' presents (flip Y); 'fbo' renders top-row-first into a free buffer for readPixels */
   target: 'canvas' | 'fbo';
   mirror: boolean;
+  /** O-normalized rect the uploaded src covers, (x, y, w, h); [0,0,1,1] for the preview */
+  win: [number, number, number, number];
+  /** V-normalized rect the V buffers cover; [0,0,1,1] for the preview */
+  tile: [number, number, number, number];
+  /** V → O, column-major mat3; IDENTITY_MAT3 (the same object) at identity geometry */
+  geo: Float32Array;
+  geoIdentity: boolean;
+  /** win ≠ tile: P2 resamples the window into the buffer */
+  windowed: boolean;
+  /** the working bitmap's width / height: every face warp's iso metric, the same for the preview, a tile and the export */
+  oAspect: number;
+  /** pixel size of the O-space buffers (src, M at ¼, A): the window, or `size` at identity without a window */
+  srcSize: Size;
+  /** the O short edge in output pixels (k = fullShortEdge / 720) */
+  fullShortEdge: number;
 }
 
 export interface FrameResult {
@@ -125,6 +141,10 @@ export interface PassPlanInput {
   bodyOn: boolean;
   /** the frame needs the 調節 program (FrameJob.adjust.on) */
   adjustOn: boolean;
+  /** step 3: false → P2 runs (default true) */
+  geoIdentity?: boolean;
+  /** step 3: true → P2 runs (default false) */
+  windowed?: boolean;
 }
 
 export interface PassPlan {
@@ -150,7 +170,8 @@ export function planPasses(i: PassPlanInput): PassPlan {
   return {
     mask: (faceOn || clearBelowWhite) && !i.matchGpupixel && mean,
     makeup: faceOn && i.makeupActive && i.makeupReady,
-    reshape: (faceOn && i.reshapeActive) || i.bodyOn,
+    // step 3 (S §4.3): a geometry or a window always runs P2, the V ← O resample
+    reshape: (faceOn && i.reshapeActive) || i.bodyOn || i.geoIdentity === false || i.windowed === true,
     mean,
     adjust: i.adjustOn,
   };
@@ -160,7 +181,7 @@ export function planPasses(i: PassPlanInput): PassPlan {
 export function planFrame(
   job: { faces: readonly Pick<FrameFace, 'weight' | 'makeup' | 'reshape'>[] } & Pick<FrameJob, 'maskClear' | 'matchGpupixel' | 'skin'> & {
     adjust: { on: boolean };
-  },
+  } & Partial<Pick<FrameJob, 'geoIdentity' | 'windowed'>>,
   makeupReady: boolean,
   bodyOn: boolean,
 ): PassPlan {
@@ -175,6 +196,8 @@ export function planFrame(
     reshapeActive: live.some((f) => reshapeActive(f.reshape)),
     bodyOn,
     adjustOn: job.adjust.on,
+    geoIdentity: job.geoIdentity,
+    windowed: job.windowed,
   });
 }
 
@@ -199,8 +222,11 @@ export function tableFaces(job: Pick<FrameJob, 'faces' | 'obstacles'>, aspect: n
 
 export interface Pipeline {
   run(job: FrameJob): FrameResult;
-  /** renderOriginal: draw `src` to the canvas with flip Y (+ mirror). Canvas must already be sized. */
-  drawSource(src: Texture, mirror: boolean): void;
+  /**
+   * renderOriginal: draw `src` to the canvas with flip Y (+ mirror), sampled through `geo` (V → O, step 3; default
+   * IDENTITY_MAT3). Canvas must already be sized.
+   */
+  drawSource(src: Texture, mirror: boolean, geo?: Float32Array): void;
   /** Debug overlay on the canvas (after present). */
   drawOverlay(face: Face, mirror: boolean): void;
   /**
@@ -211,6 +237,8 @@ export interface Pipeline {
   preloadMakeup(): Promise<void>;
   /** the 調節 program failed to compile on this context */
   readonly adjustFailed: boolean;
+  /** every FBO to 1 × 1 (after a tiled export, S §4.4); the next frame re-allocates at its own size */
+  releaseBuffers(): void;
   /** `lost` = context already lost: drop references without issuing GL calls. */
   dispose(lost?: boolean): void;
 }
@@ -302,6 +330,7 @@ export function createPipeline(gl: GL): Pipeline {
   gl.uniform1i(meanProg.u('uSrc'), 0);
   presentProg.use();
   gl.uniform1i(presentProg.u('uSrc'), 0);
+  gl.uniformMatrix3fv(presentProg.u('uGeo'), false, IDENTITY_MAT3);
 
   // 1×1 white stand-in for samplers the current frame does not use (avoids unbound-unit sampling).
   const white = createTexture(gl, 1, 1);
@@ -391,11 +420,11 @@ export function createPipeline(gl: GL): Pipeline {
     meanProg.use();
     bindTarget(gl, c);
     bindTexture(gl, 0, src);
-    gl.uniform2fv(meanProg.u('uStep'), meanStep(job.size, 'h'));
+    gl.uniform2fv(meanProg.u('uStep'), meanStep(job.size, 'h', job.fullShortEdge));
     drawFullscreen(gl);
     bindTarget(gl, d);
     bindTexture(gl, 0, c.tex);
-    gl.uniform2fv(meanProg.u('uStep'), meanStep(job.size, 'v'));
+    gl.uniform2fv(meanProg.u('uStep'), meanStep(job.size, 'v', job.fullShortEdge));
     drawFullscreen(gl);
     return d.tex;
   }
@@ -413,9 +442,13 @@ export function createPipeline(gl: GL): Pipeline {
       let maskTex: Texture | null = null;
       if (plan.mask) {
         mask ??= createMaskPass(gl);
-        // RGBA8 (fb's default), still 8-bit unorm per channel: the 磨皮 channel quantizes exactly like v0.3's R8
-        const m = fb('M', maskBufferSize(job.size));
-        mask.drawFaces(m, job.faces.map((f) => ({ face: f.face, weight: f.weight, k: [f.kS, f.kR] as const })), job.maskClear);
+        // RGBA8 (fb's default), still 8-bit unorm per channel: the 磨皮 channel quantizes exactly like v0.3's R8. In O
+        // (step 3): ¼ of the window; the feathers use oAspect once a geometry or a window is in play, else v0.3's
+        const m = fb('M', maskBufferSize(job.srcSize));
+        mask.drawFaces(m, job.faces.map((f) => ({ face: f.face, weight: f.weight, k: [f.kS, f.kR] as const })), job.maskClear, {
+          win: job.win,
+          aspect: job.geoIdentity && !job.windowed ? undefined : job.oAspect,
+        });
         maskTex = m.tex;
         passes.push('mask');
       }
@@ -423,20 +456,23 @@ export function createPipeline(gl: GL): Pipeline {
       let base: Texture = job.src;
       let baseFb: Framebuffer | null = null;
       if (plan.makeup && makeup) {
-        const a = fb('A', job.size);
-        makeup.drawFaces(base, a, meshes);
+        // in O (step 3): the window's size
+        const a = fb('A', job.srcSize);
+        makeup.drawFaces(base, a, meshes, job.win);
         base = a.tex;
         baseFb = a;
         passes.push('makeup');
       }
       if (plan.reshape) {
         reshape ??= createReshapePass(gl, { carrier: FACE_TABLE_CARRIER });
-        const aspect = job.size.width / job.size.height;
+        // the working bitmap's aspect (step 3, S §4.1): at identity without a window it is job.size's, as before
+        const aspect = job.oAspect;
+        const view: ReshapeView = { geo: job.geo, tile: job.tile, win: job.win };
         // every listed face with its cap; a face without weight or an active warp gets zero deltas (EMPTY_BOX), so a
         // body-only frame draws no face chain; its limit is a layer only with a warp drawn (no upload otherwise)
         const t = tableFaces(job, aspect);
         const b = fb('B', job.size);
-        reshape.drawFaces(base, b, t.faces, { aspect, body, protects: t.protects });
+        reshape.drawFaces(base, b, t.faces, { aspect, body, protects: t.protects, view });
         base = b.tex;
         baseFb = b;
         passes.push('reshape');
@@ -447,7 +483,7 @@ export function createPipeline(gl: GL): Pipeline {
           // the contour moved in. Same program and table, the image's aspect (not the rounded ¼-res buffer's); all
           // channels pass through.
           const n = fb('N', maskBufferSize(job.size));
-          reshape.drawFaces(maskTex, n, t.faces, { aspect, body, protects: t.protects });
+          reshape.drawFaces(maskTex, n, t.faces, { aspect, body, protects: t.protects, view });
           maskTex = n.tex;
           passes.push('maskWarp');
         }
@@ -462,7 +498,7 @@ export function createPipeline(gl: GL): Pipeline {
 
       let output: Framebuffer | null = null;
       if (job.target === 'fbo') {
-        // Reuse whichever full-size buffer is not the composite input.
+        // Reuse whichever full-size buffer is not the composite input (A is re-sized from srcSize to size after P2 read it).
         output = baseFb !== null && baseFb === fbs.A ? fb('B', job.size) : fb('A', job.size);
         bindTarget(gl, output);
       } else {
@@ -484,7 +520,7 @@ export function createPipeline(gl: GL): Pipeline {
       bindTexture(gl, COMPOSITE_UNITS.light, luts ? luts.light : white);
       bindTexture(gl, COMPOSITE_UNITS.filter, filterAmt > 0 && job.filterLut ? job.filterLut : white);
       if (drawsAdjust) bindTexture(gl, COMPOSITE_UNITS.look, job.lookLut ?? white);
-      gl.uniform2fv(prog.u('uTexel'), sharpenTexel(job.size));
+      gl.uniform2fv(prog.u('uTexel'), sharpenTexel(job.size, job.fullShortEdge));
       gl.uniform1f(prog.u('uSmooth'), plan.mean ? job.skin.smooth : 0);
       gl.uniform1f(prog.u('uSharpen'), job.skin.sharpen);
       gl.uniform1f(prog.u('uWhiten'), whiten);
@@ -506,12 +542,13 @@ export function createPipeline(gl: GL): Pipeline {
       return comp.adjustFailed;
     },
 
-    drawSource(src, mirror) {
+    drawSource(src, mirror, geo = IDENTITY_MAT3) {
       resetState();
       bindTarget(gl, null);
       presentProg.use();
       bindTexture(gl, 0, src);
       gl.uniform2fv(presentProg.u('uOut'), presentScale(true, mirror));
+      gl.uniformMatrix3fv(presentProg.u('uGeo'), false, geo);
       drawFullscreen(gl);
       bindTexture(gl, 0, null);
     },
@@ -520,6 +557,11 @@ export function createPipeline(gl: GL): Pipeline {
       return getMakeup().ready.catch(() => {
         // already logged by getMakeup's handler; makeup stays disabled
       });
+    },
+
+    releaseBuffers() {
+      // every FBO to 1 × 1: the next frame re-allocates at its own size (S §4.4, after a tiled export)
+      for (const f of Object.values(fbs)) if (f) resizeFramebuffer(gl, f, 1, 1);
     },
 
     drawOverlay(face, mirror) {

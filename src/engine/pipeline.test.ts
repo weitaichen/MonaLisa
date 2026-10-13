@@ -228,3 +228,15 @@ describe('tableFaces (S §4.1)', () => {
     expect(Object.values(t.faces[2].u).every((v) => v === 0)).toBe(true);
   });
 });
+
+describe('planPasses with geometry and windows (step 3)', () => {
+  const quiet: PassPlanInput = { ...base, anyFace: false, reshapeActive: false, bodyOn: false };
+  it('identity geometry and no window keep P2 skipped (v0.3 parity)', () => {
+    expect(planPasses({ ...quiet, geoIdentity: true, windowed: false }).reshape).toBe(false);
+    expect(planPasses(quiet).reshape).toBe(false);
+  });
+  it('a geometry or a window always runs P2', () => {
+    expect(planPasses({ ...quiet, geoIdentity: false }).reshape).toBe(true);
+    expect(planPasses({ ...quiet, windowed: true }).reshape).toBe(true);
+  });
+});

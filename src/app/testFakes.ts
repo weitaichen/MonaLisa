@@ -15,6 +15,7 @@ import type {
   LutKind,
   LutState,
   Prefs,
+  PxRect,
   RenderInput,
   Tier,
   Tracker,
@@ -138,6 +139,8 @@ export interface FakeEngine extends Engine {
   render: ReturnType<typeof vi.fn<Engine['render']>>;
   renderToImageData: ReturnType<typeof vi.fn<Engine['renderToImageData']>>;
   renderOriginal: ReturnType<typeof vi.fn<Engine['renderOriginal']>>;
+  renderTile: ReturnType<typeof vi.fn<Engine['renderTile']>>;
+  releaseBuffers: ReturnType<typeof vi.fn<Engine['releaseBuffers']>>;
   /** last RenderInput passed to render() */
   lastInput(): RenderInput | undefined;
 }
@@ -195,6 +198,11 @@ export function fakeEngine(clock?: { work(ms: number): void }, tier: Tier = 'M')
     renderOriginal: vi.fn(() => {
       clock?.work(e.cost);
     }),
+    renderTile: vi.fn(
+      (_input: RenderInput, read: PxRect) =>
+        ({ width: read.w, height: read.h, data: new Uint8ClampedArray(read.w * read.h * 4) }) as unknown as ImageData,
+    ),
+    releaseBuffers: vi.fn(),
     dispose: vi.fn(),
     lastInput(): RenderInput | undefined {
       const calls = e.render.mock.calls;

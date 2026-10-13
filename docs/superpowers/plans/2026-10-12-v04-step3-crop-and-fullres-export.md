@@ -2777,7 +2777,7 @@ EOF
 - Produces (`pipeline.ts`): `FrameJob.win`, `tile: [number, number, number, number]`, `geo: Float32Array`, `geoIdentity: boolean`, `windowed: boolean`, `oAspect: number`, `srcSize: Size`, `fullShortEdge: number`; `PassPlanInput.geoIdentity?: boolean`, `windowed?: boolean` (forwarded by `planFrame`); `MaskPass.drawFaces(…, view?)`, `MakeupPass.drawFaces(…, win?)`; `Pipeline.drawSource(src, mirror, geo?: Float32Array)`; `Pipeline.releaseBuffers(): void`.
 - Produces (`gl.ts`): `shrinkTexture(gl, tex): void` (1 × 1 RGBA8).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `src/engine/uniforms.test.ts`:
 
@@ -2947,12 +2947,12 @@ describe('createEngine: geometry, windows and tiles (step 3)', () => {
 
 (`RenderInput` from `../types`.)
 
-- [ ] **Step 2: Run the tests to see them fail**
+- [x] **Step 2: Run the tests to see them fail**
 
 Run: `npx vitest run src/engine/uniforms.test.ts src/engine/pipeline.test.ts src/engine/index.test.ts`
 Expected: FAIL — `adjustFrameFor is not exported`, `j.srcSize` undefined, `engine.renderTile is not a function`.
 
-- [ ] **Step 3: Types and pure math**
+- [x] **Step 3: Types and pure math**
 
 `src/types.ts` (CRLF): next to `RenderInput`:
 
@@ -3041,7 +3041,7 @@ export function shrinkTexture(gl: GL, tex: Texture): void {
 }
 ```
 
-- [ ] **Step 4: Pipeline**
+- [x] **Step 4: Pipeline**
 
 `src/engine/pipeline.ts` (CRLF). `FrameJob` gains:
 
@@ -3128,7 +3128,7 @@ void main() {
 
 (S §4.2 puts this map in the vertex shader; doing it where `pos` is already computed keeps the identity case bit-identical, because a shader round trip `aPos·0.5 + 0.5` would round.)
 
-- [ ] **Step 5: Engine entry points**
+- [x] **Step 5: Engine entry points**
 
 `src/engine/index.ts` (CRLF): import `IDENTITY_GEOMETRY, IDENTITY_MAT3, glMat3, isIdentity, viewSize, vToO` from `../geometry/view`, `shrinkTexture` from `./gl/gl` (the `./gl/gl` import, `index.ts:7-15`), `adjustFrameFor` from `./uniforms` (`index.ts:22`), and types `Geometry, Rect` (`index.ts:5`; not `PxRect`: `renderTile`'s parameters are typed by `Engine`, and an unused import fails `noUnusedLocals`). Drop `frameFor` from the `./adjustMath` import (`index.ts:6`): `adjustFrameFor` replaces its one use, and `noUnusedLocals` rejects the leftover. Add helpers inside `createEngine` (next to `sizeCanvas`, `index.ts:260`):
 
@@ -3218,7 +3218,7 @@ Where step 2's `job()` builds the frame for its memoized `adjustFor(values, look
 
 (`renderOriginal` takes a `Pick` of `RenderInput`, so it sizes the V canvas with `viewSize` directly.)
 
-- [ ] **Step 6: Fakes**
+- [x] **Step 6: Fakes**
 
 `src/app/testFakes.ts`: `FakeEngine` (`testFakes.ts:123-143`) gains `renderTile: ReturnType<typeof vi.fn<Engine['renderTile']>>; releaseBuffers: ReturnType<typeof vi.fn<Engine['releaseBuffers']>>;` and `fakeEngine` (`:145-211`, next to `renderOriginal`) gains
 
@@ -3244,14 +3244,14 @@ Where step 2's `job()` builds the frame for its memoized `adjustFor(values, look
   releaseBuffers() {}
 ```
 
-- [ ] **Step 7: Run the unit tests, the engine harnesses and parity**
+- [x] **Step 7: Run the unit tests, the engine harnesses and parity**
 
 Run: `npx vitest run src/engine/`
 Expected: PASS.
 Run: `npm run build && npx playwright test tests/e2e/engine.spec.ts tests/e2e/reshape.spec.ts tests/e2e/faceProtect.spec.ts tests/e2e/parity.spec.ts`
 Expected: all passed (identity geometry is bit-identical; parity ≤ 1/255).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/types.ts src/engine/ src/app/testFakes.ts tests/harness/t7/fakes.ts

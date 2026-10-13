@@ -7793,7 +7793,7 @@ EOF
 - Consumes: everything above; `STEP3_BASE` = `b975bcc`, the step base commit (substitute it in every command below; the plan-reconcile commit right after it touches only this plan).
 - Produces: a green step 3 on local `feat/meiyan-pwa`, version still `0.3.0`.
 
-- [ ] **Step 1: Typecheck, unit tests, build**
+- [x] **Step 1: Typecheck, unit tests, build**
 
 Run: `npm run typecheck`
 Expected: exit 0, no output.
@@ -7802,12 +7802,12 @@ Expected: every suite passes, 0 failed.
 Run: `npm run build`
 Expected: `tsc` clean and `vite build` completes (`dist/` written).
 
-- [ ] **Step 2: The whole e2e suite**
+- [x] **Step 2: The whole e2e suite**
 
 Run: `npm run test:e2e`
 Expected: every spec passes — including `parity.spec.ts`, `editor.spec.ts`, `camera.spec.ts`, `engine.spec.ts`, `reshape.spec.ts`, `faceProtect.spec.ts`, `body.spec.ts`, `settings.spec.ts`, `home.spec.ts`, `update.spec.ts`, `bench.spec.ts`, the step-1/2 specs (`persons`, `camera-group` in the `chromium-group` project, `adjust`, `composite`) and this step's `export.spec.ts` and `crop.spec.ts`.
 
-- [ ] **Step 3: v0.3 equivalence (C §1.1, S §1.3)**
+- [x] **Step 3: v0.3 equivalence (C §1.1, S §1.3)**
 
 Run: `npx playwright test tests/e2e/parity.spec.ts`
 Expected: passes (identity geometry: max channel diff ≤ 1/255, mean < 0.02/255 against the v0.3 goldens).
@@ -7822,7 +7822,7 @@ Expected: no output (only added tests).
 Run: `git diff STEP3_BASE -- 'src/**/*.test.ts' 'src/**/*.test.tsx' | grep -E '^-[^-]'`
 Expected: only these intended lines: the `RESHAPE_FS` hash pin in `reshapeCpu.test.ts` (C §8.2); import lines that only gained names (`exporter.test.ts`, `importer.test.ts`, `reshape.test.ts`, `panelModel.test.ts`, `editorModel.test.ts`, …); `PhotoParams` literals in step 1's `src/edit/*.test.ts` that only gained `geometry: IDENTITY_GEOMETRY` (Task 3's mechanical port); the `Prefs` literal of `settings.test.ts`'s round-trip test (two added fields); and the `index.test.ts` fakes (`fakeCanvas` gl / pipeline mock gained members). Anything else is an assertion change: revert it and fix the code instead.
 
-- [ ] **Step 4: Constraints**
+- [x] **Step 4: Constraints**
 
 Run: `node -p "require('./package.json').version"`
 Expected: `0.3.0`.
@@ -7839,7 +7839,7 @@ Expected: no output from either (`tests/harness/t1/harness.ts` was already mixed
 Run: `git status --short && git log --oneline STEP3_BASE..HEAD`
 Expected: a clean tree, the plan-reconcile commit and one local commit per task (Tasks 1–19, plus any `task <N> fix` commits); `git status -sb` shows the branch ahead of its upstream — nothing was pushed.
 
-- [ ] **Step 5: Record the gate**
+- [x] **Step 5: Record the gate**
 
 If any step failed, fix it in the owning task's files, re-run that task's tests and this gate from Step 1, and commit the fix:
 

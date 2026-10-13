@@ -1,11 +1,13 @@
 // createEngine context-loss bookkeeping of filter LUT loads, with the GL layer and the pipeline faked.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { legacyFrame } from '../edit/frame';
+import { defaultPhoto } from '../edit/state';
+import { seedMix } from './adjustMath';
 import { loadImageTexture } from './gl/gl';
-import { createEngine } from './index';
+import { createEngine, MAX_RESIDENT_LUTS } from './index';
 import { defaultParams } from './params';
 import { createPipeline, type FrameJob } from './pipeline';
-import type { BodyField } from '../types';
+import type { BodyField, PhotoParams, RenderInput } from '../types';
 
 vi.mock('./gl/gl', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./gl/gl')>()),
@@ -55,7 +57,10 @@ const filterCalls = (id: string) => loadTex.mock.calls.filter((c) => c[1] === fi
 
 beforeEach(() => {
   loadTex.mockReset();
-  loadTex.mockImplementation(async (_gl, url) => ({ tex: {}, width: url.includes('/filters/') ? 512 : 64, height: url.includes('/filters/') ? 512 : 64 }) as never);
+  loadTex.mockImplementation(async (_gl, url) => {
+    const lut = /\/(filters|looks)\//.test(url);
+    return { tex: {}, width: lut ? 512 : 64, height: lut ? 512 : 64 } as never;
+  });
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
@@ -148,5 +153,144 @@ describe('createEngine: the frame job’s 調節 (step-2 spec §4.1)', () => {
     engine.render({ source: {} as TexImageSource, width: 640, height: 480, ...frame, photo });
     expect(lastJob().adjust).toMatchObject({ on: true, adjustOn: true, curveOn: true, lookAmt: 0 });
     expect(lastJob().lookLut).toBeNull();
+  });
+});
+
+const lookUrl = (id: string) => `/luts/looks/look_${id}.png`;
+const calls = (url: string) => loadTex.mock.calls.filter((c) => c[1] === url).length;
+const photoInput = (photo: Partial<PhotoParams> = {}, extra: Partial<RenderInput> = {}): RenderInput => ({
+  source: {} as TexImageSource,
+  width: 640,
+  height: 480,
+  faces: [],
+  globalSkin: null,
+  photo: { ...defaultPhoto(), ...photo },
+  ...extra,
+});
+const latestJob = (): FrameJob => {
+  const pipe = vi.mocked(createPipeline).mock.results.at(-1)!.value as { run: { mock: { calls: [FrameJob][] } } };
+  return pipe.run.mock.calls.at(-1)![0];
+};
+const flush = async () => {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+};
+
+describe('createEngine: 濾鏡 and 質感 LUT cache (step-2 spec §3.5)', () => {
+  it('kinds have their own paths; filter "film" and look "film" are separate textures', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    await engine.loadLut('filter', 'film');
+    expect(engine.lutState('filter', 'film')).toBe('ready');
+    expect(engine.lutState('look', 'film')).toBe('none');
+    await engine.loadLut('look', 'film');
+    expect(calls(filterUrl('film'))).toBe(1);
+    expect(calls(lookUrl('film'))).toBe(1);
+    expect(engine.lutState('look', 'film')).toBe('ready');
+    await engine.loadFilter('warm');
+    expect(engine.lutState('filter', 'warm')).toBe('ready');
+    expect(engine.lutState('filter', 'none')).toBe('ready');
+  });
+
+  it('lutState: loading → ready; a failed LUT stays failed (no implicit retry) until an explicit loadLut', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    loadTex.mockImplementationOnce(async () => {
+      throw new Error('HTTP 404');
+    });
+    const p = engine.loadLut('look', 'ccd');
+    expect(engine.lutState('look', 'ccd')).toBe('loading');
+    await expect(p).rejects.toThrow('HTTP 404');
+    expect(engine.lutState('look', 'ccd')).toBe('failed');
+    engine.render(photoInput({ look: { id: 'ccd', amount: 0.8 } }));
+    expect(calls(lookUrl('ccd'))).toBe(1);
+    await engine.loadLut('look', 'ccd');
+    expect(engine.lutState('look', 'ccd')).toBe('ready');
+    expect(calls(lookUrl('ccd'))).toBe(2);
+  });
+
+  it('the same LUT asked again while loading is fetched once (pick → 無 → pick, hook + frame path)', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    let done!: (t: unknown) => void;
+    loadTex.mockImplementationOnce(() => new Promise((r) => (done = r)) as never);
+    const a = engine.loadLut('look', 'blue');
+    const b = engine.loadLut('look', 'blue');
+    engine.render(photoInput({ look: { id: 'blue', amount: 0.8 } }));
+    expect(a).toBe(b);
+    expect(calls(lookUrl('blue'))).toBe(1);
+    done({ tex: {}, width: 512, height: 512 });
+    await a;
+    expect(engine.lutState('look', 'blue')).toBe('ready');
+    expect(calls(lookUrl('blue'))).toBe(1);
+  });
+
+  it(`keeps at most ${MAX_RESIDENT_LUTS} LUTs resident: the least recently used goes, never one the latest frame drew with`, async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    await engine.loadLut('filter', 'a');
+    engine.render(photoInput({ filterId: 'a' })); // the latest frame draws with filter a
+    for (const id of ['b', 'c', 'd', 'e', 'f', 'g']) await engine.loadLut('filter', id);
+    expect(engine.lutState('filter', 'a')).toBe('ready');
+    expect(engine.lutState('filter', 'b')).toBe('none');
+    for (const id of ['c', 'd', 'e', 'f', 'g']) expect(engine.lutState('filter', id)).toBe('ready');
+  });
+
+  it('a context loss drops the cache; after the restore the next frame reloads the look by itself', async () => {
+    const { canvas, fire } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    await engine.loadLut('look', 'film');
+    fire('webglcontextlost');
+    expect(engine.lutState('look', 'film')).toBe('none');
+    fire('webglcontextrestored');
+    await engine.ready;
+    const before = calls(lookUrl('film'));
+    engine.render(photoInput({ look: { id: 'film', amount: 0.8 } }));
+    expect(calls(lookUrl('film'))).toBe(before + 1);
+  });
+
+  it('a look draws only once its LUT is resident (all-or-nothing: no LUT and no offsets before)', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    let done!: (t: unknown) => void;
+    loadTex.mockImplementationOnce(() => new Promise((r) => (done = r)) as never);
+    const input = photoInput({ look: { id: 'cinema', amount: 0.8 } });
+    engine.render(input);
+    expect(latestJob().lookLut).toBeNull();
+    expect(latestJob().adjust).toMatchObject({ on: false, lookAmt: 0 });
+    done({ tex: {}, width: 512, height: 512 });
+    await flush();
+    engine.render(input);
+    expect(latestJob().lookLut).not.toBeNull();
+    expect(latestJob().adjust).toMatchObject({ on: true, adjustOn: true, lookAmt: 0.8 });
+  });
+
+  it('user 調節 values, pictureFrame and grainSeed reach the frame uniforms; neutral photos stay off', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    engine.render(photoInput());
+    expect(latestJob().adjust.on).toBe(false);
+    const p = defaultPhoto();
+    engine.render(
+      photoInput({ values: { ...p.values, 'adjust.vignette': 1 } }, { pictureFrame: { x: 0.25, y: 0, w: 0.5, h: 1 }, grainSeed: 7 }),
+    );
+    expect(latestJob().adjust.on).toBe(true);
+    expect(latestJob().adjust.vMap).toEqual([2, 1, -0.5, 0]);
+    expect(latestJob().adjust.seedMix).toBe(seedMix(7));
+  });
+
+  it('adjustUnavailable mirrors the pipeline', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    expect(engine.adjustUnavailable).toBe(false);
+    (vi.mocked(createPipeline).mock.results.at(-1)!.value as { adjustFailed?: boolean }).adjustFailed = true;
+    expect(engine.adjustUnavailable).toBe(true);
   });
 });

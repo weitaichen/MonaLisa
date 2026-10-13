@@ -20,6 +20,8 @@ import type {
   Engine,
   EngineAssetsProgress,
   HistoryEntry,
+  LutKind,
+  LutState,
   Prefs,
   RenderInput,
   StillFrame,
@@ -106,6 +108,20 @@ class FakeEngine implements Engine {
   }
   async loadFilter() {
     await sleep(30);
+  }
+  /** 濾鏡 + 質感 LUT states, like the engine's cache (the fake draws no LUT; it only settles them after a delay) */
+  private luts = new Map<string, LutState>();
+  readonly adjustUnavailable = false;
+  loadLut(kind: LutKind, id: string): Promise<void> {
+    if (kind === 'filter' && id === 'none') return Promise.resolve();
+    const key = `${kind}:${id}`;
+    if (this.luts.get(key) !== 'ready') this.luts.set(key, 'loading');
+    return sleep(30).then(() => {
+      this.luts.set(key, 'ready');
+    });
+  }
+  lutState(kind: LutKind, id: string): LutState {
+    return kind === 'filter' && id === 'none' ? 'ready' : (this.luts.get(`${kind}:${id}`) ?? 'none');
   }
   private size(w: number, h: number, still?: boolean) {
     if (still) return { w, h };

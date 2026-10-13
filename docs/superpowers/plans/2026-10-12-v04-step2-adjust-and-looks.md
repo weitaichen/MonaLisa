@@ -2744,12 +2744,12 @@ git commit -m "v0.4 step 2: lazily compiled 調節 program in P5; base program f
   - `MAX_RESIDENT_LUTS = 6`; `lutUrl(kind: LutKind, id: string): string` (exported from `src/engine/index.ts`)
   - `job()` sets `FrameJob.adjust` from the photo's 調節 values, its look (only when the LUT is resident), `pictureFrame` and `grainSeed`; memoized
 
-- [ ] **Step 0: Confirm the step-1 shapes**
+- [x] **Step 0: Confirm the step-1 shapes**
 
 Run: `grep -n "filterFor\|filterTex\|filterLoads\|filterFailed" src/engine/index.ts`
 Expected: the v0.3 filter cache (`index.ts:60-63, 115-117, 153-198, 206, 320` at `9eec432`) with `input.photo.filterId` in `job()`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `src/engine/index.test.ts`, change the `beforeEach` mock (line 58) so look LUTs are 512² too:
 
@@ -2910,12 +2910,12 @@ describe('createEngine: 濾鏡 and 質感 LUT cache (step-2 spec §3.5)', () => 
 
 (Merge these imports into the file's existing import lines: `MAX_RESIDENT_LUTS` into `import { createEngine } from './index';`, `PhotoParams` and `RenderInput` into `import type { BodyField } from '../types';`; `FrameJob` and `createPipeline` are already imported from `./pipeline`. The `filterUrl` helper already exists at line 53.)
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run src/engine/index.test.ts`
 Expected: FAIL — `engine.loadLut is not a function`.
 
-- [ ] **Step 3: Types**
+- [x] **Step 3: Types**
 
 In `src/types.ts`, `RenderInput` (step 1's v0.4 form) gains (C §4.1):
 
@@ -2940,7 +2940,7 @@ In `src/types.ts`, `RenderInput` (step 1's v0.4 form) gains (C §4.1):
   readonly adjustUnavailable: boolean;
 ```
 
-- [ ] **Step 4: The cache**
+- [x] **Step 4: The cache**
 
 In `src/engine/index.ts`:
 1. Imports: add `LutKind`, `LutState` to the `../types` type import; add `import { ADJUST_IDS, adjustUniforms, frameFor, type AdjustFrame, type AdjustUniforms, type AdjustValues } from './adjustMath';` (replacing Task 7's narrower import) and `import { lookDef } from './looks';`. Add `LookDef` to the `../types` type import.
@@ -3102,12 +3102,12 @@ interface LutEntry {
 
 8. In `dispose()` replace `for (const t of filterTex.values()) deleteTexture(gl, t);` with `for (const e of lutCache.values()) deleteTexture(gl, e.tex);`.
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `npx vitest run src/engine/index.test.ts`
 Expected: PASS (the two v0.3 context-loss tests at `index.test.ts:62-95` keep passing: a failure on a lost context leaves no mark; one on a live context is not retried implicitly).
 
-- [ ] **Step 6: Port the engine stand-ins that implement `Engine`**
+- [x] **Step 6: Port the engine stand-ins that implement `Engine`**
 
 `src/app/testFakes.ts` and `src/ui/services.test.ts` build their engines with `as unknown as …`, so `tsc` does not ask for the new members there (`testFakes.ts` gains them in Task 11). `tests/harness/t7/fakes.ts` declares `class FakeEngine implements Engine`, so it must implement them now. Add `LutKind` and `LutState` to its `../../../src/types` type import, and after its `async loadFilter() { … }` method add:
 
@@ -3133,7 +3133,7 @@ If a stale, gitignored `tests/harness/b2/baseline/` exists on disk and `tsc` rep
 Run: `npm run typecheck`
 Expected: `tsc` exits 0.
 
-- [ ] **Step 7: Full suite and commit**
+- [x] **Step 7: Full suite and commit**
 
 Run: `npm test`
 Expected: PASS.

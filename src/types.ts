@@ -462,6 +462,10 @@ export interface RenderInput {
   photo: PhotoParams;
   /** body displacement field (美體); null/undefined = none */
   body?: BodyField | null;
+  /** step 2: the picture rectangle (source UV) that vignette and grain treat as V — the camera's ratio crop; default the whole source */
+  pictureFrame?: Rect;
+  /** step 2: grain seed; 0 in the editor and exports, a frame counter in the camera */
+  grainSeed?: number;
 }
 
 /** What a still session renders: the frame without its source, size and body field (the session adds those, S1). */
@@ -488,6 +492,15 @@ export interface Engine {
   setOptions(opts: Partial<EngineOptions>): void;
   /** Make a filter LUT available (lazy-loaded on first use); resolves when uploaded. */
   loadFilter(filterId: string): Promise<void>;
+  /** Make a 濾鏡 or 質感 LUT resident (lazy-loaded on first use); resolves when uploaded. An explicit call retries a failed one. */
+  loadLut(kind: LutKind, id: string): Promise<void>;
+  /**
+   * For export readiness ('ready' | 'failed' = settled). 'none' = not resident: never asked, evicted by the LRU cap,
+   * or dropped with a lost context. A filter id 'none' (no filter) is 'ready'.
+   */
+  lutState(kind: LutKind, id: string): LutState;
+  /** the 調節 program failed to compile on this context: 調節 and 質感 are not drawn until the context is rebuilt */
+  readonly adjustUnavailable: boolean;
   /**
    * Render to the display canvas at processing resolution.
    * Live: processing short edge = tier (H 1080 / M 720 / L 540, never above source).

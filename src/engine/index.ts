@@ -2,8 +2,8 @@
 // tiers, and the render / capture / compare entry points. Pass logic lives in pipeline.ts.
 import { debugState } from '../app/debug';
 import { MAX_RENDER_FACES } from '../config/limits';
-import type { Engine, EngineOptions, RenderInput, RenderStats, Tier } from '../types';
-import { adjustUniforms, frameFor } from './adjustMath';
+import type { Engine, EngineOptions, LookDef, LutKind, LutState, RenderInput, RenderStats, Tier } from '../types';
+import { ADJUST_IDS, adjustUniforms, frameFor, type AdjustFrame, type AdjustUniforms, type AdjustValues } from './adjustMath';
 import {
   createTexture,
   deleteTexture,
@@ -14,6 +14,7 @@ import {
   uploadSource,
 } from './gl/gl';
 import { probeFaceTable, probeR16FArray, readGlLimits } from './glProbe';
+import { lookDef } from './looks';
 import { boxCentre, ovalBox } from './passes/faceCap';
 import { makeupUniformsFor } from './passes/makeup';
 import { reshapeUniforms, type ReshapeUniforms } from './passes/reshape';
@@ -31,8 +32,23 @@ const CONTEXT_ATTRS: WebGLContextAttributes = {
 };
 
 const LUT_NAMES = ['gray', 'origin', 'skin', 'light'] as const;
-const FILTER_ID = /^[a-z0-9_-]+$/;
-const FILTER_LUT_SIZE = 512;
+const LUT_ID = /^[a-z0-9_-]+$/;
+const LUT_SIZE = 512;
+/** 濾鏡 + 質感 LUT textures resident at once: 6 × 1 MB (step-2 spec §3.5) */
+export const MAX_RESIDENT_LUTS = 6;
+
+export function lutUrl(kind: LutKind, id: string): string {
+  return kind === 'filter' ? `/luts/filters/${id}.png` : `/luts/looks/look_${id}.png`;
+}
+
+interface LutEntry {
+  state: 'loading' | 'ready' | 'failed';
+  tex: Texture | null;
+  /** the upload in flight while loading */
+  load: Promise<void> | null;
+  /** LRU clock: bumped when a frame draws with it or it is asked for again */
+  used: number;
+}
 
 /** λ_f (S §4.4): every warp strength × k; k = 1 returns `u` itself, so the unguarded table is bit-identical */
 function scaleUniforms(u: ReshapeUniforms, k: number): ReshapeUniforms {
@@ -58,10 +74,12 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
   let srcTex: Texture | null = null;
   let maxSize = 4096;
   let luts: StaticLuts | null = null;
-  const filterTex = new Map<string, Texture>();
-  const filterLoads = new Map<string, Promise<void>>();
-  /** filters whose implicit (frame-path) load failed; an explicit loadFilter() retries */
-  const filterFailed = new Set<string>();
+  /** 濾鏡 and 質感 LUTs keyed `${kind}:${id}` (the filter 'film' and the look 'film' are different textures) */
+  const lutCache = new Map<string, LutEntry>();
+  let lutTick = 0;
+  /** keys the latest frame drew with: the LRU never evicts these */
+  let frameLuts = new Set<string>();
+  let adjustMemo: { key: string; u: AdjustUniforms } | null = null;
 
   /** makeup textures of the current pipeline (see Pipeline.preloadMakeup) */
   let makeupLoad: Promise<void> = Promise.resolve();
@@ -113,9 +131,9 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
     pipeline = null;
     srcTex = null;
     luts = null;
-    filterTex.clear();
-    filterLoads.clear();
-    filterFailed.clear();
+    lutCache.clear();
+    frameLuts = new Set();
+    adjustMemo = null;
     resetGlCaches();
   }
 
@@ -151,51 +169,92 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
   // Callers await `ready`; this handler only stops a rejection nobody awaits from surfacing as unhandled.
   ready.catch(() => {});
 
-  function loadFilter(filterId: string): Promise<void> {
-    if (filterId === 'none' || filterTex.has(filterId)) return Promise.resolve();
-    if (!FILTER_ID.test(filterId)) return Promise.reject(new Error(`invalid filter id ${filterId}`));
-    const pending = filterLoads.get(filterId);
-    if (pending) return pending;
+  const lutKey = (kind: LutKind, id: string) => `${kind}:${id}`;
+
+  /** Over the cap: drop the least recently used resident LUTs, but none the latest frame drew with. */
+  function evictLuts(): void {
+    const ready = [...lutCache.entries()].filter(([, e]) => e.state === 'ready').sort((a, b) => a[1].used - b[1].used);
+    let excess = ready.length - MAX_RESIDENT_LUTS;
+    for (const [key, e] of ready) {
+      if (excess <= 0) break;
+      if (frameLuts.has(key)) continue;
+      deleteTexture(gl, e.tex);
+      lutCache.delete(key);
+      excess--;
+    }
+  }
+
+  function loadLut(kind: LutKind, id: string): Promise<void> {
+    if (kind === 'filter' && id === 'none') return Promise.resolve();
+    const key = lutKey(kind, id);
+    if (!LUT_ID.test(id)) {
+      lutCache.set(key, { state: 'failed', tex: null, load: null, used: ++lutTick });
+      return Promise.reject(new Error(`invalid ${kind} LUT id ${id}`));
+    }
+    const cur = lutCache.get(key);
+    if (cur?.state === 'ready') {
+      cur.used = ++lutTick;
+      return Promise.resolve();
+    }
+    if (cur?.state === 'loading' && cur.load) return cur.load;
     const gen = generation;
-    const p = loadImageTexture(gl, `/luts/filters/${filterId}.png`).then(
+    const entry: LutEntry = { state: 'loading', tex: null, load: null, used: ++lutTick };
+    lutCache.set(key, entry);
+    const p = loadImageTexture(gl, lutUrl(kind, id)).then(
       (t) => {
-        if (gen !== generation) return;
-        filterLoads.delete(filterId);
-        if (disposed) {
+        if (gen !== generation) return; // uploaded to a dead context: the restored one reloads on demand
+        if (lutCache.get(key) !== entry || disposed) {
           deleteTexture(gl, t);
           return;
         }
-        if (t.width !== FILTER_LUT_SIZE || t.height !== FILTER_LUT_SIZE) {
+        entry.load = null;
+        if (t.width !== LUT_SIZE || t.height !== LUT_SIZE) {
           deleteTexture(gl, t);
-          if (!lost) filterFailed.add(filterId);
-          throw new Error(`filter LUT ${filterId} is ${t.width}×${t.height}, expected 512×512`);
+          if (lost) lutCache.delete(key);
+          else entry.state = 'failed';
+          throw new Error(`${kind} LUT ${id} is ${t.width}×${t.height}, expected 512×512`);
         }
-        filterFailed.delete(filterId);
-        filterTex.set(filterId, t);
+        entry.tex = t;
+        entry.state = 'ready';
+        entry.used = ++lutTick;
+        evictLuts();
       },
       (err: unknown) => {
-        if (gen === generation) {
-          filterLoads.delete(filterId);
-          // A load that failed on the lost context (createTexture returns null) is not the filter's fault:
-          // leave no mark, so the restored context's first frame retries it implicitly.
-          if (!lost) filterFailed.add(filterId);
+        if (gen === generation && lutCache.get(key) === entry) {
+          entry.load = null;
+          // a load that failed on the lost context is not the LUT's fault: no mark, the restored context's first
+          // frame asks again implicitly
+          if (lost) lutCache.delete(key);
+          else entry.state = 'failed';
         }
         throw err;
       },
     );
-    filterLoads.set(filterId, p);
+    entry.load = p;
     return p;
   }
 
-  /** LUT for the frame, or null (filter skipped) while it is still loading. */
-  function filterFor(filterId: string): Texture | null {
-    if (filterId === 'none') return null;
-    const t = filterTex.get(filterId);
-    if (t) return t;
-    if (!filterLoads.has(filterId) && !filterFailed.has(filterId)) {
-      loadFilter(filterId).catch((err: unknown) => console.warn(`[engine] filter ${filterId} unavailable`, err));
+  /** The LUT for this frame, or null (not drawn) while it loads; touches the LRU and pins it for this frame. */
+  function lutFor(kind: LutKind, id: string): Texture | null {
+    if (kind === 'filter' && id === 'none') return null;
+    const key = lutKey(kind, id);
+    frameLuts.add(key);
+    const e = lutCache.get(key);
+    if (e?.state === 'ready' && e.tex) {
+      e.used = ++lutTick;
+      return e.tex;
     }
+    if (!e) loadLut(kind, id).catch((err: unknown) => console.warn(`[engine] ${kind} LUT ${id} unavailable`, err));
     return null;
+  }
+
+  /** adjustUniforms, memoized on its inputs (a drag rebuilds 9 knots; an unchanged frame rebuilds nothing) */
+  function adjustFor(values: AdjustValues, look: { def: LookDef; amount: number } | null, ready: boolean, frame: AdjustFrame): AdjustUniforms {
+    const key = JSON.stringify([ADJUST_IDS.map((id) => values[id]), look?.def.id ?? null, look?.amount ?? null, ready, frame]);
+    if (adjustMemo?.key === key) return adjustMemo.u;
+    const u = adjustUniforms(values, look, ready, frame);
+    adjustMemo = { key, u };
+    return u;
   }
 
   function sizeCanvas(size: Size): void {
@@ -204,7 +263,8 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
   }
 
   function job(input: RenderInput, src: Texture, size: Size, halfMean: boolean, target: FrameJob['target'], mirror: boolean): FrameJob {
-    const filterLut = filterFor(input.photo.filterId);
+    frameLuts = new Set();
+    const filterLut = lutFor('filter', input.photo.filterId);
     const listed = input.faces.slice(0, MAX_RENDER_FACES);
     const m = skinMaxima(
       listed.map((f) => ({ weight: f.weight, smooth: f.person.values['skin.smooth'], rosy: f.person.values['skin.rosy'] })),
@@ -225,6 +285,10 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
         presence: f.presence ?? 1,
       };
     });
+    const look = input.photo.look;
+    const def = look ? lookDef(look.id) : null;
+    const lookRef = look && def ? { def, amount: look.amount } : null;
+    const lookLut = lookRef ? lutFor('look', lookRef.def.id) : null;
     return {
       src,
       size,
@@ -238,9 +302,9 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       skin: skinUniformsFor(input.photo, m.S, m.R, filterLut !== null),
       luts,
       filterLut,
-      // step 2: user 調節 values only until the LUT cache serves looks (Task 8)
-      adjust: adjustUniforms(input.photo.values, null, false, frameFor(size)),
-      lookLut: null,
+      // step 2: the look draws all-or-nothing, only once its LUT is resident (S §1.4)
+      adjust: adjustFor(input.photo.values, lookRef, lookLut !== null, frameFor(size, input.pictureFrame, input.grainSeed ?? 0)),
+      lookLut,
       matchGpupixel: options.matchGpupixel,
       target,
       mirror,
@@ -269,7 +333,15 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       Object.assign(options, o);
     },
 
-    loadFilter,
+    loadFilter: (filterId: string) => loadLut('filter', filterId),
+    loadLut,
+    lutState(kind, id): LutState {
+      if (kind === 'filter' && id === 'none') return 'ready';
+      return lutCache.get(lutKey(kind, id))?.state ?? 'none';
+    },
+    get adjustUnavailable() {
+      return pipeline?.adjustFailed ?? false;
+    },
 
     render(input, opts) {
       const t0 = performance.now();
@@ -321,7 +393,7 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       if (live) {
         deleteTexture(gl, srcTex);
         if (luts) for (const t of Object.values(luts)) deleteTexture(gl, t);
-        for (const t of filterTex.values()) deleteTexture(gl, t);
+        for (const e of lutCache.values()) deleteTexture(gl, e.tex);
       }
       dropGlState();
     },

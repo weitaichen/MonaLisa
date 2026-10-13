@@ -3163,7 +3163,7 @@ git commit -m "v0.4 step 2: one LRU cache for 濾鏡 and 質感 LUTs; frame unif
   - `buildLookThumb(id, lut, swatch = drawSwatch(THUMB)): Buffer`
   - the 10 PNG assets under `public/luts/looks/` (precached by the existing `**/*.png` glob, `vite.config.ts:110`)
 
-- [ ] **Step 1: Write the failing asset tests**
+- [x] **Step 1: Write the failing asset tests**
 
 In `tests/harness/t5/assets.test.mjs`, add `LOOK_GRADES`, `LOOK_IDS`, `buildLookThumb` to the `../../../scripts/gen-luts.mjs` import list, and add:
 
@@ -3267,12 +3267,12 @@ describe('shipped 質感 look LUTs (step-2 spec §8.2)', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run tests/harness/t5/assets.test.mjs`
 Expected: FAIL — `LOOK_GRADES` / `LOOK_IDS` / `buildLookThumb` are not exported by `gen-luts.mjs`.
 
-- [ ] **Step 3: Look grades and thumbnails in the generator**
+- [x] **Step 3: Look grades and thumbnails in the generator**
 
 Edit `scripts/gen-luts.mjs` (CRLF — Edit tool):
 1. Header (lines 1-12): after the `<id>_thumb.png` line add
@@ -3461,12 +3461,12 @@ export function buildLookThumb(id, lut, swatch = drawSwatch(THUMB)) {
   }
 ```
 
-- [ ] **Step 4: Generate the assets**
+- [x] **Step 4: Generate the assets**
 
 Run: `node scripts/gen-luts.mjs && git status --short public/luts`
 Expected: the console lists 8 filter lines and 5 `public/luts/looks/look_<id>.png + look_<id>_thumb.png` lines; `git status` shows `?? public/luts/looks/`. If it also lists modified files under `public/luts/filters/` (a different zlib build can change PNG bytes without changing pixels), restore them with `git checkout -- public/luts/filters` — their pixels are pinned by the existing asset tests.
 
-- [ ] **Step 5: The tuning sheet**
+- [x] **Step 5: The tuning sheet**
 
 Create `tests/harness/t5/preview-looks.mjs`:
 
@@ -3565,7 +3565,7 @@ console.log('previews written to tests/harness/t5/previews/looks.png, looks_swat
 Run: `node tests/harness/t5/preview-looks.mjs`
 Expected: prints the `previews written …` line; `tests/harness/t5/previews/looks.png` exists (gitignored by `tests/harness/**/*.png`). This is the sheet S §3.7 asks to show the user; the user pre-authorized execution, so do not wait — name its path in this task's commit message.
 
-- [ ] **Step 6: Licensing lines**
+- [x] **Step 6: Licensing lines**
 
 `LICENSES/NOTICE.txt` (LF): replace line 48
 
@@ -3581,12 +3581,12 @@ The 顆粒 (grain) hash uses the lowbias32 finalizer constants published in Chri
 
 `src/ui/screens/Settings.tsx` (LF): in the credits paragraph (lines 252-253) change `未使用其任何程式碼或素材。濾鏡` (end of line 252) + `LUT、色號與圖示為本專案原創` (start of line 253) so the sentence reads `濾鏡與質感 LUT、色號與圖示為本專案原創`: replace `濾鏡\n        LUT、色號與圖示為本專案原創` with `濾鏡與質感\n        LUT、色號與圖示為本專案原創` (keep the line break and indentation).
 
-- [ ] **Step 7: Run the asset tests**
+- [x] **Step 7: Run the asset tests**
 
 Run: `npx vitest run tests/harness/t5/assets.test.mjs`
 Expected: PASS (while writing the plan these recipes measured: maxStep film 16, ccd 31, flash 7, blue 30, cinema 27; thumbnails vs the swatch ≥ 8.9; pairwise ≥ 6; vs every filter thumbnail ≥ 6.9; every skin patch inside the hue/chroma/lightness window). If a check fails after the user's tuning feedback, change only the recipe constants or the `LOOKS` offsets (S §3.2: "the tests check behaviour, not the constants"), regenerate (Step 4) and rerun.
 
-- [ ] **Step 8: Full suite and commit**
+- [x] **Step 8: Full suite and commit**
 
 Run: `npm test && npm run typecheck`
 Expected: PASS.

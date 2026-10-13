@@ -3,7 +3,10 @@
 //                   x = (b % 8)·64 + r, y = floor(b / 8)·64 + g   (r, g, b ∈ 0..63)
 //   <id>_thumb.png  96×96 synthetic portrait swatch graded with that LUT (filter strip thumbnail)
 // plus none_thumb.png (the ungraded swatch), the reference tests/harness/t5 compares each look's thumbnail
-// against (the 無 item in the strip uses an icon, see src/ui/panelModel.ts).
+// against (the 無 item in the strip uses an icon, see src/ui/panelModel.ts),
+// and our own 質感 look LUTs into public/luts/looks/ (v0.4 step 2): look_<id>.png (same layout) and look_<id>_thumb.png
+// (the swatch graded by the full look at its default 程度: the LUT mix, then the look's 調節 offsets through
+// src/engine/adjustMath.ts). Importing the .ts modules needs Node ≥ 22.18 (type stripping); the repo uses Node 24.
 //
 // Looks are built in OKLab (perceptual, on linear light): white balance in linear RGB, tone
 // curves on lightness (authored on sRGB-encoded luminance), chroma/hue edits in LCh with skin
@@ -14,9 +17,12 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PNG } from 'pngjs';
+import { adjustRgb, adjustUniforms, frameFor } from '../src/engine/adjustMath.ts';
+import { LOOKS as LOOK_DEFS } from '../src/engine/looks.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = join(root, 'public', 'luts', 'filters');
+const looksDir = join(root, 'public', 'luts', 'looks');
 
 export const LUT_DIM = 512;
 export const LUT_N = 64;
@@ -403,6 +409,130 @@ function mono(c) {
 export const LOOKS = { natural, soft, milktea, warm, cool, japanese, film, mono };
 export const identity = (c) => c;
 
+// ───────────────────────── 質感 looks (v0.4 step 2) ─────────────────────────
+// Complete looks: the LUT carries the colour; grain, fade and vignette are the look's 調節 offsets
+// (src/engine/looks.ts), so the LUTs stay grain-free. Tuned on filterId none; 程度 0.8 is the intended look.
+// Generic photographic themes only (no camera, film-stock or app emulation).
+
+/** 膠片 — warm-neutral portrait film: soft toe and shoulder, olive greens, slate blues, creamy highlights, skin held. */
+const lookFilmCurve = curve([
+  [0, 0.03],
+  [0.25, 0.27],
+  [0.5, 0.53],
+  [0.75, 0.77],
+  [1, 0.97],
+]);
+function lookFilm(c) {
+  const orig = srgbToLab(c);
+  let lab = srgbToLab(whiteBalance(c, [1.04, 1, 0.93]));
+  lab = withL(lab, lookFilmCurve);
+  lab = chroma(lab, {
+    sat: 0.9,
+    skinSat: 1,
+    bands: [
+      { h: 140, half: 55, sat: 0.7, shift: -22 },
+      { h: 250, half: 50, sat: 0.8, shift: -12 },
+      { h: 75, half: 40, sat: 1.08 },
+    ],
+  });
+  lab = tone(lab, { shadows: [0.004, 0.006], mids: [0.006, 0.014], highlights: [0.006, 0.024], skinKeep: 0.5 });
+  return labToSrgb(holdSkin(orig, lab, { k: 0.6, chroma: 1.04 }));
+}
+
+/** CCD — early compact digital: clean cool white balance, cyan shadows, slightly magenta highlights, skin kept pink. */
+const lookCcdCurve = curve([
+  [0, 0],
+  [0.25, 0.24],
+  [0.5, 0.52],
+  [0.75, 0.8],
+  [1, 1],
+]);
+function lookCcd(c) {
+  const orig = srgbToLab(c);
+  let lab = srgbToLab(whiteBalance(c, [0.95, 1, 1.07], 'max'));
+  lab = withL(lab, lookCcdCurve);
+  lab = chroma(lab, {
+    sat: 1.08,
+    skinSat: 1,
+    bands: [
+      { h: 0, half: 35, sat: 1.15, shift: -6 },
+      { h: 200, half: 50, sat: 1.1, shift: -10 },
+      { h: 140, half: 50, shift: 12 },
+    ],
+  });
+  lab = tone(lab, { shadows: [-0.018, -0.022], highlights: [0.014, -0.006], skinKeep: 0.6 });
+  return labToSrgb(holdSkin(orig, lab, { k: 0.7, hueShift: -6 }));
+}
+
+/** 直閃 — direct on-camera flash: neutral-cool, hard curve with deep blacks and a bright shoulder, skin held. */
+const lookFlashCurve = curve([
+  [0, 0],
+  [0.15, 0.11],
+  [0.5, 0.5],
+  [0.85, 0.9],
+  [1, 1],
+]);
+function lookFlash(c) {
+  const orig = srgbToLab(c);
+  let lab = srgbToLab(whiteBalance(c, [0.98, 1, 1.03], 'max'));
+  lab = withL(lab, lookFlashCurve);
+  lab = chroma(lab, { sat: 0.94, skinSat: 1.02 });
+  lab = tone(lab, { shadows: [-0.004, -0.008], highlights: [0.002, 0.004], skinKeep: 0.8 });
+  return labToSrgb(holdSkin(orig, lab, { k: 0.8 }));
+}
+
+/** 藍調 — blue hour: blue shadows, cyan-blue mids, cool highlights, greens to teal, skin kept out of most of the cast. */
+const lookBlueCurve = curve([
+  [0, 0.02],
+  [0.25, 0.25],
+  [0.5, 0.51],
+  [0.75, 0.76],
+  [1, 0.98],
+]);
+function lookBlue(c) {
+  const orig = srgbToLab(c);
+  let lab = srgbToLab(c);
+  lab = withL(lab, lookBlueCurve);
+  lab = chroma(lab, {
+    sat: 0.92,
+    skinSat: 0.95,
+    bands: [
+      { h: 140, half: 55, sat: 0.8, shift: 30 },
+      { h: 60, half: 35, sat: 0.8 },
+    ],
+  });
+  lab = tone(lab, { shadows: [-0.012, -0.04], mids: [-0.012, -0.02], highlights: [-0.006, -0.006], skinKeep: 0.65 });
+  return labToSrgb(holdSkin(orig, lab, { k: 0.5, hueShift: -6, chroma: 0.9 }));
+}
+
+/** 電影感 — teal and orange: teal shadows, orange highlights, greens and blues pulled to teal, mild S-curve. */
+const lookCinemaCurve = curve([
+  [0, 0.02],
+  [0.2, 0.18],
+  [0.5, 0.5],
+  [0.8, 0.83],
+  [1, 0.98],
+]);
+function lookCinema(c) {
+  const orig = srgbToLab(c);
+  let lab = srgbToLab(c);
+  lab = withL(lab, lookCinemaCurve);
+  lab = chroma(lab, {
+    sat: 0.95,
+    skinSat: 1.04,
+    bands: [
+      { h: 140, half: 60, sat: 0.75, shift: 45 },
+      { h: 250, half: 45, sat: 0.9, shift: -18 },
+      { h: 60, half: 30, sat: 1.06 },
+    ],
+  });
+  lab = tone(lab, { shadows: [-0.026, -0.022], highlights: [0.012, 0.03], skinKeep: 0.55 });
+  return labToSrgb(holdSkin(orig, lab, { k: 0.6, chroma: 1.05 }));
+}
+
+export const LOOK_IDS = ['film', 'ccd', 'flash', 'blue', 'cinema'];
+export const LOOK_GRADES = { film: lookFilm, ccd: lookCcd, flash: lookFlash, blue: lookBlue, cinema: lookCinema };
+
 // ───────────────────────── LUT encode / lookup ─────────────────────────
 
 /** Bake a transform into a 512×512 RGBA buffer in the GPUImage 64³ layout. */
@@ -577,6 +707,36 @@ export function drawSwatch(size = THUMB) {
   return data;
 }
 
+/**
+ * A 質感 look on an RGBA8 image: the LUT mix at `amount`, then the look's 調節 offsets through adjustMath.adjustRgb
+ * (seed 0, the app's editor and export grain). `thumb` grades grain on the image's own pixel grid at 0.6 amplitude.
+ */
+export function gradeLook(id, lut, rgba, width, height, amount, thumb = false) {
+  const def = LOOK_DEFS.find((l) => l.id === id);
+  if (!def) throw new Error(`unknown look ${id}`);
+  const graded = applyLut(lut, rgba, amount);
+  const u = adjustUniforms({}, { def, amount }, true, { ...frameFor({ width, height }), thumb });
+  const out = Buffer.alloc(graded.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const c = adjustRgb([graded[i] / 255, graded[i + 1] / 255, graded[i + 2] / 255], u, [(x + 0.5) / width, (y + 0.5) / height]);
+      out[i] = Math.round(c[0] * 255);
+      out[i + 1] = Math.round(c[1] * 255);
+      out[i + 2] = Math.round(c[2] * 255);
+      out[i + 3] = 255;
+    }
+  }
+  return out;
+}
+
+/** The 質感 strip thumbnail: the swatch graded by the full look at its default 程度. */
+export function buildLookThumb(id, lut, swatch = drawSwatch(THUMB)) {
+  const def = LOOK_DEFS.find((l) => l.id === id);
+  if (!def) throw new Error(`unknown look ${id}`);
+  return gradeLook(id, lut, swatch, THUMB, THUMB, def.defaultAmount, true);
+}
+
 // ───────────────────────── output ─────────────────────────
 
 /**
@@ -599,6 +759,13 @@ function main() {
     writeFileSync(join(outDir, `${id}.png`), encodePng(lut, LUT_DIM, LUT_DIM));
     writeFileSync(join(outDir, `${id}_thumb.png`), encodePng(applyLut(lut, swatch, 1), THUMB, THUMB));
     console.log(`public/luts/filters/${id}.png + ${id}_thumb.png`);
+  }
+  mkdirSync(looksDir, { recursive: true });
+  for (const id of LOOK_IDS) {
+    const lut = buildLut(LOOK_GRADES[id]);
+    writeFileSync(join(looksDir, `look_${id}.png`), encodePng(lut, LUT_DIM, LUT_DIM));
+    writeFileSync(join(looksDir, `look_${id}_thumb.png`), encodePng(buildLookThumb(id, lut, swatch), THUMB, THUMB));
+    console.log(`public/luts/looks/look_${id}.png + look_${id}_thumb.png`);
   }
 }
 

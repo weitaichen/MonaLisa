@@ -249,7 +249,7 @@ function Credits() {
         ))}
       </div>
       <p class="credits-note">
-        參數設計參考公開的 SDK 文件（PixelFree、FaceUnity FULiveDemo、阿里雲 Queen SDK），未使用其任何程式碼或素材。濾鏡
+        參數設計參考公開的 SDK 文件（PixelFree、FaceUnity FULiveDemo、阿里雲 Queen SDK），未使用其任何程式碼或素材。濾鏡與質感
         LUT、色號與圖示為本專案原創；口紅與腮紅的單色遮罩（lip_mask、blush_mask）由 GPUPixel 的 mouth、blusher
         圖檔經程式轉換而成，屬修改後的衍生素材。各元件的完整授權條款可於上方展開檢視。
       </p>

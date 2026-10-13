@@ -45,7 +45,9 @@ Preact 10.29.8 — Copyright (c) 2015-present Jason Miller — MIT (Preact-MIT.t
 Workbox 7.4 — Copyright 2018 Google LLC — MIT (Workbox-MIT.txt)
 vite-plugin-pwa 2.0.0 — Copyright (c) 2020-present Anthony Fu — MIT (vite-plugin-pwa-MIT.txt)
 
-Original to this project: the filter LUTs, makeup shade colours and the icons.
+Original to this project: the filter LUTs, the 質感 look LUTs and thumbnails, makeup shade colours and the icons.
+The 顆粒 (grain) hash uses the lowbias32 finalizer constants published in Chris Wellons' hash-prospector
+(github.com/skeeto/hash-prospector), dedicated to the public domain (The Unlicense); the code is this project's own.
 
 Test data in the repository only (not part of the deployed app):
   - tests/fixtures/fullbody.jpg (male_full_height_hands.jpg) and tests/fixtures/fullbody_yoga.jpg (pose.jpg):

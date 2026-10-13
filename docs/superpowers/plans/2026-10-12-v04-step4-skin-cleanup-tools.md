@@ -19,7 +19,7 @@ Checked against the code at the step base `0203207` (steps 1–3 fully committed
 - **Task 1:** step 1's `state.test.ts` case 'live: everything but 美體 is offered in the camera' must also exempt the `'tone'` group (the six are `live: false`).
 - **Task 3:** step 3 already passes the entry's `{ width, height }` from `normalizeEntry` (`history.ts:213`), so `history.ts` is not changed and both history tests pass once Task 2 is in. The second history test stores person `f3`, because `sanitizeEditState` always bounds owners by the stored persons. `legacyProjection` writes the six `tone.*` values as **neutral** instead of dropping their keys. The projection stays a complete `BeautyParams`, so step 1's round-trip tests (`legacy.test.ts`, the `lens.test.ts` parity case, `migrate.test.ts`) still pass. Only the 500-random round trip generates its raw tone values as neutral, since a v1 record never holds a 膚質 value. The stored `params` are the same as with dropped keys, because `sanitizeParams` fills them with the same neutral values. This keeps S §5's "0.3 opens a 0.4 entry without them".
 - **Task 5:** `buildMaskGeometry` returns step 1's `[count, base, fanEnd]`. `toneDrawsQ` draws the skin (Q.R, Q.G) in step 1's mask.ts order instead of the plan's ring + fan MAX (phase 0), holes MIN (phase 1). Under that MAX, one face's 勻膚 ring raised Q.R inside a neighbour's oval, and a neutral neighbour could not write 0 there (C §4.1 "others untouched", S §4.2 "a person whose items are all 0 writes 0"). The skin draws are now every ring MAX (phase 0), every oval fan MIN (phase 1) and then MAX (phase 2) at its own strength, and the holes MIN (phase 3). A MIN and then a MAX at one constant write exactly that constant inside each fan, and where two fans overlap the stronger face wins. `ToneDraw`, its phases and blends, `toneMask.ts` and `rasterizeTone` (Task 6) are unchanged. 膚色 keeps phases 2 and 3: its draws write only B, so sharing a phase with the RG draws changes nothing. For one face, R and G are the same as with the plan's draws (max difference 0). The 'neutral values draw nothing into R' test expects `[[0,'max',1],[1,'min',1],[2,'max',1],[3,'min',1]]`, and two new tests check the change. The first puts two copies of the recorded face side by side (A 勻膚 1, B neutral), touching and then 0.03 fw apart, in both list orders. Every point of B's oval that A's ring lifts must end at Q.R = 0 and Q.G = 1. With the bounding boxes touching, the recorded ovals come no closer than ≈ 0.03 fw, so the probes are the points of B's oval that A's ring reaches, not the points within 0.02 fw of A's oval. The second test checks that the stronger face wins where two ovals overlap. The skin is now 4 draws per face, not S §4.2's "2 skin".
-- **Task 7:** `global-setup.ts` already imports `existsSync, statSync` and has a `stale()` helper; the fixture uses it.
+- **Task 7:** `global-setup.ts` already imports `existsSync, statSync` and has a `stale()` helper; the fixture uses it. The teeth of `sample_face.png` are in shadow: Y 0.15–0.24 with low chroma, the gap between them ≤ 0.13, and the lip edge inside the inner-lip polygon at Y 0.25–0.45 with high Cr. S §8.3's `Y > 0.35` selects 8 lip-corner pixels and no teeth. The teeth defect therefore selects `Y > 0.15` and chroma `2·|(Cb, Cr) − 0.5| < 0.15` (the sclera's chroma bound): 486 pixels, exactly the visible teeth. The edit stays Cb − 0.05. Note for Tasks 8, 9 and 16: these teeth lie below the 白牙 tooth gate `TONE.teeth.y = [0.28, 0.42]` (S §4.4), so with that gate 白牙 leaves them unchanged. It also leaves the teeth of `sample_face.png` itself unchanged in the app.
 - **Task 11:** `base` / `baseFb` are declared right after the P0 mask block (`pipeline.ts:456-457`), and the tone block goes after them. Step 3's `releaseBuffers` loops over every FBO, so it gets the explicit six-name list. `still.ts` publishes the stats in `flush()`, next to step 3's `renderCount`.
 - **Task 13:** the exporter's `ctxOpts` line carries a type annotation, and the replacement keeps it.
 - **Task 15:** `ZoomPanOptions` already exists (step 1 / 3) with `onTap(uv, layer: DOMRect)` and `resetWhen`, read through `optsRef`. `spotTap` takes the same `(uv, layer)` form. In view mode a `pointercancel` still never calls `onTap` (step 1), but it still counts toward the double tap.
@@ -2080,7 +2080,7 @@ git commit -m "v0.4 step 4 (6/20): R and Q targets on the GPU, tone engine harne
   ```
   Defect names: `dot1` `dot2` `dot3` (blemishes, S §8.3 order), `blotch1` `blotch2`, `darkL` `darkR`, `foldL` `foldR`, `teeth`, `scleraL` `scleraR`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/toneFixture.test.ts`:
 ```ts
@@ -2164,12 +2164,12 @@ describe('gen-tone-fixture', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [x] **Step 2: Run it to see it fail**
 
 Run: `npx vitest run tests/unit/toneFixture.test.ts`
 Expected: FAIL — `Cannot find module …/scripts/gen-tone-fixture.mjs`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `scripts/gen-tone-fixture.mjs`:
 ```js
@@ -2420,14 +2420,14 @@ tests/fixtures/sample_face_tone.json
     red sclera drawn by scripts/gen-tone-fixture.mjs; sample_face_tone.json lists them.
 ```
 
-- [ ] **Step 4: Run the test and the generator**
+- [x] **Step 4: Run the test and the generator**
 
 Run: `npx vitest run tests/unit/toneFixture.test.ts`
 Expected: PASS (4 tests).
 Run: `node scripts/gen-tone-fixture.mjs && git status --short tests/fixtures`
 Expected: prints `sample_face_tone.png: 12 defects, … listed pixels`; `git status` shows nothing for `tests/fixtures` (both outputs ignored).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/gen-tone-fixture.mjs tests/unit/toneFixture.test.ts tests/e2e/global-setup.ts .gitignore LICENSES/NOTICE.txt

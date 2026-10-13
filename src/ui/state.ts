@@ -72,6 +72,8 @@ export interface AppState {
   toast: { id: number; text: string } | null;
   /** object URL shown full-screen for long-press saving when the share sheet is unavailable */
   saveFallback: string | null;
+  /** file name of the save-fallback image (the e2e reads the format from it) */
+  saveFallbackName: string | null;
   /** blocking work in progress (e.g. decoding an imported photo) */
   busy: string | null;
   /** 全部套用 (S §2.5): in memory only, false at app start, kept across Review and retakes */
@@ -96,6 +98,7 @@ export const app = createStore<AppState>({
   timer: 0,
   toast: null,
   saveFallback: null,
+  saveFallbackName: null,
   busy: null,
   cameraAll: false,
 });
@@ -172,11 +175,11 @@ export function toast(text: string, ms = 2200): void {
 export function showSaveFallback(file: File): void {
   const prev = app.get().saveFallback;
   if (prev) URL.revokeObjectURL(prev);
-  app.set({ saveFallback: URL.createObjectURL(file) });
+  app.set({ saveFallback: URL.createObjectURL(file), saveFallbackName: file.name });
 }
 
 export function closeSaveFallback(): void {
   const prev = app.get().saveFallback;
   if (prev) URL.revokeObjectURL(prev);
-  app.set({ saveFallback: null });
+  app.set({ saveFallback: null, saveFallbackName: null });
 }

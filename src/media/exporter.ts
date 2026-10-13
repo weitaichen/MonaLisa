@@ -1,28 +1,50 @@
 // OWNER: media agent. Encoding + saving via the share sheet (RB §1 #10, §4 "Capture and save").
-import type { SaveResult } from '../types';
+import type { ExportFormat, SaveResult } from '../types';
 import { fitLongEdge } from './importer';
 
 export const JPEG_QUALITY = 0.92;
 export const THUMB_QUALITY = 0.85;
 
-/** meiyan-YYYYMMDD-HHMMSS.jpg in local time. */
-export function jpegFileName(d: Date = new Date()): string {
+/** 原始解析度 JPEG quality (C §4.6); 標準 and the camera keep JPEG_QUALITY */
+export const FULL_JPEG_QUALITY = 0.95;
+
+const MIME: Record<ExportFormat, 'image/jpeg' | 'image/png'> = { jpeg: 'image/jpeg', png: 'image/png' };
+const EXT: Record<ExportFormat, string> = { jpeg: 'jpg', png: 'png' };
+
+/** meiyan-YYYYMMDD-HHMMSS.jpg|.png in local time (the prefix stays, C §3.8) */
+export function outputFileName(format: ExportFormat, d: Date = new Date()): string {
   const p = (n: number) => String(n).padStart(2, '0');
   const date = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
   const time = `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-  return `meiyan-${date}-${time}.jpg`;
+  return `meiyan-${date}-${time}.${EXT[format]}`;
 }
 
-/** JPEG-encode `img` as a File named meiyan-YYYYMMDD-HHMMSS.jpg (EXIF-free). */
-export async function encodeJpeg(img: ImageData, quality: number = JPEG_QUALITY): Promise<File> {
-  const surface = createSurface(img.width, img.height);
+/** meiyan-YYYYMMDD-HHMMSS.jpg in local time. */
+export function jpegFileName(d: Date = new Date()): string {
+  return outputFileName('jpeg', d);
+}
+
+/** Encode `img` as a JPEG (at `quality`) or a lossless PNG File, EXIF-free, on an opaque surface. */
+export async function encodeOutput(img: ImageData, format: ExportFormat, quality: number = JPEG_QUALITY): Promise<File> {
+  const type = MIME[format];
+  const surface = createSurface(img.width, img.height, { type, alpha: false });
   try {
     surface.ctx.putImageData(img, 0, 0);
-    const blob = await surface.toBlob(quality);
-    return new File([blob], jpegFileName(), { type: 'image/jpeg', lastModified: Date.now() });
+    const blob = await surface.toBlob(format === 'jpeg' ? quality : undefined);
+    return new File([blob], outputFileName(format), { type, lastModified: Date.now() });
   } finally {
     surface.release();
   }
+}
+
+/** JPEG-encode `img` as a File named meiyan-YYYYMMDD-HHMMSS.jpg (EXIF-free). */
+export function encodeJpeg(img: ImageData, quality: number = JPEG_QUALITY): Promise<File> {
+  return encodeOutput(img, 'jpeg', quality);
+}
+
+/** PNG-encode `img` (lossless, opaque) as a File named meiyan-YYYYMMDD-HHMMSS.png (no metadata). */
+export function encodePng(img: ImageData): Promise<File> {
+  return encodeOutput(img, 'png');
 }
 
 /** Encode any drawable to a JPEG Blob, scaled so the long edge ≤ maxLongEdge (thumbnails, history originals). */
@@ -89,21 +111,33 @@ export function saveFile(file: File): Promise<SaveResult> {
 
 type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
-interface Surface {
+export interface Surface {
   ctx: Ctx2D;
-  toBlob(quality: number): Promise<Blob>;
+  /** `quality` is ignored for PNG */
+  toBlob(quality?: number): Promise<Blob>;
   release(): void;
 }
 
+export interface SurfaceOptions {
+  /** default image/jpeg (thumbnails, history originals) */
+  type?: 'image/jpeg' | 'image/png';
+  /** false: an opaque context (every exported pixel is opaque anyway) */
+  alpha?: boolean;
+}
+
 /** OffscreenCanvas when it can encode (Safari 16.4+), else a detached <canvas>. */
-function createSurface(width: number, height: number): Surface {
+export function createSurface(width: number, height: number, opts: SurfaceOptions = {}): Surface {
+  const type = opts.type ?? 'image/jpeg';
+  // annotated: an inferred `{ alpha: boolean } | undefined` sends <canvas>.getContext to its RenderingContext overload
+  const ctxOpts: CanvasRenderingContext2DSettings | undefined = opts.alpha === false ? { alpha: false } : undefined;
+  const enc = (quality?: number): ImageEncodeOptions => (quality === undefined ? { type } : { type, quality });
   if (typeof OffscreenCanvas !== 'undefined' && typeof OffscreenCanvas.prototype.convertToBlob === 'function') {
     const oc = new OffscreenCanvas(width, height);
-    const ctx = oc.getContext('2d');
+    const ctx = oc.getContext('2d', ctxOpts);
     if (ctx) {
       return {
         ctx,
-        toBlob: (quality) => oc.convertToBlob({ type: 'image/jpeg', quality }),
+        toBlob: (quality) => oc.convertToBlob(enc(quality)),
         release: () => {
           oc.width = oc.height = 0;
         },
@@ -113,13 +147,13 @@ function createSurface(width: number, height: number): Surface {
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', ctxOpts);
   if (!ctx) throw new Error('exporter: 2D canvas unavailable');
   return {
     ctx,
     toBlob: (quality) =>
       new Promise<Blob>((resolve, reject) =>
-        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('exporter: JPEG encode failed'))), 'image/jpeg', quality),
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error(`exporter: ${type} encode failed`))), type, quality),
       ),
     // iOS caps total canvas memory and frees backing stores only on GC; release eagerly.
     release: () => {

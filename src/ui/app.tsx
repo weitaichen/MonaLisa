@@ -95,6 +95,7 @@ function Busy() {
 /** Share sheet unavailable → long-press the image to save (RB §4 "Capture and save"). */
 function SaveFallback() {
   const url = useStore(app, (s) => s.saveFallback);
+  const name = useStore(app, (s) => s.saveFallbackName);
   const dlg = useRef<HTMLDivElement>(null);
   // aria-modal: start VoiceOver / keyboard focus inside the dialog
   useEffect(() => {
@@ -111,7 +112,7 @@ function SaveFallback() {
         <span style={{ width: 44 }} />
       </div>
       <div class="fallback-img">
-        <img src={url} alt="編輯結果" />
+        <img src={url} alt="編輯結果" data-name={name ?? undefined} />
       </div>
       <div class="fallback-hint">
         <b>長按圖片 → 儲存到照片</b>

@@ -6,8 +6,8 @@ import { createStillSession } from '../app/still';
 import { ENGINE_PATHS, loadEngineAssets, loadPoseModel, loadSegmenterModel } from '../engine/assets';
 import { createEngine, isWebGL2Supported } from '../engine/index';
 import { createCamera } from '../media/camera';
-import { encodeJpeg, saveFile, toJpegBlob } from '../media/exporter';
-import { importPhoto } from '../media/importer';
+import { encodeJpeg, encodeOutput, encodePng, saveFile, toJpegBlob } from '../media/exporter';
+import { importPhoto, importPhotoInfo } from '../media/importer';
 import { addEntry, deleteEntry, getEntry, listEntries, updateEntry } from '../store/history';
 import { clearExportCap, consumeExportGuardAtLaunch, exportCapped, loadLook, loadPrefs, readExportDebug, saveLook, savePrefs } from '../store/settings';
 import { UndoStack, type UndoOptions } from '../store/undo';
@@ -50,7 +50,10 @@ export const deps = {
   createPersonSegmenter,
   createCamera,
   importPhoto,
+  importPhotoInfo,
   encodeJpeg,
+  encodeOutput,
+  encodePng,
   toJpegBlob,
   saveFile,
   addEntry,

@@ -220,7 +220,7 @@ export function Camera() {
     const image = cropImageData(img, ratioValue);
     let file: Promise<File>;
     try {
-      file = deps.encodeJpeg(image, 0.92);
+      file = deps.encodeOutput(image, prefsRef.current.exportFormat, 0.92);
     } catch (e) {
       file = Promise.reject(e);
     }

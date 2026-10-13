@@ -7,7 +7,7 @@ import { deps } from '../deps';
 import { freshSource } from '../flows';
 import { Icon } from '../icons';
 import { haptic } from '../platform';
-import { go, showSaveFallback, toast, type Shot } from '../state';
+import { app, go, showSaveFallback, toast, type Shot } from '../state';
 
 export function Review({ shot }: { shot: Shot }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -48,7 +48,8 @@ export function Review({ shot }: { shot: Shot }) {
         setEncodeErr(null);
         let p: Promise<File>;
         try {
-          p = deps.encodeJpeg(shot.image, 0.92);
+          // a camera frame is ≤ 1920 px, so 輸出解析度 does not apply; 輸出格式 does (S §2.4)
+          p = deps.encodeOutput(shot.image, app.get().prefs.exportFormat, 0.92);
         } catch (e) {
           p = Promise.reject(e);
         }

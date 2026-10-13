@@ -5,6 +5,7 @@
 import type { LiveDeps, LiveLoop } from '../../../src/app/live';
 import type { StillSession } from '../../../src/app/still';
 import { splitLegacy } from '../../../src/edit/legacy';
+import { encodeOutput } from '../../../src/media/exporter';
 import type { Deps, UndoLike } from '../../../src/ui/deps';
 import type {
   BeautyParams,
@@ -481,6 +482,11 @@ export async function installFakes(deps: Deps, defaults: { params: BeautyParams;
       await sleep(flag('slowencode') ? 4000 : 120);
       const b = await toBlob(img, 99999, 0.92);
       return new File([b], 'meiyan-20261007-120000.jpg', { type: 'image/jpeg' });
+    },
+    // the camera and Review encode with the 輸出格式 pref (step 3): same delay (slowSave), then the real encoder
+    encodeOutput: async (...a: Parameters<Deps['encodeOutput']>) => {
+      await sleep(flag('slowencode') ? 4000 : 120);
+      return encodeOutput(...a);
     },
     toJpegBlob: toBlob,
     saveFile: async () => (flag('save') === 'shared' ? 'shared' : 'fallback'),

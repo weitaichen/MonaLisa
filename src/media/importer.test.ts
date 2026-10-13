@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fitLongEdge, importViaBitmap } from './importer';
+import { fitLongEdge, importViaBitmap, importViaBitmapInfo, importViaImageElementInfo } from './importer';
 
 describe('fitLongEdge', () => {
   it('downscales so the long edge equals the limit, keeping aspect', () => {
@@ -165,5 +165,56 @@ describe('importViaBitmap', () => {
     const small = await run({ rawW: 800, rawH: 600, rot: false }, 2048, unreadable);
     expect([small.width, small.height]).toEqual([800, 600]);
     expect(small.close).not.toHaveBeenCalled();
+  });
+});
+
+describe('import probe (importPhotoInfo, step 3)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const header = async (f: Blob) => {
+    const { rawW, rawH, rot } = f as unknown as FakeFile;
+    return rot ? { width: rawH, height: rawW } : { width: rawW, height: rawH };
+  };
+
+  it('returns the oriented header size with the decoded bitmap, with one header read', async () => {
+    stubEngine('spec');
+    let probes = 0;
+    const probe = async (f: Blob) => {
+      probes++;
+      return header(f);
+    };
+    const info = await importViaBitmapInfo({ rawW: 4032, rawH: 3024, rot: true } as unknown as Blob, 2048, probe);
+    expect(info.oriented).toEqual({ width: 3024, height: 4032 });
+    expect([info.bitmap.width, info.bitmap.height]).toEqual([1536, 2048]);
+    expect(info.path).toBe('bitmap');
+    expect(probes).toBe(1);
+  });
+
+  it('without a readable header, the oriented size comes from the full decode', async () => {
+    stubEngine('spec');
+    const info = await importViaBitmapInfo({ rawW: 4032, rawH: 3024, rot: false } as unknown as Blob, 2048, async () => {
+      throw new Error('no header');
+    });
+    expect(info.oriented).toEqual({ width: 4032, height: 3024 });
+  });
+
+  it('the <img> fallback reports the natural (oriented) size', async () => {
+    stubEngine('spec');
+    class FakeImage {
+      naturalWidth = 3000;
+      naturalHeight = 4000;
+      decoding = '';
+      src = '';
+      decode() {
+        return Promise.resolve();
+      }
+    }
+    vi.stubGlobal('Image', FakeImage);
+    vi.stubGlobal('URL', { createObjectURL: () => 'blob:x', revokeObjectURL: () => undefined });
+    const info = await importViaImageElementInfo(new Blob([]), 2048);
+    expect(info.oriented).toEqual({ width: 3000, height: 4000 });
+    expect([info.bitmap.width, info.bitmap.height]).toEqual([1536, 2048]);
+    expect(info.path).toBe('img');
   });
 });

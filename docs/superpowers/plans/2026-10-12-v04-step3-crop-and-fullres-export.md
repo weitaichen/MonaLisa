@@ -1887,7 +1887,7 @@ EOF
 - Produces (`importer.ts`): `interface ImportInfo {bitmap: ImageBitmap; oriented: {width: number; height: number}; path: 'bitmap' | 'img'}` (`path`: which decoder ran, for the Phase 0 row S §6.4 item 1); `importPhotoInfo(file, maxLongEdge): Promise<ImportInfo>`; `importViaBitmapInfo(file, maxLongEdge, probe?)`, `importViaImageElementInfo(file, maxLongEdge)`: `Promise<ImportInfo>` (`importPhoto`, `importViaBitmap`, `importViaImageElement` keep their signatures and behaviour).
 - Produces (`deps`): `encodeOutput`, `encodePng`, `importPhotoInfo`. (`state.ts`): `AppState.saveFallbackName: string | null`; the 長按 fallback `<img>` carries `data-name` = the file name.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `src/media/exporter.test.ts` (extend the first import with `createSurface, encodeOutput, encodePng, outputFileName`):
 
@@ -2020,12 +2020,12 @@ describe('import probe (importPhotoInfo, step 3)', () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to see them fail**
+- [x] **Step 2: Run the tests to see them fail**
 
 Run: `npx vitest run src/media/exporter.test.ts src/media/importer.test.ts`
 Expected: FAIL — `outputFileName is not a function` / `importViaBitmapInfo is not a function`.
 
-- [ ] **Step 3: Implement `exporter.ts`**
+- [x] **Step 3: Implement `exporter.ts`**
 
 Change the type import to `import type { ExportFormat, SaveResult } from '../types';`. Replace `jpegFileName` and `encodeJpeg` (`exporter.ts:8-26`) with:
 
@@ -2130,7 +2130,7 @@ export function createSurface(width: number, height: number, opts: SurfaceOption
 
 `toJpegBlob` keeps `createSurface(width, height)` and `surface.toBlob(quality)` (same output as today).
 
-- [ ] **Step 4: Implement the probe in `importer.ts`** (CRLF)
+- [x] **Step 4: Implement the probe in `importer.ts`** (CRLF)
 
 Add after `importPhoto`:
 
@@ -2175,12 +2175,12 @@ export async function importViaImageElement(file: Blob, maxLongEdge: number): Pr
 }
 ```
 
-- [ ] **Step 5: Run the tests to see them pass**
+- [x] **Step 5: Run the tests to see them pass**
 
 Run: `npx vitest run src/media/exporter.test.ts src/media/importer.test.ts`
 Expected: PASS (every existing test unchanged).
 
-- [ ] **Step 6: Use the format in every save; expose the fallback file name**
+- [x] **Step 6: Use the format in every save; expose the fallback file name**
 
 `src/ui/deps.ts`: import `encodeOutput`, `encodePng` (exporter) and `importPhotoInfo` (importer) and add them to `deps`.
 
@@ -2198,7 +2198,7 @@ initial value `saveFallbackName: null`; `showSaveFallback(file)` ends with `app.
 
 `src/ui/app.tsx` `SaveFallback`: `const name = useStore(app, (s) => s.saveFallbackName);` and `<img src={url} alt="編輯結果" data-name={name ?? undefined} />`.
 
-- [ ] **Step 7: Verify and commit**
+- [x] **Step 7: Verify and commit**
 
 Run: `npm run typecheck && npm test`
 Expected: no type errors; every suite passes.

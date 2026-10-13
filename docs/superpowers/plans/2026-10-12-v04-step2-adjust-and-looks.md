@@ -57,7 +57,7 @@ Checked against the code at `9eec432` (step 1 fully committed, its follow-ups in
 Each point was measured or forced while writing the plan; the reviewer should check that the reason holds.
 
 1. `LOOKS` / `lookDef` are imported from `src/engine/looks.ts`, not re-exported from `params.ts` (S §3.6): a runtime re-export would make `params.ts` unloadable under Node type stripping, which `tests/harness/t5/preview-luts.mjs` relies on.
-2. The composite "no jump" check (S §8.3) allows max ≤ 2 levels, mean ≤ 0.5, instead of ≤ 1: the CPU reference itself moves saturated colours by up to 2 levels at +1 display unit of 亮度 (luma gamma × hue-safe scaling). Continuity is pinned more tightly in Task 5: ±0.1 display unit of every item moves no 8-bit colour by more than 1 level.
+2. The composite "no jump" check (S §8.3) allows max ≤ 2 levels, mean ≤ 1 (measured in Task 10: the reference's own mean move is 0.76), instead of ≤ 1: the CPU reference itself moves saturated colours by up to 2 levels at +1 display unit of 亮度 (luma gamma × hue-safe scaling). Continuity is pinned more tightly in Task 5: ±0.1 display unit of every item moves no 8-bit colour by more than 1 level.
 3. The 鮮艷度 skin-guard test (S §8.1) asserts that skin gains at most 50 % of an equal-S/V non-skin hue; "< 40 %" is unreachable with the guard 0.6 (its best case is exactly 40 %). The 飽和 +50 "does not clip a 70 %-saturated colour" test uses (0.5, 0.3, 0.15); the formula does clip some other 70 % colours.
 4. The `ADJUST_FAST` define and the 調節 pre-warm (S §6.1 fallbacks 2–3) are conditional on iPhone measurements (preview deploy only with the user's go-ahead) and are not built here.
 5. The bench row times a synthetic 1080 × 1920 frame; the live-camera-frame variant of S §6.4 is left to an iPhone session with the camera running.
@@ -3607,7 +3607,7 @@ git commit -m "v0.4 step 2: 質感 look LUTs and thumbnails (original work), ass
 - Consumes: Task 5 (`ADJUST_IDS`, `ADJUST_ONE_WAY`, `adjustUniforms`, `frameFor`), Task 6 (`compositeCpu`), Task 8 (`createEngine` with `loadLut`, `RenderInput` with `photo.values`/`photo.look`), Task 9 (the shipped look LUTs), Task 2 (`LOOK_IDS`, `lookDef`); step 1's `defaultPhoto()` and the `RenderInput` fields `faces`/`globalSkin`.
 - Produces: `window.runCompositeCheck(): Promise<CompositeCheck>` with `CompositeCheck { renderer: string; glError: number; cases: Record<string, { passes: string[]; max: number; mean: number; p999: number }> }`; the Playwright test `tests/e2e/composite.spec.ts`.
 
-- [ ] **Step 1: Write the failing spec**
+- [x] **Step 1: Write the failing spec**
 
 Create `tests/e2e/composite.spec.ts`:
 
@@ -3643,9 +3643,11 @@ test('composite: 調節 and 質感 on the GPU match compositeCpu; neutral frames
       // cell-boundary rounding: float32 lattice coordinates can pick the neighbouring cell
       expect(c.p999, name).toBeLessThanOrEqual(1);
     } else if (name.startsWith('jump:')) {
-      // +1 display unit through the 調節 program vs the neutral base render: a continuous change, no jump
+      // +1 display unit through the 調節 program vs the neutral base render: a continuous change, no jump. The CPU
+      // reference's own move at +1 unit of 亮度 is max 2, mean ≈ 0.76 on these inputs (曝光: max 1, mean ≈ 0.43), so
+      // the bounds sit just above it; a one-level offset added by the program switch would push the mean past 1.
       expect(c.max, name).toBeLessThanOrEqual(2);
-      expect(c.mean, name).toBeLessThanOrEqual(0.5);
+      expect(c.mean, name).toBeLessThanOrEqual(1);
     } else {
       expect(c.max, name).toBeLessThanOrEqual(1);
       expect(c.mean, name).toBeLessThanOrEqual(0.25);
@@ -3654,12 +3656,12 @@ test('composite: 調節 and 質感 on the GPU match compositeCpu; neutral frames
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx playwright test tests/e2e/composite.spec.ts`
 Expected: FAIL — the page does not exist (`waitForFunction` times out / 404 on `composite.html`).
 
-- [ ] **Step 3: The harness page**
+- [x] **Step 3: The harness page**
 
 Create `tests/e2e/pages/composite.html`:
 
@@ -3861,12 +3863,14 @@ window.runCompositeCheck = async () => {
 };
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `npx playwright test tests/e2e/composite.spec.ts`
 Expected: PASS; the log shows every ALU case at max ≤ 1, the looks at mean ≤ 1, `jump:*` at max ≤ 2. (The `jump` bound is 2, not S §8.3's 1: the CPU reference itself moves saturated colours by up to 2 levels at +1 display unit of 亮度 — continuous, not a program-switch jump; Task 5's continuity test pins ≤ 1 level at 0.1 unit.)
 
-- [ ] **Step 5: Commit**
+Implementation note (Task 10): the `jump:*` mean bound is 1, not the 0.5 first written here. Measured on SwiftShader, `jump:brightness` is max 2, mean 0.752 (`jump:exposure` max 1, mean 0.425), and the CPU reference alone (`adjustRgb` at 0.51 vs the source, same inputs) moves max 2, mean 0.76 (曝光 max 1, mean 0.43): the change is the stage's own continuous move, which no program switch can undercut. Every ALU case matched `compositeCpu` at max ≤ 1 (mean ≤ 0.015), every look and `all` at max 1, grain p99.9 0, and `neutral` was identical to the source (max 0) without an `adjust` pass.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/e2e/pages/composite.html tests/e2e/pages/composite.ts tests/e2e/composite.spec.ts

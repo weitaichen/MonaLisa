@@ -1,7 +1,10 @@
 // Root component: one screen at a time (no router), plus global overlays.
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { EXPORT_COPY } from '../media/exportPlan';
 import { Status } from './components/Status';
 import { UpdateBanner } from './components/UpdateBanner';
+import { reportError } from './debug';
+import { deps } from './deps';
 import { Icon } from './icons';
 import { Camera } from './screens/Camera';
 import { Editor } from './screens/Editor';
@@ -9,7 +12,7 @@ import { Home } from './screens/Home';
 import { Review } from './screens/Review';
 import { SettingsSheet } from './screens/Settings';
 import { applyPrefsToEngine, bindPrefs, prefetchWhenIdle, svc, webgl2Supported } from './services';
-import { app, closeSaveFallback } from './state';
+import { app, closeSaveFallback, toast } from './state';
 import { useStore } from './store';
 
 bindPrefs(() => app.get().prefs);
@@ -20,6 +23,12 @@ export function App() {
   const screen = useStore(app, (s) => s.screen);
 
   useEffect(() => {
+    // a full-resolution export died last time (S §3.7): from now on 標準, told once
+    try {
+      if (deps.consumeExportGuardAtLaunch()) toast(EXPORT_COPY.breadcrumb, 4000);
+    } catch (e) {
+      reportError(e, 'export guard');
+    }
     if (webgl2) prefetchWhenIdle();
     // keep engine options in sync with prefs (and push them once the engine exists)
     let last = app.get().prefs;

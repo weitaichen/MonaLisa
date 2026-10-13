@@ -49,11 +49,14 @@ export function Segmented<T extends string>({
   options,
   onChange,
   label,
+  disabled,
 }: {
   value: T;
   options: readonly { value: T; label: string }[];
   onChange(v: T): void;
   label: string;
+  /** options that cannot be picked (shown, not selectable) */
+  disabled?: readonly T[];
 }) {
   return (
     <div class="segmented" role="radiogroup" aria-label={label}>
@@ -64,6 +67,8 @@ export function Segmented<T extends string>({
           role="radio"
           aria-checked={o.value === value}
           class={o.value === value ? 'on' : ''}
+          disabled={disabled?.includes(o.value)}
+          aria-disabled={disabled?.includes(o.value) ? 'true' : undefined}
           onClick={() => o.value !== value && onChange(o.value)}
         >
           {o.label}

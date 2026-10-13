@@ -3,7 +3,14 @@ import { applyPreset, defaultParams, PARAM_DEFS, setFilter, setParam, setShade }
 import { splitLegacy } from '../edit/legacy';
 import type { Prefs } from '../types';
 import {
+  clearExportCap,
+  clearExportGuard,
+  consumeExportGuardAtLaunch,
   DEFAULT_PREFS,
+  EXPORT_CAP_KEY,
+  EXPORT_DEBUG_KEY,
+  EXPORT_GUARD_KEY,
+  exportCapped,
   hasSavedSettings,
   loadLook,
   loadParams,
@@ -12,11 +19,14 @@ import {
   PARAMS_KEY,
   PERSONS_HINT_KEY,
   PREFS_KEY,
+  readExportDebug,
+  readExportGuard,
   sanitizePrefs,
   saveLook,
   saveParams,
   savePrefs,
   takePersonsHint,
+  writeExportGuard,
 } from './settings';
 
 /** Minimal Map-backed Storage. */
@@ -198,6 +208,8 @@ describe('loadPrefs / savePrefs', () => {
       showLandmarks: true,
       delegate: 'CPU',
       installHintDismissed: true,
+      exportFormat: 'png',
+      exportSize: 'standard',
     };
     savePrefs(p);
     expect([...store.map.keys()]).toEqual([PREFS_KEY]);
@@ -375,5 +387,58 @@ describe('camera look: 調節 and 質感 (step-2 spec §5)', () => {
     store.setItem(LOOK_KEY, JSON.stringify(styled));
     expect(loadLook().photo.look).toEqual({ id: 'blue', amount: 0.6 });
     expect(loadLook().photo.values['adjust.fade']).toBe(0.3);
+  });
+});
+
+describe('export prefs and keys (step 3)', () => {
+  it('default to JPEG at full resolution; invalid values fall back to the defaults', () => {
+    expect(DEFAULT_PREFS).toMatchObject({ exportFormat: 'jpeg', exportSize: 'full' });
+    expect(sanitizePrefs({ exportFormat: 'png', exportSize: 'standard' })).toMatchObject({ exportFormat: 'png', exportSize: 'standard' });
+    expect(sanitizePrefs({ exportFormat: 'heic', exportSize: 4096 })).toMatchObject({ exportFormat: 'jpeg', exportSize: 'full' });
+  });
+
+  it('the breadcrumb is written, read with a shape check, and cleared', () => {
+    writeExportGuard({ at: 5, w: 4096, h: 3072, format: 'png' });
+    expect(EXPORT_GUARD_KEY).toBe('meiyan.exportGuard.v1');
+    expect(readExportGuard()).toEqual({ at: 5, w: 4096, h: 3072, format: 'png' });
+    clearExportGuard();
+    expect(readExportGuard()).toBeNull();
+    store.setItem(EXPORT_GUARD_KEY, '{"at":"x"}');
+    expect(readExportGuard()).toBeNull();
+  });
+
+  it('at launch a breadcrumb sets the 2048 cap once and is removed; a malformed one is removed without a cap', () => {
+    writeExportGuard({ at: 1, w: 4000, h: 3000, format: 'jpeg' });
+    expect(consumeExportGuardAtLaunch()).toBe(true);
+    expect(store.getItem(EXPORT_GUARD_KEY)).toBeNull();
+    expect(store.getItem(EXPORT_CAP_KEY)).toBe('2048');
+    expect(exportCapped()).toBe(true);
+    expect(consumeExportGuardAtLaunch()).toBe(false);
+    clearExportCap();
+    expect(exportCapped()).toBe(false);
+    store.setItem(EXPORT_GUARD_KEY, 'not json');
+    expect(consumeExportGuardAtLaunch()).toBe(false);
+    expect(store.getItem(EXPORT_GUARD_KEY)).toBeNull();
+    expect(exportCapped()).toBe(false);
+  });
+
+  it('the test knob keeps only valid fields', () => {
+    expect(readExportDebug()).toEqual({});
+    store.setItem(EXPORT_DEBUG_KEY, JSON.stringify({ tile: 256, slowMs: 4500, failAt: 'tile' }));
+    expect(readExportDebug()).toEqual({ tile: 256, slowMs: 4500, failAt: 'tile' });
+    store.setItem(EXPORT_DEBUG_KEY, JSON.stringify({ tile: 300, slowMs: -1, failAt: 'boom' }));
+    expect(readExportDebug()).toEqual({});
+  });
+
+  it('every key access survives a throwing storage', () => {
+    const boom = () => {
+      throw new Error('blocked');
+    };
+    vi.stubGlobal('localStorage', { getItem: boom, setItem: boom, removeItem: boom });
+    expect(() => writeExportGuard({ at: 1, w: 1, h: 1, format: 'jpeg' })).not.toThrow();
+    expect(consumeExportGuardAtLaunch()).toBe(false);
+    expect(exportCapped()).toBe(false);
+    expect(readExportDebug()).toEqual({});
+    expect(() => clearExportCap()).not.toThrow();
   });
 });

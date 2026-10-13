@@ -7,7 +7,7 @@
 import { sanitizeParams } from '../engine/params';
 import { splitLegacy } from '../edit/legacy';
 import { naturalPerson, sanitizePerson, sanitizePhoto } from '../edit/state';
-import type { BeautyParams, CameraLook, Prefs } from '../types';
+import type { BeautyParams, CameraLook, ExportFormat, ExportSize, Prefs } from '../types';
 
 export const PARAMS_KEY = 'meiyan.params.v1';
 export const PREFS_KEY = 'meiyan.prefs.v1';
@@ -19,10 +19,14 @@ export const DEFAULT_PREFS: Prefs = {
   showLandmarks: false,
   delegate: 'auto',
   installHintDismissed: false,
+  exportFormat: 'jpeg',
+  exportSize: 'full',
 };
 
 const TIERS: readonly Prefs['tier'][] = ['auto', 'H', 'M', 'L'];
 const DELEGATES: readonly Prefs['delegate'][] = ['auto', 'CPU'];
+const FORMATS: readonly ExportFormat[] = ['jpeg', 'png'];
+const SIZES: readonly ExportSize[] = ['full', 'standard'];
 
 export function loadParams(): BeautyParams {
   return sanitizeParams(readJson(PARAMS_KEY));
@@ -81,6 +85,8 @@ export function sanitizePrefs(raw: unknown): Prefs {
   bool('installHintDismissed');
   if (TIERS.includes(r.tier as Prefs['tier'])) out.tier = r.tier as Prefs['tier'];
   if (DELEGATES.includes(r.delegate as Prefs['delegate'])) out.delegate = r.delegate as Prefs['delegate'];
+  if (FORMATS.includes(r.exportFormat as ExportFormat)) out.exportFormat = r.exportFormat as ExportFormat;
+  if (SIZES.includes(r.exportSize as ExportSize)) out.exportSize = r.exportSize as ExportSize;
   return out;
 }
 
@@ -150,4 +156,89 @@ export function takePersonsHint(): boolean {
   writeJson(PERSONS_HINT_KEY, 1);
   // storage that silently drops writes (private mode) would repeat the hint on every photo: show it only if it stuck
   return readJson(PERSONS_HINT_KEY) !== undefined;
+}
+
+// ───────────── full-resolution export: crash breadcrumb, cap and test knob (step-3 spec §3.7) ─────────────
+
+export const EXPORT_GUARD_KEY = 'meiyan.exportGuard.v1';
+export const EXPORT_CAP_KEY = 'meiyan.exportCap.v1';
+export const EXPORT_DEBUG_KEY = 'meiyan.debug.export.v1';
+/** the long edge exports fall back to after a full export died */
+export const EXPORT_CAP_EDGE = 2048;
+
+export interface ExportGuard {
+  at: number;
+  w: number;
+  h: number;
+  format: ExportFormat;
+}
+
+function removeKey(key: string): void {
+  try {
+    storage()?.removeItem(key);
+  } catch {
+    // disabled storage: nothing to remove
+  }
+}
+
+function hasKey(key: string): boolean {
+  try {
+    return storage()?.getItem(key) != null;
+  } catch {
+    return false;
+  }
+}
+
+/** written synchronously right before a tiled export; a launch that finds it knows the page died while saving */
+export function writeExportGuard(g: ExportGuard): void {
+  writeJson(EXPORT_GUARD_KEY, g);
+}
+
+export function clearExportGuard(): void {
+  removeKey(EXPORT_GUARD_KEY);
+}
+
+export function readExportGuard(): ExportGuard | null {
+  const r = readJson(EXPORT_GUARD_KEY);
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return null;
+  const { at, w, h, format } = r as Record<string, unknown>;
+  const n = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
+  if (!n(at) || !n(w) || !n(h) || (format !== 'jpeg' && format !== 'png')) return null;
+  return { at: at as number, w: w as number, h: h as number, format };
+}
+
+/** At launch: a breadcrumb found → remove it, cap exports at 2048 and tell the caller to toast once (S §3.7). */
+export function consumeExportGuardAtLaunch(): boolean {
+  const g = readExportGuard();
+  if (hasKey(EXPORT_GUARD_KEY)) removeKey(EXPORT_GUARD_KEY);
+  if (!g) return false;
+  writeJson(EXPORT_CAP_KEY, EXPORT_CAP_EDGE);
+  return true;
+}
+
+export function exportCapped(): boolean {
+  return readJson(EXPORT_CAP_KEY) === EXPORT_CAP_EDGE;
+}
+
+/** choosing 原始解析度 in 設定 lifts the cap (S D8) */
+export function clearExportCap(): void {
+  removeKey(EXPORT_CAP_KEY);
+}
+
+export interface ExportDebugKnob {
+  tile?: 256 | 512 | 1024 | 2048;
+  slowMs?: number;
+  failAt?: 'decode' | 'tile' | 'encode';
+}
+
+/** e2e knob (works in the production build): read once per export; it never changes the output */
+export function readExportDebug(): ExportDebugKnob {
+  const r = readJson(EXPORT_DEBUG_KEY);
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return {};
+  const { tile, slowMs, failAt } = r as Record<string, unknown>;
+  const out: ExportDebugKnob = {};
+  if (tile === 256 || tile === 512 || tile === 1024 || tile === 2048) out.tile = tile;
+  if (typeof slowMs === 'number' && Number.isFinite(slowMs) && slowMs > 0) out.slowMs = slowMs;
+  if (failAt === 'decode' || failAt === 'tile' || failAt === 'encode') out.failAt = failAt;
+  return out;
 }

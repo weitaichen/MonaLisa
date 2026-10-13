@@ -1,9 +1,11 @@
 // Settings 設定 bottom sheet (spec §7.2.5) with the 關於與授權 credits page (spec §11).
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { EXPORT_COPY, exportSizeView, fullExportBlock } from '../../media/exportPlan';
 import type { Prefs } from '../../types';
 import { IconButton, Segmented, ToggleRow } from '../components/Controls';
 import { UpdateBanner } from '../components/UpdateBanner';
 import { reportError } from '../debug';
+import { deps } from '../deps';
 import { Icon } from '../icons';
 import { restartTracker } from '../services';
 import { app, setPrefs } from '../state';
@@ -20,6 +22,16 @@ const TIER_OPTIONS = [
 const DELEGATE_OPTIONS = [
   { value: 'auto', label: '自動（GPU）' },
   { value: 'CPU', label: 'CPU' },
+] as const;
+
+const FORMAT_OPTIONS = [
+  { value: 'jpeg', label: 'JPEG（較小）' },
+  { value: 'png', label: 'PNG（無損）' },
+] as const;
+
+const SIZE_OPTIONS = [
+  { value: 'full', label: '原始解析度' },
+  { value: 'standard', label: '標準（2048）' },
 ] as const;
 
 export const PRIVACY_TEXT = '所有影像處理都在你的裝置上完成，照片不會上傳。';
@@ -99,6 +111,8 @@ function SettingsBody({ prefs }: { prefs: Prefs }) {
         />
       </div>
 
+      <ExportGroup prefs={prefs} />
+
       <div class="group-label">效能</div>
       <div class="group">
         <div class="row stack">
@@ -159,6 +173,49 @@ function SettingsBody({ prefs }: { prefs: Prefs }) {
         </div>
       </div>
       <div class="sheet-foot">Mona Misa 美顏 · {displayVersion(APP_VERSION)}</div>
+    </>
+  );
+}
+
+/** 輸出 (S §2.4): 輸出解析度 shows the effective setting; under the breadcrumb cap a tap on 原始解析度 retries */
+function ExportGroup({ prefs }: { prefs: Prefs }) {
+  const [, bump] = useState(0);
+  const block = fullExportBlock({
+    prefTier: prefs.tier,
+    autoTier: deps.autoTierSession(),
+    screen: { width: window.screen.width, height: window.screen.height },
+    capped: deps.exportCapped(),
+  });
+  const view = exportSizeView(prefs.exportSize, block);
+  return (
+    <>
+      <div class="group-label">輸出</div>
+      <div class="group">
+        <div class="row stack">
+          <div class="row-text">
+            <div class="row-title">輸出格式</div>
+            <div class="row-sub">{prefs.exportFormat === 'png' ? EXPORT_COPY.pngSub : EXPORT_COPY.jpegSub}</div>
+          </div>
+          <Segmented label="輸出格式" value={prefs.exportFormat} options={FORMAT_OPTIONS} onChange={(exportFormat) => setPrefs({ exportFormat })} />
+        </div>
+        <div class="row stack">
+          <div class="row-text">
+            <div class="row-title">輸出解析度</div>
+            <div class="row-sub">{view.sub}</div>
+          </div>
+          <Segmented
+            label="輸出解析度"
+            value={view.value}
+            options={SIZE_OPTIONS}
+            disabled={view.fullDisabled ? ['full'] : undefined}
+            onChange={(exportSize) => {
+              if (exportSize === 'full') deps.clearExportCap();
+              setPrefs({ exportSize });
+              bump((n) => n + 1);
+            }}
+          />
+        </div>
+      </div>
     </>
   );
 }

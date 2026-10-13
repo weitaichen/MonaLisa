@@ -578,6 +578,9 @@ export type SaveResult = 'shared' | 'cancelled' | 'fallback';
 
 // ───────────────────────── Store ─────────────────────────
 
+export type ExportFormat = 'jpeg' | 'png';
+export type ExportSize = 'full' | 'standard';
+
 export interface Prefs {
   mirrorOnSave: boolean;
   tier: 'auto' | Tier;
@@ -585,6 +588,10 @@ export interface Prefs {
   showLandmarks: boolean;
   delegate: 'auto' | 'CPU';
   installHintDismissed: boolean;
+  /** 設定 › 輸出格式 (step 3); every save, the camera's included */
+  exportFormat: ExportFormat;
+  /** 設定 › 輸出解析度 (step 3): the stored choice; a block shows 標準 without changing it */
+  exportSize: ExportSize;
 }
 
 export interface HistoryEntry {

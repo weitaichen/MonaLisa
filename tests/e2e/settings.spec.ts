@@ -89,3 +89,25 @@ test('credits list GPUPixel and MediaPipe; privacy statement shown', async ({ pa
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '設定' })).toBeFocused();
 });
+
+test('設定 › 輸出: JPEG and 原始解析度 by default; PNG persists across a reload', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '設定' }).click();
+  const sheet = page.getByRole('dialog', { name: '設定' });
+  const format = sheet.getByRole('radiogroup', { name: '輸出格式' });
+  const size = sheet.getByRole('radiogroup', { name: '輸出解析度' });
+  await expect(format.getByRole('radio', { name: 'JPEG（較小）' })).toHaveAttribute('aria-checked', 'true');
+  await expect(size.getByRole('radio', { name: '原始解析度' })).toHaveAttribute('aria-checked', 'true');
+  await expect(sheet.getByText('原始解析度：最長邊最多 4096 像素')).toBeVisible();
+  await format.getByRole('radio', { name: 'PNG（無損）' }).click();
+  await expect(sheet.getByText('PNG 檔案較大，約為 JPEG 的 3–5 倍')).toBeVisible();
+  await page.reload();
+  await page.getByRole('button', { name: '設定' }).click();
+  await expect(
+    page.getByRole('dialog', { name: '設定' }).getByRole('radiogroup', { name: '輸出格式' }).getByRole('radio', { name: 'PNG（無損）' }),
+  ).toHaveAttribute('aria-checked', 'true');
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('meiyan.prefs.v1') ?? 'null'))).toMatchObject({
+    exportFormat: 'png',
+    exportSize: 'full',
+  });
+});

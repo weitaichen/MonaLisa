@@ -86,6 +86,8 @@ const prefs: Prefs = {
   showLandmarks: false,
   delegate: 'auto',
   installHintDismissed: true,
+  exportFormat: 'jpeg',
+  exportSize: 'full',
 };
 
 let mode: Mode = 'skin+shape';

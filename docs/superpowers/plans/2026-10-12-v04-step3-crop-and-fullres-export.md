@@ -1433,7 +1433,7 @@ EOF
 - Produces (`src/media/exportPlan.ts`): re-exports `ExportFormat`, `ExportSize`; `type FullBlock = 'tierL'|'tierLow'|'device'|'guard'|null`; `interface ExportEnv {prefTier: Prefs['tier']; autoTier: Tier; screen: {width: number; height: number}; capped: boolean}`; `isSeClassScreen(s): boolean`; `fullExportBlock(env): FullBlock`; `interface ExportSizeView {value: ExportSize; fullDisabled: boolean; sub: string}`; `exportSizeView(pref: ExportSize, block: FullBlock): ExportSizeView`; `EXPORT_COPY` (the step's export strings).
 - Produces (`Segmented`): optional prop `disabled?: readonly T[]`. (`deps`): `consumeExportGuardAtLaunch`, `exportCapped`, `clearExportCap`, `readExportDebug`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `src/store/settings.test.ts` (and port the `const p: Prefs` literal at `settings.test.ts:194-201` by adding `exportFormat: 'png', exportSize: 'standard',` — the round trip then covers the new fields):
 
@@ -1580,12 +1580,12 @@ test('設定 › 輸出: JPEG and 原始解析度 by default; PNG persists acros
 });
 ```
 
-- [ ] **Step 2: Run the unit tests to see them fail**
+- [x] **Step 2: Run the unit tests to see them fail**
 
 Run: `npx vitest run src/store/settings.test.ts src/media/exportPlan.test.ts`
 Expected: FAIL — `writeExportGuard is not exported` / `Failed to resolve import "./exportPlan"`.
 
-- [ ] **Step 3: Implement the types, the store keys and the pure view model**
+- [x] **Step 3: Implement the types, the store keys and the pure view model**
 
 `src/types.ts` (CRLF), before `Prefs`:
 
@@ -1766,12 +1766,12 @@ export function exportSizeView(pref: ExportSize, block: FullBlock): ExportSizeVi
 }
 ```
 
-- [ ] **Step 4: Run the unit tests to see them pass**
+- [x] **Step 4: Run the unit tests to see them pass**
 
 Run: `npx vitest run src/store/settings.test.ts src/media/exportPlan.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Wire `Segmented`, 設定 › 輸出, `deps` and the launch toast**
+- [x] **Step 5: Wire `Segmented`, 設定 › 輸出, `deps` and the launch toast**
 
 `src/ui/components/Controls.tsx` (`Segmented`, `Controls.tsx:47-74`): add the prop `disabled?: readonly T[];` to the props type and destructuring, and on each option `<button>`:
 
@@ -1854,14 +1854,14 @@ function ExportGroup({ prefs }: { prefs: Prefs }) {
     }
 ```
 
-- [ ] **Step 6: Run the e2e and the unit suite**
+- [x] **Step 6: Run the e2e and the unit suite**
 
 Run: `npm run build && npx playwright test tests/e2e/settings.spec.ts`
 Expected: every test passes (v0.3's two, any steps 1–2 added, and the new 輸出 test).
 Run: `npm test`
 Expected: every suite passes.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/types.ts src/store/settings.ts src/store/settings.test.ts src/media/exportPlan.ts src/media/exportPlan.test.ts src/ui/components/Controls.tsx src/ui/screens/Settings.tsx src/ui/deps.ts src/ui/app.tsx src/app/testFakes.ts src/bench/main.ts tests/e2e/settings.spec.ts

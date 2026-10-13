@@ -342,6 +342,8 @@ export function prefs(over: Partial<Prefs> = {}): Prefs {
     showLandmarks: false,
     delegate: 'auto',
     installHintDismissed: false,
+    exportFormat: 'jpeg',
+    exportSize: 'full',
     ...over,
   };
 }

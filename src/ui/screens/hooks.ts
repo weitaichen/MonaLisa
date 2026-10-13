@@ -106,3 +106,25 @@ export function useHold(onChange: (on: boolean) => void) {
     },
   };
 }
+
+/** the element's CSS size, kept current by a ResizeObserver (the 裁切 layout fits the stage) */
+export function useElementSize(ref: { current: HTMLElement | null }): { width: number; height: number } {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const read = () => {
+      const r = el.getBoundingClientRect();
+      setSize((s) => (s.width === r.width && s.height === r.height ? s : { width: r.width, height: r.height }));
+    };
+    read();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', read);
+      return () => window.removeEventListener('resize', read);
+    }
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return size;
+}

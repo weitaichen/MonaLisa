@@ -35,7 +35,20 @@ export function drawThumb(bitmap: ImageBitmap, r: Rect): string | null {
   return url;
 }
 
-export function PersonStrip({ persons, selection, photoScope, onSelect }: { persons: StripPerson[]; selection: Selection; photoScope: boolean; onSelect(s: Selection): void }) {
+export function PersonStrip({
+  persons,
+  selection,
+  photoScope,
+  onSelect,
+  thumbTransform,
+}: {
+  persons: StripPerson[];
+  selection: Selection;
+  photoScope: boolean;
+  onSelect(s: Selection): void;
+  /** the O thumbnails shown upright after a 旋轉 / 翻轉 (geometry/view.ts chipTransform; S §2.2) */
+  thumbTransform?: string;
+}) {
   const rowRef = useRef<HTMLDivElement>(null);
   const selKey = selection.kind === 'all' ? 'all' : selection.id;
   useLayoutEffect(() => {
@@ -68,7 +81,7 @@ export function PersonStrip({ persons, selection, photoScope, onSelect }: { pers
           aria-label={p.label}
           onClick={() => pick({ kind: 'person', id: p.id })}
         >
-          {p.thumb ? <img src={p.thumb} alt="" /> : <span class="chip-blank" />}
+          {p.thumb ? <img src={p.thumb} alt="" style={thumbTransform ? { transform: thumbTransform } : undefined} /> : <span class="chip-blank" />}
           <span class="chip-num num" aria-hidden="true">
             {p.n}
           </span>

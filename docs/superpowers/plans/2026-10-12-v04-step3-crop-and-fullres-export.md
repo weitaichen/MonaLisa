@@ -5539,7 +5539,7 @@ EOF
 - Consumes: step 1 Editor names (S1 §3.3–3.4 U1–U5): `edit` / `editRef` (the current `EditState`), `update(e: EditState, commit: boolean, user = true)`, `sel` / `setSel`, `session`, `sessionRef`, `sessionFaces`, `photo` (`{width, height}` of the working bitmap, `Editor.tsx:227`), `doUndo` / `doRedo` (each applies the restored state `e` from `undo.undo()` / `undo.redo()`), `useZoomPan(stageRef, layerRef, enabled, { onTap })` whose `onTap(uv: [number, number], rect)` hands `hitPerson(uv, hitCtxOf(…))` a layer UV tuple, `FaceBoxes` (`items`, `dim`, `idle`, `mapY`) / `PersonStrip` (`persons`, `selection`, `photoScope`, `onSelect`) props, the debug `boxes` write (a layout effect), `scope = multi && photoScoped(sel, lens)`. Task 1 (`apply`, `chipTransform`, `cropModeLayout`, `cssTurn`, `eYAt`, `lockFor`, `ovalViewBox`, `vToO`), Task 3 (`editSetGeometry`), Task 11 (`setViewMode`, `viewSizeFor`, `DebugState.renderCount`), Task 12 (`cropActivate`, `straightenView`, `StraightenGesture`, `CropAction`, BeautyPanel `crop`), Task 13 (`CropOverlay`, `BandPlane`, `HeightBandOverlay.yAt`, `CanvasHost.style`, `useZoomPan` `resetWhen`).
 - Produces: `useElementSize(ref): Size` (`hooks.ts`); the Editor's 裁切 mode (S §2.1) and normal-mode overlay mapping (S §2.2).
 
-- [ ] **Step 1: Write the failing e2e test**
+- [x] **Step 1: Write the failing e2e test**
 
 Create `tests/e2e/crop.spec.ts`:
 
@@ -5658,12 +5658,12 @@ test('旋轉 turns the canvas the short way over 240 ms; nothing animates under 
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [x] **Step 2: Run it to see it fail**
 
 Run: `npm run build && npx playwright test tests/e2e/crop.spec.ts`
 Expected: FAIL — `expected 7 to be 8` (the Editor does not pass `crop` to BeautyPanel yet).
 
-- [ ] **Step 3: `useElementSize`**
+- [x] **Step 3: `useElementSize`**
 
 Append to `src/ui/screens/hooks.ts` (LF; `useState` is already imported):
 
@@ -5691,7 +5691,7 @@ export function useElementSize(ref: { current: HTMLElement | null }): { width: n
 }
 ```
 
-- [ ] **Step 4: 裁切 mode in the Editor**
+- [x] **Step 4: 裁切 mode in the Editor**
 
 In `src/ui/screens/Editor.tsx` (LF) add the imports (`editSetGeometry` joins the `editKey, P0` import from `../../edit/state`, `BandPlane` the `HeightBandOverlay` import, `useElementSize` the `./hooks` import and `Rect` the `../../types` type import; the rest are new lines):
 
@@ -5847,14 +5847,14 @@ Normal-mode overlays through the view (S §2.2), at step 1's call sites:
 - **Person chips:** `PersonStrip` (`src/ui/components/PersonStrip.tsx`) gains the prop `thumbTransform?: string`, applied as `style={thumbTransform ? { transform: thumbTransform } : undefined}` on each chip's `<img>`; the Editor passes `thumbTransform={isIdentity(g) ? undefined : chipTransform(g)}` (`Editor.tsx:1180`).
 - **Person strip on 裁切:** 裁切 is a photo-level tab (C §2.2): Task 12's `photoScoped` already returns true for it, so step 1's `scope` dims the strip with 「整張照片」 while 裁切 is open (the strip stays mounted: `session && multi`).
 
-- [ ] **Step 5: Run the e2e and the unit suite**
+- [x] **Step 5: Run the e2e and the unit suite**
 
 Run: `npm run build && npx playwright test tests/e2e/crop.spec.ts tests/e2e/editor.spec.ts tests/e2e/body.spec.ts`
 Expected: all passed (`editor.spec.ts` and `body.spec.ts` unchanged).
 Run: `npm run typecheck && npm test`
 Expected: clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/ui/screens/Editor.tsx src/ui/screens/hooks.ts src/ui/components/PersonStrip.tsx tests/e2e/crop.spec.ts

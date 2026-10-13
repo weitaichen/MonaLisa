@@ -28,23 +28,26 @@ import { sanitizeParams } from '../../engine/params';
 import { takePersonsHint } from '../../store/settings';
 import { stableKey } from '../../store/undo';
 import { buildFaceProtect } from '../../tracking/faceProtect';
-import type { BodyField, DetectionCache, EditState, Engine, FaceProtect, LookId, PersonId, Selection } from '../../types';
+import type { BodyField, DetectionCache, EditState, Engine, FaceProtect, LookId, PersonId, Rect, Selection } from '../../types';
 import { buildFrame } from '../../edit/frame';
 import { lensFor } from '../../edit/lens';
 import { legacyProjection } from '../../edit/legacy';
 import { bodyAnswer, firstAnswer } from '../../edit/migrate';
-import { editKey, P0 } from '../../edit/state';
+import { editKey, editSetGeometry, P0 } from '../../edit/state';
 import { createWarpGuard } from '../../edit/warpGuard';
+import { apply, chipTransform, cropModeLayout, cssTurn, eYAt, isIdentity, lockFor, ovalViewBox, vToO } from '../../geometry/view';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
 import { FaceBoxes, type FaceBoxItem } from '../components/FaceBoxes';
-import { HeightBandOverlay } from '../components/HeightBandOverlay';
+import { BandPlane, HeightBandOverlay } from '../components/HeightBandOverlay';
 import { CanvasHost } from '../components/CanvasHost';
+import { CropOverlay } from '../components/CropOverlay';
 import { IconButton } from '../components/Controls';
 import { EngineStatus } from '../components/EngineStatus';
 import { drawThumb, PersonStrip, type StripPerson } from '../components/PersonStrip';
 import { SliderRow } from '../components/Slider';
 import { Status } from '../components/Status';
 import { debug, reportError } from '../debug';
+import { cropActivate, StraightenGesture, straightenView, type CropAction } from '../cropPanel';
 import { deps, type UndoLike } from '../deps';
 import {
   answerNotices,
@@ -95,7 +98,7 @@ import { haptic } from '../platform';
 import { ensureBodyTracker, ensureEngine, ensureFaceSegmenter, svc } from '../services';
 import { go, setPendingHistory, showSaveFallback, toast, type EditorSource } from '../state';
 import { useStore } from '../store';
-import { requestLut, useAdjustFailureNotice, useHold, useLutLoader } from './hooks';
+import { requestLut, useAdjustFailureNotice, useElementSize, useHold, useLutLoader } from './hooks';
 import { useZoomPan } from './zoomPan';
 
 const ENCODE_DEBOUNCE_MS = 400;
@@ -229,10 +232,33 @@ export function Editor({ source }: { source: EditorSource }) {
 
   // only a session bound to the current engine counts; while recoverEngine rebuilds there is none
   const session = bound && bundle && bound.engine === bundle.engine ? bound.s : null;
+
+  // ── 裁切 (S §2.1): the engine draws the whole O image (identity geometry) and CSS turns the canvas ──
+  const cropMode = sel.tab === 'crop';
+  const g = edit.photo.geometry;
+  const [straighten] = useState(() => new StraightenGesture());
+  const [straightening, setStraightening] = useState(false);
+  /** 240 ms after a 旋轉 / 翻轉 tap: the canvas animates (not during 拉直 drags) */
+  const [turning, setTurning] = useState(false);
+  /** the turn window runs from the last tap: an earlier tap's timer must not cut a later turn short */
+  const turnTimer = useRef(0);
+  useEffect(() => () => clearTimeout(turnTimer.current), []);
+  const stageSize = useElementSize(stageRef);
+  const turnAngle = useRef<number | undefined>(undefined);
+  const cropLayout = cropMode && stageSize.width > 0 ? cropModeLayout(stageSize, photo, g, 24, turnAngle.current) : null;
+  turnAngle.current = cropLayout ? cropLayout.angle : undefined;
+  /** read at the tap (not at render), so a reduced-motion change applies to the very next 旋轉 / 翻轉 */
+  const reduceMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  /** normal-mode overlays are V-normalized (S §2.2): an O-space box through the view (its points' V bbox) */
+  const viewBoxOf = (pts: Float32Array, box: Rect): Rect => (isIdentity(g) ? box : ovalViewBox(pts, g, photo));
+  const cornersOf = (b: Rect) => new Float32Array([b.x, b.y, b.x + b.w, b.y, b.x, b.y + b.h, b.x + b.w, b.y + b.h]);
+
   /** the session's faces, kept while a recovering engine has no session (head / neck anchors come from them) */
   const facesRef = useRef<readonly SessionFace[] | null>(null);
   const sessionFaces = session?.faces ?? facesRef.current;
   facesRef.current = sessionFaces;
+  /** a cached face's drawn box in V: its adapted O-space FACE_OVAL mapped through the view (the box's corners while none is at hand) */
+  const faceViewBox = (f: { id: string; box: Rect }): Rect => viewBoxOf(sessionFaces?.find((x) => x.id === f.id)?.face.oval ?? cornersOf(f.box), f.box);
   /** every body person measured with its PAIRED face, or none (S §3.3 item 6, P4) */
   const measures = useMemo(
     () => measurePersons(detect, (id) => sessionFaces?.find((f) => f.id === id)?.face ?? null, measureBody, (e) => reportError(e, 'measureBody')),
@@ -465,6 +491,45 @@ export function Editor({ source }: { source: EditorSource }) {
       }
     }, 60);
   }, [currentEngine, detectGen]);
+
+  // the session draws identity geometry while 裁切 is open; the ratio lock is derived from the crop on entering
+  const wasCrop = useRef(false);
+  useEffect(() => {
+    if (cropMode !== wasCrop.current) {
+      wasCrop.current = cropMode;
+      straighten.reset();
+      setStraightening(false);
+      if (cropMode) {
+        const lock = lockFor(editRef.current.photo.geometry, photo);
+        if (lock !== sel.crop) setSel({ ...sel, crop: lock });
+      }
+    }
+    try {
+      session?.setViewMode(cropMode ? 'crop' : 'normal');
+    } catch (e) {
+      reportError(e, 'session.setViewMode');
+    }
+  }, [cropMode, session]);
+
+  const onCropAction = (a: CropAction) => {
+    const r = cropActivate(editRef.current, a, sel.crop, photo);
+    if (r.lock !== sel.crop) setSel({ ...sel, crop: r.lock });
+    if (r.changed) {
+      if ((a.type === 'rotate' || a.type === 'flip') && !reduceMotion()) {
+        setTurning(true);
+        clearTimeout(turnTimer.current);
+        turnTimer.current = window.setTimeout(() => setTurning(false), 260);
+      }
+      update(r.edit, true);
+    }
+    if (r.toast) toast(r.toast);
+  };
+
+  /** a 拉直 drag step (commit=false) or its commit: always from the gesture's start geometry */
+  const straightenTo = (v: number, commit: boolean) => {
+    setStraightening(!commit);
+    update(editSetGeometry(editRef.current, straighten.step(editRef.current.photo.geometry, v, photo, commit)), commit);
+  };
 
   // the tracker is back (or a throwing detect call has rebuilt its graph): detect again on this photo until
   // it gives a real answer (a few non-answers in a row; a tracker recovery allows a few more)
@@ -806,8 +871,9 @@ export function Editor({ source }: { source: EditorSource }) {
   // (a layout effect: a tap's selection is readable by the time the event's task ends)
   useLayoutEffect(() => {
     if (!session) return;
-    debug({ persons: infos.length, faces: session.faces.length, selected: selId, boxes: (detect?.faces ?? []).map((f) => ({ id: f.id, ...f.box })) });
-  }, [session, detect, infos, selId]);
+    // V-normalized like the drawn boxes (S §2.2): a tap at a box centre on the layer hits that person
+    debug({ persons: infos.length, faces: session.faces.length, selected: selId, boxes: (detect?.faces ?? []).map((f) => ({ id: f.id, ...faceViewBox(f) })) });
+  }, [session, detect, infos, selId, edit.photo.geometry]);
 
   /**
    * Export + encode with the user's state captured when it was asked for (`e`, the 美體 `field`); waits for the filter
@@ -967,6 +1033,8 @@ export function Editor({ source }: { source: EditorSource }) {
       // an undo lands on another committed state: the safety net checks it (S §4.4)
       warpScales.current = guardScales(e);
       setEditState(e);
+      // the highlighted ratio follows the restored crop (S §2.1)
+      if (sel.tab === 'crop') setSel({ ...sel, crop: lockFor(e.photo.geometry, photo) });
       afterHistoryStep('undo', before, e);
     }
     bump((n) => n + 1);
@@ -980,6 +1048,7 @@ export function Editor({ source }: { source: EditorSource }) {
     if (e) {
       warpScales.current = guardScales(e);
       setEditState(e);
+      if (sel.tab === 'crop') setSel({ ...sel, crop: lockFor(e.photo.geometry, photo) });
       afterHistoryStep('redo', before, e);
     }
     bump((n) => n + 1);
@@ -1043,16 +1112,19 @@ export function Editor({ source }: { source: EditorSource }) {
   /** 調節 and 一鍵 › 質感 act on the whole photo, like 濾鏡: no face boxes, no photo taps (step-2 spec §2.1–2.2) */
   const personTab = PERSON_TABS.has(sel.tab) && photoTabLabel(sel) === null;
   const tapsOn = !!session && multi && personTab && !showsHeightBand(sel, bodyCtx);
-  useZoomPan(stageRef, layerRef, !!session, {
+  // off in 裁切 mode, and its view is reset to identity when the tab opens (S §2.1)
+  useZoomPan(stageRef, layerRef, !!session && !cropMode, {
     onTap: tapsOn
       ? (uv, rect) => {
           wakeBoxes();
           const d = detectRef.current;
           if (!d || dragging) return;
-          const hit = hitPerson(uv, hitCtxOf(d, sel.tab === 'body', fieldMemo.field, rect));
+          // the layer shows V: the hit test runs in O (S §2.2)
+          const hit = hitPerson(apply(vToO(g, photo), uv), hitCtxOf(d, sel.tab === 'body', fieldMemo.field, rect));
           if (hit) choose({ kind: 'person', id: hit });
         }
       : undefined,
+    resetWhen: cropMode,
   });
   /** chip thumbnails, drawn once per person from the working bitmap */
   const [thumbs, setThumbs] = useState<Readonly<Record<PersonId, string | null>>>({});
@@ -1088,8 +1160,10 @@ export function Editor({ source }: { source: EditorSource }) {
       ? detect.persons.flatMap((p, i): FaceBoxItem[] => {
           const f = p.face ? detect.faces.find((x) => x.id === p.face) : undefined;
           const b = !f && sel.tab === 'body' && p.body ? detect.bodies?.find((x) => x.id === p.body) : undefined;
-          const box = f?.box ?? (b ? bodyBox(b) : null);
-          if (!box) return [];
+          const oBox = f?.box ?? (b ? bodyBox(b) : null);
+          if (!oBox) return [];
+          // V-normalized (S §2.2): a face's oval, a body-only person's dashed pose box by its corners
+          const box = f ? faceViewBox(f) : viewBoxOf(cornersOf(oBox), oBox);
           return [{ person: p.id, n: i + 1, box, selected: selected.kind === 'all' || selected.id === p.id, changed: changedIds.includes(p.id), dashed: !f, narrow: box.w * layerW < 24 }];
         })
       : [];
@@ -1105,7 +1179,9 @@ export function Editor({ source }: { source: EditorSource }) {
     else faceNote = '臉部偵測失敗，臉型與美妝暫不套用';
   }
   const faceOff = !!faceNote && FACE_TABS.includes(sel.tab);
-  const ratio = session ? session.width / session.height : source.bitmap.width / Math.max(1, source.bitmap.height) || 0.75;
+  // the frame takes the V aspect (S §2.2)
+  const view = session ? session.viewSizeFor(g) : { width: source.bitmap.width, height: Math.max(1, source.bitmap.height) };
+  const ratio = view.width / view.height || 0.75;
 
   let overlay = null;
   if (fatal) {
@@ -1138,23 +1214,66 @@ export function Editor({ source }: { source: EditorSource }) {
       </div>
 
       <div class="stage editor-stage" ref={stageRef}>
-        <div class="frame" style={{ '--r': String(ratio) }}>
+        <div class={`frame${cropMode ? ' crop-mode' : ''}`} style={cropMode ? undefined : { '--r': String(ratio) }}>
           <div class="zoom-layer" ref={layerRef}>
-            <CanvasHost fit="contain" />
-            {showBoxes && <FaceBoxes items={boxItems} dim={scope} idle={boxesIdle} mapY={bands.length ? (y) => forwardY(bands, y) : undefined} />}
-            {session && !fatal && !hold.held && showsHeightBand(sel, bodyCtx) && (
-              <HeightBandOverlay
-                band={bandOrSuggested(edit, bodyCtx)}
-                stretch={heightBandStretch}
-                onChange={(b, commit) => {
-                  const l = lensOf(editRef.current);
-                  const t = bandTouchToast(l, touchedPhoto.current);
-                  if (t) toast(t);
-                  update(l.setHeightBand(b), commit);
-                }}
+            <CanvasHost
+              fit="contain"
+              style={
+                cropLayout
+                  ? {
+                      left: `${cropLayout.canvas.x}px`,
+                      top: `${cropLayout.canvas.y}px`,
+                      right: 'auto',
+                      bottom: 'auto',
+                      width: `${cropLayout.canvas.w}px`,
+                      height: `${cropLayout.canvas.h}px`,
+                      transform: cssTurn(cropLayout),
+                      transformOrigin: '50% 50%',
+                      transition: turning ? 'transform 240ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none',
+                    }
+                  : undefined
+              }
+            />
+            {/* 裁切 is not in PERSON_TABS, so its boxItems are already empty there (C §2.2). The 增高 / 長腿 row shift maps
+                through the crop at θ = 0 (exactly forwardY at identity); with θ ≠ 0 the rows tilt and no shift is drawn */}
+            {showBoxes && (
+              <FaceBoxes
+                items={boxItems}
+                dim={scope}
+                idle={boxesIdle}
+                mapY={bands.length && g.straighten === 0 ? (y) => (forwardY(bands, g.crop.y + y * g.crop.h) - g.crop.y) / g.crop.h : undefined}
               />
             )}
+            {session && !fatal && !hold.held && !cropMode && showsHeightBand(sel, bodyCtx) && (
+              <BandPlane geometry={g}>
+                <HeightBandOverlay
+                  band={bandOrSuggested(edit, bodyCtx)}
+                  stretch={heightBandStretch}
+                  onChange={(b, commit) => {
+                    const l = lensOf(editRef.current);
+                    const t = bandTouchToast(l, touchedPhoto.current);
+                    if (t) toast(t);
+                    update(l.setHeightBand(b), commit);
+                  }}
+                  yAt={(cx, cy) => {
+                    // client → V → E (C §3.5): the lines are E rows
+                    const r = layerRef.current?.getBoundingClientRect();
+                    return r && r.width > 0 ? eYAt(g, photo, [(cx - r.left) / r.width, (cy - r.top) / r.height]) : 0;
+                  }}
+                />
+              </BandPlane>
+            )}
           </div>
+          {cropLayout && session && !fatal && (
+            <CropOverlay
+              layout={cropLayout}
+              geometry={g}
+              lock={sel.crop}
+              oSize={photo}
+              grid={straightening}
+              onChange={(ng, commit) => update(editSetGeometry(editRef.current, ng), commit)}
+            />
+          )}
           {hold.held && <span class="corner-label">原圖</span>}
           {session && !fatal && (
             <div class="editor-tools">
@@ -1177,11 +1296,13 @@ export function Editor({ source }: { source: EditorSource }) {
       </div>
 
       <div class="editor-panel">
-        {session && multi && <PersonStrip persons={stripPersons} selection={selected} photoScope={scope} onSelect={choose} />}
+        {session && multi && (
+          <PersonStrip persons={stripPersons} selection={selected} photoScope={scope} onSelect={choose} thumbTransform={isIdentity(g) ? undefined : chipTransform(g)} />
+        )}
         <SliderRow
-          binding={session && !faceOff ? binding : null}
-          onChange={(v) => binding && slide(binding, v, false)}
-          onCommit={(v) => binding && slide(binding, v, true)}
+          binding={session && !faceOff ? (cropMode ? straightenView(g) : binding) : null}
+          onChange={(v) => (cropMode ? straightenTo(v, false) : binding && slide(binding, v, false))}
+          onCommit={(v) => (cropMode ? straightenTo(v, true) : binding && slide(binding, v, true))}
           emptyText={session && !faceOff ? sliderEmptyText(lens, sel) : null}
         />
         <BeautyPanel
@@ -1194,6 +1315,7 @@ export function Editor({ source }: { source: EditorSource }) {
           photoTouched={touchedPhoto.current}
           lookFailed={(id) => bundle?.engine.lutState('look', id) === 'failed'}
           onRetryLook={retryLook}
+          crop={{ geometry: g, lock: sel.crop, oSize: photo, onAction: onCropAction }}
         />
       </div>
       <div class="editor-bottom-pad" />

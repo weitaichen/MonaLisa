@@ -55,7 +55,7 @@ export function defaultPhoto(): PhotoParams {
   const p = applyPreset('natural', 1);
   const values = {} as Record<PhotoParamId, number>;
   for (const k of PHOTO_IDS) values[k] = p.values[k];
-  return { values, filterId: p.filterId, look: null, presetLink: { id: 'natural', amount: 1 }, bodyProtect: true, heightBand: null, legsAnchor: null, geometry: IDENTITY_GEOMETRY };
+  return { values, filterId: p.filterId, look: null, presetLink: { id: 'natural', amount: 1 }, bodyProtect: true, heightBand: null, legsAnchor: null, geometry: IDENTITY_GEOMETRY, spots: [] };
 }
 
 /** The output de-dupe and undo key (RM §3.4; step 6 replaces stroke points by stroke ids here). */
@@ -277,6 +277,7 @@ export function sanitizePhoto(raw: unknown, persons: ReadonlySet<PersonId> | nul
     heightBand: sanitizeBand(r.heightBand),
     legsAnchor: typeof la === 'string' && PERSON_ID.test(la) && (!persons || persons.has(la)) ? la : null,
     geometry: sanitizeGeometry(r.geometry, oSize),
+    spots: [],
   };
   if (photo.presetLink && !matchesPhotoLink(photo, photo.presetLink)) photo.presetLink = null;
   return photo;

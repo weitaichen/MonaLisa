@@ -57,3 +57,9 @@ export const SHARE_WINDOW_MS = 4000;
 export const MIN_CROP_FRAC = 0.05;
 /** …and at least this many working-resolution pixels per axis */
 export const MIN_CROP_PX = 64;
+
+// ── step 4: 膚質 tools (skin-cleanup spec §3.3) ──
+/** 祛痘: spots per photo (C §5.3); measured fallback 50 (skin-cleanup spec §6) */
+export const SPOT_CAP = 100;
+/** 祛痘: ring samples per spot (skin-cleanup spec §4.5); measured fallback 24 (spacing 0.34 r) */
+export const HEAL_RING_SAMPLES = 32;

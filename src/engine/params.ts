@@ -7,6 +7,13 @@ export const PARAM_DEFS: readonly ParamDef[] = [
   { id: 'skin.whiten', label: '美白', group: 'skin', bidirectional: false, default: 0.25, icon: 'whiten', scope: 'photo', live: true },
   { id: 'skin.rosy', label: '紅潤', group: 'skin', bidirectional: false, default: 0.25, icon: 'rosy', scope: 'person', live: true },
   { id: 'skin.sharpen', label: '銳化', group: 'skin', bidirectional: false, default: 0.2, icon: 'sharpen', scope: 'photo', live: true },
+  // 膚質 (skin-cleanup spec §3.1): person-level face items, editor-only, neutral by default and in every preset
+  { id: 'tone.even', label: '勻膚', group: 'tone', bidirectional: false, default: 0, icon: 'even', scope: 'person', live: false },
+  { id: 'tone.warmth', label: '膚色', group: 'tone', bidirectional: true, default: 0.5, icon: 'tone', scope: 'person', live: false },
+  { id: 'tone.darkCircle', label: '黑眼圈', group: 'tone', bidirectional: false, default: 0, icon: 'darkCircle', scope: 'person', live: false },
+  { id: 'tone.nasolabial', label: '法令紋', group: 'tone', bidirectional: false, default: 0, icon: 'nasolabial', scope: 'person', live: false },
+  { id: 'tone.teeth', label: '白牙', group: 'tone', bidirectional: false, default: 0, icon: 'teeth', scope: 'person', live: false },
+  { id: 'tone.eyeBright', label: '亮眼', group: 'tone', bidirectional: false, default: 0, icon: 'eyeBright', scope: 'person', live: false },
   // 美型
   { id: 'shape.eyeEnlarge', label: '大眼', group: 'shape', bidirectional: false, default: 0.2, icon: 'eye', scope: 'person', live: true },
   { id: 'shape.faceSlim', label: '瘦臉', group: 'shape', bidirectional: false, default: 0.15, icon: 'faceSlim', scope: 'person', live: true },

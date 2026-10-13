@@ -127,7 +127,7 @@ Checked against the code at the step base `0203207` (steps 1–3 fully committed
   export const HEAL_RING_SAMPLES = 32;
   ```
 
-- [ ] **Step 1: Check the consumed names and record the baseline**
+- [x] **Step 1: Check the consumed names and record the baseline**
 
 Run (Git Bash, repo root; HEAD is the plan's reconcile commit, which changes no code, on top of the step base `0203207`):
 ```bash
@@ -177,7 +177,7 @@ npm run typecheck && npm test
 ```
 Expected: typecheck prints nothing; Vitest ends with `Test Files … passed`.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Append to `src/engine/params.test.ts` (it already imports `PARAM_DEFS`, `neutralValue`, `paramDef`, `paramsInGroup`, `presetDef` and defines `PRESET_IDS`):
 ```ts
@@ -232,12 +232,12 @@ describe('step 4: spots in the photo params', () => {
 ```
 (import `defaultPhoto` from `./state` if the file does not yet.)
 
-- [ ] **Step 3: Run the tests to see them fail**
+- [x] **Step 3: Run the tests to see them fail**
 
 Run: `npx vitest run src/engine/params.test.ts src/edit/state.test.ts`
 Expected: FAIL — `expected [] to deeply equal [ 'tone.even', … ]` and `expected undefined to deeply equal []` (and typecheck-level errors in the IDE for the unknown ids).
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 `src/types.ts` (CRLF) — append `| 'tone'` to `ParamGroup` (line 6) and the six ids to `ParamId` (after step 2's last id `'adjust.vignette'`, line 47, moving its `;` to the new last line):
 ```ts
@@ -313,12 +313,12 @@ export const HEAL_RING_SAMPLES = 32;
     passes: [],
 ```
 
-- [ ] **Step 5: Run the tests and the typecheck**
+- [x] **Step 5: Run the tests and the typecheck**
 
 Run: `npx vitest run src/engine/params.test.ts src/edit/state.test.ts && npm run typecheck`
 Expected: PASS; typecheck prints nothing.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/types.ts src/config/limits.ts src/engine/params.ts src/edit/state.ts src/app/debug.ts src/ui/debug.ts src/engine/params.test.ts src/edit/state.test.ts

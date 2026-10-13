@@ -18,6 +18,10 @@ function state(): DebugState {
       screen: 'home',
       cameraState: 'idle',
       lastError: null,
+      spots: 0,
+      lastSpot: null,
+      toneBuilds: 0,
+      passes: [],
     };
   }
   return window.__meiyan;

@@ -3,7 +3,7 @@
 
 // ───────────────────────── Parameters ─────────────────────────
 
-export type ParamGroup = 'skin' | 'shape' | 'body' | 'filter' | 'makeup' | 'adjust';
+export type ParamGroup = 'skin' | 'shape' | 'body' | 'filter' | 'makeup' | 'adjust' | 'tone';
 
 export type ParamId =
   | 'skin.smooth'
@@ -44,7 +44,14 @@ export type ParamId =
   | 'adjust.vibrance'
   | 'adjust.fade'
   | 'adjust.grain'
-  | 'adjust.vignette';
+  | 'adjust.vignette'
+  // 膚質 (v0.4 step 4): person-level face items, editor-only, neutral by default and in every beauty preset
+  | 'tone.even'
+  | 'tone.warmth'
+  | 'tone.darkCircle'
+  | 'tone.nasolabial'
+  | 'tone.teeth'
+  | 'tone.eyeBright';
 
 export type ParamScope = 'photo' | 'person';
 
@@ -145,6 +152,21 @@ export interface HeightBand {
   /** 0..1 → stretch S = 1 + min(0.15·amount, 0.08 / (bottom − top)) inside the band (src/body/bands.ts heightBandStretch) */
   amount: number;
 }
+/** 祛痘 spot (skin-cleanup spec §3.2; replaces C §3.2's Spot). Photo-level, stored in EditState.photo.spots. */
+export interface Spot {
+  /** O-space centre, normalized by W_O and H_O (top-left origin) */
+  x: number;
+  y: number;
+  /** radius, fraction of the O short edge */
+  r: number;
+  /** donor offset, fraction of the O short edge (isotropic); dx = dy = 0 → fill mode (no donor found) */
+  dx: number;
+  dy: number;
+  /** the person whose face region (else body mask) held the centre when it was tapped; null = elsewhere */
+  owner: PersonId | null;
+}
+/** 祛痘 大小 小／中／大 */
+export type SpotSize = 'S' | 'M' | 'L';
 
 // ───────────────────────── v0.4 edit model (RM §3.2, step-1 subset) ─────────────────────────
 
@@ -197,6 +219,8 @@ export interface PhotoParams {
   legsAnchor: PersonId | null;
   /** crop, rotate, straighten, flip (step 3); photo-level, identity by default */
   geometry: Geometry;
+  /** 祛痘 spots, at most SPOT_CAP (skin-cleanup spec §3.2, C §5.3) */
+  spots: readonly Spot[];
 }
 export interface PersonParams {
   values: Record<PersonParamId, number>;
@@ -694,6 +718,14 @@ export interface DebugState {
   renderCount?: number;
   /** the last export of the editor, or null while one runs / after an abort */
   export?: { mode: 'working' | 'tiled'; width: number; height: number; tiles: number; ms: number } | null;
+  /** 祛痘 spots of the open photo (editor; skin-cleanup spec §3.2) */
+  spots: number;
+  /** the spot added last in this page session; null before the first */
+  lastSpot: Spot | null;
+  /** tone-field (P0c) rebuilds in this page session */
+  toneBuilds: number;
+  /** pass list of the last display frame */
+  passes: string[];
 }
 
 declare global {

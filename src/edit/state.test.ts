@@ -36,11 +36,15 @@ describe('scope table (RM §3.1, step-1 subset)', () => {
     expect(PHOTO_IDS.filter((id) => (PERSON_IDS as readonly string[]).includes(id))).toEqual([]);
     const person = PARAM_DEFS.filter((d) => d.scope === 'person').map((d) => d.id);
     expect(person).toEqual(expect.arrayContaining(['skin.smooth', 'skin.rosy', 'makeup.lip', 'makeup.blush']));
+    expect(person).toEqual(
+      expect.arrayContaining(['tone.even', 'tone.warmth', 'tone.darkCircle', 'tone.nasolabial', 'tone.teeth', 'tone.eyeBright']),
+    );
     expect(person.filter((id) => id.startsWith('shape.'))).toHaveLength(9);
     expect(person.filter((id) => id.startsWith('body.'))).toHaveLength(9);
+    expect(person.filter((id) => id.startsWith('tone.'))).toHaveLength(6);
   });
-  it('live: everything but 美體 is offered in the camera', () => {
-    for (const d of PARAM_DEFS) expect(d.live, d.id).toBe(d.group !== 'body');
+  it('live: everything but 美體 and 膚質 is offered in the camera', () => {
+    for (const d of PARAM_DEFS) expect(d.live, d.id).toBe(d.group !== 'body' && d.group !== 'tone');
   });
 });
 
@@ -267,5 +271,11 @@ describe('geometry in the edit state (step 3)', () => {
     const raw = { ...base(), photo: { ...base().photo, geometry: rotateLeft(IDENTITY_GEOMETRY) } };
     expect(sanitizeEditState(raw, null, OSIZE).photo.geometry.quarter).toBe(3);
     expect(sanitizeEditState(raw, null).photo.geometry).toEqual(IDENTITY_GEOMETRY);
+  });
+});
+
+describe('step 4: spots in the photo params', () => {
+  it('defaultPhoto has no spots (重置 clears them, C §3.4)', () => {
+    expect(defaultPhoto().spots).toEqual([]);
   });
 });

@@ -29,7 +29,7 @@ import {
 } from './params';
 
 const PRESET_IDS: PresetId[] = ['original', 'natural', 'refined', 'glow'];
-const GROUPS: ParamGroup[] = ['skin', 'shape', 'body', 'filter', 'makeup', 'adjust'];
+const GROUPS: ParamGroup[] = ['skin', 'shape', 'body', 'filter', 'makeup', 'adjust', 'tone'];
 const BIDIRECTIONAL: ParamId[] = [
   'shape.chin',
   'shape.forehead',
@@ -45,6 +45,7 @@ const BIDIRECTIONAL: ParamId[] = [
   'adjust.tint',
   'adjust.saturation',
   'adjust.vibrance',
+  'tone.warmth',
 ];
 
 function deepFreeze<T>(o: T): T {
@@ -56,9 +57,9 @@ function deepFreeze<T>(o: T): T {
 }
 
 describe('PARAM_DEFS schema (RB §5)', () => {
-  it('has the 38 params (16 face/colour + 10 美體 + 12 調節), unique ids, valid groups', () => {
-    expect(PARAM_DEFS).toHaveLength(38);
-    expect(new Set(PARAM_DEFS.map((d) => d.id)).size).toBe(38);
+  it('has the 44 params (16 face/colour + 10 美體 + 12 調節 + 6 膚質), unique ids, valid groups', () => {
+    expect(PARAM_DEFS).toHaveLength(44);
+    expect(new Set(PARAM_DEFS.map((d) => d.id)).size).toBe(44);
     for (const d of PARAM_DEFS) {
       expect(GROUPS).toContain(d.group);
       expect(d.id.startsWith(`${d.group}.`)).toBe(true);
@@ -69,7 +70,7 @@ describe('PARAM_DEFS schema (RB §5)', () => {
     }
   });
 
-  it('bidirectional params are exactly chin / forehead / mouth / eye distance / 美臀 and the 9 bidirectional 調節 items, neutral 0.5', () => {
+  it('bidirectional params are exactly chin / forehead / mouth / eye distance / 美臀, the 9 bidirectional 調節 items and 膚色, neutral 0.5', () => {
     expect(PARAM_DEFS.filter((d) => d.bidirectional).map((d) => d.id).sort()).toEqual([...BIDIRECTIONAL].sort());
     for (const d of PARAM_DEFS) {
       expect(neutralValue(d)).toBe(d.bidirectional ? 0.5 : 0);
@@ -119,6 +120,13 @@ describe('PARAM_DEFS schema (RB §5)', () => {
       'adjust.fade': 0,
       'adjust.grain': 0,
       'adjust.vignette': 0,
+      // 膚質: neutral by default (every preset holds them neutral)
+      'tone.even': 0,
+      'tone.warmth': 0.5,
+      'tone.darkCircle': 0,
+      'tone.nasolabial': 0,
+      'tone.teeth': 0,
+      'tone.eyeBright': 0,
     };
     for (const d of PARAM_DEFS) expect(d.default).toBe(expected[d.id]);
   });
@@ -675,5 +683,25 @@ describe('integration fixes (phase 2)', () => {
     const chin = paramDef('shape.chin');
     expect(Object.is(displayValue(chin, 0.499), 0)).toBe(true);
     expect(Object.is(displayValue(chin, 0.5), 0)).toBe(true);
+  });
+});
+
+describe('step 4 tone params (skin-cleanup spec §3.1)', () => {
+  const TONE: ParamId[] = ['tone.even', 'tone.warmth', 'tone.darkCircle', 'tone.nasolabial', 'tone.teeth', 'tone.eyeBright'];
+
+  it('adds the six tone params in strip order: person-level, editor-only, neutral by default', () => {
+    expect(paramsInGroup('tone').map((d) => d.id)).toEqual(TONE);
+    expect(paramsInGroup('tone').map((d) => d.label)).toEqual(['勻膚', '膚色', '黑眼圈', '法令紋', '白牙', '亮眼']);
+    expect(paramsInGroup('tone').map((d) => d.icon)).toEqual(['even', 'tone', 'darkCircle', 'nasolabial', 'teeth', 'eyeBright']);
+    for (const d of paramsInGroup('tone')) {
+      expect(d.scope).toBe('person');
+      expect(d.live).toBe(false);
+      expect(d.bidirectional).toBe(d.id === 'tone.warmth');
+      expect(d.default).toBe(neutralValue(d));
+    }
+  });
+
+  it('every beauty preset holds them neutral (C §3.4, §12 #31)', () => {
+    for (const id of PRESET_IDS) for (const t of TONE) expect(presetDef(id).values[t]).toBe(neutralValue(paramDef(t)));
   });
 });

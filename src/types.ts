@@ -688,6 +688,10 @@ export interface DebugState {
   lastError: string | null;
   /** 有新版本 state (ui/updateModel.ts); absent until a service worker reports one */
   update?: 'idle' | 'available' | 'applying';
+  /** display frames the still session drew (engine FBO exports do not count): e2e checks 裁切 gestures draw none */
+  renderCount?: number;
+  /** the last export of the editor, or null while one runs / after an abort */
+  export?: { mode: 'working' | 'tiled'; width: number; height: number; tiles: number; ms: number } | null;
 }
 
 declare global {

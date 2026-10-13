@@ -4429,7 +4429,7 @@ EOF
 - Consumes: step 1 (S1 §3.4 S1): `StillFrame = Omit<RenderInput, 'source' | 'width' | 'height' | 'body'>`, `createStillSession(engine, tracker, bitmap, opts)` with `opts.faces`, `render(frame)`, `exportImageData(frame, body?)`, `prepareExport(frame)`, `exportReady(frame)`; Task 1 (`IDENTITY_GEOMETRY`, `snapCrop`, `viewSize`); Task 3 (`frame.geometry` from `buildFrame`); Task 9 (`faceBoundsFor`, `TileBounds`); Task 10 (`TileInputBase`).
 - Produces (`StillSession`): `viewSizeFor(g: Geometry): Size`; `setViewMode(mode: ViewMode): void`; `pauseDisplay(on: boolean): void`; `tileInput(frame: StillFrame, body?: BodyField | null): TileInputBase`; `bounds(frame: StillFrame, body?: BodyField | null): TileBounds`; `type ViewMode = 'crop' | 'normal'`; `sameDisplayFrame(a: StillFrame, b: StillFrame): boolean`. `DebugState.renderCount?: number` (display frames drawn), `DebugState.export?: { mode: 'working' | 'tiled'; width: number; height: number; tiles: number; ms: number } | null`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `src/app/still.test.ts`:
 
@@ -4524,12 +4524,12 @@ describe('crop view mode, display pause and tiles (step 3)', () => {
 
 (`bitmap()`, `fakeEngine`, `makeBodyField` and `stubRaf` are this file's existing helpers. `debugState()` needs a `window` (`src/app/debug.ts:6`): give the `describe` a `beforeEach(() => vi.stubGlobal('window', globalThis));` — the file's `afterEach` already calls `vi.unstubAllGlobals()`.)
 
-- [ ] **Step 2: Run the tests to see them fail**
+- [x] **Step 2: Run the tests to see them fail**
 
 Run: `npx vitest run src/app/still.test.ts`
 Expected: FAIL — `sameDisplayFrame is not exported`, `s.setViewMode is not a function`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/types.ts` `DebugState` (CRLF), after `update?`:
 
@@ -4652,12 +4652,12 @@ Add to the returned object:
 
 `tests/harness/t7/fakes.ts` `fakeStill`: add `viewSizeFor: () => ({ width: bitmap.width, height: bitmap.height }), setViewMode() {}, pauseDisplay() {}, tileInput: (f) => ({ ...f, oAspect: bitmap.width / bitmap.height }), bounds: () => ({ body, faces: [] }),`.
 
-- [ ] **Step 4: Run the tests to see them pass**
+- [x] **Step 4: Run the tests to see them pass**
 
 Run: `npx vitest run src/app/still.test.ts`
 Expected: PASS (step 1's tests unchanged).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/app/still.ts src/app/still.test.ts src/types.ts tests/harness/t7/fakes.ts

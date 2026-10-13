@@ -319,6 +319,11 @@ function fakeStill(
     prepareExport: (f) => (f.photo.filterId === 'none' ? Promise.resolve() : engine.loadFilter(f.photo.filterId).catch(() => undefined)),
     exportReady: () => true,
     exportImageData: (f) => engine.renderToImageData(input(f), { mirror: false }),
+    viewSizeFor: () => ({ width: bitmap.width, height: bitmap.height }),
+    setViewMode() {},
+    pauseDisplay() {},
+    tileInput: (f) => ({ ...f, oAspect: bitmap.width / bitmap.height }),
+    bounds: () => ({ body, faces: [] }),
     stopDisplay() {
       cancelAnimationFrame(raf);
       raf = 0;

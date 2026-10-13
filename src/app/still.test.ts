@@ -4,9 +4,10 @@ import { legacyFrame } from '../edit/frame';
 import { splitLegacy } from '../edit/legacy';
 import { defaultPhoto } from '../edit/state';
 import { applyPreset, setParam } from '../engine/params';
+import { applyRatio, IDENTITY_GEOMETRY, rotateLeft, snapCrop } from '../geometry/view';
 import { adapt } from '../tracking/adapter111';
-import type { BeautyParams, PhotoParams, StillFrame } from '../types';
-import { createStillSession, type StillSession } from './still';
+import type { BeautyParams, Geometry, PhotoParams, StillFrame } from '../types';
+import { createStillSession, sameDisplayFrame, type StillSession } from './still';
 import { faceOf, fakeEngine, fakeTracker, makeBodyField, makeFace, makeLandmarks, stubRaf, weightOf } from './testFakes';
 
 vi.mock('../tracking/adapter111', () => ({
@@ -153,7 +154,8 @@ describe('createStillSession', () => {
     vi.advanceTimersByTime(16);
     expect(engine.renderOriginal).toHaveBeenCalledTimes(1);
     expect(engine.renderOriginal.mock.calls[0]).toEqual([
-      { source: expect.anything(), width: 1536, height: 2048 },
+      // step 3: the original goes through the view geometry too (按住對比 keeps the crop, C §12 #17)
+      { source: expect.anything(), width: 1536, height: 2048, geometry: IDENTITY_GEOMETRY },
       { still: true },
     ]);
     s.setCompare(false);
@@ -521,5 +523,89 @@ describe('濾鏡 and 質感 LUTs in the still session (step-2 spec §3.5)', () =
     vi.advanceTimersByTime(16);
     expect(engine.render.mock.calls.length).toBe(renders + 1);
     expect(engine.loadLook).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('crop view mode, display pause and tiles (step 3)', () => {
+  const photo = defaultPhoto();
+  const frame = (g: Geometry = IDENTITY_GEOMETRY): StillFrame => ({ faces: [], obstacles: [], globalSkin: null, photo: { ...photo, geometry: g }, geometry: g });
+  const turned = rotateLeft(IDENTITY_GEOMETRY);
+  const square = applyRatio(IDENTITY_GEOMETRY, '1:1', { width: 1536, height: 2048 });
+
+  beforeEach(() => vi.stubGlobal('window', globalThis));
+
+  it('sameDisplayFrame ignores only the geometry', () => {
+    expect(sameDisplayFrame(frame(), frame(turned))).toBe(true);
+    expect(sameDisplayFrame(frame(), { ...frame(), photo: { ...photo, values: { ...photo.values } } })).toBe(false);
+    expect(sameDisplayFrame(frame(), { ...frame(), globalSkin: { smooth: 0.5, rosy: 0, weight: 1 } })).toBe(false);
+  });
+
+  it('normal mode draws V through the snapped geometry; the canvas size is the view size', () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, null, bitmap(), { faces: [] });
+    s.render(frame(square));
+    vi.advanceTimersByTime(20);
+    expect(engine.lastInput()!.geometry).toEqual(snapCrop(square, { width: 1536, height: 2048 }));
+    expect(s.viewSizeFor(square)).toEqual({ width: 1536, height: 1536 });
+  });
+
+  it('crop mode draws identity geometry; a geometry-only change schedules no frame; exports still apply it', () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, null, bitmap(), { faces: [] });
+    s.setViewMode('crop');
+    s.render(frame());
+    vi.advanceTimersByTime(20);
+    expect(engine.render).toHaveBeenCalledTimes(1);
+    expect(engine.lastInput()!.geometry).toEqual(IDENTITY_GEOMETRY);
+    s.render(frame(turned));
+    s.render(frame(square));
+    vi.advanceTimersByTime(50);
+    expect(engine.render).toHaveBeenCalledTimes(1);
+    s.exportImageData(frame(square));
+    expect(engine.renderToImageData.mock.calls.at(-1)![0].geometry).toEqual(snapCrop(square, { width: 1536, height: 2048 }));
+    vi.advanceTimersByTime(20);
+    expect(engine.render).toHaveBeenCalledTimes(1); // the autosave's export draws nothing in 裁切 mode
+    s.setViewMode('normal');
+    vi.advanceTimersByTime(20);
+    // leaving 裁切 draws once, in normal mode (V)
+    expect(engine.render).toHaveBeenCalledTimes(2);
+    expect(engine.lastInput()!.geometry).toEqual(snapCrop(square, { width: 1536, height: 2048 }));
+  });
+
+  it('pauseDisplay drops every display frame until it is lifted, which draws once', () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, null, bitmap(), { faces: [] });
+    s.pauseDisplay(true);
+    s.render(frame());
+    s.setCompare(true);
+    vi.advanceTimersByTime(50);
+    expect(engine.render).not.toHaveBeenCalled();
+    expect(engine.renderOriginal).not.toHaveBeenCalled();
+    s.pauseDisplay(false);
+    vi.advanceTimersByTime(20);
+    expect(engine.renderOriginal).toHaveBeenCalledTimes(1);
+  });
+
+  it('renderCount counts display frames only', () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, null, bitmap(), { faces: [] });
+    const before = window.__meiyan?.renderCount ?? 0;
+    s.render(frame());
+    vi.advanceTimersByTime(20);
+    expect(window.__meiyan!.renderCount).toBe(before + 1);
+    s.exportImageData(frame());
+    expect(window.__meiyan!.renderCount).toBe(before + 1);
+  });
+
+  it('tileInput carries the raw geometry and the working aspect; bounds lists the body field', () => {
+    const s = createStillSession(fakeEngine(), null, bitmap(), { faces: [] });
+    const body = makeBodyField();
+    s.setBody(body);
+    const t = s.tileInput(frame(square));
+    expect(t.geometry).toBe(square);
+    expect(t.oAspect).toBe(1536 / 2048);
+    expect('source' in t).toBe(false);
+    expect(s.bounds(frame()).body).toBe(body);
+    expect(s.bounds(frame(), null).body).toBeNull();
   });
 });

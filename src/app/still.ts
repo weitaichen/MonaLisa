@@ -4,7 +4,10 @@
 import { EDIT_DETECT_FACES } from '../config/limits';
 import { adaptCached, prepareFaces } from '../detect/faces';
 import { photoLuts } from '../engine/looks';
-import type { BodyField, CachedFace, CachedObstacle, Engine, Face, Rect, RenderInput, StillFrame, Tracker } from '../types';
+import { IDENTITY_GEOMETRY, snapCrop, viewSize } from '../geometry/view';
+import type { TileInputBase } from '../media/exportFull';
+import { faceBoundsFor, type TileBounds } from '../media/exportPlan';
+import type { BodyField, CachedFace, CachedObstacle, Engine, Face, Geometry, Rect, RenderInput, Size, StillFrame, Tracker } from '../types';
 import { debugState, reportError } from './debug';
 
 export interface SessionFace {
@@ -59,12 +62,56 @@ export interface StillSession {
    * filter LUT is the session's at export time, as the settled preview draws it.
    */
   exportImageData(frame: StillFrame, body?: BodyField | null): ImageData;
+  /** V pixel size of `g` at the working density (the editor frame's aspect) */
+  viewSizeFor(g: Geometry): Size;
+  /**
+   * 'crop' (the 裁切 tab): display frames draw the whole O image (identity geometry; CSS turns the canvas) and a
+   * geometry-only change draws nothing. Exports always apply the frame's geometry.
+   */
+  setViewMode(mode: ViewMode): void;
+  /** held during a tiled export: no display frame at all (the last one stays on screen); lifting it draws once */
+  pauseDisplay(on: boolean): void;
+  /** the tile runner's input: the frame plus the session's body field and the working aspect, geometry unsnapped */
+  tileInput(frame: StillFrame, body?: BodyField | null): TileInputBase;
+  /** the planner's displacement bounds for this frame */
+  bounds(frame: StillFrame, body?: BodyField | null): TileBounds;
   /**
    * The screen is closing but an export is still pending: stop drawing to the shared display canvas (another
    * screen owns it now). prepareExport / exportImageData keep working until dispose.
    */
   stopDisplay(): void;
   dispose(): void;
+}
+
+export type ViewMode = 'crop' | 'normal';
+
+function shallowSame(x: unknown, y: unknown): boolean {
+  if (Object.is(x, y)) return true;
+  if (Array.isArray(x) && Array.isArray(y)) return x.length === y.length && x.every((v, i) => shallowSame(v, y[i]));
+  if (x && y && typeof x === 'object' && typeof y === 'object' && Object.getPrototypeOf(x) === Object.prototype && Object.getPrototypeOf(y) === Object.prototype) {
+    const a = x as Record<string, unknown>;
+    const b = y as Record<string, unknown>;
+    const ka = Object.keys(a);
+    return ka.length === Object.keys(b).length && ka.every((k) => Object.is(a[k], b[k]));
+  }
+  return false;
+}
+
+/** two frames draw the same crop-mode display (the geometry is the only difference): edits share their unchanged parts */
+export function sameDisplayFrame(a: StillFrame, b: StillFrame): boolean {
+  const ra = a as unknown as Record<string, unknown>;
+  const rb = b as unknown as Record<string, unknown>;
+  for (const k of new Set([...Object.keys(ra), ...Object.keys(rb)])) {
+    if (k === 'geometry') continue;
+    if (k === 'photo') {
+      const pa = ra.photo as Record<string, unknown>;
+      const pb = rb.photo as Record<string, unknown>;
+      for (const q of new Set([...Object.keys(pa), ...Object.keys(pb)])) if (q !== 'geometry' && !Object.is(pa[q], pb[q])) return false;
+      continue;
+    }
+    if (!shallowSame(ra[k], rb[k])) return false;
+  }
+  return true;
 }
 
 export interface StillSessionOptions {
@@ -116,17 +163,31 @@ export function createStillSession(
   let compare = false;
   let raf = 0;
   let disposed = false;
+  let mode: ViewMode = 'normal';
+  let paused = false;
+  /** the frame the display last drew (crop mode compares against it) */
+  let drawn: StillFrame | null = null;
+  const oSize: Size = { width, height };
+  const viewGeometry = (f: StillFrame) => (mode === 'crop' ? IDENTITY_GEOMETRY : snapCrop(f.geometry ?? IDENTITY_GEOMETRY, oSize));
 
-  const input = (f: StillFrame, b: BodyField | null = body): RenderInput => ({ source: bitmap, width, height, ...f, body: b });
+  // exports and thumbnails: V, the crop snapped to whole working pixels
+  const input = (f: StillFrame, b: BodyField | null = body): RenderInput => ({
+    source: bitmap,
+    width,
+    height,
+    ...f,
+    geometry: snapCrop(f.geometry ?? IDENTITY_GEOMETRY, oSize),
+    body: b,
+  });
 
   function schedule(): void {
-    if (disposed || displayOff || raf || !frame) return;
+    if (disposed || displayOff || paused || raf || !frame) return;
     raf = requestAnimationFrame(flush);
   }
 
   function flush(): void {
     raf = 0;
-    if (disposed || displayOff || !frame) return;
+    if (disposed || displayOff || paused || !frame) return;
     // context lost: keep the pending render and retry next frame (the engine rebuilds itself on restore)
     if (engine.lost) {
       schedule();
@@ -135,8 +196,11 @@ export function createStillSession(
     try {
       // the engine is shared with the live loop, whose front-camera preview is mirrored
       engine.setOptions({ mirror: false });
-      if (compare) engine.renderOriginal({ source: bitmap, width, height }, { still: true });
-      else engine.render(input(frame), { still: true });
+      if (compare) engine.renderOriginal({ source: bitmap, width, height, geometry: viewGeometry(frame) }, { still: true });
+      else engine.render({ ...input(frame), geometry: viewGeometry(frame) }, { still: true });
+      drawn = frame;
+      const d = debugState();
+      if (d) d.renderCount = (d.renderCount ?? 0) + 1;
     } catch (err) {
       reportError('still render', err);
     }
@@ -239,6 +303,8 @@ export function createStillSession(
       if (disposed) return;
       frame = f;
       ensureLuts(f.photo);
+      // 裁切: a geometry-only change draws nothing (CSS shows it)
+      if (mode === 'crop' && drawn && !raf && sameDisplayFrame(drawn, f)) return;
       schedule();
     },
     setCompare(on) {
@@ -269,9 +335,37 @@ export function createStillSession(
       if (disposed) throw new Error('StillSession: disposed');
       ensureLuts(f.photo);
       const img = engine.renderToImageData(input(f, b === undefined ? body : b), { mirror: false });
-      // the display keeps showing the last frame; redraw in case the offscreen render disturbed it
-      schedule();
+      // the display keeps showing the last frame; redraw in case the offscreen render disturbed it. Not in 裁切 mode: the
+      // debounced autosave after a gesture must draw no engine frame (S §6.3)
+      if (mode !== 'crop') schedule();
       return img;
+    },
+    viewSizeFor(g) {
+      return viewSize(snapCrop(g, oSize), oSize);
+    },
+    setViewMode(m) {
+      if (disposed || m === mode) return;
+      mode = m;
+      schedule();
+    },
+    pauseDisplay(on) {
+      if (disposed || on === paused) return;
+      paused = on;
+      if (on) {
+        if (raf) cancelAnimationFrame(raf);
+        raf = 0;
+      } else schedule();
+    },
+    tileInput(f, b) {
+      // the runner sets source, size, window and output per tile
+      const all: Partial<RenderInput> = { ...input(f, b === undefined ? body : b) };
+      delete all.source;
+      delete all.width;
+      delete all.height;
+      return { ...(all as TileInputBase), geometry: f.geometry ?? IDENTITY_GEOMETRY, oAspect: width / height };
+    },
+    bounds(f, b) {
+      return { body: b === undefined ? body : b, faces: faceBoundsFor(f.faces, width / height) };
     },
     stopDisplay() {
       displayOff = true;

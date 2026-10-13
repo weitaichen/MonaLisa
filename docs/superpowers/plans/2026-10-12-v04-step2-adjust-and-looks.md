@@ -1908,7 +1908,7 @@ git commit -m "v0.4 step 2: 調節 stages, effective values, picture frame and u
   - `lut64Cpu(lut: ArrayLike<number>, r: number, g: number, b: number): [number, number, number]`
   - `compositeCpu(src: ArrayLike<number>, width: number, height: number, u: AdjustUniforms, lookLut: ArrayLike<number> | null): Uint8ClampedArray`
 
-- [ ] **Step 1: Record the step-1 composite hash before touching the shader**
+- [x] **Step 1: Record the step-1 composite hash before touching the shader**
 
 Run:
 
@@ -1940,7 +1940,7 @@ it('prints the step-1 composite hash', () => {
 
 run `npx vitest run src/engine/compositeBase.tmp.test.ts`, read the printed value, and delete the file (it is never committed).
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Create `src/engine/compositeCpu.test.ts`. In the first line of code below, replace the string `PASTE_STEP1_HASH` with the 8 hex digits printed in Step 1 (the value is measured, not designed). The 調節-variant pin starts as `'00000000'` and is set in Step 8.
 
@@ -2038,12 +2038,12 @@ describe('compositeCpu', () => {
 });
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `npx vitest run src/engine/compositeCpu.test.ts`
 Expected: FAIL — `Failed to resolve import "./compositeCpu"` (and `./shaderHash`, `./shaders/adjust`).
 
-- [ ] **Step 4: Move the shader hash**
+- [x] **Step 4: Move the shader hash**
 
 Create `src/engine/shaderHash.ts`:
 
@@ -2061,7 +2061,7 @@ export function shaderHash(src: string): string {
 
 In `src/engine/passes/reshapeCpu.test.ts` delete the local `/** FNV-1a 32 of the shader with whitespace collapsed */ function shaderHash(src: string): string {…}` (lines 19-27 at `9eec432`) and add `import { shaderHash } from '../shaderHash';` with the other imports. The reshape pin keeps its value.
 
-- [ ] **Step 5: The 調節 GLSL**
+- [x] **Step 5: The 調節 GLSL**
 
 Create `src/engine/shaders/adjust.ts`:
 
@@ -2213,7 +2213,7 @@ vec3 adjustStage(vec3 c, vec2 uv) {
 
 (While writing this plan, this GLSL was compiled on Chromium/SwiftShader and compared with Task 5's `adjustRgb`: every item at ±max, all twelve together and grain at 2.8 px cells matched within 1 level, mean ≤ 0.003; and the full `compositeFs({adjust: true})`, spliced into the v0.3 composite, linked with 36 active uniforms. The plan check re-ran the `highp`-qualified text above under `precision highp float` only (no default int precision, as in the composite): it compiled, and with seven stages on — 曝光, 對比, 色溫, 鮮艷度, 褪色, 暗角, 顆粒 — matched `adjustRgb` with max ≤ 1 level at 1, 1.42 and 2.8 px cells; the probe of Task 16 was bit-exact on 4096 indices.)
 
-- [ ] **Step 6: Two composite variants from one source**
+- [x] **Step 6: Two composite variants from one source**
 
 Edit `src/engine/shaders/composite.ts` (CRLF — use the Edit tool):
 1. In the header's `Modified:` sentence (lines 9-15), insert before `output alpha is 1.0 (opaque export).` the text: `the 調節 variant (compositeFs({adjust: true})) adds a 質感 LUT mix (unit 8) and calls the 調節 stages of adjust.ts after the filter LUT;`.
@@ -2269,7 +2269,7 @@ export function compositeFs(opts: { adjust: boolean }): string {
 export const COMPOSITE_FS = compositeFs({ adjust: false });
 ```
 
-- [ ] **Step 7: The CPU port**
+- [x] **Step 7: The CPU port**
 
 Create `src/engine/compositeCpu.ts`:
 
@@ -2379,13 +2379,13 @@ export function compositeCpu(
 }
 ```
 
-- [ ] **Step 8: Run the tests, then pin the 調節 variant**
+- [x] **Step 8: Run the tests, then pin the 調節 variant**
 
 Run: `npx vitest run src/engine/compositeCpu.test.ts src/engine/passes/reshapeCpu.test.ts`
 Expected: everything passes except `the 調節 variant is pinned`, which fails with `expected '<8 hex>' to be '00000000'`. Put that printed 8-hex value in place of `'00000000'` in `compositeCpu.test.ts`, then run again.
 Expected: PASS. (If `the base variant is the step-1 composite` fails, Step 6 changed more than whitespace in the base text: compare `compositeFs({adjust: false})` with `git show HEAD:src/engine/shaders/composite.ts` and fix the splice.)
 
-- [ ] **Step 9: Typecheck, full suite, commit**
+- [x] **Step 9: Typecheck, full suite, commit**
 
 Run: `npm run typecheck && npm test`
 Expected: PASS.

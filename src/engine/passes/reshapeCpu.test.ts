@@ -13,18 +13,9 @@ import type { ReshapeUniforms as RU } from './reshape';
 import { MIN_DET } from '../../body/field';
 import { syntheticPortrait } from '../../body/synthetic';
 import { buildFaceProtect } from '../../tracking/faceProtect';
+import { shaderHash } from '../shaderHash';
 
 const PINNED = 'b7f7bcdc';
-
-/** FNV-1a 32 of the shader with whitespace collapsed */
-function shaderHash(src: string): string {
-  let h = 0x811c9dc5;
-  for (const ch of src.replace(/\s+/g, ' ').trim()) {
-    h ^= ch.codePointAt(0)!;
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h.toString(16).padStart(8, '0');
-}
 
 const lm = JSON.parse(readFileSync(new URL('../../../tests/fixtures/landmarks_sample_face.json', import.meta.url), 'utf8')) as {
   width: number;

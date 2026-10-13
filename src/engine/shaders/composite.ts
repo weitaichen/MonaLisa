@@ -12,7 +12,9 @@
  * sharpen taps skipped when sharpen = 0, and their offsets scaled by shortEdge/720 like the mean
  * (so preview tiers and the full-res capture sharpen the same footprint); added 紅潤 soft-light
  * tint, a 512² LUT filter (GPUImage 64³ layout, the same lookup math as lookupCustom) and the
- * present flip/mirror (PRESENT_VS); output alpha is 1.0 (opaque export).
+ * present flip/mirror (PRESENT_VS); the 調節 variant (compositeFs({adjust: true})) adds a 質感 LUT
+ * mix (unit 8) and calls the 調節 stages of adjust.ts after the filter LUT; output alpha is 1.0
+ * (opaque export).
  *
  * lut64() (the 512² / 64³ lookup used for lookup_light and the filter LUTs) is GPUImageLookupFilter's
  * lookup math, carried through GPUPixel beauty_face_unit_filter.cc:136-157. Modified: GLSL ES 3.00,
@@ -42,10 +44,11 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+import { ADJUST_GLSL } from './adjust';
 
 // P5 composite + present (RB §2.3 parts 1–2, §2.5). Draw with PRESENT_VS.
 // Texture units: 0 src, 1 mean, 2 mask, 3 lookup_gray, 4 lookup_origin, 5 lookup_skin,
-// 6 lookup_light, 7 filter LUT.
+// 6 lookup_light, 7 filter LUT, 8 質感 LUT (調節 variant only).
 
 export const COMPOSITE_UNITS = {
   src: 0,
@@ -56,9 +59,25 @@ export const COMPOSITE_UNITS = {
   skin: 5,
   light: 6,
   filter: 7,
+  look: 8,
 } as const;
 
-export const COMPOSITE_FS = /* glsl */ `#version 300 es
+/** 質感 LUT mix, then the 調節 stages (spliced after the filter LUT of the 調節 variant only) */
+const ADJUST_CALL = /* glsl */ `
+  if (uLookAmt > 0.0) {
+    vec3 a = clamp(color, 0.0, 1.0);
+    color = mix(a, lut64(uLookLut, a), uLookAmt);
+  }
+  if (uAdjustOn > 0.0) color = adjustStage(color, vUv);`;
+
+/**
+ * P5 composite. `adjust: false` is the base program, the step-1 text unchanged (pinned in compositeCpu.test.ts);
+ * `adjust: true` is the 調節 program: + uLookLut / uLookAmt, ADJUST_GLSL and the call after the filter LUT
+ * (step-2 spec §4.1). The inserted parts are empty strings in the base, so its text only gains blank lines.
+ */
+export function compositeFs(opts: { adjust: boolean }): string {
+  const a = opts.adjust;
+  return /* glsl */ `#version 300 es
 precision highp float;
 in vec2 vUv;
 
@@ -69,7 +88,7 @@ uniform sampler2D uLookupGray;
 uniform sampler2D uLookupOrigin;
 uniform sampler2D uLookupSkin;
 uniform sampler2D uLookupLight;
-uniform sampler2D uFilterLut;
+uniform sampler2D uFilterLut;${a ? '\nuniform sampler2D uLookLut;\nuniform float uLookAmt;' : ''}
 
 uniform vec2 uTexel;      // (shortEdge/720) / processing size (GPUPixel widthOffset, heightOffset at 720)
 uniform float uSmooth;    // GPUPixel blurAlpha
@@ -154,6 +173,7 @@ vec3 softLight(vec3 a, vec3 b) {
   vec3 hi = a + (2.0 * b - 1.0) * (d - a);
   return mix(lo, hi, step(vec3(0.5), b));
 }
+${a ? ADJUST_GLSL : ''}
 
 void main() {
   vec3 I = texture(uSrc, vUv).rgb;
@@ -200,6 +220,9 @@ void main() {
     vec3 a = clamp(color, 0.0, 1.0);
     color = mix(a, lut64(uFilterLut, a), uFilterAmt);
   }
-
+${a ? ADJUST_CALL : ''}
   outColor = vec4(color, 1.0);
 }`;
+}
+
+export const COMPOSITE_FS = compositeFs({ adjust: false });

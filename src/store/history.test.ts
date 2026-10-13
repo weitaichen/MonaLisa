@@ -5,7 +5,7 @@ import { withBodies } from '../detect/cache';
 import { cacheBody, makeCache } from '../detect/testCaches';
 import { editFromLegacy, legacyProjection } from '../edit/legacy';
 import { openState } from '../edit/migrate';
-import { assignPersons, renamePersons } from '../edit/state';
+import { assignPersons, defaultPhoto, naturalPerson, neutralPerson, renamePersons } from '../edit/state';
 import { applyPreset, defaultParams, sanitizeParams, setParam } from '../engine/params';
 import type { BodyDetection, DetectionCache, EditState, HistoryEntry } from '../types';
 import {
@@ -754,5 +754,19 @@ describe('detection-driven writes keep 最近編輯 (S §5.2, A17)', () => {
     await write(assignPersons(renamePersons(assigned, r.renamed), r.cache.persons.map((p) => p.id), r.cache.primary), r.cache);
     expect((await listEntries()).map((e) => [e.id, e.updatedAt])).toEqual(before);
     expect((await getEntry(older))!.detect?.bodies).toHaveLength(1);
+  });
+});
+
+describe('v2 entries with 調節 and 質感 (step-2 spec §5)', () => {
+  it('round-trip the 12 values and the look', async () => {
+    const photo = { ...defaultPhoto(), look: { id: 'cinema' as const, amount: 0.7 } };
+    photo.values = { ...photo.values, 'adjust.exposure': 0.65, 'adjust.grain': 0.35, 'adjust.vignette': 1 };
+    const e: EditState = { v: 2, photo, persons: { p0: naturalPerson() }, template: neutralPerson(), primaryInit: null };
+    const id = await addEntry({ ...entry('adj'), schema: 2, edit: e });
+    const back = (await getEntry(id))!.edit!;
+    expect(back.photo.look).toEqual({ id: 'cinema', amount: 0.7 });
+    expect(back.photo.values['adjust.exposure']).toBe(0.65);
+    expect(back.photo.values['adjust.grain']).toBe(0.35);
+    expect(back.photo.values['adjust.vignette']).toBe(1);
   });
 });

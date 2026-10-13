@@ -169,6 +169,8 @@ export interface Rect {
 export interface PhotoParams {
   values: Record<PhotoParamId, number>;
   filterId: string;
+  /** 一鍵 › 質感 (C §3.4): a look and its 程度, or null (無) */
+  look: { id: LookId; amount: number } | null;
   /** the photo part of the last beauty preset, while 美白 / 銳化 / 濾鏡 are untouched since (RM §3.4) */
   presetLink: PresetRef | null;
   bodyProtect: boolean;

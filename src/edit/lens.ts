@@ -4,6 +4,7 @@ import { applyPreset, cleanBand, displayValue, FILTERS, hasValue, MAKEUP_PICK_DE
 import type {
   EditState,
   HeightBand,
+  LookId,
   ParamGroup,
   ParamId,
   PersonId,
@@ -15,7 +16,7 @@ import type {
   Selection,
   ShadePart,
 } from '../types';
-import { personOf, PRESET_PERSON_IDS, PRESET_PHOTO_IDS, resetAll, withPersons, withPhoto } from './state';
+import { personOf, PRESET_PERSON_IDS, PRESET_PHOTO_IDS, resetAdjust, resetAll, setLook as setPhotoLook, withPersons, withPhoto } from './state';
 
 export const NO_FACE_NOTE = '這位人物未偵測到臉部，臉部效果不適用';
 export const NO_BODY_NOTE = '這位人物未偵測到身體，僅能使用增高、長腿';
@@ -52,6 +53,10 @@ export interface Lens {
   setFilter(filterId: string): EditState;
   setBodyProtect(on: boolean): EditState;
   setHeightBand(band: HeightBand | null): EditState;
+  /** 一鍵 › 質感 of the photo (step-2 spec §3.4) */
+  look(): PhotoParams['look'];
+  /** pick a look (amount clamped) or 無 (null); a photo item, whatever the selection */
+  setLook(id: LookId | null, amount: number): EditState;
   resetGroup(group: ParamGroup): EditState;
   groupNeutral(group: ParamGroup): boolean;
   groupHasValue(group: ParamGroup): boolean;
@@ -212,7 +217,15 @@ export function lensFor(edit: EditState, sel: Selection, persons: readonly Perso
     setHeightBand(band) {
       return withPhoto(edit, (ph) => ({ ...ph, heightBand: band ? cleanBand(band) : null }));
     },
+    look() {
+      return edit.photo.look;
+    },
+    setLook(id, amount) {
+      return setPhotoLook(edit, id, amount);
+    },
     resetGroup(group) {
+      // 調節 is photo-level as a whole tab: ⊘ resets it under any selection (step-2 spec §3.4)
+      if (group === 'adjust') return resetAdjust(edit);
       const defs = paramsInGroup(group);
       const personIds = defs.filter((d) => d.scope === 'person').map((d) => d.id);
       const who = [...new Set(personIds.flatMap((id) => targets(id)))];

@@ -538,12 +538,12 @@ git commit -m "v0.4 step 2: 質感 look table (5 looks, offsets, LUT refs)" -m "
   - `sanitizePhotoLook(raw: unknown): PhotoParams['look']`
   - `Lens.look(): PhotoParams['look']`; `Lens.setLook(id: LookId | null, amount: number): EditState`; `Lens.resetGroup('adjust')` = `resetAdjust(edit)`
 
-- [ ] **Step 0: Confirm the step-1 names**
+- [x] **Step 0: Confirm the step-1 names**
 
 Run: `grep -n "export function \(defaultPhoto\|sanitizePhoto\|neutralPerson\|naturalPerson\|sanitizeEditState\|editKey\|splitLegacy\|legacyProjection\|lensFor\)" -r src/edit; grep -n "export interface Lens\|resetGroup(group\|const lens: Lens" src/edit/lens.ts; grep -n "LOOK_KEY\|export function loadLook" src/store/settings.ts`
 Expected (step-1 plan, Tasks 4–6 and 11): `defaultPhoto`, `sanitizePhoto`, `neutralPerson`, `naturalPerson`, `sanitizeEditState(raw, personIds)` and `editKey` in `src/edit/state.ts`; `splitLegacy`, `legacyProjection` in `src/edit/legacy.ts`; the `Lens` interface (with `readonly edit`) and `const lens: Lens = { … }` inside `lensFor` in `src/edit/lens.ts`, without `look`/`setLook`; `LOOK_KEY` and `loadLook()` in `src/store/settings.ts` (whose own `sanitizeLook(raw): CameraLook` is why this task names its function `sanitizePhotoLook`). If the v1 helpers `defaultParams`/`applyPreset` moved out of `src/engine/params.ts`, import them from where they now live.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/edit/adjust.test.ts`:
 
@@ -789,12 +789,12 @@ describe('v2 entries with 調節 and 質感 (step-2 spec §5)', () => {
 
 (add `defaultPhoto, naturalPerson, neutralPerson` to its existing `import { assignPersons, renamePersons } from '../edit/state';`; `EditState` is already in its `../types` type import.)
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run src/edit/adjust.test.ts src/store/settings.test.ts src/store/history.test.ts`
 Expected: FAIL — `setLook`, `resetAdjust`, `adjustIsNeutral`, `sanitizePhotoLook` are not exported; `defaultPhoto().look` is `undefined`.
 
-- [ ] **Step 3: Add `look` to `PhotoParams`**
+- [x] **Step 3: Add `look` to `PhotoParams`**
 
 In `src/types.ts`, in step 1's `PhotoParams` after `filterId: string;` add:
 
@@ -803,7 +803,7 @@ In `src/types.ts`, in step 1's `PhotoParams` after `filterId: string;` add:
   look: { id: LookId; amount: number } | null;
 ```
 
-- [ ] **Step 4: Edit-state functions**
+- [x] **Step 4: Edit-state functions**
 
 In `src/edit/state.ts`:
 1. In `defaultPhoto()`'s returned object add `look: null,` (the 12 adjust values are already neutral: step 1 fills them from `PHOTO_IDS`, the photo-scope `PARAM_DEFS`, via the 自然 preset).
@@ -847,7 +847,7 @@ export function sanitizePhotoLook(raw: unknown): PhotoParams['look'] {
 
 4. In `src/edit/legacy.ts` `splitLegacy`, add `look: null,` after `filterId: p.filterId,` in the returned `photo` literal (a v1 `BeautyParams` has no 質感; `loadLook()`'s first-load migration of `meiyan.params.v1` goes through it, so the settings test below depends on it). `legacyProjection` needs no change: it writes the 12 adjust values into `params.values` (a 0.3 build ignores ids it does not know) and has no look field.
 
-- [ ] **Step 5: Lens**
+- [x] **Step 5: Lens**
 
 In `src/edit/lens.ts`:
 1. Add `resetAdjust` and `setLook as setPhotoLook` to the existing `./state` import and `LookId` to the `../types` type import; add to the `Lens` interface (step 1 does not have these yet; C §3.3 lists `setLook`):
@@ -874,17 +874,17 @@ In `src/edit/lens.ts`:
 4. Adjust ids need no routing code: their `scope` is `'photo'` (Task 1), and step 1's lens writes photo-scope ids to `edit.photo.values` under every selection — the tests prove it.
 5. If `a beauty preset never touches 調節 or the look` fails, step 1's preset photo part walks every photo-scope id; restrict it to the four C §3.4 names — 美白 (`skin.whiten`), 銳化 (`skin.sharpen`), `filterId`, `filter.amount`.
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 Run: `npx vitest run src/edit/adjust.test.ts src/store/settings.test.ts src/store/history.test.ts && npm run typecheck`
 Expected: PASS; `tsc` exits 0. If `tsc` reports object literals of type `PhotoParams` missing `look` (step-1 code, tests or harnesses that build a photo field by field), add `look: null` there. Code that passes a whole photo through (`importEdit` / `cameraShotEdit` use `photo: look.photo`, `cameraEdit` / `lookOf` likewise) already carries the camera's 質感 into the editor and must stay that way (S §2.3 hand-over, §11 Q5).
 
-- [ ] **Step 7: Run the whole unit suite**
+- [x] **Step 7: Run the whole unit suite**
 
 Run: `npm test`
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/types.ts src/edit/state.ts src/edit/legacy.ts src/edit/lens.ts src/edit/adjust.test.ts src/store/settings.test.ts src/store/history.test.ts

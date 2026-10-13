@@ -345,3 +345,35 @@ describe('first group photo hint (S §1.1 item 11)', () => {
     expect(takePersonsHint()).toBe(false);
   });
 });
+
+describe('camera look: 調節 and 質感 (step-2 spec §5)', () => {
+  it('a migrated meiyan.params.v1 opens with neutral 調節 and no look', () => {
+    store.setItem(PARAMS_KEY, JSON.stringify(applyPreset('glow', 1)));
+    const look = loadLook();
+    const values = look.photo.values as Record<string, number>;
+    for (const d of PARAM_DEFS.filter((x) => x.group === 'adjust')) expect(values[d.id], d.id).toBe(d.bidirectional ? 0.5 : 0);
+    expect(look.photo.look).toBeNull();
+  });
+
+  it('a meiyan.look.v1 written by a step-1 build (no look, no adjust keys) or holding junk opens neutral', () => {
+    const raw = JSON.parse(JSON.stringify(loadLook())) as { photo: { values: Record<string, unknown>; look?: unknown } };
+    for (const k of Object.keys(raw.photo.values)) if (k.startsWith('adjust.')) delete raw.photo.values[k];
+    delete raw.photo.look;
+    store.setItem(LOOK_KEY, JSON.stringify(raw));
+    expect(loadLook().photo.look).toBeNull();
+    expect(loadLook().photo.values['adjust.vignette']).toBe(0);
+    raw.photo.look = { id: 'ccd', amount: 'x' };
+    raw.photo.values['adjust.exposure'] = Number.POSITIVE_INFINITY;
+    store.setItem(LOOK_KEY, JSON.stringify(raw));
+    expect(loadLook().photo.look).toBeNull();
+    expect(loadLook().photo.values['adjust.exposure']).toBe(0.5);
+  });
+
+  it('round-trips 調節 values and the look', () => {
+    const l = loadLook();
+    const styled = { ...l, photo: { ...l.photo, values: { ...l.photo.values, 'adjust.fade': 0.3 }, look: { id: 'blue' as const, amount: 0.6 } } };
+    store.setItem(LOOK_KEY, JSON.stringify(styled));
+    expect(loadLook().photo.look).toEqual({ id: 'blue', amount: 0.6 });
+    expect(loadLook().photo.values['adjust.fade']).toBe(0.3);
+  });
+});

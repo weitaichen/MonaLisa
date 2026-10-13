@@ -1,10 +1,13 @@
 // The v0.4 edit of one photo (RM §3.2–3.4): an immutable EditState with a photo layer and a person layer. Every change
 // returns a new object and shares what it did not change, so UndoStack keeps states by reference ({clone: false}).
-import { applyPreset, BLUSH_SHADES, FILTERS, LIP_SHADES, PARAM_DEFS, PRESETS, sanitizeBand } from '../engine/params';
+import { isLookId } from '../engine/looks';
+import { applyPreset, BLUSH_SHADES, FILTERS, LIP_SHADES, neutralValue, PARAM_DEFS, paramsInGroup, PRESETS, sanitizeBand } from '../engine/params';
 import { stableKey } from '../store/undo';
 import type {
+  AdjustId,
   CameraLook,
   EditState,
+  LookId,
   PersonId,
   PersonParamId,
   PersonParams,
@@ -49,7 +52,7 @@ export function defaultPhoto(): PhotoParams {
   const p = applyPreset('natural', 1);
   const values = {} as Record<PhotoParamId, number>;
   for (const k of PHOTO_IDS) values[k] = p.values[k];
-  return { values, filterId: p.filterId, presetLink: { id: 'natural', amount: 1 }, bodyProtect: true, heightBand: null, legsAnchor: null };
+  return { values, filterId: p.filterId, look: null, presetLink: { id: 'natural', amount: 1 }, bodyProtect: true, heightBand: null, legsAnchor: null };
 }
 
 /** The output de-dupe and undo key (RM §3.4; step 6 replaces stroke points by stroke ids here). */
@@ -133,6 +136,29 @@ export function resetAll(edit: EditState): EditState {
   return { ...edit, photo: defaultPhoto(), persons };
 }
 
+const clampAmount = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
+
+/** 一鍵 › 質感 (step-2 spec §3.4): null clears it; the amount is clamped to 0..1. Unchanged → the same object. */
+export function setLook(edit: EditState, id: LookId | null, amount: number): EditState {
+  const cur = edit.photo.look;
+  const next = id === null ? null : { id, amount: clampAmount(amount) };
+  if (cur === next || (cur && next && cur.id === next.id && cur.amount === next.amount)) return edit;
+  return { ...edit, photo: { ...edit.photo, look: next } };
+}
+
+/** true when no 調節 item carries a value (the item / tab dots and the ⊘ no-op check, step-2 spec §2.1) */
+export function adjustIsNeutral(photo: Pick<PhotoParams, 'values'>): boolean {
+  return paramsInGroup('adjust').every((d) => photo.values[d.id as AdjustId] === neutralValue(d));
+}
+
+/** ⊘ 原圖 in 調節: the 12 user values to neutral, the 質感 untouched. Already neutral → the same object. */
+export function resetAdjust(edit: EditState): EditState {
+  if (adjustIsNeutral(edit.photo)) return edit;
+  const values = { ...edit.photo.values };
+  for (const d of paramsInGroup('adjust')) values[d.id as AdjustId] = neutralValue(d);
+  return { ...edit, photo: { ...edit.photo, values } };
+}
+
 /** the person part of `ref` (face items within 1e-6, lip / blush shades) is what `p` holds (RM §3.4 matching) */
 export function matchesPersonPreset(p: PersonParams, ref: PresetRef): boolean {
   const q = personFromPreset(ref.id, ref.amount);
@@ -174,6 +200,14 @@ export function sanitizePerson(raw: unknown, fallback: PersonParams): PersonPara
   return { values, shades, preset };
 }
 
+/** A stored 質感 → a valid look (amount clamped) or null. */
+export function sanitizePhotoLook(raw: unknown): PhotoParams['look'] {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as { id?: unknown; amount?: unknown };
+  if (!isLookId(r.id) || typeof r.amount !== 'number' || !Number.isFinite(r.amount)) return null;
+  return { id: r.id, amount: clampAmount(r.amount) };
+}
+
 /** Untrusted photo layer → valid; `persons` (when known) bounds the 長腿 anchor; a link survives only while it matches. */
 export function sanitizePhoto(raw: unknown, persons: ReadonlySet<PersonId> | null = null): PhotoParams {
   const base = defaultPhoto();
@@ -188,6 +222,7 @@ export function sanitizePhoto(raw: unknown, persons: ReadonlySet<PersonId> | nul
   const photo: PhotoParams = {
     values,
     filterId: FILTERS.some((f) => f.id === r.filterId) ? (r.filterId as string) : 'none',
+    look: sanitizePhotoLook(r.look),
     presetLink: presetRefOf(r.presetLink),
     bodyProtect: typeof r.bodyProtect === 'boolean' ? r.bodyProtect : true,
     heightBand: sanitizeBand(r.heightBand),

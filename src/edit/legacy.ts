@@ -11,7 +11,7 @@ export function splitLegacy(p: BeautyParams): { photo: PhotoParams; person: Pers
   const personValues = {} as Record<PersonParamId, number>;
   for (const id of PERSON_IDS) personValues[id] = p.values[id];
   return {
-    photo: { values: photoValues, filterId: p.filterId, presetLink: ref, bodyProtect: p.bodyProtect, heightBand: p.heightBand, legsAnchor: null },
+    photo: { values: photoValues, filterId: p.filterId, look: null, presetLink: ref, bodyProtect: p.bodyProtect, heightBand: p.heightBand, legsAnchor: null },
     person: { values: personValues, shades: { lip: p.lipShade, blush: p.blushShade }, preset: ref ?? 'custom' },
   };
 }

@@ -314,3 +314,17 @@ export function liveRows(runs: readonly LiveRun[]): MultiRow[] {
   }
   return out;
 }
+
+// ───────────────────────── 輸出 (v0.4 step 3, S §6.4) ─────────────────────────
+
+export interface ExportBenchRow {
+  name: string;
+  /** null: failed, or a manual row */
+  ms: number | null;
+  detail: string;
+}
+
+/** the export rows of 複製結果 (S §6.4) */
+export function formatExportRows(rows: readonly ExportBenchRow[]): string {
+  return ['輸出\tms\t說明', ...rows.map((r) => `${r.name}\t${r.ms === null ? '—' : r.ms.toFixed(0)}\t${r.detail}`)].join('\n');
+}

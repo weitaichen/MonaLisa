@@ -4,6 +4,7 @@ import {
   type BodyBenchRow,
   formatBodyReport,
   formatElapsed,
+  formatExportRows,
   formatMultiRows,
   formatReport,
   liveRows,
@@ -189,5 +190,16 @@ describe('bench 多臉 L: the cost of a numFaces switch', () => {
     ]);
     expect(rows[0].values.switch_ms).toBe(912.4);
     expect(rows[1].values).not.toHaveProperty('switch_ms');
+  });
+});
+
+describe('formatExportRows (S §6.4)', () => {
+  it('one TSV line per row with ms rounded, and — for manual or failed rows', () => {
+    expect(
+      formatExportRows([
+        { name: 'decode 12MP', ms: 412.6, detail: '4032×3024 from 4032×3024' },
+        { name: 'share after 3.5 / 4.5 / 5.5 s', ms: null, detail: 'manual on the iPhone' },
+      ]),
+    ).toBe('輸出\tms\t說明\ndecode 12MP\t413\t4032×3024 from 4032×3024\nshare after 3.5 / 4.5 / 5.5 s\t—\tmanual on the iPhone');
   });
 });

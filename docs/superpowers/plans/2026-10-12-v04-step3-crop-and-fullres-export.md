@@ -7454,7 +7454,7 @@ EOF
 - Consumes: Task 1 (`IDENTITY_GEOMETRY`, `setStraighten`, `snapCrop`, `viewSize`), Task 5 (`importPhotoInfo`), Task 8 (`Engine.renderTile`, `releaseBuffers`, `renderToImageData` with geometry), Task 9 (`planTiles`, `TileGrid`), step 1 (`defaultPhoto`, the step-1 `RenderInput`).
 - Produces: `interface ExportBenchRow { name: string; ms: number | null; detail: string }`; `runExportBench(engine: Engine, onRow: (r: ExportBenchRow) => void, picked?: File): Promise<ExportBenchRow[]>`; `formatExportRows(rows: readonly ExportBenchRow[]): string`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `src/bench/report.test.ts`:
 
@@ -7473,12 +7473,12 @@ describe('formatExportRows (S §6.4)', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [x] **Step 2: Run it to see it fail**
 
 Run: `npx vitest run src/bench/report.test.ts`
 Expected: FAIL — `formatExportRows is not exported`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `src/bench/report.ts`:
 
@@ -7763,14 +7763,14 @@ async function runExport(picked?: File): Promise<void> {
 
 and `copyResults` (`main.ts:725`) appends `\n\n${formatExportRows(exportRows)}` when `exportRows.length > 0`. Append `exportBtn` and `exportPhotoBtn` where the panel's other buttons (`bodyBtn`) are appended; `exportInput` is already in `root`. Declare these after `root` and `bodyOut` (`main.ts:166, 221`) so the module-level code finds them.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run: `npx vitest run src/bench/report.test.ts && npm run typecheck`
 Expected: PASS; no type errors.
 Run: `npm run build && npx playwright test tests/e2e/bench.spec.ts`
 Expected: every test in `bench.spec.ts` passes (step 2 added one; the bench page still starts; the new buttons are not exercised headless).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/bench/exportBench.ts src/bench/report.ts src/bench/report.test.ts src/bench/main.ts

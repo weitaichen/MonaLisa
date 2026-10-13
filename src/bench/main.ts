@@ -4,6 +4,8 @@
 // 美體偵測 (body research report P0): PoseLandmarker lite/full × IMAGE/VIDEO × CPU/GPU on a picked photo — model
 // load, graph creation, first and median detect time, mask size, visibility sanity — added to 複製結果. It needs
 // no camera, so it can run from the start screen too.
+// 輸出測試 (step-3 spec §6.4): decode, tiled render, encode, canvas-area and P2-with-geometry rows on synthetic frames
+// (or a picked photo's decode, 輸出測試（選照片）), added to 複製結果. It needs the engine, so it sits in the live panel.
 import { debugState, reportError } from '../app/debug';
 import { type LiveLoop, type LiveStats, autoTierSession, resetAutoTierSession, startLiveLoop } from '../app/live';
 import { type StillSession, createStillSession } from '../app/still';
@@ -29,11 +31,14 @@ import type {
 } from '../types';
 import { primaryBody } from '../detect/cache';
 import { formatAdjustBench, runAdjustBench } from './adjustBench';
+import { runExportBench } from './exportBench';
 import { mountMultiFace } from './multiFace';
 import {
   type BenchSample,
   type BodyBenchRow,
+  type ExportBenchRow,
   formatElapsed,
+  formatExportRows,
   formatMultiRows,
   formatReport,
   maskCoverage,
@@ -106,6 +111,7 @@ let startedAt = 0;
 let busy = false;
 const samples: BenchSample[] = [];
 const bodyRows: BodyBenchRow[] = [];
+let exportRows: ExportBenchRow[] = [];
 
 // ───────────────────────── DOM ─────────────────────────
 
@@ -221,6 +227,11 @@ const stillBtn = button('靜態圖片測試', () => void stillTest());
 const copyBtn = button('複製結果', () => copyResults());
 const bodyBtn = button('美體偵測', () => bodyTest());
 const bodyOut = el('div', { className: 'note' });
+const exportBtn = button('輸出測試', () => void runExport());
+// synchronous inside the tap (iOS user-activation rule, as bodyTest); exportInput is declared after bodyInput
+const exportPhotoBtn = button('輸出測試（選照片）', () => {
+  if (!busy && engine) exportInput.click();
+});
 const bodyTable = el('tbody');
 const bodyCopyBtn = button('複製結果', () => copyResults());
 bodyCopyBtn.hidden = true;
@@ -255,7 +266,7 @@ const panel = el(
   { className: 'panel' },
   el('div', { className: 'row' }, el('span', { textContent: '畫質' }), ...tierBtns),
   el('div', { className: 'row' }, el('span', { textContent: '參數' }), ...modeBtns),
-  el('div', { className: 'row' }, delegateBtn, landmarksBtn, compareBtn, captureBtn, stillBtn, bodyBtn, resumeBtn),
+  el('div', { className: 'row' }, delegateBtn, landmarksBtn, compareBtn, captureBtn, stillBtn, bodyBtn, exportBtn, exportPhotoBtn, resumeBtn),
   el('div', { className: 'row' }, copyBtn, note),
   table,
   copyArea,
@@ -518,6 +529,49 @@ function bodyTest(): void {
   bodyInput.click(); // synchronous inside the tap (iOS user-activation rule)
 }
 
+// ───────────────────────── 輸出測試 (step-3 spec §6.4) ─────────────────────────
+
+// in the document and not display:none / hidden, like bodyInput: iOS then opens the picker reliably. Appended after
+// bodyInput, so tests/harness/b3/bench.mjs's input[type=file] nth(1) stays the 美體偵測 input.
+const exportInput = el('input', { type: 'file', accept: 'image/*', tabIndex: -1 });
+exportInput.setAttribute('aria-hidden', 'true');
+exportInput.style.cssText = 'position:fixed;left:-100px;top:0;width:1px;height:1px;opacity:0';
+exportInput.addEventListener('change', () => {
+  const f = exportInput.files?.[0];
+  exportInput.value = '';
+  if (f) void runExport(f);
+});
+root.appendChild(exportInput);
+
+async function runExport(picked?: File): Promise<void> {
+  if (busy || !engine) return;
+  busy = true;
+  exportBtn.disabled = exportPhotoBtn.disabled = true;
+  // the export pauses the display (S §2.3): live frames between tiles would resize the FBOs and skew the tile times
+  const wasLive = loop !== null;
+  loop?.stop();
+  loop = null;
+  try {
+    exportRows = [];
+    await runExportBench(
+      engine,
+      (r) => {
+        exportRows.push(r);
+        note.textContent = `輸出：${r.name} ${r.ms === null ? '—' : `${r.ms.toFixed(0)} ms`}`;
+      },
+      picked,
+    );
+    const failed = exportRows.filter((r) => r.detail.startsWith('failed:')).length; // not the manual share row
+    note.textContent = `輸出：完成 ${exportRows.length} 列${failed > 0 ? `，${failed} 項失敗` : ''}（複製結果）`;
+  } catch (err) {
+    showError('export bench', err);
+  } finally {
+    busy = false;
+    exportBtn.disabled = exportPhotoBtn.disabled = false;
+    if (wasLive && !still) startLoop();
+  }
+}
+
 async function runAdjust(): Promise<void> {
   if (busy) return;
   busy = true;
@@ -726,7 +780,8 @@ function reportMeta(): Record<string, string> {
 
 function copyResults(): void {
   const multiText = multi.rows().length ? `\n\n${formatMultiRows(multi.rows())}` : '';
-  const text = formatReport(reportMeta(), samples, bodyRows) + multiText;
+  const exportText = exportRows.length > 0 ? `\n\n${formatExportRows(exportRows)}` : '';
+  const text = formatReport(reportMeta(), samples, bodyRows) + multiText + exportText;
   // the body section may be on the start screen, where the panel (and its textarea) is hidden
   if (panel.hidden) bodySection.append(copyArea);
   else if (copyArea.parentElement !== panel) panel.append(copyArea);

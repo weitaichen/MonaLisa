@@ -420,7 +420,7 @@ button:focus-visible {
 .tabs {
   display: flex;
   justify-content: space-between;
-  /* six two-character tabs: ≥ 60 px each at 375 pt */
+  /* up to 8 tabs (v0.4 roadmap §2.1): (375 − 12)/8 = 45.4 pt each, still ≥ 44 pt — never a 9th */
   padding: 0 6px;
   height: 46px;
 }
@@ -482,6 +482,20 @@ button:focus-visible {
   line-height: 15px;
   color: var(--text-2);
   white-space: normal;
+}
+/* 調節: 「質感：膠片」 leads the strip while a look is set (tap → 一鍵 › 質感) */
+.lead-chip {
+  flex: none;
+  align-self: center;
+  height: 32px;
+  margin: 0 4px 0 0;
+  padding: 0 12px;
+  border-radius: 16px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 .strip.face-off .item {
   opacity: 0.4;
@@ -733,6 +747,13 @@ button:focus-visible {
   margin-top: -1.5px;
   border-radius: 1.5px;
   background: rgba(255, 255, 255, 0.22);
+}
+/* 色溫 / 色調 (調節): the track shows which way the colour moves; the accent fill still marks the value */
+.slider-track.track-temperature {
+  background: linear-gradient(90deg, #4f8dff, rgba(255, 255, 255, 0.22) 50%, #ffae42);
+}
+.slider-track.track-tint {
+  background: linear-gradient(90deg, #3ecf6e, rgba(255, 255, 255, 0.22) 50%, #e04fd8);
 }
 .slider-fill {
   position: absolute;

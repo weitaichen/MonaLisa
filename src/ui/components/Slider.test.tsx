@@ -148,3 +148,22 @@ describe('SliderRow and persons (S §2.4)', () => {
     expect(plain.find('slider-mixed')).toBeUndefined();
   });
 });
+
+describe('SliderRow tints and the default dot (step-2 spec §2.1)', () => {
+  const track = (root: FakeElement) => root.find('slider-track')!;
+  it('色溫 / 色調 tint the track; every other slider keeps the plain track', () => {
+    expect(track(mount(eye({ bidirectional: true, value: 0.5, defaultValue: 0.5, track: 'temperature' }))).attrs.class).toBe(
+      'slider-track track-temperature',
+    );
+    expect(track(mount(eye({ bidirectional: true, value: 0.5, defaultValue: 0.5, track: 'tint' }))).attrs.class).toBe('slider-track track-tint');
+    expect(track(mount(eye())).attrs.class).toBe('slider-track');
+  });
+  it('hideDefault (調節 one-way items: neutral is the default) omits the default dot; otherwise it stays', () => {
+    const hidden = mount(eye({ param: 'adjust.grain', value: 0.3, defaultValue: 0, hideDefault: true }));
+    expect(hidden.find('slider-def')).toBeUndefined();
+    expect(hidden.find('slider-tick')).toBeUndefined();
+    expect(mount(eye()).find('slider-def')).toBeDefined();
+    // bidirectional sliders keep the centre tick, hideDefault or not
+    expect(mount(eye({ bidirectional: true, value: 0.5, defaultValue: 0.5, hideDefault: true })).find('slider-tick')).toBeDefined();
+  });
+});

@@ -4787,7 +4787,7 @@ git commit -m "v0.4 step 2: panel model for the 調節 tab and 一鍵 › 美顏
   - `SliderRow` renders `.slider-track.track-temperature` / `.track-tint` and omits `.slider-def` when `hideDefault`
   - CSS classes `.track-temperature`, `.track-tint`, `.lead-chip`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/ui/icons.adjust.test.ts`:
 
@@ -4818,12 +4818,12 @@ describe('調節 and 質感 visuals (step-2 spec §2.5, §7)', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run src/ui/icons.adjust.test.ts`
 Expected: FAIL — `hasIcon('brightness')` is false.
 
-- [ ] **Step 3: Icons**
+- [x] **Step 3: Icons**
 
 In `src/ui/icons.tsx`, insert after the `custom: (…),` entry and before `// ── chrome ──` (original line drawings on the 24 × 24 grid; the `Icon` component supplies stroke 1.75, round caps):
 
@@ -4905,7 +4905,7 @@ In `src/ui/icons.tsx`, insert after the `custom: (…),` entry and before `// �
   ),
 ```
 
-- [ ] **Step 4: BeautyPanel**
+- [x] **Step 4: BeautyPanel**
 
 In `src/ui/components/BeautyPanel.tsx` (CRLF — Edit tool):
 1. Header comment line 1: `tab row 一鍵 · 美膚 · 美型 · 美體 · 濾鏡 · 美妝` → `tab row 一鍵 · 美膚 · 美型 · 美體 · 濾鏡 · 美妝 · 調節`.
@@ -5001,7 +5001,7 @@ function Thumb({ src, fallback }: { src: string; fallback: string }) {
 
    (the `<img …/>` part is unchanged).
 
-- [ ] **Step 5: Slider tint and default dot**
+- [x] **Step 5: Slider tint and default dot**
 
 In `src/ui/components/Slider.tsx` replace lines 184-186:
 
@@ -5011,7 +5011,7 @@ In `src/ui/components/Slider.tsx` replace lines 184-186:
           {bi ? <div class="slider-tick" /> : binding.hideDefault ? null : <div class="slider-def" style={{ left: `${binding.defaultValue * 100}%` }} />}
 ```
 
-- [ ] **Step 6: Styles**
+- [x] **Step 6: Styles**
 
 In `src/ui/theme.css`:
 1. The `.tabs` comment (line 423) `/* six two-character tabs: ≥ 60 px each at 375 pt */` → `/* up to 8 tabs (v0.4 roadmap §2.1): (375 − 12)/8 = 45.4 pt each, still ≥ 44 pt — never a 9th */`.
@@ -5046,12 +5046,12 @@ In `src/ui/theme.css`:
 }
 ```
 
-- [ ] **Step 7: Run tests, typecheck, build**
+- [x] **Step 7: Run tests, typecheck, build**
 
 Run: `npx vitest run src/ui/icons.adjust.test.ts src/ui/panelModel.test.ts && npm run typecheck && npm run build`
 Expected: PASS; `tsc` exits 0; `vite build` succeeds.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/ui/icons.tsx src/ui/components/BeautyPanel.tsx src/ui/components/Slider.tsx src/ui/theme.css src/ui/icons.adjust.test.ts

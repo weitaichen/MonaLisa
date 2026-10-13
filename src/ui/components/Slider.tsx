@@ -181,9 +181,9 @@ export function SliderRow({ binding, onChange, onCommit, float, emptyText }: Pro
           onCommit(nv);
         }}
       >
-        <div class="slider-track" ref={trackRef}>
+        <div class={`slider-track${binding.track ? ` track-${binding.track}` : ''}`} ref={trackRef}>
           <div class="slider-fill" style={fill} />
-          {bi ? <div class="slider-tick" /> : <div class="slider-def" style={{ left: `${binding.defaultValue * 100}%` }} />}
+          {bi ? <div class="slider-tick" /> : binding.hideDefault ? null : <div class="slider-def" style={{ left: `${binding.defaultValue * 100}%` }} />}
           <div class="slider-thumb" style={{ left: `${pct}%` }} />
           <div class={`slider-bubble num${bubble ? ' show' : ''}`} style={{ left: `${pct}%` }}>
             {text}

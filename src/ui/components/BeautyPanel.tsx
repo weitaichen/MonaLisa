@@ -1,16 +1,20 @@
-// BeautyPanel (spec §7.3): tab row 一鍵 · 美膚 · 美型 · 美體 · 濾鏡 · 美妝 over a horizontal item strip.
+// BeautyPanel (spec §7.3): tab row 一鍵 · 美膚 · 美型 · 美體 · 濾鏡 · 美妝 · 調節 over a horizontal item strip.
 // The value slider (and the 增高 band overlay) are rendered by the screen (floating in Camera, docked in Editor).
+import { Fragment } from 'preact';
 import { useLayoutEffect, useRef } from 'preact/hooks';
 import type { Lens } from '../../edit/lens';
-import type { EditState } from '../../types';
+import type { EditState, LookId } from '../../types';
 import { Icon } from '../icons';
 import {
   activate,
   bodyNoteFor,
   itemsFor,
-  MAKEUP_PARTS,
+  leadChip,
+  partButtons,
   partHasValue,
   personNote,
+  photoTabLabel,
+  selectPart,
   tabHasValue,
   TABS,
   tapToast,
@@ -45,15 +49,20 @@ interface Props {
    * 背景保護 adds 「{label}套用於整張照片」 (S §2.4). Omitted (the camera) → no first-touch toast
    */
   photoTouched?: Set<string>;
+  /** the 質感 LUT of this look failed to load (a re-tap of the selected look then retries it) */
+  lookFailed?: (id: LookId) => boolean;
+  /** the tapped look is selected but its LUT failed to load: retry it (step-2 spec §2.2; no edit, no undo step) */
+  onRetryLook?(id: LookId): void;
   id?: string;
 }
 
 /** tabs whose effects need a detected face */
 export const FACE_TABS: readonly TabId[] = ['shape', 'makeup'];
 
-export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, body, photoTouched, id }: Props) {
+export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, body, photoTouched, lookFailed, onRetryLook, id }: Props) {
   const stripRef = useRef<HTMLDivElement>(null);
-  const stripKey = sel.tab === 'makeup' ? `makeup.${sel.makeupPart}` : sel.tab;
+  const stripKey =
+    sel.tab === 'makeup' ? `makeup.${sel.makeupPart}` : sel.tab === 'preset' ? `preset.${sel.presetPart}` : sel.tab;
 
   // new tab → start of strip, then bring the selected item into view
   useLayoutEffect(() => {
@@ -69,8 +78,12 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
   }, [stripKey]);
 
   const items = itemsFor(lens, sel, body);
-  // photo-level face note (no face, 基本模式, tracker health) first; then the selected person's (S §2.4, U5)
-  const pNote = personNote(sel.tab, lens);
+  const look = lens.look();
+  const parts = partButtons(sel, { makeupOn: (p) => partHasValue(lens, p), look });
+  const lead = leadChip(sel, look);
+  // photo-level face note (no face, 基本模式, tracker health) first; then the selected person's (S §2.4, U5);
+  // 調節 and 一鍵 › 質感 act on the whole photo: no per-person strip note (step-2 spec §2.2)
+  const pNote = photoTabLabel(sel) ? null : personNote(sel.tab, lens);
   const offText = faceNote ?? (pNote?.dim ? pNote.text : null);
   const faceOff = !!offText && FACE_TABS.includes(sel.tab);
   const infoNote = !faceOff && pNote && !pNote.dim ? pNote.text : null;
@@ -78,13 +91,14 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
   const bodyOff = body?.status === 'unsupported';
 
   const tapItem = (item: PanelItem) => {
-    const r = activate(item, lens, sel);
+    const r = activate(item, lens, sel, { lookFailed });
     const text = tapToast(item, lens, r, photoTouched);
     // a notice keeps its longer stay; the first-touch line alone stays as long as the slider's (toast's default)
     if (text) toast(text, r.notice ? (item.disabled ? 2600 : 3200) : undefined);
+    if (r.retryLook) onRetryLook?.(r.retryLook);
     if (!r.changed) return;
     const a = item.action.type;
-    if (a === 'preset' || a === 'reset' || a === 'protect') haptic();
+    if (a === 'preset' || a === 'reset' || a === 'protect' || a === 'look') haptic();
     if (r.sel !== sel) onSel(r.sel);
     if (r.edit !== lens.edit) onEdit(r.edit);
   };
@@ -110,60 +124,70 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
             </p>
           )}
           {note && <StripBodyNote note={note} />}
-          {sel.tab === 'makeup' && (
+          {parts && (
             <>
-              {MAKEUP_PARTS.map((p) => {
-                const on = partHasValue(lens, p.id);
-                const active = sel.makeupPart === p.id;
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    class={`item part${active ? ' selected' : ''}${on ? ' has-value' : ''}`}
-                    aria-pressed={active}
-                    onClick={() => {
-                      if (active) return;
-                      haptic();
-                      onSel({ ...sel, makeupPart: p.id });
-                    }}
-                  >
-                    <span class="item-tile">
-                      <Icon name={p.id} />
-                    </span>
-                    <span class="item-label">{p.label}</span>
-                    <span class="item-dot" />
-                  </button>
-                );
-              })}
+              {parts.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  class={`item part${p.active ? ' selected' : ''}${p.hasValue ? ' has-value' : ''}`}
+                  aria-pressed={p.active}
+                  onClick={() => {
+                    if (p.active) return;
+                    haptic();
+                    onSel(selectPart(sel, p.id));
+                  }}
+                >
+                  <span class="item-tile">
+                    <Icon name={p.icon} />
+                  </span>
+                  <span class="item-label">{p.label}</span>
+                  <span class="item-dot" />
+                </button>
+              ))}
               <span class="strip-divider" />
             </>
           )}
-          {items.map((item) => (
+          {lead && (
             <button
-              key={`${stripKey}:${item.key}`}
               type="button"
-              role="option"
-              aria-selected={item.selected}
-              aria-disabled={faceOff || item.disabled ? 'true' : undefined}
-              aria-pressed={item.pressed}
-              aria-description={item.disabled ? (item.reason ?? undefined) : item.badge ? '整張照片' : undefined}
-              class={`item${item.selected ? ' selected' : ''}${item.hasValue ? ' has-value' : ''}${item.disabled ? ' disabled' : ''}${
-                item.pressed === undefined ? '' : item.pressed ? ' switchable on' : ' switchable'
-              }`}
-              onClick={() => tapItem(item)}
+              class="lead-chip"
+              onClick={() => {
+                haptic();
+                onSel(lead.target);
+              }}
             >
-              <span class="item-tile">
-                <ItemVisual item={item} />
-                {item.pressed !== undefined && <i class="item-switch" aria-hidden="true" />}
-                {item.badge && (
-                  <span class="item-badge" aria-hidden="true">
-                    {item.badge}
-                  </span>
-                )}
-              </span>
-              <span class="item-label">{item.label}</span>
-              <span class="item-dot" />
+              {lead.label}
             </button>
+          )}
+          {items.map((item) => (
+            <Fragment key={`${stripKey}:${item.key}`}>
+              {item.divider === 'before' && <span class="strip-divider" aria-hidden="true" />}
+              <button
+                type="button"
+                role="option"
+                aria-selected={item.selected}
+                aria-disabled={faceOff || item.disabled ? 'true' : undefined}
+                aria-pressed={item.pressed}
+                aria-description={item.disabled ? (item.reason ?? undefined) : item.badge ? '整張照片' : undefined}
+                class={`item${item.selected ? ' selected' : ''}${item.hasValue ? ' has-value' : ''}${item.disabled ? ' disabled' : ''}${
+                  item.pressed === undefined ? '' : item.pressed ? ' switchable on' : ' switchable'
+                }`}
+                onClick={() => tapItem(item)}
+              >
+                <span class="item-tile">
+                  <ItemVisual item={item} />
+                  {item.pressed !== undefined && <i class="item-switch" aria-hidden="true" />}
+                  {item.badge && (
+                    <span class="item-badge" aria-hidden="true">
+                      {item.badge}
+                    </span>
+                  )}
+                </span>
+                <span class="item-label">{item.label}</span>
+                <span class="item-dot" />
+              </button>
+            </Fragment>
           ))}
         </div>
         <div class="tabs" role="tablist">
@@ -231,17 +255,17 @@ function StripBodyNote({ note }: { note: BodyNote }) {
 
 function ItemVisual({ item }: { item: PanelItem }) {
   const v = item.visual;
-  if (v.kind === 'thumb') return <Thumb src={v.src} />;
+  if (v.kind === 'thumb') return <Thumb src={v.src} fallback={v.fallback ?? 'filter'} />;
   if (v.kind === 'swatch')
     return <span class={`swatch${v.color ? '' : ' orig'}`} style={v.color ? { background: v.color } : undefined} />;
   return <Icon name={v.icon} />;
 }
 
-/** Filter thumbnail over the filter icon, so a missing PNG degrades to the icon instead of a hole. */
-function Thumb({ src }: { src: string }) {
+/** Thumbnail over an icon (the filter icon, or the look icon), so a missing PNG degrades to the icon instead of a hole. */
+function Thumb({ src, fallback }: { src: string; fallback: string }) {
   return (
     <>
-      <Icon name="filter" />
+      <Icon name={fallback} />
       <img
         src={src}
         alt=""

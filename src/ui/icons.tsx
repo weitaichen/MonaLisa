@@ -240,6 +240,81 @@ const P: Record<string, JSX.Element> = {
       <circle cx="9" cy="17" r="2" />
     </>
   ),
+  // ── 調節 (v0.4 step 2) ──
+  brightness: (
+    <>
+      <circle cx="12" cy="12" r="4.2" />
+      <path d="M12 3v2.4M12 18.6V21M3 12h2.4M18.6 12H21M5.6 5.6l1.7 1.7M16.7 16.7l1.7 1.7M5.6 18.4l1.7-1.7M16.7 7.3l1.7-1.7" />
+      <path d="M12 7.8v8.4" />
+    </>
+  ),
+  exposure: (
+    <>
+      <rect x="3.8" y="3.8" width="16.4" height="16.4" rx="3" />
+      <path d="M4.6 19.4 19.4 4.6M7 8.6h4M9 6.6v4M13.2 15.6h4" />
+    </>
+  ),
+  contrast: (
+    <>
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 4v16M12 7h3.8M12 10h7.2M12 13h7.2M12 16h4.2" />
+    </>
+  ),
+  highlights: <path d="M5 17h14M8 17a4 4 0 0 1 8 0M12 6.5v2.2M6.3 9.3l1.5 1.5M17.7 9.3l-1.5 1.5" />,
+  shadows: <path d="M5 7h14M8 7a4 4 0 0 0 8 0M12 17.5v-2.2M6.3 14.7l1.5-1.5M17.7 14.7l-1.5-1.5" />,
+  temperature: (
+    <>
+      <path d="M10 14.2V5.5a2 2 0 0 1 4 0v8.7a4 4 0 1 1-4 0Z" />
+      <path d="M12 9v7" />
+    </>
+  ),
+  tint: (
+    <>
+      <circle cx="12" cy="12" r="7.8" />
+      <path d="M6.5 17.5 17.5 6.5" />
+      <circle cx="9" cy="9" r="1.2" />
+      <circle cx="15" cy="15" r="1.2" />
+    </>
+  ),
+  saturation: (
+    <>
+      <circle cx="12" cy="8.8" r="4.6" />
+      <circle cx="8.8" cy="14.6" r="4.6" />
+      <circle cx="15.2" cy="14.6" r="4.6" />
+    </>
+  ),
+  vibrance: (
+    <>
+      <circle cx="10.5" cy="13.5" r="6" />
+      <path d="M18 3.6c.4 2 1.1 2.7 3 3-1.9.3-2.6 1-3 3-.4-2-1.1-2.7-3-3 1.9-.3 2.6-1 3-3Z" />
+    </>
+  ),
+  fade: (
+    <>
+      <rect x="4" y="4" width="16" height="16" rx="3" />
+      <path d="M8 8h8M8 12h5.5M8 16h3" />
+    </>
+  ),
+  grain: (
+    <>
+      <rect x="3.6" y="3.6" width="16.8" height="16.8" rx="3" />
+      <path d="M8 8h.01M12 8h.01M16 8h.01M10 12h.01M14 12h.01M8 16h.01M12 16h.01M16 16h.01" />
+    </>
+  ),
+  vignette: (
+    <>
+      <rect x="3.6" y="5" width="16.8" height="14" rx="3" />
+      <ellipse cx="12" cy="12" rx="5.4" ry="4" />
+    </>
+  ),
+  // 一鍵 › 質感 part button and the look thumbnail fallback
+  look: (
+    <>
+      <rect x="4" y="6" width="16" height="12" rx="2" />
+      <path d="M4 9.5h2M4 14.5h2M18 9.5h2M18 14.5h2" />
+      <path d="M12 9.2c.3 1.5.8 2 2.3 2.3-1.5.3-2 .8-2.3 2.3-.3-1.5-.8-2-2.3-2.3 1.5-.3 2-.8 2.3-2.3Z" />
+    </>
+  ),
   // ── chrome ──
   close: <path d="M6.2 6.2 17.8 17.8M17.8 6.2 6.2 17.8" />,
   back: <path d="M14.8 5.4 8.2 12l6.6 6.6" />,

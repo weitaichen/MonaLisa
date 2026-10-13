@@ -4064,7 +4064,7 @@ EOF
 - Consumes: Task 4 (`writeExportGuard`, `clearExportGuard`, `ExportGuard`, `ExportDebugKnob`), Task 5 (`outputFileName`, `createSurface`; `importPhoto`), Task 8 (`Engine.renderTile`, `releaseBuffers`, `RenderInput.output/sourceWindow/oAspect`), Task 9 (`ExportPlan`, `TileJob`), Task 1 (`snapCrop`, `IDENTITY_GEOMETRY`).
 - Produces: `type TileInputBase = Omit<RenderInput, 'source' | 'width' | 'height' | 'sourceWindow' | 'output'>`; `interface TileRenderer { renderTile(input: RenderInput, read: PxRect): ImageData; releaseBuffers(): void }` (an `Engine` is one); `interface OutputCanvas { put(img: ImageData, x: number, y: number): void; encode(quality?: number): Promise<Blob>; release(): void }`; `interface RunnerDeps { decode(blob, maxLongEdge): Promise<ImageBitmap>; crop(full, r: PxRect): Promise<ImageBitmap>; createCanvas(w, h, type: 'image/jpeg' | 'image/png'): OutputCanvas; nextFrame(): Promise<void>; sleep(ms): Promise<void>; writeGuard(g: ExportGuard): void; clearGuard(): void }`; `browserRunnerDeps: RunnerDeps`; `class ExportError extends Error { kind: 'aspect' | 'size' | 'knob' }`; `interface RunOptions { signal: AbortSignal; onProgress?(fraction: number): void; working: Size; knob?: ExportDebugKnob }`; `runTiledExport(renderer: TileRenderer, sourceBlob: Blob, plan: ExportPlan, input: TileInputBase, opts: RunOptions, deps?: RunnerDeps): Promise<File>`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/media/exportFull.test.ts`:
 
@@ -4205,12 +4205,12 @@ describe('runTiledExport (S §4.4)', () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to see them fail**
+- [x] **Step 2: Run the tests to see them fail**
 
 Run: `npx vitest run src/media/exportFull.test.ts`
 Expected: FAIL — `Failed to resolve import "./exportFull"`.
 
-- [ ] **Step 3: Implement `src/media/exportFull.ts`**
+- [x] **Step 3: Implement `src/media/exportFull.ts`**
 
 ```ts
 // Tiled full-resolution export (step-3 spec §4.4 runner): decode the source at the plan's size, render each tile through
@@ -4400,12 +4400,12 @@ export async function runTiledExport(
 }
 ```
 
-- [ ] **Step 4: Run the tests to see them pass**
+- [x] **Step 4: Run the tests to see them pass**
 
 Run: `npx vitest run src/media/exportFull.test.ts`
 Expected: PASS (9 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/media/exportFull.ts src/media/exportFull.test.ts

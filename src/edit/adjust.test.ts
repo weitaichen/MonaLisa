@@ -96,6 +96,14 @@ describe('the lens routes 調節 and 質感 to the photo (C §3.3)', () => {
     const reset = lensFor(dirty, { kind: 'all' }, persons, 'f0').resetGroup('adjust');
     expect(reset).toEqual(resetAdjust(dirty));
     expect(reset.photo.look).toEqual({ id: 'cinema', amount: 0.6 });
+    // a person selection in a group photo (the editor's default): ⊘ still resets the whole 調節 tab (step-2 spec §3.4)
+    const bySel = lensFor(dirty, { kind: 'person', id: 'f1' }, persons, 'f0').resetGroup('adjust');
+    expect(bySel.photo.values['adjust.vignette']).toBe(0);
+    expect(bySel).toEqual(resetAdjust(dirty));
+    expect(bySel.photo.look).toEqual({ id: 'cinema', amount: 0.6 });
+    // resetGroup('adjust') is resetAdjust itself: a neutral photo comes back as the same object
+    const clean = two();
+    expect(lensFor(clean, { kind: 'all' }, persons, 'f0').resetGroup('adjust')).toBe(clean);
   });
 
   it('a beauty preset never touches 調節 or the look (C §3.4)', () => {

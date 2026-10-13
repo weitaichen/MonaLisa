@@ -959,7 +959,7 @@ EOF
 - Consumes (Task 1): `cropFits`, `cropValid`, `eSize`, `lockAspect`, `minCrop`, `CropLock`, `transposeLock`.
 - Produces: `type Corner = 'tl'|'tr'|'bl'|'br'`; `type Edge = 'top'|'bottom'|'left'|'right'`; `dragCorner(start: Geometry, corner: Corner, d: Vec2, lock: CropLock, oSize: Size): Geometry`; `dragEdge(start, edge: Edge, d: Vec2, oSize): Geometry`; `dragMove(start, d: Vec2, oSize): Geometry`; re-exports `CropLock`, `lockAspect`, `transposeLock` (S §3.8 lists them here; they live in `view.ts` because `applyRatio`/`lockFor` need them, which avoids an import cycle). `d` is the finger delta in the plane, normalized to the E frame (stage px ÷ `eBox.w`/`eBox.h`).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/geometry/cropModel.test.ts`:
 
@@ -1054,12 +1054,12 @@ describe('crop gestures (fuzzed)', () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to see them fail**
+- [x] **Step 2: Run the tests to see them fail**
 
 Run: `npx vitest run src/geometry/cropModel.test.ts`
 Expected: FAIL — `Failed to resolve import "./cropModel"`.
 
-- [ ] **Step 3: Implement `src/geometry/cropModel.ts`**
+- [x] **Step 3: Implement `src/geometry/cropModel.ts`**
 
 ```ts
 // Crop box gestures in 裁切 mode (S §2.1, §3.3): pure reducers from the geometry at gesture start and the finger delta in
@@ -1177,12 +1177,12 @@ export function dragMove(start: Geometry, d: Vec2, oSize: Size): Geometry {
 }
 ```
 
-- [ ] **Step 4: Run the tests to see them pass**
+- [x] **Step 4: Run the tests to see them pass**
 
 Run: `npx vitest run src/geometry/cropModel.test.ts`
 Expected: PASS (5 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/geometry/cropModel.ts src/geometry/cropModel.test.ts

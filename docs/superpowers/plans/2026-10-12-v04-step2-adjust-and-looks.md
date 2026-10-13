@@ -1206,7 +1206,7 @@ git commit -m "v0.4 step 2: adjustMath constants and the deterministic grain has
   - `adjustRgb(rgb: readonly number[], u: AdjustUniforms, uv: readonly [number, number]): [number, number, number]`
   - `adjustWanted(values: AdjustValues, look: { id: string } | null): boolean`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/engine/adjustMath.test.ts`:
 
@@ -1514,12 +1514,12 @@ describe('picture frame and grain size (step-2 spec §4.4–4.5)', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run src/engine/adjustMath.test.ts`
 Expected: FAIL — `adjustRgb` (and the other new names) are not exported.
 
-- [ ] **Step 3: Append the stages to `src/engine/adjustMath.ts`**
+- [x] **Step 3: Append the stages to `src/engine/adjustMath.ts`**
 
 Change the type import at the top to `import type { AdjustId, LookDef, Rect } from '../types';` and append:
 
@@ -1877,12 +1877,12 @@ export function adjustWanted(values: AdjustValues, look: { id: string } | null):
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run src/engine/adjustMath.test.ts src/engine/adjustMath.grain.test.ts && npm run typecheck`
 Expected: PASS. The tolerances were checked against this exact code while writing the plan (亮度 mid 0.6527 / 0.3243; 曝光 ratio 2.0000 / 0.5000; vibrance skin/non-skin gain ratio 0.46; 褪色 40.8 / 244.8; vignette corner exactly 0.3^(1/2.2); grain std ratio 2.000; ±0.1-unit continuity ≤ 1 level for all 21 directions).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/engine/adjustMath.ts src/engine/adjustMath.test.ts

@@ -129,3 +129,24 @@ describe('createEngine: 美體 field', () => {
     expect(lastJob().body).toBeNull();
   });
 });
+
+describe('createEngine: the frame job’s 調節 (step-2 spec §4.1)', () => {
+  const lastJob = (): FrameJob => {
+    const pipe = vi.mocked(createPipeline).mock.results.at(-1)!.value as { run: { mock: { calls: [FrameJob][] } } };
+    return pipe.run.mock.calls.at(-1)![0];
+  };
+
+  it('a neutral photo keeps the 調節 program off; a user 調節 value turns it on, with no 質感 LUT bound', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    const frame = legacyFrame(defaultParams(), null, 0);
+    engine.render({ source: {} as TexImageSource, width: 640, height: 480, ...frame });
+    expect(lastJob().adjust.on).toBe(false);
+    expect(lastJob().lookLut).toBeNull();
+    const photo = { ...frame.photo, values: { ...frame.photo.values, 'adjust.contrast': 0.8 } };
+    engine.render({ source: {} as TexImageSource, width: 640, height: 480, ...frame, photo });
+    expect(lastJob().adjust).toMatchObject({ on: true, adjustOn: true, curveOn: true, lookAmt: 0 });
+    expect(lastJob().lookLut).toBeNull();
+  });
+});

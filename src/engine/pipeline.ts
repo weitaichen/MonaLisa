@@ -9,8 +9,11 @@
 // only; the reshape pass uploads it as an array layer on version change, like the body field).
 // v0.4 (S §4): every listed face (≤ MAX_RENDER_FACES) through mask, makeup and the face-table reshape, capped by its
 // neighbours and the obstacles; one face is v0.3's frame.
+// P5 has two programs (step 2): the base composite and the 調節 one (質感 LUT + 調節 stages), compiled on first need.
 import { FACE_TABLE_CARRIER } from '../config/limits';
 import type { BodyField, Face, FaceProtect, PhotoParams } from '../types';
+import type { AdjustUniforms } from './adjustMath';
+import { createCompositePrograms, uploadAdjust } from './compositePrograms';
 import {
   bindTarget,
   bindTexture,
@@ -22,7 +25,6 @@ import {
   drawFullscreen,
   type Framebuffer,
   type GL,
-  hexToRgb,
   type Program,
   resizeFramebuffer,
   setUnpackState,
@@ -33,7 +35,7 @@ import { createMakeupPass, makeupActive, type MakeupPass, type MakeupUniforms } 
 import { createMaskPass, type MaskPass } from './passes/mask';
 import { createLandmarkOverlay, type LandmarkOverlay } from './passes/overlay';
 import { createReshapePass, reshapeActive, type ReshapePass, type ReshapeUniforms } from './passes/reshape';
-import { COMPOSITE_FS, COMPOSITE_UNITS } from './shaders/composite';
+import { COMPOSITE_UNITS } from './shaders/composite';
 import { MEAN_FS, MEAN_VS } from './shaders/mean';
 import { PRESENT_FS, PRESENT_VS } from './shaders/present';
 import {
@@ -43,7 +45,6 @@ import {
   needsMean,
   presentScale,
   sharpenTexel,
-  ROSY_TINT,
   type Size,
   type SkinUniforms,
 } from './uniforms';
@@ -94,6 +95,10 @@ export interface FrameJob {
   /** null until the GPUPixel LUTs are uploaded (whitening is skipped meanwhile) */
   luts: StaticLuts | null;
   filterLut: Texture | null;
+  /** 調節 + 質感 uniforms of this frame (adjustUniforms); `on` picks the 調節 program */
+  adjust: AdjustUniforms;
+  /** the resident 質感 LUT (unit 8), or null: none, or still loading (then the look is not drawn at all) */
+  lookLut: Texture | null;
   matchGpupixel: boolean;
   /** 'canvas' presents (flip Y); 'fbo' renders top-row-first into a free buffer for readPixels */
   target: 'canvas' | 'fbo';
@@ -118,6 +123,8 @@ export interface PassPlanInput {
   reshapeActive: boolean;
   /** a valid body field will be applied */
   bodyOn: boolean;
+  /** the frame needs the 調節 program (FrameJob.adjust.on) */
+  adjustOn: boolean;
 }
 
 export interface PassPlan {
@@ -125,6 +132,8 @@ export interface PassPlan {
   makeup: boolean;
   reshape: boolean;
   mean: boolean;
+  /** P5 draws with the 調節 program (when it compiled; else the base program) */
+  adjust: boolean;
 }
 
 /**
@@ -143,12 +152,15 @@ export function planPasses(i: PassPlanInput): PassPlan {
     makeup: faceOn && i.makeupActive && i.makeupReady,
     reshape: (faceOn && i.reshapeActive) || i.bodyOn,
     mean,
+    adjust: i.adjustOn,
   };
 }
 
 /** run()'s plan of a frame job (pure): the faces with weight > 0 drive the face passes, the clear keeps the mask on */
 export function planFrame(
-  job: { faces: readonly Pick<FrameFace, 'weight' | 'makeup' | 'reshape'>[] } & Pick<FrameJob, 'maskClear' | 'matchGpupixel' | 'skin'>,
+  job: { faces: readonly Pick<FrameFace, 'weight' | 'makeup' | 'reshape'>[] } & Pick<FrameJob, 'maskClear' | 'matchGpupixel' | 'skin'> & {
+    adjust: { on: boolean };
+  },
   makeupReady: boolean,
   bodyOn: boolean,
 ): PassPlan {
@@ -162,6 +174,7 @@ export function planFrame(
     makeupReady,
     reshapeActive: live.some((f) => reshapeActive(f.reshape)),
     bodyOn,
+    adjustOn: job.adjust.on,
   });
 }
 
@@ -196,6 +209,8 @@ export interface Pipeline {
    * silently drawing without it on the first frame.
    */
   preloadMakeup(): Promise<void>;
+  /** the 調節 program failed to compile on this context */
+  readonly adjustFailed: boolean;
   /** `lost` = context already lost: drop references without issuing GL calls. */
   dispose(lost?: boolean): void;
 }
@@ -279,24 +294,14 @@ export function bodyUploadNeeded(prev: BodyUploadKey | null, f: BodyField): bool
 
 export function createPipeline(gl: GL): Pipeline {
   const meanProg = createProgram(gl, MEAN_VS, MEAN_FS, 'mean');
-  const compProg = createProgram(gl, PRESENT_VS, COMPOSITE_FS, 'composite');
+  const comp = createCompositePrograms(gl);
   const presentProg = createProgram(gl, PRESENT_VS, PRESENT_FS, 'present');
-  const programs: Program[] = [meanProg, compProg, presentProg];
+  const programs: Program[] = [meanProg, presentProg];
 
   meanProg.use();
   gl.uniform1i(meanProg.u('uSrc'), 0);
   presentProg.use();
   gl.uniform1i(presentProg.u('uSrc'), 0);
-  compProg.use();
-  gl.uniform1i(compProg.u('uSrc'), COMPOSITE_UNITS.src);
-  gl.uniform1i(compProg.u('uMean'), COMPOSITE_UNITS.mean);
-  gl.uniform1i(compProg.u('uMask'), COMPOSITE_UNITS.mask);
-  gl.uniform1i(compProg.u('uLookupGray'), COMPOSITE_UNITS.gray);
-  gl.uniform1i(compProg.u('uLookupOrigin'), COMPOSITE_UNITS.origin);
-  gl.uniform1i(compProg.u('uLookupSkin'), COMPOSITE_UNITS.skin);
-  gl.uniform1i(compProg.u('uLookupLight'), COMPOSITE_UNITS.light);
-  gl.uniform1i(compProg.u('uFilterLut'), COMPOSITE_UNITS.filter);
-  gl.uniform3fv(compProg.u('uRosyTint'), hexToRgb(ROSY_TINT));
 
   // 1×1 white stand-in for samplers the current frame does not use (avoids unbound-unit sampling).
   const white = createTexture(gl, 1, 1);
@@ -467,7 +472,9 @@ export function createPipeline(gl: GL): Pipeline {
       const luts = job.luts;
       const whiten = luts ? job.skin.whiten : 0;
       const filterAmt = job.filterLut ? job.skin.filterAmount : 0;
-      compProg.use();
+      const prog = comp.pick(plan.adjust);
+      const drawsAdjust = prog !== comp.base;
+      prog.use();
       bindTexture(gl, COMPOSITE_UNITS.src, base);
       bindTexture(gl, COMPOSITE_UNITS.mean, meanTex);
       bindTexture(gl, COMPOSITE_UNITS.mask, maskTex ?? white);
@@ -476,20 +483,27 @@ export function createPipeline(gl: GL): Pipeline {
       bindTexture(gl, COMPOSITE_UNITS.skin, luts ? luts.skin : white);
       bindTexture(gl, COMPOSITE_UNITS.light, luts ? luts.light : white);
       bindTexture(gl, COMPOSITE_UNITS.filter, filterAmt > 0 && job.filterLut ? job.filterLut : white);
-      gl.uniform2fv(compProg.u('uTexel'), sharpenTexel(job.size));
-      gl.uniform1f(compProg.u('uSmooth'), plan.mean ? job.skin.smooth : 0);
-      gl.uniform1f(compProg.u('uSharpen'), job.skin.sharpen);
-      gl.uniform1f(compProg.u('uWhiten'), whiten);
-      gl.uniform1f(compProg.u('uRosy'), plan.mean ? job.skin.rosy : 0);
-      gl.uniform1f(compProg.u('uFilterAmt'), filterAmt);
-      gl.uniform1f(compProg.u('uMaskOn'), maskTex ? 1 : 0);
-      gl.uniform2fv(compProg.u('uOut'), presentScale(job.target === 'canvas', job.mirror));
+      if (drawsAdjust) bindTexture(gl, COMPOSITE_UNITS.look, job.lookLut ?? white);
+      gl.uniform2fv(prog.u('uTexel'), sharpenTexel(job.size));
+      gl.uniform1f(prog.u('uSmooth'), plan.mean ? job.skin.smooth : 0);
+      gl.uniform1f(prog.u('uSharpen'), job.skin.sharpen);
+      gl.uniform1f(prog.u('uWhiten'), whiten);
+      gl.uniform1f(prog.u('uRosy'), plan.mean ? job.skin.rosy : 0);
+      gl.uniform1f(prog.u('uFilterAmt'), filterAmt);
+      gl.uniform1f(prog.u('uMaskOn'), maskTex ? 1 : 0);
+      gl.uniform2fv(prog.u('uOut'), presentScale(job.target === 'canvas', job.mirror));
+      if (drawsAdjust) uploadAdjust(gl, prog, job.adjust, job.lookLut !== null);
       drawFullscreen(gl);
       passes.push('composite');
+      if (drawsAdjust) passes.push('adjust');
 
       // Leave no FBO texture bound on a unit, so later passes never form a feedback loop by accident.
-      for (let unit = 0; unit < 8; unit++) bindTexture(gl, unit, null);
+      for (let unit = 0; unit < 9; unit++) bindTexture(gl, unit, null);
       return { passes, output };
+    },
+
+    get adjustFailed() {
+      return comp.adjustFailed;
     },
 
     drawSource(src, mirror) {
@@ -517,6 +531,7 @@ export function createPipeline(gl: GL): Pipeline {
     dispose(lost = false) {
       if (!lost) {
         for (const p of programs) p.dispose();
+        comp.dispose();
         deleteTexture(gl, white);
         for (const f of Object.values(fbs)) deleteFramebuffer(gl, f);
         mask?.dispose();

@@ -204,7 +204,7 @@ describe('the camera frame on tracks: liveFrame → skinMaxima → planFrame (S 
     const m = skinMaxima(f.faces.map((x) => ({ weight: x.weight, smooth: x.person.values['skin.smooth'], rosy: x.person.values['skin.rosy'] })), f.globalSkin);
     const skin = skinUniformsFor(f.photo, m.S, m.R, false);
     const faces = f.faces.map((x) => ({ weight: x.weight, reshape: reshapeUniforms(x.person.values, x.weight), makeup: makeupUniformsFor(x.person, x.weight) }));
-    const plan = planFrame({ faces, maskClear: m.clear, matchGpupixel: false, skin }, true, false);
+    const plan = planFrame({ faces, maskClear: m.clear, matchGpupixel: false, skin, adjust: { on: false } }, true, false);
     // without a mask pass the composite reads the white texture (mask 1); with one, the clear outside every face
     const bg = [plan.mask ? skin.smooth * m.clear[0] : skin.smooth, plan.mask ? skin.rosy * m.clear[1] : skin.rosy];
     return { f, m, plan, bg };

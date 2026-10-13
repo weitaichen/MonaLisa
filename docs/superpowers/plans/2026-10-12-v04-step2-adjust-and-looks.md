@@ -2416,12 +2416,12 @@ git commit -m "v0.4 step 2: 調節 composite variant, CPU port and hash pins (ba
   - `Pipeline.adjustFailed: boolean` (getter)
   - the frame's `passes` gain `'adjust'` (right after `'composite'`) exactly when the 調節 program drew
 
-- [ ] **Step 0: Confirm the step-1 shapes**
+- [x] **Step 0: Confirm the step-1 shapes**
 
 Run: `grep -n "export interface FrameJob\|export interface PassPlanInput\|export interface PassPlan\b\|compProg\|for (let unit" src/engine/pipeline.ts; grep -n "function job" -A30 src/engine/index.ts | head -40`
 Expected: `compProg` is created and its samplers set (`pipeline.ts:282, 290-299` at `9eec432`), drawn at the end of `run()`; `run()` plans the frame through `planFrame(job, makeupReady, body !== null)` (`:406`), which builds the `planPasses` input; `job()` returns the `FrameJob`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/engine/compositePrograms.test.ts`:
 
@@ -2537,12 +2537,12 @@ describe('planPasses: the 調節 program (step-2 spec §4.1)', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run src/engine/compositePrograms.test.ts src/engine/pipeline.test.ts`
 Expected: FAIL — `Failed to resolve import "./compositePrograms"`; `adjust` is `undefined` in the plan.
 
-- [ ] **Step 3: The program pair**
+- [x] **Step 3: The program pair**
 
 Create `src/engine/compositePrograms.ts`:
 
@@ -2634,7 +2634,7 @@ export function uploadAdjust(gl: GL, p: Program, a: AdjustUniforms, lookResident
 }
 ```
 
-- [ ] **Step 4: Use it in the pipeline**
+- [x] **Step 4: Use it in the pipeline**
 
 In `src/engine/pipeline.ts` (CRLF — Edit tool):
 1. Imports: replace `import { COMPOSITE_FS, COMPOSITE_UNITS } from './shaders/composite';` with `import { COMPOSITE_UNITS } from './shaders/composite';`, add `import type { AdjustUniforms } from './adjustMath';` and `import { createCompositePrograms, uploadAdjust } from './compositePrograms';`, and remove `hexToRgb` from the `./gl/gl` import list and `ROSY_TINT` from the `./uniforms` list (both now live in `compositePrograms.ts`; `noUnusedLocals` is on).
@@ -2695,7 +2695,7 @@ In `src/engine/pipeline.ts` (CRLF — Edit tool):
 
 9. In `dispose`, inside `if (!lost) { … }` add `comp.dispose();` after the programs loop.
 
-- [ ] **Step 5: Interim frame job in the engine (user 調節 values; looks follow in Task 8)**
+- [x] **Step 5: Interim frame job in the engine (user 調節 values; looks follow in Task 8)**
 
 In `src/engine/index.ts` add `import { adjustUniforms, frameFor } from './adjustMath';` and add to the object `job()` returns:
 
@@ -2705,21 +2705,21 @@ In `src/engine/index.ts` add `import { adjustUniforms, frameFor } from './adjust
       lookLut: null,
 ```
 
-- [ ] **Step 6: Port the existing plan assertions (mechanical)**
+- [x] **Step 6: Port the existing plan assertions (mechanical)**
 
 In `src/engine/pipeline.test.ts`: add `adjustOn: false,` to the shared `base: PassPlanInput` object, and add `adjust: false` to every object literal passed to `toEqual(...)` on a `planPasses(...)` or `planFrame(...)` result (the `toMatchObject` ones need no change). Run `grep -n "plan\(Passes\|Frame\)(.*toEqual" src/engine/pipeline.test.ts` to find them (five `planPasses` lines, three `planFrame` lines at `9eec432`). In the `describe('planFrame …')` block, the local `job(weights, maskClear)` helper gains `adjust: { on: false },`.
 
-- [ ] **Step 7: Run the tests**
+- [x] **Step 7: Run the tests**
 
 Run: `npx vitest run src/engine/compositePrograms.test.ts src/engine/pipeline.test.ts src/engine/index.test.ts && npm run typecheck`
 Expected: PASS; `tsc` exits 0.
 
-- [ ] **Step 8: Prove neutral frames still use the base program end to end**
+- [x] **Step 8: Prove neutral frames still use the base program end to end**
 
 Run: `npm run build && npx playwright test tests/e2e/engine.spec.ts tests/e2e/parity.spec.ts`
 Expected: PASS (no case of either spec sets a 調節 value, so their pass lists and pixels are step 1's).
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add src/engine/compositePrograms.ts src/engine/compositePrograms.test.ts src/engine/pipeline.ts src/engine/pipeline.test.ts src/engine/index.ts

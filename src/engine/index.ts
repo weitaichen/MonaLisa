@@ -3,6 +3,7 @@
 import { debugState } from '../app/debug';
 import { MAX_RENDER_FACES } from '../config/limits';
 import type { Engine, EngineOptions, RenderInput, RenderStats, Tier } from '../types';
+import { adjustUniforms, frameFor } from './adjustMath';
 import {
   createTexture,
   deleteTexture,
@@ -237,6 +238,9 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       skin: skinUniformsFor(input.photo, m.S, m.R, filterLut !== null),
       luts,
       filterLut,
+      // step 2: user 調節 values only until the LUT cache serves looks (Task 8)
+      adjust: adjustUniforms(input.photo.values, null, false, frameFor(size)),
+      lookLut: null,
       matchGpupixel: options.matchGpupixel,
       target,
       mirror,

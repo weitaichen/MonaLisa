@@ -29,17 +29,18 @@ const base: PassPlanInput = {
   makeupReady: true,
   reshapeActive: true,
   bodyOn: false,
+  adjustOn: false,
 };
 /** no face: the global skin at weight 1 (clear 1) */
 const noFace = { anyFace: false, maskClear: [1, 1] } satisfies Partial<PassPlanInput>;
 
 describe('planPasses', () => {
   it('runs everything with a face and active params', () => {
-    expect(planPasses(base)).toEqual({ mask: true, makeup: true, reshape: true, mean: true });
+    expect(planPasses(base)).toEqual({ mask: true, makeup: true, reshape: true, mean: true, adjust: false });
   });
 
   it('skips every face pass without a face, keeping skin', () => {
-    expect(planPasses({ ...base, ...noFace })).toEqual({ mask: false, makeup: false, reshape: false, mean: true });
+    expect(planPasses({ ...base, ...noFace })).toEqual({ mask: false, makeup: false, reshape: false, mean: true, adjust: false });
   });
 
   it('skips face passes at faceWeight 0', () => {
@@ -47,7 +48,7 @@ describe('planPasses', () => {
   });
 
   it('match-GPUPixel mode disables only the mask', () => {
-    expect(planPasses({ ...base, matchGpupixel: true })).toEqual({ mask: false, makeup: true, reshape: true, mean: true });
+    expect(planPasses({ ...base, matchGpupixel: true })).toEqual({ mask: false, makeup: true, reshape: true, mean: true, adjust: false });
   });
 
   it('skips makeup until its textures are ready, and when inactive', () => {
@@ -76,7 +77,7 @@ describe('planPasses: the mask clear (S §3.3, A2)', () => {
   });
 
   it('the clear turns on no face pass, and no mask in match-GPUPixel mode or without mean', () => {
-    expect(planPasses({ ...base, anyFace: false, maskClear: [0, 0] })).toEqual({ mask: true, makeup: false, reshape: false, mean: true });
+    expect(planPasses({ ...base, anyFace: false, maskClear: [0, 0] })).toEqual({ mask: true, makeup: false, reshape: false, mean: true, adjust: false });
     expect(planPasses({ ...base, anyFace: false, maskClear: [0, 0], matchGpupixel: true }).mask).toBe(false);
     expect(planPasses({ ...base, anyFace: false, maskClear: [0, 0], skin: skinOff }).mask).toBe(false);
   });
@@ -90,24 +91,40 @@ describe('planFrame (run()’s plan of a job)', () => {
     maskClear,
     matchGpupixel: false,
     skin: skinOn,
+    adjust: { on: false },
   });
 
   it('a face with weight drives every face pass', () => {
-    expect(planFrame(job([1, 0], [0, 0]), true, false)).toEqual({ mask: true, makeup: true, reshape: true, mean: true });
+    expect(planFrame(job([1, 0], [0, 0]), true, false)).toEqual({ mask: true, makeup: true, reshape: true, mean: true, adjust: false });
   });
 
   it('two listed faces at weight 0 (the target track lost beside a present face): the mask pass stays on with clear 0', () => {
-    expect(planFrame(job([0, 0], [0, 0]), true, false)).toEqual({ mask: true, makeup: false, reshape: false, mean: true });
+    expect(planFrame(job([0, 0], [0, 0]), true, false)).toEqual({ mask: true, makeup: false, reshape: false, mean: true, adjust: false });
   });
 
   it('no listed face and the global skin at weight 1: no face pass, the white mask', () => {
-    expect(planFrame(job([], [1, 1]), true, false)).toEqual({ mask: false, makeup: false, reshape: false, mean: true });
+    expect(planFrame(job([], [1, 1]), true, false)).toEqual({ mask: false, makeup: false, reshape: false, mean: true, adjust: false });
+  });
+
+  it('the 調節 program follows the job’s adjust.on (step-2 spec §4.1)', () => {
+    expect(planFrame({ ...job([1, 0], [0, 0]), adjust: { on: true } }, true, false)).toEqual({ mask: true, makeup: true, reshape: true, mean: true, adjust: true });
+    expect(planFrame({ ...job([], [1, 1]), adjust: { on: true } }, true, false).adjust).toBe(true);
+  });
+});
+
+describe('planPasses: the 調節 program (step-2 spec §4.1)', () => {
+  it('adjust follows adjustOn exactly and changes no other pass', () => {
+    const off = planPasses({ ...base, adjustOn: false });
+    const on = planPasses({ ...base, adjustOn: true });
+    expect(off.adjust).toBe(false);
+    expect(on.adjust).toBe(true);
+    expect({ ...on, adjust: false }).toEqual(off);
   });
 });
 
 describe('planPasses with a body field', () => {
   it('runs reshape for a body-only frame (no face), but no face pass', () => {
-    expect(planPasses({ ...base, ...noFace, bodyOn: true })).toEqual({ mask: false, makeup: false, reshape: true, mean: true });
+    expect(planPasses({ ...base, ...noFace, bodyOn: true })).toEqual({ mask: false, makeup: false, reshape: true, mean: true, adjust: false });
   });
 
   it('runs reshape at faceWeight 0 and with every face delta 0 when the body is on', () => {

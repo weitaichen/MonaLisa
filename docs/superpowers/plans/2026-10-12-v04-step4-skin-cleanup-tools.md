@@ -1702,7 +1702,7 @@ git commit -m "v0.4 step 4 (5/20): mouth/eye fans, skin and 膚色 regions, R an
   window.runToneMasks(): { w: number; h: number; err: number; R: string; Qwarm: string; Qcool: string } // base64 RGBA8
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/engine/toneRaster.test.ts`:
 ```ts
@@ -1891,14 +1891,14 @@ test('tone masks: the GPU R and Q targets equal the CPU raster of toneGeometry',
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `npx vitest run src/engine/toneRaster.test.ts`
 Expected: FAIL — `Failed to resolve import "./toneRaster.node"`.
 Run: `npm run build && npx playwright test tests/e2e/tone-engine.spec.ts`
 Expected: FAIL — the page does not compile (`createToneMaskPass` missing), so `runToneMasks` never appears (timeout).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/engine/toneRaster.node.ts`:
 ```ts
@@ -2039,14 +2039,14 @@ export function createToneMaskPass(gl: GL): ToneMaskPass {
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/engine/toneRaster.test.ts && npm run typecheck`
 Expected: PASS.
 Run: `npm run build && npx playwright test tests/e2e/tone-engine.spec.ts`
 Expected: `1 passed`; the log prints the three `mean … > 2/255 …` lines.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/engine/passes/toneMask.ts src/engine/toneRaster.node.ts src/engine/toneRaster.test.ts tests/e2e/pages/tone.html tests/e2e/pages/tone.ts tests/e2e/tone-engine.spec.ts

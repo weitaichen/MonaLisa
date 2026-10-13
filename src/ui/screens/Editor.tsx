@@ -28,7 +28,7 @@ import { sanitizeParams } from '../../engine/params';
 import { takePersonsHint } from '../../store/settings';
 import { stableKey } from '../../store/undo';
 import { buildFaceProtect } from '../../tracking/faceProtect';
-import type { BodyField, DetectionCache, EditState, Engine, FaceProtect, PersonId, Selection } from '../../types';
+import type { BodyField, DetectionCache, EditState, Engine, FaceProtect, LookId, PersonId, Selection } from '../../types';
 import { buildFrame } from '../../edit/frame';
 import { lensFor } from '../../edit/lens';
 import { legacyProjection } from '../../edit/legacy';
@@ -772,6 +772,29 @@ export function Editor({ source }: { source: EditorSource }) {
   useLutLoader(bundle?.engine ?? null, edit.photo);
   useAdjustFailureNotice(bundle?.engine ?? null, edit.photo);
 
+  /**
+   * Re-tap of the selected look whose LUT failed (step-2 spec §2.4, §7): retry the load. The still session draws only
+   * when asked and the retry changes no edit, so once it worked redraw and, like a new 美體 field, re-arm the encode /
+   * autosave: the share cache and the saved output were made without the look.
+   */
+  const retryLook = (id: LookId) => {
+    if (!bundle) return;
+    void requestLut(bundle.engine, 'look', id).then((ok) => {
+      const s = sessionRef.current;
+      const e = editRef.current;
+      // (another look picked meanwhile: the edit already redrew and re-armed for that one)
+      if (!ok || !s || unmounted.current || e.photo.look?.id !== id) return;
+      try {
+        s.render(frameOf(e, s));
+      } catch (err) {
+        setFatal(reportError(err, 'session.render'));
+        return;
+      }
+      fieldGen.current++;
+      setFieldTick((n) => n + 1);
+    });
+  };
+
   useEffect(() => {
     if (!session) return;
     try {
@@ -1170,7 +1193,7 @@ export function Editor({ source }: { source: EditorSource }) {
           body={bodyCtx}
           photoTouched={touchedPhoto.current}
           lookFailed={(id) => bundle?.engine.lutState('look', id) === 'failed'}
-          onRetryLook={(id) => bundle && requestLut(bundle.engine, 'look', id)}
+          onRetryLook={retryLook}
         />
       </div>
       <div class="editor-bottom-pad" />

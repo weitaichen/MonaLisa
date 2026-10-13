@@ -1,5 +1,6 @@
+import { test as bare, type Locator, type Page } from '@playwright/test';
 import { PNG } from 'pngjs';
-import { debugState, dragSlider, expect, hold, mad, SAMPLE_FACE, settled, shot, test } from './fixtures';
+import { debugState, decodeDataUrl, dragSlider, expect, grab, hold, importFixture, mad, SAMPLE_FACE, settled, shot, test, type Pixels } from './fixtures';
 
 /** A face-free photo: a soft grey gradient. */
 function noFacePng(width = 600, height = 800): Buffer {
@@ -166,4 +167,73 @@ test('no face in the photo: 美型 / 美妝 are dimmed with a note and no slider
   await expect(note).toHaveCount(0);
   for (const o of await options.all()) await expect(o).not.toHaveAttribute('aria-disabled', 'true');
   await expect(page.getByRole('slider')).toHaveCount(1);
+});
+
+/** the 儲存 fallback's JPEG, decoded at a quarter of its size (enough to tell a look apart) */
+async function savedPhoto(page: Page): Promise<Pixels> {
+  await page.getByRole('button', { name: '儲存' }).click();
+  const fallback = page.getByRole('dialog', { name: '儲存照片' });
+  await expect(fallback).toBeVisible({ timeout: 30_000 });
+  const img = fallback.getByRole('img', { name: '編輯結果' });
+  await expect.poll(() => img.evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
+  const url = await img.evaluate((i: HTMLImageElement) => {
+    const c = document.createElement('canvas');
+    c.width = Math.round(i.naturalWidth / 4);
+    c.height = Math.round(i.naturalHeight / 4);
+    c.getContext('2d')!.drawImage(i, 0, 0, c.width, c.height);
+    return c.toDataURL('image/png');
+  });
+  await fallback.getByRole('button', { name: '關閉' }).click();
+  await expect(fallback).toHaveCount(0);
+  return decodeDataUrl(url);
+}
+
+// the failed LUT request prints the browser's own "Failed to load resource" line: no shared console guard here, and
+// no service worker in between, so page.route sees the LUT request
+bare.describe('a 質感 whose LUT failed', () => {
+  bare.use({ serviceWorkers: 'block' });
+
+  bare('re-tapping it once it can load redraws the preview and 儲存 exports it (step-2 spec §2.4, §7)', async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    const FILM = /\/luts\/looks\/look_film\.png$/;
+    await page.route(FILM, (r) => r.abort());
+    await importFixture(page, SAMPLE_FACE);
+    const frame: Locator = page.locator('.editor-stage .frame');
+    await settled(frame);
+
+    await page.getByRole('tab', { name: '一鍵' }).click();
+    await page.getByRole('button', { name: '質感', exact: true }).click();
+    const film = page.getByRole('option', { name: '膠片', exact: true });
+    await film.click();
+    const notice = page.locator('.toast', { hasText: '無法載入「膠片」質感，請稍後再試' });
+    await expect(notice).toBeVisible();
+    await expect(film).toHaveAttribute('aria-selected', 'true');
+    // (the toast sits over the stage: the frames are compared without it)
+    await expect(notice).toHaveCount(0, { timeout: 10_000 });
+    const without = await settled(frame);
+    // the share cache (and autosave) for this edit, made without the look
+    const savedWithout = await savedPhoto(page);
+    await expect(page.locator('.toast')).toHaveCount(0, { timeout: 10_000 });
+    expect(mad(without, await settled(frame)), 'nothing redraws the failed look by itself').toBeLessThan(0.5);
+
+    // back online: the re-tap retries the load; the preview and the next 儲存 carry the look
+    await page.unroute(FILM);
+    const loaded = page.waitForResponse(FILM);
+    await film.click();
+    expect((await loaded).ok()).toBe(true);
+    let preview = 0;
+    for (let i = 0; i < 20 && preview <= 1; i++) {
+      await page.waitForTimeout(250);
+      preview = mad(without, await grab(frame));
+    }
+    const withLook = await settled(frame);
+    preview = mad(without, withLook);
+    const savedWith = await savedPhoto(page);
+    const saved = mad(savedWithout, savedWith);
+    console.log(`look retry: preview mad ${preview.toFixed(2)}, saved photo mad ${saved.toFixed(2)} (0..255)`);
+    expect(preview, 'the preview redrew with the look').toBeGreaterThan(1);
+    expect(saved, '儲存 re-encoded with the look instead of handing over the look-less file').toBeGreaterThan(1);
+    expect(pageErrors).toEqual([]);
+  });
 });

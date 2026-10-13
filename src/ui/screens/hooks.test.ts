@@ -24,6 +24,19 @@ describe('failure notices', () => {
     expect(engine.loadLut).toHaveBeenCalledTimes(4);
   });
 
+  it('requestLut resolves true once the LUT loaded and false when it failed (the editor redraws after a good retry)', async () => {
+    const ok = { loadLut: vi.fn(() => Promise.resolve()) } as unknown as Engine;
+    const failed = { loadLut: vi.fn(() => Promise.reject(new Error('offline'))) } as unknown as Engine;
+    const threw = {
+      loadLut: vi.fn(() => {
+        throw new Error('no context');
+      }),
+    } as unknown as Engine;
+    await expect(requestLut(ok, 'look', 'flash')).resolves.toBe(true);
+    await expect(requestLut(failed, 'look', 'flash')).resolves.toBe(false);
+    await expect(requestLut(threw, 'filter', 'warm')).resolves.toBe(false);
+  });
+
   it('「調節效果暫時無法使用」 once per session, only when the engine reports the 調節 program unavailable', () => {
     vi.mocked(toast).mockClear();
     expect(noteAdjustFailure({ adjustUnavailable: false })).toBe(false);

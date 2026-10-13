@@ -5895,17 +5895,17 @@ git commit -m "v0.4 step 2: bench row 調節效能 (base vs 調節 program, comp
 - Consumes: Tasks 1–16; step 1's `tests/e2e/parity.spec.ts` and `tests/fixtures/parity-v03/*.png` (C §8.3).
 - Produces: a green step 2 on local `feat/meiyan-pwa` commits; version still `0.3.0`; nothing pushed.
 
-- [ ] **Step 1: Typecheck, unit tests, build**
+- [x] **Step 1: Typecheck, unit tests, build**
 
 Run: `npm run typecheck && npm test && npm run build`
 Expected: `tsc` exits 0; Vitest reports every file passed (including `tests/harness/t5/assets.test.mjs`); `vite build` succeeds.
 
-- [ ] **Step 2: The whole e2e suite**
+- [x] **Step 2: The whole e2e suite**
 
 Run: `npm run test:e2e`
 Expected: every Playwright project and spec passes — step 1's specs (`parity`, `persons`, `body`, `camera-group` …), the v0.3 specs (`editor`, `camera`, `engine`, `reshape`, `faceProtect`, `home`, `settings`, `update`, `bench`) and step 2's `composite`, `adjust` and the new `bench` test.
 
-- [ ] **Step 3: v0.3-equivalence checks (C §1.1, S §1.3)**
+- [x] **Step 3: v0.3-equivalence checks (C §1.1, S §1.3)**
 
 1. Parity goldens: `npx playwright test tests/e2e/parity.spec.ts` → PASS (max channel diff ≤ 1/255, mean < 0.02/255 — every parity case leaves 調節 neutral and has no look, so the base program draws).
 2. The base composite is step 1's text: `npx vitest run src/engine/compositeCpu.test.ts -t "the base variant"` → PASS.
@@ -5919,10 +5919,11 @@ git diff --stat "$BASE"..HEAD -- tests/e2e/parity.spec.ts tests/e2e/engine.spec.
 ```
 
    Expected: no output (step 2 changed none of them; the unit-test ports in Tasks 1, 7 and 12 are the count/plan/tab-order changes listed there).
+   Gate run: one line of output, `tests/e2e/editor.spec.ts | 72 +++…-` (71 insertions, 1 deletion), from the Task 14 fix `51cff1f`: it appended the test 「a 質感 whose LUT failed › re-tapping it once it can load …」 and extended the `./fixtures` import line (the one deleted line). No existing assertion changed, so the check's intent holds; nothing was moved.
 6. Version and push state: `node -p "require('./package.json').version"` prints `0.3.0`; `git status --short` is empty; nothing was pushed (`git log -1 --format=%H @{u} 2>/dev/null` is unchanged from before step 2, or there is no upstream).
 7. Line endings: `file src/types.ts src/ui/panelModel.ts src/engine/shaders/composite.ts src/engine/pipeline.ts src/engine/index.ts src/app/live.ts src/app/live.test.ts src/app/testFakes.ts src/ui/components/BeautyPanel.tsx src/ui/components/Slider.tsx src/ui/screens/Camera.tsx src/ui/icons.tsx src/ui/theme.css scripts/gen-luts.mjs src/bench/main.ts | grep -v CRLF` prints nothing (they are all still CRLF), and `git diff --numstat "$BASE"..HEAD` shows no CRLF file with a whole-file rewrite (added ≈ deleted ≈ file length).
 
-- [ ] **Step 4: Commit fixes, if any**
+- [x] **Step 4: Commit fixes, if any**
 
 If Steps 1–3 required a fix, stage exactly the changed files (`git add -u` for edits; new files by name), run Steps 1–3 again until green, and commit with a message that names the failing check, in this form:
 

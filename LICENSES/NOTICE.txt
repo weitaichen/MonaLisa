@@ -59,6 +59,9 @@ Test data in the repository only (not part of the deployed app):
     straight 1-2 px lines drawn on the background by scripts/gen-lines-fixture.mjs; fullbody_lines.json lists them.
   - tests/fixtures/sample_face.png: GPUPixel demo image (Apache-2.0, see GPUPixel above).
     tests/fixtures/sample_face.pose.json is this project's recorded Pose Landmarker result on it.
+  - Test images generated in code from sample_face.png and a gradient (not committed): the synthetic JPEGs, the EXIF-
+    orientation JPEG and the sideways copy of tests/e2e/crop.spec.ts and tests/e2e/fixtures.ts, and the frames of
+    tests/e2e/pages/export.ts. Modified derivatives of sample_face.png (Apache-2.0 §4(b) change notice).
   - tests/fixtures/group_faces.png and tests/fixtures/group6_faces.png: modified derivatives of sample_face.png
     (Apache-2.0 §4(b) change notice): scaled, mirrored and cropped copies composed on a flat background by
     scripts/gen-group-fixture.mjs. group_faces.landmarks.json / group_faces.pose.json are this project's recorded

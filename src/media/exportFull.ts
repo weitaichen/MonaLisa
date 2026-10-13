@@ -35,10 +35,40 @@ export interface RunnerDeps {
   clearGuard(): void;
 }
 
+/**
+ * One source window as its own bitmap, copied 1:1 through a 2D canvas. Not createImageBitmap(full, x, y, w, h): Chromium
+ * crops a bitmap decoded with imageOrientation 'from-image' in the file's stored orientation, so an EXIF-orientation-6
+ * photo exported tiles of the wrong, sideways region; drawImage honours the orientation the decode applied.
+ */
+async function cropWindow(full: ImageBitmap, r: PxRect): Promise<ImageBitmap> {
+  if (typeof OffscreenCanvas !== 'undefined') {
+    const oc = new OffscreenCanvas(r.w, r.h);
+    const ctx = oc.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(full, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+      const bmp = oc.transferToImageBitmap();
+      // iOS frees canvas backing stores only on GC: release eagerly
+      oc.width = oc.height = 0;
+      return bmp;
+    }
+  }
+  const c = document.createElement('canvas');
+  c.width = r.w;
+  c.height = r.h;
+  const ctx = c.getContext('2d');
+  if (!ctx) throw new Error('exportFull: 2D canvas unavailable');
+  ctx.drawImage(full, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+  try {
+    return await createImageBitmap(c);
+  } finally {
+    c.width = c.height = 0;
+  }
+}
+
 export const browserRunnerDeps: RunnerDeps = {
   // the import's own decoder: EXIF orientation, probeSize, the <img> fallback (importer.ts:4-13)
   decode: (blob, edge) => importPhoto(blob, edge),
-  crop: (full, r) => createImageBitmap(full, r.x, r.y, r.w, r.h),
+  crop: cropWindow,
   createCanvas: (w, h, type) => {
     const s = createSurface(w, h, { type, alpha: false });
     return { put: (img, x, y) => s.ctx.putImageData(img, x, y), encode: (q) => s.toBlob(q), release: () => s.release() };

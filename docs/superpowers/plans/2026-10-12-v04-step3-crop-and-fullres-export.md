@@ -7080,7 +7080,7 @@ EOF
 - Consumes: Tasks 1–17 (the whole feature); Task 16's fixtures `makeJpeg`, `withExifOrientation`, `exportFile`, `closeFallback`; step 1's fixture `tests/fixtures/group_faces.png` (S1 §8.3), `__meiyan.boxes` / `faces` / `detectCalls` (S1 §3.2) and its e2e helper `selectPerson(page, n)` (C §8.4); this file's `importInto`, `frameAspect`, `tab`, `option`, `knob`.
 - Produces: no new code; NOTICE gains one line.
 
-- [ ] **Step 1: Write the tests**
+- [x] **Step 1: Write the tests**
 
 In `tests/e2e/crop.spec.ts`, add `withExifOrientation` and step 1's `selectPerson` to the `./fixtures` import (`closeFallback`, `exportFile`, `makeJpeg` are there since Tasks 16–17; `readFileSync` since Task 15; every pixel check runs in the page, so no `decodePng`), and add at the top, with the other imports:
 
@@ -7414,7 +7414,7 @@ test('裁切 mode draws no engine frame while handles move, 拉直 drags and 旋
 
 (`selectPerson` comes from step 1's `tests/e2e/fixtures.ts` additions, C §8.4.)
 
-- [ ] **Step 2: Add the NOTICE line**
+- [x] **Step 2: Add the NOTICE line**
 
 In `LICENSES/NOTICE.txt` (LF), after the `tests/fixtures/sample_face.pose.json …` line (`NOTICE.txt:61`; step 1 added the `group_faces` / `group_people` entries below it):
 
@@ -7424,12 +7424,12 @@ In `LICENSES/NOTICE.txt` (LF), after the `tests/fixtures/sample_face.pose.json �
     tests/e2e/pages/export.ts. Modified derivatives of sample_face.png (Apache-2.0 §4(b) change notice).
 ```
 
-- [ ] **Step 3: Run the app spec**
+- [x] **Step 3: Run the app spec**
 
 Run: `npm run build && npx playwright test tests/e2e/crop.spec.ts`
 Expected: every crop.spec test passes (the 12 MP cases take minutes on SwiftShader; their timeouts allow it). On a failure, fix the code the failing case exercises (the plan's earlier tasks own it), never the assertion.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests/e2e/crop.spec.ts LICENSES/NOTICE.txt

@@ -337,6 +337,19 @@ export function withExifOrientation(jpeg: Buffer, orientation: number): Buffer {
 
 /** 儲存 → (a second tap when the pill turned 分享) → the long-press fallback's image: size, blob type and file name. */
 export async function exportFile(page: Page): Promise<{ width: number; height: number; type: string; name: string | null }> {
+  // the CSP (connect-src 'self') blocks fetch() of a blob: URL, so the blob type is read from the object URLs the page
+  // makes from now on (the fallback's URL.createObjectURL(file), state.ts)
+  await page.evaluate(() => {
+    const w = window as unknown as { __blobTypes?: Record<string, string> };
+    if (w.__blobTypes) return;
+    const types: Record<string, string> = (w.__blobTypes = {});
+    const make = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = (o: Blob | MediaSource) => {
+      const u = make(o);
+      if (o instanceof Blob) types[u] = o.type;
+      return u;
+    };
+  });
   const pill = page.locator('.topbar .pill');
   await pill.click();
   const fallback = page.getByRole('dialog', { name: '儲存照片' });
@@ -346,10 +359,10 @@ export async function exportFile(page: Page): Promise<{ width: number; height: n
   await expect(fallback).toBeVisible({ timeout: 30_000 });
   const img = fallback.getByRole('img', { name: '編輯結果' });
   await expect.poll(() => img.evaluate((i: HTMLImageElement) => i.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
-  return img.evaluate(async (i: HTMLImageElement) => ({
+  return img.evaluate((i: HTMLImageElement) => ({
     width: i.naturalWidth,
     height: i.naturalHeight,
-    type: (await (await fetch(i.src)).blob()).type,
+    type: (window as unknown as { __blobTypes?: Record<string, string> }).__blobTypes?.[i.src] ?? '',
     name: i.dataset.name ?? null,
   }));
 }

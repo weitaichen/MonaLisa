@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { PNG } from 'pngjs';
-import { debugState, expect, makeJpeg, readHistory, SAMPLE_FACE, test } from './fixtures';
+import { closeFallback, debugState, expect, exportFile, makeJpeg, readHistory, SAMPLE_FACE, test } from './fixtures';
 
 async function importInto(page: Page, file: string | { name: string; mimeType: string; buffer: Buffer }) {
   await page.goto('/');
@@ -248,4 +248,77 @@ test('a larger picked photo is kept in 最近編輯 with its size; a reopen stil
   expect(rows).toHaveLength(1);
   expect(rows[0].sourceSize).toBe(jpeg.length);
   expect([rows[0].sourceWidth, rows[0].sourceHeight]).toEqual([3000, 4000]);
+});
+
+const knob = (page: Page, value: object) => page.evaluate((v) => localStorage.setItem('meiyan.debug.export.v1', JSON.stringify(v)), value);
+
+/** every toast text shown from now on (a toast lasts 4 s, and an export on SwiftShader can outlive it) */
+const watchToasts = (page: Page) =>
+  page.evaluate(() => {
+    const w = window as unknown as { __toasts: string[] };
+    w.__toasts = [];
+    const scan = () => {
+      for (const el of document.querySelectorAll('.toast')) {
+        const t = (el.textContent ?? '').trim();
+        if (t && w.__toasts.at(-1) !== t) w.__toasts.push(t);
+      }
+    };
+    new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+const toastsSeen = (page: Page): Promise<string[]> => page.evaluate(() => (window as unknown as { __toasts: string[] }).__toasts);
+
+test('原始解析度: a tiled export keeps the picked size; 標準 is the working size; a failure falls back once', async ({ page }) => {
+  test.setTimeout(600_000);
+  await page.goto('/');
+  await importInto(page, { name: 'big.jpg', mimeType: 'image/jpeg', buffer: await makeJpeg(page, 2400, 3200) });
+  const full = await exportFile(page);
+  expect([full.width, full.height, full.type]).toEqual([2400, 3200, 'image/jpeg']);
+  expect((await debugState(page)).export).toMatchObject({ mode: 'tiled', width: 2400, height: 3200 });
+  await closeFallback(page);
+
+  // slowMs makes the fallback finish after the 4 s window, so its file is delivered through the 「分享」 pill
+  await knob(page, { failAt: 'tile', slowMs: 4500 });
+  await page.getByRole('tab', { name: '美膚', exact: true }).click();
+  await page.getByRole('option', { name: '美白', exact: true }).click();
+  await page.getByRole('slider').focus();
+  await page.keyboard.press('ArrowRight'); // an edit: the cached file no longer matches
+  await watchToasts(page);
+  // a fallback slower than 4 s ends in 「分享」: exportFile's second tap must then share that file (Review Focus 5)
+  const fell = await exportFile(page);
+  expect(await toastsSeen(page)).toContain('已改用標準解析度輸出');
+  expect([fell.width, fell.height]).toEqual([1536, 2048]);
+  expect(await page.evaluate(() => localStorage.getItem('meiyan.exportGuard.v1'))).toBeNull();
+});
+
+test('a slow tiled export turns the pill into 分享; the second tap shares', async ({ page }) => {
+  test.setTimeout(600_000);
+  await page.goto('/');
+  await knob(page, { slowMs: 4500, tile: 2048 });
+  await importInto(page, { name: 'big.jpg', mimeType: 'image/jpeg', buffer: await makeJpeg(page, 2400, 3200) });
+  await page.locator('.topbar .pill').click();
+  await expect(page.locator('.topbar .pill', { hasText: '分享' })).toBeVisible({ timeout: 300_000 });
+  await expect(page.getByText('已準備好，點一下分享')).toBeVisible();
+  await page.locator('.topbar .pill', { hasText: '分享' }).click();
+  await expect(page.getByRole('dialog', { name: '儲存照片' })).toBeVisible();
+});
+
+test('going to the background mid-export aborts it, frees it and says so on return', async ({ page }) => {
+  test.setTimeout(600_000);
+  await page.goto('/');
+  await knob(page, { slowMs: 4500, tile: 2048 });
+  await importInto(page, { name: 'big.jpg', mimeType: 'image/jpeg', buffer: await makeJpeg(page, 2400, 3200) });
+  await page.locator('.topbar .pill').click();
+  await expect(page.getByText('正在輸出原始解析度…')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('meiyan.exportGuard.v1'))).not.toBeNull();
+  const setVisibility = (state: 'hidden' | 'visible') =>
+    page.evaluate((s) => {
+      Object.defineProperty(document, 'visibilityState', { value: s, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, state);
+  await setVisibility('hidden');
+  expect(await page.evaluate(() => localStorage.getItem('meiyan.exportGuard.v1'))).toBeNull();
+  await expect(page.locator('.topbar .pill')).toHaveText('儲存');
+  expect((await debugState(page)).export).toBeNull();
+  await setVisibility('visible');
+  await expect(page.getByText('輸出已中斷，請再按一次「儲存」')).toBeVisible();
 });

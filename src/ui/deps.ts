@@ -7,6 +7,7 @@ import { ENGINE_PATHS, loadEngineAssets, loadPoseModel, loadSegmenterModel } fro
 import { createEngine, isWebGL2Supported } from '../engine/index';
 import { createCamera } from '../media/camera';
 import { encodeJpeg, encodeOutput, encodePng, saveFile, toJpegBlob } from '../media/exporter';
+import { runTiledExport } from '../media/exportFull';
 import { shouldKeepSource } from '../media/exportPlan';
 import { importPhoto, importPhotoInfo } from '../media/importer';
 import { addEntry, deleteEntry, getEntry, listEntries, updateEntry } from '../store/history';
@@ -58,6 +59,7 @@ export const deps = {
   toJpegBlob,
   saveFile,
   shouldKeepSource,
+  runTiledExport,
   addEntry,
   updateEntry,
   listEntries,

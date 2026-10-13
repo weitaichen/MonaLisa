@@ -25,7 +25,7 @@ import { measureBody, paramAvailability } from '../../body/measure';
 import { bodyBox, personInfos } from '../../detect/cache';
 import { hitPerson } from '../../detect/persons';
 import { sanitizeParams } from '../../engine/params';
-import { NO_SOURCE, sourceSizeRecord, type SourceInfo } from '../../media/exportPlan';
+import { EXPORT_COPY, NO_SOURCE, planExport, sourceSizeRecord, type ExportPlan, type SourceInfo } from '../../media/exportPlan';
 import { takePersonsHint } from '../../store/settings';
 import { stableKey } from '../../store/undo';
 import { buildFaceProtect } from '../../tracking/faceProtect';
@@ -83,6 +83,7 @@ import {
   type BodyDet,
   type OutputStamp,
 } from '../editorModel';
+import { exportOutcome, noSourceNote, pillLabel, planSig, preEncodes, shareNow, shareReady, tapAction, type Pill, type ShareCache } from '../exportFlow';
 import { FaceProtectSource, isContourEdit, maskCoversFace, paramsPatch, type FaceProtectRecord } from '../faceProtectModel';
 import { Icon } from '../icons';
 import {
@@ -101,7 +102,7 @@ import {
 } from '../panelModel';
 import { haptic } from '../platform';
 import { ensureBodyTracker, ensureEngine, ensureFaceSegmenter, svc } from '../services';
-import { go, setPendingHistory, showSaveFallback, toast, type EditorSource } from '../state';
+import { app, go, setPendingHistory, showSaveFallback, toast, type EditorSource } from '../state';
 import { useStore } from '../store';
 import { requestLut, useAdjustFailureNotice, useElementSize, useHold, useLutLoader } from './hooks';
 import { useZoomPan } from './zoomPan';
@@ -199,11 +200,28 @@ export function Editor({ source }: { source: EditorSource }) {
   const [fatal, setFatal] = useState<string | null>(null);
   const fatalRef = useRef(fatal);
   fatalRef.current = fatal;
-  const [preparing, setPreparing] = useState(false);
+  /** the 輸出 prefs (設定): read at the tap and by the debounce through prefsRef, so a change re-arms the pre-encode */
+  const prefs = useStore(app, (s) => s.prefs);
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
+  const [pill, setPill] = useState<Pill>('save');
+  /** a tiled export is running (S §2.3): the overlay, inert controls, a paused display and debounce */
+  const [exporting, setExporting] = useState<{ progress: number } | null>(null);
+  const exportBusy = exporting !== null;
+  const exportAbort = useRef<AbortController | null>(null);
+  /** the app went to the background mid-export: the return says so */
+  const interrupted = useRef(false);
+  /** 「此照片只保留了 2048 解析度」 once per editor session */
+  const noSourceToastDone = useRef(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [, bump] = useState(0);
-  /** share cache: the encoded file for these params and 美體 field (so 儲存 can share synchronously inside the tap) */
-  const fresh = useRef<(OutputStamp & { file: File }) | null>(null);
+  /**
+   * share cache: the encoded file for these params, this 美體 field and these output settings (planSig), so 儲存 can
+   * share synchronously inside the tap
+   */
+  const fresh = useRef<ShareCache | null>(null);
+  /** the file a slow export delivered: the 「分享」 tap shares it (tapAction) */
+  const delivered = useRef<File | null>(null);
   const historyId = useRef<string | null>(source.historyId);
   /** what was last queued to history (a reopened entry starts saved: viewing it writes nothing) */
   const saved = useRef<OutputStamp | null>(source.historyId ? { key: editKey(source.edit), field: ANY_FIELD } : null);
@@ -348,6 +366,23 @@ export function Editor({ source }: { source: EditorSource }) {
     const d = detectRef.current;
     return buildFrame(e, frameFacesOf(d, s?.faces ?? []), d?.obstacles ?? [], protectsRef.current, d?.primary ?? P0, warpScales.current);
   };
+  /** the export plan (S §3.7) of `e` on session `s` from `src`, with the 輸出 prefs and the device blocks of now */
+  const planFor = (s: StillSession, e: EditState, src: SourceInfo, field: BodyField | null): ExportPlan =>
+    planExport(
+      e,
+      prefsRef.current,
+      src,
+      photo,
+      { prefTier: prefsRef.current.tier, autoTier: deps.autoTierSession(), screen: { width: window.screen.width, height: window.screen.height }, capped: deps.exportCapped() },
+      s.bounds(frameOf(e, s), field),
+      deps.readExportDebug(),
+    );
+  /** an edit drops a finished file (a 25 MB file is not kept past the next edit, S §2.3); functional: a drag's closure may hold a stale pill */
+  const dropFinished = () => {
+    fresh.current = null;
+    delivered.current = null;
+    setPill((p) => (p === 'share' ? 'save' : p));
+  };
   /** on a commit with ≥ 2 faces: the CPU port checks the summed map (once per warp); an empty map whenever the guard does not act */
   const guardScales = (e: EditState): ReadonlyMap<string, number> => {
     const s = sessionRef.current;
@@ -392,6 +427,7 @@ export function Editor({ source }: { source: EditorSource }) {
    * write through the selection (重置 resets everyone whatever is selected: no 全部 toast)
    */
   const update = (e: EditState, commit: boolean, user = true) => {
+    dropFinished();
     fieldDraft.noteUpdate(commit);
     // a drag step draws the plain table; the commit checks it (S §4.4)
     warpScales.current = commit ? guardScales(e) : new Map();
@@ -740,7 +776,17 @@ export function Editor({ source }: { source: EditorSource }) {
   useEffect(() => {
     // iOS may suspend or kill a backgrounded PWA before the debounce fires
     const onVis = () => {
-      if (document.visibilityState === 'hidden') flushHistory();
+      if (document.visibilityState === 'hidden') {
+        // abort first: its listener frees ~140 MB synchronously, before the flush renders a thumbnail (S §2.3)
+        if (exportAbort.current) {
+          exportAbort.current.abort();
+          interrupted.current = true;
+        }
+        flushHistory();
+      } else if (interrupted.current) {
+        interrupted.current = false;
+        toast(EXPORT_COPY.interrupted, 4000);
+      }
     };
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
@@ -749,6 +795,11 @@ export function Editor({ source }: { source: EditorSource }) {
   useEffect(
     () => () => {
       unmounted.current = true;
+      // a running tiled export frees its memory before the flush renders (✕ aborted it already; any other unmount too)
+      exportAbort.current?.abort();
+      // a finished file can be 25 MB: not kept past the editor (S §2.3)
+      fresh.current = null;
+      delivered.current = null;
       flushHistory(); // before dispose: the readback needs the live session
       const s = sessionRef.current;
       sessionRef.current = null;
@@ -1000,24 +1051,31 @@ export function Editor({ source }: { source: EditorSource }) {
 
   /**
    * Export + encode with the user's state captured when it was asked for (`e`, the 美體 `field`); waits for the filter
-   * LUT so the file matches the settled preview, and draws with the 瘦臉 limits at export time (see save).
+   * LUT so the file matches the settled preview, and draws with the 瘦臉 limits at export time (see save). The working
+   * size, encoded in the plan's format and quality.
    */
-  const encode = async (s: StillSession, e: EditState, field: BodyField | null) => {
+  const encode = async (s: StillSession, e: EditState, field: BodyField | null, plan: ExportPlan) => {
     await s.prepareExport(frameOf(e, s));
     if (unmounted.current) throw new Error('editor closed');
     const img = s.exportImageData(frameOf(e, s), field);
-    return { img, file: await deps.encodeJpeg(img, 0.92) };
+    return { img, file: await deps.encodeOutput(img, plan.format, plan.quality) };
   };
 
   // debounced re-encode (share cache) + autosave to history; paused while the context is lost (nothing to
   // read back) and re-armed once it is restored. While a 瘦臉 limit is still being computed it waits for it (at
   // most PROTECT_WAIT_MS from the segmenter's start; protectTick re-arms this once it settles, also when it brings
-  // no limit), so the limit landing does not redo a full-resolution export + history write right after this one
+  // no limit), so the limit landing does not redo a full-resolution export + history write right after this one.
+  // Only a working-size JPEG plan keeps a pre-encoded share file (S §2.3); a share file is for the output settings it was
+  // made with (planSig: a 設定 change re-arms this, Review Focus 1). Waits while a tiled export runs (its GL buffers are
+  // tile-sized: a working-size render meanwhile would grow them back) and runs once when it ends
   useEffect(() => {
-    if (!session || lost) return;
+    if (!session || lost || exportBusy) return;
     const s = session;
     const key = editKey(edit);
-    if (stampIs(fresh.current, key, fieldGen.current) && stampIs(saved.current, key, fieldGen.current)) return;
+    const now = planFor(s, edit, sourceRef.current, fieldMemo.field);
+    // (a tiled or PNG plan has no share file to make: only an owed thumbnail or the autosave is left)
+    const shareDone = preEncodes(now) ? shareReady(fresh.current, key, fieldGen.current, planSig(now)) : !thumbOwed.current;
+    if (shareDone && stampIs(saved.current, key, fieldGen.current)) return;
     const delay = Math.max(ENCODE_DEBOUNCE_MS, protectSrc.outputHoldMs());
     const t = window.setTimeout(async () => {
       if (unmounted.current || sessionRef.current !== s || editKey(editRef.current) !== key) return;
@@ -1026,22 +1084,34 @@ export function Editor({ source }: { source: EditorSource }) {
       const field = snapshotField();
       /** nothing newer (params, 美體 field, session) replaced what this export was made from */
       const current = () => editKey(editRef.current) === key && sessionRef.current === s && fieldGen.current === gen;
+      const plan = planFor(s, edit, sourceRef.current, field);
+      const sig = planSig(plan);
       let img: ImageData | null = null;
-      if (!stampIs(fresh.current, key, gen)) {
+      if (preEncodes(plan) && !shareReady(fresh.current, key, gen, sig)) {
         try {
-          const r = await encode(s, edit, field);
+          const r = await encode(s, edit, field, plan);
           img = r.img;
           // (a session replaced meanwhile, e.g. by a re-detect that found the face, made this file stale)
-          if (current()) fresh.current = { key, field: gen, file: r.file };
+          if (current()) fresh.current = { key, field: gen, sig, file: r.file };
         } catch (e) {
           // closing mid-encode is not an error (the unmount flush writes history itself), and neither is a
           // context loss (this effect re-arms once the context is restored)
           if (!unmounted.current && sessionRef.current === s && !sessionEngine.current?.lost) reportError(e, 'encode');
           return;
         }
+      } else if (!preEncodes(plan) && thumbOwed.current && historyId.current && stampIs(saved.current, key, gen)) {
+        // no share file for a tiled or PNG plan: an owed thumbnail still gets the working-size image
+        try {
+          await s.prepareExport(frameOf(edit, s));
+          if (unmounted.current || sessionRef.current !== s) return;
+          img = s.exportImageData(frameOf(edit, s), field);
+        } catch (e) {
+          reportError(e, 'history export');
+          return;
+        }
       }
-      // the output of a saved entry is exported anyway for the share cache: an owed thumbnail (thumbOwed) is rewritten
-      // from it once, without reordering 最近編輯
+      // the output of a saved entry is exported anyway for the share cache (or for the thumbnail alone): an owed
+      // thumbnail (thumbOwed) is rewritten from it once, without reordering 最近編輯
       if (img && current() && thumbOwed.current && historyId.current && stampIs(saved.current, key, gen)) {
         thumbOwed.current = false;
         const id = historyId.current;
@@ -1067,7 +1137,7 @@ export function Editor({ source }: { source: EditorSource }) {
       queueHistory(edit, gen, img, s);
     }, delay);
     return () => clearTimeout(t);
-  }, [session, edit, lost, fieldTick, protectTick]);
+  }, [session, edit, lost, fieldTick, protectTick, exportBusy, prefs]);
 
   const hold = useHold((on) => {
     try {
@@ -1096,43 +1166,129 @@ export function Editor({ source }: { source: EditorSource }) {
     );
   };
 
+  /**
+   * 儲存 (S §2.3): the plan of the user's state at the tap. A file ready for it (the debounced JPEG, or the last export's
+   * file for these output settings) and a slow export's delivered file (「分享」) are shared synchronously inside the tap;
+   * otherwise the working size is encoded (today's path) or the source is rendered in tiles.
+   */
   const save = () => {
-    if (!session || preparing || lost) return;
-    const key = editKey(edit);
-    const gen = settleField();
-    const f = fresh.current;
-    if (f && stampIs(f, key, gen)) {
-      share(f.file); // synchronous inside the tap
+    if (!session || lost) return;
+    const action = tapAction(pill, delivered.current !== null);
+    if (action === 'ignore') return;
+    if (action === 'sharePending') {
+      const file = delivered.current!;
+      delivered.current = null;
+      setPill('save');
+      share(file); // synchronous inside the tap: a fresh transient activation
       return;
     }
+    const s = session;
     // the user's state at the tap is what is exported: these params and this 美體 field (snapshotField), so a 美體
     // edit while this waits for a filter LUT does not leak into it. Inputs the system settles by itself are not
     // snapshotted: they are included as the settled preview shows them (the filter LUT finishing loading, the 瘦臉
     // limit landing: it is no user edit, it only ever appears or improves, and the autosave / thumbnail the same
     // wait produces carries it too)
+    const e = editRef.current;
+    const key = editKey(e);
+    const gen = settleField();
     const field = snapshotField();
-    setPreparing(true);
+    const plan = planFor(s, e, sourceRef.current, field);
+    const sig = planSig(plan);
+    if (shareReady(fresh.current, key, gen, sig)) {
+      setPill('save');
+      share(fresh.current!.file); // synchronous inside the tap
+      return;
+    }
+    if (noSourceNote(plan, sourceRef.current, photo) && !noSourceToastDone.current) {
+      noSourceToastDone.current = true;
+      toast(EXPORT_COPY.noSource);
+    }
+    const t0 = performance.now();
+    if (plan.mode === 'tiled' && sourceRef.current.blob && sessionEngine.current) runTiled(s, e, field, plan, key, gen, t0);
+    else runWorking(s, e, field, plan, key, gen, t0);
+  };
+
+  /** finished: share inside the 4 s window, else the pill asks for a second tap (S §2.3) */
+  const deliver = (file: File, t0: number) => {
+    if (shareNow(t0, performance.now())) {
+      setPill('save');
+      share(file);
+    } else {
+      delivered.current = file;
+      setPill('share');
+      toast(EXPORT_COPY.shareReady, 4000);
+    }
+  };
+
+  /** today's path: the working size, encoded in the plan's format */
+  const runWorking = (s: StillSession, e: EditState, field: BodyField | null, plan: ExportPlan, key: string, gen: number, t0: number) => {
+    setPill('preparing');
     // a re-detect or an engine recovery may replace (and dispose) the session while this waits for the filter
     // LUT: export from the replacement instead of failing
     const replacement = (failed: StillSession) => {
       const cur = sessionRef.current;
       return !unmounted.current && cur && cur !== failed && !sessionEngine.current?.lost ? cur : null;
     };
-    exportOnLatest(session, (s) => encode(s, edit, field), replacement).then(
-      ({ s, result: r }) => {
-        setPreparing(false);
+    exportOnLatest(s, (x) => encode(x, e, field, plan), replacement).then(
+      ({ s: done, result: r }) => {
+        debug({ export: { mode: 'working', width: r.img.width, height: r.img.height, tiles: 0, ms: Math.round(performance.now() - t0) } });
         // cached only while it still matches what is on screen (not after a 美體 edit during 準備中)
-        if (sessionRef.current === s && editKey(editRef.current) === key && fieldGen.current === gen) {
-          fresh.current = { key, field: gen, file: r.file };
-        }
-        share(r.file);
+        if (sessionRef.current === done && editKey(editRef.current) === key && fieldGen.current === gen) fresh.current = { key, field: gen, sig: planSig(plan), file: r.file };
+        deliver(r.file, t0);
       },
-      (e: unknown) => {
+      (err: unknown) => {
         if (unmounted.current) return;
-        setPreparing(false);
-        toast(`無法輸出照片：${reportError(e, 'encode')}`, 4000);
+        setPill('save');
+        toast(`無法輸出照片：${reportError(err, 'encode')}`, 4000);
       },
     );
+  };
+
+  /** the source decoded at up to 4096 and rendered in tiles; one fallback to the working size on failure (C §4.6) */
+  const runTiled = (s: StillSession, e: EditState, field: BodyField | null, plan: ExportPlan, key: string, gen: number, t0: number) => {
+    const engine = sessionEngine.current!;
+    const ac = new AbortController();
+    exportAbort.current = ac;
+    setPill('preparing');
+    setExporting({ progress: 0 });
+    debug({ export: null });
+    s.pauseDisplay(true);
+    deps
+      .runTiledExport(engine, sourceRef.current.blob!, plan, s.tileInput(frameOf(e, s), field), {
+        signal: ac.signal,
+        working: photo,
+        knob: deps.readExportDebug(),
+        onProgress: (p) => setExporting({ progress: p }),
+      })
+      .then(
+        (file) => {
+          if (unmounted.current) return;
+          debug({ export: { mode: 'tiled', width: plan.width, height: plan.height, tiles: plan.tiles.length, ms: Math.round(performance.now() - t0) } });
+          if (editKey(editRef.current) === key && fieldGen.current === gen) fresh.current = { key, field: gen, sig: planSig(plan), file };
+          deliver(file, t0);
+        },
+        (err: unknown) => {
+          if (unmounted.current || exportOutcome(err) === 'abort') {
+            setPill('save');
+            return;
+          }
+          // a handled fallback, told by its toast: a warning, not reportError (console.error fails every e2e test,
+          // tests/e2e/fixtures.ts guard, and the knob-injected failures of crop.spec.ts take this path)
+          console.warn('[meiyan] tiled export failed; standard fallback', err);
+          toast(EXPORT_COPY.fallback, 4000);
+          const working = planFor(s, e, NO_SOURCE, field);
+          runWorking(sessionRef.current ?? s, e, field, working, key, gen, t0);
+        },
+      )
+      .finally(() => {
+        if (exportAbort.current === ac) exportAbort.current = null;
+        setExporting(null);
+        try {
+          s.pauseDisplay(false);
+        } catch (err) {
+          reportError(err, 'pauseDisplay');
+        }
+      });
   };
 
   /** ↶ ↷ never change the selection; they flag the persons they changed and name them when none is selected (S §1.1 item 8) */
@@ -1153,6 +1309,8 @@ export function Editor({ source }: { source: EditorSource }) {
     const e = undo.undo();
     fieldDraft.noteFull();
     if (e) {
+      // a finished file is for the state before (S §2.3)
+      dropFinished();
       // an undo lands on another committed state: the safety net checks it (S §4.4)
       warpScales.current = guardScales(e);
       setEditState(e);
@@ -1169,6 +1327,7 @@ export function Editor({ source }: { source: EditorSource }) {
     const e = undo.redo();
     fieldDraft.noteFull();
     if (e) {
+      dropFinished();
       warpScales.current = guardScales(e);
       setEditState(e);
       if (sel.tab === 'crop') setSel({ ...sel, crop: lockFor(e.photo.geometry, photo) });
@@ -1205,6 +1364,8 @@ export function Editor({ source }: { source: EditorSource }) {
   };
 
   const close = () => {
+    // ✕ cancels a running tiled export, then closes (S §2.3)
+    exportAbort.current?.abort();
     haptic();
     go(source.returnTo === 'camera' ? { name: 'camera' } : { name: 'home' });
   };
@@ -1323,6 +1484,14 @@ export function Editor({ source }: { source: EditorSource }) {
     overlay = <Status spinner title="正在重新偵測臉部…" />;
   } else if (!session) {
     overlay = <Status spinner title="正在分析臉部…" />;
+  } else if (exporting) {
+    overlay = (
+      <Status spinner scrim title={EXPORT_COPY.overlay} detail={`${Math.round(exporting.progress * 100)}%`}>
+        <button type="button" class="btn" onClick={() => exportAbort.current?.abort()}>
+          {EXPORT_COPY.cancel}
+        </button>
+      </Status>
+    );
   } else if (lost) {
     overlay = <EngineStatus />; // 正在恢復畫面 · 重新載入引擎
   }
@@ -1331,12 +1500,12 @@ export function Editor({ source }: { source: EditorSource }) {
     <div class="screen editor">
       <div class="topbar">
         <IconButton icon="close" label="關閉" onClick={close} />
-        <div class="title-center">
+        <div class="title-center" inert={exportBusy}>
           <IconButton icon="undo" label="復原" onClick={doUndo} disabled={!undo?.canUndo} />
           <IconButton icon="redo" label="重做" onClick={doRedo} disabled={!undo?.canRedo} />
         </div>
-        <button type="button" class="pill" onClick={save} disabled={!session || preparing || lost} aria-busy={preparing}>
-          <span>{preparing ? '準備中' : '儲存'}</span>
+        <button type="button" class="pill" onClick={save} disabled={!session || pill === 'preparing' || lost} aria-busy={pill === 'preparing'}>
+          <span>{pillLabel(pill)}</span>
         </button>
       </div>
 
@@ -1403,7 +1572,7 @@ export function Editor({ source }: { source: EditorSource }) {
           )}
           {hold.held && <span class="corner-label">原圖</span>}
           {session && !fatal && (
-            <div class="editor-tools">
+            <div class="editor-tools" inert={exportBusy}>
               <button type="button" class={`float-btn${confirmReset ? ' confirm' : ''}`} onClick={reset}>
                 <span>
                   <Icon name="reset" size={16} stroke={2} />
@@ -1422,7 +1591,7 @@ export function Editor({ source }: { source: EditorSource }) {
         {overlay}
       </div>
 
-      <div class="editor-panel">
+      <div class="editor-panel" inert={exportBusy}>
         {session && multi && (
           <PersonStrip persons={stripPersons} selection={selected} photoScope={scope} onSelect={choose} thumbTransform={isIdentity(g) ? undefined : chipTransform(g)} />
         )}

@@ -6627,7 +6627,7 @@ EOF
 - Consumes: Task 4 (`EXPORT_COPY`, `ExportEnv`, `readExportDebug`, `exportCapped`), Task 5 (`encodeOutput`), Task 9 (`planExport`, `ExportPlan`, `SourceInfo`, `NO_SOURCE`), Task 10 (`runTiledExport`), Task 11 (`pauseDisplay`, `tileInput`, `bounds`, `DebugState.export`), Task 16 (`sourceRef`); `stampIs` (`editorModel.ts:344`); step 1's `editKey`, `frameOf(e, s)` (`Editor.tsx:256-259`: the frame session `s` renders and exports for edit `e`; step 1 keeps no frame ref, and an export builds its frame from the edit captured at the tap, so the replacement session of `exportOnLatest` gets its own faces), `exportOnLatest` (`editorModel.ts:92`), `settleField` / `snapshotField` / `fieldGen` / `sessionEngine` / `share`, the existing `encode(s, e, field)` and the `useStore` / `toast` / `debug` imports.
 - Produces (`exportFlow.ts`): `type Pill = 'save' | 'preparing' | 'share'`; `pillLabel(p): string`; `planSig(p: Pick<ExportPlan, 'mode' | 'format' | 'quality' | 'width' | 'height'>): string`; `interface ShareCache { key: string; field: number; sig: string; file: File }`; `shareReady(c, key, field, sig): boolean`; `preEncodes(p: Pick<ExportPlan, 'mode' | 'format'>): boolean`; `shareNow(startedAt: number, now: number): boolean`; `tapAction(pill: Pill, hasPending: boolean): 'ignore' | 'sharePending' | 'export'`; `exportOutcome(e: unknown): 'abort' | 'fallback'`; `noSourceNote(plan, source, working): boolean`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/ui/exportFlow.test.ts`:
 
@@ -6775,12 +6775,12 @@ test('going to the background mid-export aborts it, frees it and says so on retu
 });
 ```
 
-- [ ] **Step 2: Run the unit tests to see them fail**
+- [x] **Step 2: Run the unit tests to see them fail**
 
 Run: `npx vitest run src/ui/exportFlow.test.ts`
 Expected: FAIL — `Failed to resolve import "./exportFlow"`.
 
-- [ ] **Step 3: Implement `src/ui/exportFlow.ts`**
+- [x] **Step 3: Implement `src/ui/exportFlow.ts`**
 
 ```ts
 // The 儲存 flow's rules (S §2.3), pure: which file a tap may share at once, when the pill asks for a second tap, what a
@@ -6841,7 +6841,7 @@ export function noSourceNote(plan: ExportPlan, source: SourceInfo, working: Size
 }
 ```
 
-- [ ] **Step 4: Wire the Editor**
+- [x] **Step 4: Wire the Editor**
 
 `src/ui/deps.ts`: import `runTiledExport` from `../media/exportFull` and add it to `deps`.
 
@@ -7049,14 +7049,14 @@ and `inert={!!exporting}` on `.title-center` (↶ ↷, `:1131`), `.editor-tools`
     );
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `npx vitest run src/ui/`
 Expected: PASS.
 Run: `npm run build && npx playwright test tests/e2e/crop.spec.ts tests/e2e/editor.spec.ts`
 Expected: all passed (`editor.spec.ts:108-109` still exports 1000 × 1500: `sample_face.png` is not larger than the working copy, so the plan is `working`).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/ui/exportFlow.ts src/ui/exportFlow.test.ts src/ui/screens/Editor.tsx src/ui/deps.ts tests/e2e/crop.spec.ts

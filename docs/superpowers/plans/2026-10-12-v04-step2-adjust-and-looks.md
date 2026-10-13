@@ -910,7 +910,7 @@ git commit -m "v0.4 step 2: 質感 and 調節 in the edit state, lens and persis
   - `latticeValue(ix: number, rowHash: number): number` ∈ [−1, 1)
   - `grainAt(px: number, py: number, mix: number): number` (lattice coordinates; bilinear, variance-normalized)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/engine/adjustMath.grain.test.ts`:
 
@@ -1027,12 +1027,12 @@ describe('lattice and value noise', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run src/engine/adjustMath.grain.test.ts`
 Expected: FAIL — `Failed to resolve import "./adjustMath"`.
 
-- [ ] **Step 3: Write the module (constants, helpers, grain)**
+- [x] **Step 3: Write the module (constants, helpers, grain)**
 
 Create `src/engine/adjustMath.ts`:
 
@@ -1167,17 +1167,17 @@ export function grainAt(px: number, py: number, mix: number): number {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run src/engine/adjustMath.grain.test.ts && npm run typecheck`
 Expected: PASS (8 tests); `tsc` exits 0.
 
-- [ ] **Step 5: Check the module loads under Node's type stripping**
+- [x] **Step 5: Check the module loads under Node's type stripping**
 
 Run: `node --input-type=module -e "import('./src/engine/adjustMath.ts').then((m) => console.log(m.lowbias32(1).toString(16)))"`
 Expected: prints `688990c0` (no `ERR_` error).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/engine/adjustMath.ts src/engine/adjustMath.grain.test.ts

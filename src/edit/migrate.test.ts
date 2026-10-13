@@ -228,6 +228,18 @@ describe('firstAnswer (S §3.3 item 4, §5.3 answer-time rows, C2)', () => {
     expect(merged.detect.persons.map((p) => p.id)).toContain('b0');
     expect(merged.detect.faceScans).toEqual([{ quarter: 0, flipH: false }]);
   });
+  it('a sideways re-scan (S §3.6) appends its up-frame to faceScans, finds or not; the cache only grows', () => {
+    const upright = firstAnswer({ ...base, prepared: { faces: [], obstacles: [], dropped: { tooSmall: 0, overCap: 0 } } });
+    expect(upright.detect.faceScans).toEqual([{ quarter: 0, flipH: false }]);
+    const found = firstAnswer({ ...base, detect: upright.detect, prepared: two, quarter: 3 });
+    expect(found.detect.faceScans).toEqual([{ quarter: 0, flipH: false }, { quarter: 3, flipH: false }]);
+    expect(found.detect.persons.map((p) => p.id)).toEqual(['f0', 'f1']);
+    const nobody = firstAnswer({ ...base, detect: { ...upright.detect, bodies: [], bodyScans: [0] }, prepared: { faces: [], obstacles: [], dropped: { tooSmall: 0, overCap: 0 } }, quarter: 1 });
+    expect(nobody.detect.faceScans).toEqual([{ quarter: 0, flipH: false }, { quarter: 1, flipH: false }]);
+    expect(nobody.detect.bodyScans).toEqual([0]);
+    // 基本模式 still records nothing
+    expect(firstAnswer({ ...base, prepared: null, quarter: 1 }).detect.faceScans).toEqual([]);
+  });
 });
 
 /** a pose whose face points sit on the face's own landmarks (a perfect pair); poseOnFace of src/detect/cache.test.ts */

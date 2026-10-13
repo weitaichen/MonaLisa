@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Face, Landmarks478, Pose33 } from '../types';
-import { aspectFits, bodyBox, boxScore, buildCache, cachedFits, noFaceCache, normalizeDetect, personInfos, poseBox, rematchByIoU, withBodies, withFaces } from './cache';
+import { addFaceScan, aspectFits, bodyBox, boxScore, buildCache, cachedFits, noFaceCache, normalizeDetect, personInfos, poseBox, rematchByIoU, withBodies, withFaces } from './cache';
 import { EMPTY_PREPARED, prepareFaces } from './faces';
 import { cacheBody, cacheFace, makeCache } from './testCaches';
 
@@ -109,6 +109,17 @@ describe('normalizeDetect (S §5.4)', () => {
     expect(normalizeDetect(noFaces).cache).toBeNull();
     const bodiesEmpty = { ...noFaceCache(1000, 800, [{ quarter: 0, flipH: false }]), bodies: [] };
     expect(normalizeDetect(bodiesEmpty)).toEqual({ cache: bodiesEmpty, stale: null, lost: false });
+  });
+  it('bodyScans is kept only as distinct quarters 0–3', () => {
+    // makeCache() (./testCaches, imported already) = the valid cache the step-1 normalizeDetect tests use;
+    // normalizeDetect answers { cache, stale, lost }
+    expect(normalizeDetect({ ...makeCache(), bodyScans: [0, 3] }).cache?.bodyScans).toEqual([0, 3]);
+    expect(normalizeDetect({ ...makeCache(), bodyScans: [0, 0] }).cache?.bodyScans).toBeUndefined();
+    expect(normalizeDetect({ ...makeCache(), bodyScans: [5] }).cache?.bodyScans).toBeUndefined();
+    expect(normalizeDetect({ ...makeCache(), bodyScans: 'x' }).cache?.bodyScans).toBeUndefined();
+    // the no-face form keeps it too (a sideways photo where 美體 found nobody upright)
+    const none = { ...noFaceCache(1000, 800, [{ quarter: 0 as const, flipH: false }]), bodies: [], bodyScans: [0, 1] };
+    expect(normalizeDetect(none).cache?.bodyScans).toEqual([0, 1]);
   });
 });
 
@@ -240,6 +251,20 @@ describe('building the cache (S §3.3, §5.3)', () => {
     const merged = withFaces(basic, two, scans);
     expect(merged.persons).toEqual([{ id: 'b0', face: 'f0', body: 'b0' }, { id: 'f1', face: 'f1', body: null }]);
     expect(merged.faceScans).toEqual(scans);
+  });
+  it('withFaces keeps the cache bodyScans on both paths (rebuilt without bodies, merged with bodies)', () => {
+    const none = { ...buildCache(size, EMPTY_PREPARED, [], { faceScans: [{ quarter: 0, flipH: false }] }), bodyScans: [0, 3] as (0 | 3)[] };
+    expect(withFaces(none, two, scans).bodyScans).toEqual([0, 3]);
+    const basic = withBodies(buildCache(size, EMPTY_PREPARED, null, { faceScans: [] }), [{ pose: poseOnFace(two.faces[0].face), mask: null, score: 0.3 }], () => null).cache;
+    expect(withFaces({ ...basic, bodyScans: [0, 1] }, two, scans).bodyScans).toEqual([0, 1]);
+    expect(withFaces(basic, two, scans).bodyScans).toBeUndefined();
+  });
+  it('addFaceScan records a quarter once, as flipH false', () => {
+    const s0: { quarter: 0 | 1 | 2 | 3; flipH: boolean }[] = [{ quarter: 0, flipH: false }];
+    expect(addFaceScan(s0, 3)).toEqual([{ quarter: 0, flipH: false }, { quarter: 3, flipH: false }]);
+    expect(addFaceScan(s0, 0)).toEqual(s0);
+    expect(addFaceScan(s0, 0)).not.toBe(s0);
+    expect(addFaceScan([], 0)).toEqual([{ quarter: 0, flipH: false }]);
   });
   it('rematchByIoU maps old persons to the new ones by face box (≥ 0.5), the rest to null', () => {
     const c = buildCache(size, two, null, { faceScans: scans });

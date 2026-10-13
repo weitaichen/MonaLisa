@@ -20,7 +20,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { SessionFace, StillSession } from '../../app/still';
 import { forwardY, heightBandStretch } from '../../body/bands';
-import { bodyFieldCacheStats, buildBodyField, fieldBands } from '../../body/field';
+import { bodyFieldCacheStats, buildBodyField, fieldBands, type BodyFieldInput } from '../../body/field';
 import { measureBody, paramAvailability } from '../../body/measure';
 import { bodyBox, personInfos } from '../../detect/cache';
 import { hitPerson } from '../../detect/persons';
@@ -28,14 +28,15 @@ import { sanitizeParams } from '../../engine/params';
 import { takePersonsHint } from '../../store/settings';
 import { stableKey } from '../../store/undo';
 import { buildFaceProtect } from '../../tracking/faceProtect';
-import type { BodyField, DetectionCache, EditState, Engine, FaceProtect, LookId, PersonId, Rect, Selection } from '../../types';
+import type { BodyDetection, BodyField, DetectionCache, EditState, Engine, FaceProtect, LookId, PersonId, PersonMask, Rect, Selection } from '../../types';
 import { buildFrame } from '../../edit/frame';
 import { lensFor } from '../../edit/lens';
 import { legacyProjection } from '../../edit/legacy';
 import { bodyAnswer, firstAnswer } from '../../edit/migrate';
 import { editKey, editSetGeometry, P0 } from '../../edit/state';
 import { createWarpGuard } from '../../edit/warpGuard';
-import { apply, chipTransform, cropModeLayout, cssTurn, eYAt, isIdentity, lockFor, ovalViewBox, vToO } from '../../geometry/view';
+import { bodiesUToO, faceOToU, fieldUToO, maskOToU, maskUToO, poseOToU, upCanvas, upImage, upTracker } from '../../geometry/upFrame';
+import { apply, chipTransform, cropModeLayout, cssTurn, eYAt, isIdentity, lockFor, ovalViewBox, upQuarter, vToO, type Quarter } from '../../geometry/view';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
 import { FaceBoxes, type FaceBoxItem } from '../components/FaceBoxes';
 import { BandPlane, HeightBandOverlay } from '../components/HeightBandOverlay';
@@ -50,6 +51,7 @@ import { debug, reportError } from '../debug';
 import { cropActivate, StraightenGesture, straightenView, type CropAction } from '../cropPanel';
 import { deps, type UndoLike } from '../deps';
 import {
+  addBodyScan,
   answerNotices,
   ANY_FIELD,
   BodyFieldMemo,
@@ -66,6 +68,8 @@ import {
   legsAnchorOf,
   measuredAvailable,
   measurePersons,
+  needsBodyScan,
+  needsFaceScan,
   PERSON_TABS,
   protectRequests,
   rebaseStamp,
@@ -182,6 +186,14 @@ export function Editor({ source }: { source: EditorSource }) {
   /** bumped to detect again on the same engine once the tracker can answer (bounded: RedetectBudget) */
   const [detectGen, setDetectGen] = useState(0);
   const [redetect] = useState(() => new RedetectBudget(trackerHealth));
+  /**
+   * a face scan of a new up-frame is pending (S §3.6: a sideways photo, scanned once on leaving 裁切 or after ↶ ↷):
+   * the next session detects on the U image of `scanQuarter` instead of reusing the cache. Cleared by its answer
+   */
+  const forceDetect = useRef(false);
+  const scanQuarter = useRef<Quarter>(0);
+  /** 正在重新偵測臉部… until the scanning session is bound */
+  const [scanning, setScanning] = useState(false);
   const sessionGen = useRef(-1);
   const [fatal, setFatal] = useState<string | null>(null);
   const fatalRef = useRef(fatal);
@@ -218,7 +230,8 @@ export function Editor({ source }: { source: EditorSource }) {
     bodyDetRef.current = d;
     setBodyDetState(d);
   };
-  const [fieldMemo] = useState(() => new BodyFieldMemo(buildBodyField));
+  // the field is built in the up frame U (S §3.4): the arrow reads buildInU (declared below) only when the memo builds
+  const [fieldMemo] = useState(() => new BodyFieldMemo((input, prev, edge) => buildInU(input, prev, edge)));
   /** draft vs full 美體 field: a draft (at most once per frame) only for a drag step's own params change */
   const [fieldDraft] = useState(() => new FieldDraftGate());
   /** generation of the field the session holds (bumped on every change): part of what an export was made from */
@@ -264,11 +277,42 @@ export function Editor({ source }: { source: EditorSource }) {
   facesRef.current = sessionFaces;
   /** a cached face's drawn box in V: its adapted O-space FACE_OVAL mapped through the view (the box's corners while none is at hand) */
   const faceViewBox = (f: { id: string; box: Rect }): Rect => viewBoxOf(sessionFaces?.find((x) => x.id === f.id)?.face.oval ?? cornersOf(f.box), f.box);
-  /** every body person measured with its PAIRED face, or none (S §3.3 item 6, P4) */
+  // ── the up frame U (S §3.4): O turned by whole quarters (never mirrored), so U rows = E rows and U-up = E-up. The body
+  // measure, the 美體 field and a suggested 增高 band are computed in U; the field goes back to O exactly ──
+  const up = upQuarter(g);
+  /** the cached O masks turned into U, one object per (mask, quarter): the field builder caches per mask identity */
+  const [masksU] = useState(() => new WeakMap<PersonMask, Map<Quarter, PersonMask>>());
+  const maskInU = (m: PersonMask, q: Quarter): PersonMask => {
+    if (q === 0) return m;
+    let byQ = masksU.get(m);
+    if (!byQ) masksU.set(m, (byQ = new Map()));
+    let u = byQ.get(q);
+    if (!u) byQ.set(q, (u = maskOToU(m, q)));
+    return u;
+  };
+  /** a cached (O) body detection as the body measure reads it in U */
+  const detU = (det: BodyDetection): BodyDetection =>
+    up === 0
+      ? det
+      : { ...det, pose: poseOToU(det.pose, up), mask: det.mask && maskInU(det.mask, up), width: up % 2 ? det.height : det.width, height: up % 2 ? det.width : det.height };
+  /** every body person measured with its PAIRED face, or none (S §3.3 item 6, P4); in U */
   const measures = useMemo(
-    () => measurePersons(detect, (id) => sessionFaces?.find((f) => f.id === id)?.face ?? null, measureBody, (e) => reportError(e, 'measureBody')),
-    [detect, sessionFaces],
+    () =>
+      measurePersons(
+        detect,
+        (id) => sessionFaces?.find((f) => f.id === id)?.face ?? null,
+        (det, face) => measureBody(detU(det), face && faceOToU(face, up)),
+        (e) => reportError(e, 'measureBody'),
+      ),
+    [detect, sessionFaces, up],
   );
+  /** the 美體 field built on a U grid (the masks and the aspect turned in), handed back on the O grid */
+  const buildInU = (input: BodyFieldInput, prev?: BodyField | null, edge?: number): BodyField | null => {
+    const q = upQuarter(editRef.current.photo.geometry);
+    const inputU: BodyFieldInput = q === 0 ? input : { ...input, aspect: q % 2 ? 1 / input.aspect : input.aspect, masks: input.masks.map((m) => ({ ...m, mask: maskInU(m.mask, q) })) };
+    const f = buildBodyField(inputU, q === 0 ? prev : null, edge);
+    return f && fieldUToO(f, q);
+  };
   const measuresRef = useRef(measures);
   measuresRef.current = measures;
   const lensOf = (e: EditState) => lensFor(e, selected, infos, primary, { available: (p, id) => measuredAvailable(measuresRef.current, p, id, paramAvailability) });
@@ -456,12 +500,16 @@ export function Editor({ source }: { source: EditorSource }) {
         // with it) is used as is, also without a tracker: cached faces are render inputs (S §3.3 item 3) and a definite
         // answer, never unsure. Anything else (no cache, a 基本模式 one, a dropped one) detects once a tracker allows
         const cache = detectRef.current;
-        const { useCache, asks } = sessionPlan(cache, !!tracker);
+        // a face scan of a new up-frame (S §3.6) detects whatever the cache holds (sessionPlan would reuse a cache
+        // scanned upright), on the U image, answering in O
+        const forced = forceDetect.current;
+        const q: Quarter = forced ? scanQuarter.current : 0;
+        const { useCache, asks } = forced ? { useCache: false, asks: !!tracker } : sessionPlan(cache, !!tracker);
         const { s, unsure } = detectSession(
           asks,
           () => svc.get().tracker === 'ok',
           () =>
-            deps.createStillSession(target, tracker, source.bitmap, {
+            deps.createStillSession(target, tracker && upTracker(tracker, q), source.bitmap, {
               ownsBitmap: false,
               faces: useCache ? cache?.faces : undefined,
               obstacles: useCache ? cache?.obstacles : undefined,
@@ -481,14 +529,20 @@ export function Editor({ source }: { source: EditorSource }) {
               v1Body: first ? source.v1Body : null,
               rematch: first ? source.rematch : null,
               faceSeed: first ? source.faceSeed : null,
+              // the up-frame this detection ran in (0 for the first one): appended to faceScans
+              quarter: q,
             }),
             first,
           );
           // found on a re-detect: the output written so far lacks the face effects
           if (replacing && s.faces.length) thumbOwed.current = true;
+          // answered: the scan is done. (A tracker that could not answer keeps it pending, so the bounded re-detect
+          // retries it in U, and the scan effect does not start another one for every new session)
+          forceDetect.current = false;
         }
         sessionRef.current = s;
         setBound({ s, engine: target, unsure });
+        setScanning(false);
         // only a fresh answer says so (a reopened no-face photo shows no toast, S §8.4)
         if (tracker && !unsure && !useCache && !s.faces.length) toast('未偵測到臉部，僅套用美膚與濾鏡', 3200);
       } catch (e) {
@@ -515,6 +569,19 @@ export function Editor({ source }: { source: EditorSource }) {
       reportError(e, 'session.setViewMode');
     }
   }, [cropMode, session]);
+
+  // a sideways photo (S §3.6, D12): when normal mode shows an up-frame not scanned yet while no face is known (on
+  // leaving 裁切, or after ↶ ↷ elsewhere), detect once more on that U image, behind 正在重新偵測臉部…. Never in 裁切 (each
+  // 旋轉 tap would block for the detection), never while a scan is pending, and only on a bound session
+  useEffect(() => {
+    if (!bundle || !session || forceDetect.current) return;
+    const geometry = editRef.current.photo.geometry;
+    if (!needsFaceScan({ cache: detectRef.current, geometry, mode: cropMode ? 'crop' : 'normal', hasTracker: !!bundle.tracker })) return;
+    scanQuarter.current = upQuarter(geometry);
+    forceDetect.current = true;
+    setScanning(true);
+    setDetectGen((n) => n + 1);
+  }, [cropMode, edit.photo.geometry, detect, session]);
 
   const onCropAction = (a: CropAction) => {
     const r = cropActivate(editRef.current, a, sel.crop, photo);
@@ -684,56 +751,67 @@ export function Editor({ source }: { source: EditorSource }) {
 
   const startBodyDetection = () => {
     setBodyDet({ phase: 'working' });
-    detectBody(() => ensureBodyTracker(), source.bitmap, {
-      pause: () => new Promise((r) => window.setTimeout(r, BODY_PAINT_MS)),
-      cancelled: () => unmounted.current,
-    }).then(
-      (dets) => {
-        if (dets === undefined || unmounted.current) return;
-        const cache = detectRef.current;
-        if (!cache) return;
-        try {
-          // pairing (P4) against the cache's own faces (no session needed: an engine recovery has none), the body-only
-          // persons appended from the template, a vanished body's person handing over (p0 in a photo without faces)
-          const a = bodyAnswer(cache, dets?.bodies ?? [], photo);
-          rebaseOnDetect(a.rebase, a.detect);
-          setBodyDet({ phase: 'done', det: null });
-          // body-only persons made this a group photo: the strip mounts now, with the notices of a group answer
-          const n = a.detect.persons.length;
-          if (cache.persons.length < 2 && n >= 2) showNotices(answerNotices(a.detect, n, takePersonsHint()));
-        } catch (e) {
-          // never a spinner forever (or an unhandled rejection): 重試 runs the detection again
-          if (!unmounted.current) setBodyDet({ phase: 'error', message: reportError(e, 'body answer') });
-        }
-      },
-      (e: unknown) => {
-        // a download / startup failure was reported by ensureBodyTracker and has a friendly hint; a failing
-        // detection call is reported here (重試 runs it again on the same, self-healing tracker). The strip note
-        // shows it as 美體偵測失敗（message）
-        const st = svc.get().body;
-        const message = st.state === 'error' ? st.hint : reportError(e, 'body detect');
-        if (!unmounted.current) setBodyDet({ phase: 'error', message });
-      },
-    );
+    // on the U image of the geometry now (S §3.6): the pose model wants the person upright; poses and masks come back
+    // to O exactly, and the up-frame is recorded (bodyScans) so a "nobody" answer is tried once more only in a new one
+    const q = upQuarter(editRef.current.photo.geometry);
+    upImage(source.bitmap, q)
+      .then((up) =>
+        detectBody(() => ensureBodyTracker(), up.image, {
+          pause: () => new Promise((r) => window.setTimeout(r, BODY_PAINT_MS)),
+          cancelled: () => unmounted.current,
+        }).finally(() => up.close()),
+      )
+      .then(
+        (dets) => {
+          if (dets === undefined || unmounted.current) return;
+          const cache = detectRef.current;
+          if (!cache) return;
+          try {
+            // pairing (P4) against the cache's own faces (no session needed: an engine recovery has none), the body-only
+            // persons appended from the template, a vanished body's person handing over (p0 in a photo without faces)
+            const a = bodyAnswer(cache, dets ? bodiesUToO(dets, q).bodies : [], photo);
+            rebaseOnDetect(a.rebase, { ...a.detect, bodyScans: addBodyScan(cache.bodyScans, q) });
+            setBodyDet({ phase: 'done', det: null });
+            // body-only persons made this a group photo: the strip mounts now, with the notices of a group answer
+            const n = a.detect.persons.length;
+            if (cache.persons.length < 2 && n >= 2) showNotices(answerNotices(a.detect, n, takePersonsHint()));
+          } catch (e) {
+            // never a spinner forever (or an unhandled rejection): 重試 runs the detection again
+            if (!unmounted.current) setBodyDet({ phase: 'error', message: reportError(e, 'body answer') });
+          }
+        },
+        (e: unknown) => {
+          // a download / startup failure was reported by ensureBodyTracker and has a friendly hint; a failing
+          // detection call is reported here (重試 runs it again on the same, self-healing tracker). The strip note
+          // shows it as 美體偵測失敗（message）
+          const st = svc.get().body;
+          const message = st.state === 'error' ? st.hint : reportError(e, 'body detect');
+          if (!unmounted.current) setBodyDet({ phase: 'error', message });
+        },
+      );
   };
   const retryBody = () => {
     if (bodyDetRef.current.phase === 'error') startBodyDetection();
   };
 
   // first time the 美體 tab opens (or right away when the params already use body sliders); coming back to the
-  // tab after a failure retries. The bodies join the persons of the face answer: wait for it (detect)
+  // tab after a failure retries. The bodies join the persons of the face answer: wait for it (detect). Nobody found, and
+  // the photo turned to an up-frame not tried yet: the next 美體 open detects once more, on that U (S §3.6, D5)
   const lastTab = useRef(sel.tab);
   useEffect(() => {
     const entered = sel.tab === 'body' && lastTab.current !== 'body';
     lastTab.current = sel.tab;
-    if (shouldDetectBody(bodyDet, { tabOpen: sel.tab === 'body', entered, params }) && detectRef.current !== null) startBodyDetection();
+    if (detectRef.current === null) return;
+    const rescan = entered && bodyDet.phase !== 'working' && needsBodyScan(detectRef.current, editRef.current.photo.geometry);
+    if (shouldDetectBody(bodyDet, { tabOpen: sel.tab === 'body', entered, params }) || rescan) startBodyDetection();
   }, [sel.tab, bodyDet, params, detect]);
 
   /** Bring the field up to date with the edit / measures (BodyFieldMemo: only the 美體 inputs count, S §4.6). */
   const applyField = (draft: boolean) => {
     let r: ReturnType<BodyFieldMemo['update']>;
     try {
-      r = fieldMemo.update(fieldInputOf(editRef.current, detectRef.current, measuresRef.current, bodyAspect), draft);
+      // keyed on the up-frame too: a 旋轉 rebuilds the field in the new U, a 翻轉 does not (S §3.4)
+      r = fieldMemo.update(fieldInputOf(editRef.current, detectRef.current, measuresRef.current, bodyAspect), draft, upQuarter(editRef.current.photo.geometry));
     } catch (e) {
       reportError(e, 'buildBodyField');
       return;
@@ -812,7 +890,26 @@ export function Editor({ source }: { source: EditorSource }) {
         {
           build: (face, mask) => buildFaceProtect(face, mask, photo.width, photo.height),
           covers: (face, mask) => maskCoversFace(face, mask),
-          segmenter: () => ensureFaceSegmenter().then((sg) => (sg ? { segment: () => sg.segment(source.bitmap) } : null)),
+          // on the U image of the geometry when it runs (S §3.6), its mask mapped back to O by the exact permutation;
+          // the U copy is made and released inside the synchronous segment() (none is left behind by a cancel)
+          segmenter: () =>
+            ensureFaceSegmenter().then((sg) =>
+              sg
+                ? {
+                    segment: () => {
+                      const q = upQuarter(editRef.current.photo.geometry);
+                      if (q === 0) return sg.segment(source.bitmap);
+                      const c = upCanvas(source.bitmap, q);
+                      try {
+                        const m = sg.segment(c);
+                        return m ? maskUToO(m, q) : null;
+                      } finally {
+                        c.width = c.height = 0;
+                      }
+                    },
+                  }
+                : null,
+            ),
           pause: () => new Promise((r) => window.setTimeout(r, BODY_PAINT_MS)),
           now: () => performance.now(),
           cancelled: () => unmounted.current,
@@ -1100,9 +1197,11 @@ export function Editor({ source }: { source: EditorSource }) {
   const ownerBody = bodyOwner
     ? (detect?.persons.find((p) => p.id === bodyOwner)?.body ?? null)
     : (detect?.persons.find((p) => p.id === primary)?.body ?? detect?.bodies?.[0]?.id ?? null);
+  // (in U, like the measure: a new 增高 band is suggested on the legs' E rows, S §3.4)
+  const ownerDet = detect && ownerBody ? bodyDetectionOf(detect, ownerBody) : null;
   const bodyCtx = {
     ...bodyPanelContext(
-      bodyDet.phase === 'done' ? { phase: 'done', det: detect && ownerBody ? bodyDetectionOf(detect, ownerBody) : null } : bodyDet,
+      bodyDet.phase === 'done' ? { phase: 'done', det: ownerDet && detU(ownerDet) } : bodyDet,
       bodyTracker,
       bodyOwner ? (measures.get(bodyOwner) ?? null) : null,
       paramAvailability,
@@ -1199,6 +1298,8 @@ export function Editor({ source }: { source: EditorSource }) {
     );
   } else if (!bundle) {
     overlay = <EngineStatus />;
+  } else if (scanning) {
+    overlay = <Status spinner title="正在重新偵測臉部…" />;
   } else if (!session) {
     overlay = <Status spinner title="正在分析臉部…" />;
   } else if (lost) {

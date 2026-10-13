@@ -7,6 +7,7 @@ import { bodyBox, scanned0 } from '../detect/cache';
 import type { HitCtx } from '../detect/persons';
 import type { FrameFaceIn } from '../edit/frame';
 import { personOf } from '../edit/state';
+import { upQuarter, type Quarter } from '../geometry/view';
 import { hasValue, paramsInGroup } from '../engine/params';
 import { stableKey } from '../store/undo';
 import { protectWindow } from '../tracking/faceProtect';
@@ -20,6 +21,7 @@ import type {
   DetectionCache,
   EditState,
   Face,
+  Geometry,
   ParamId,
   PersonId,
   PersonInfoCached,
@@ -58,6 +60,34 @@ export function detectSession<S extends { faces: readonly unknown[]; faceKnown: 
 export function sessionPlan(cache: DetectionCache | null, hasTracker: boolean): { useCache: boolean; asks: boolean } {
   const useCache = cache !== null && (!hasTracker || scanned0(cache));
   return { useCache, asks: hasTracker && !useCache };
+}
+
+/** the up-frame scan record lives with the cache (src/detect/cache.ts), so firstAnswer can write it too */
+export { addFaceScan } from '../detect/cache';
+
+type FaceScan = { quarter: number; flipH: boolean };
+
+/** one face scan in the current up-frame (S §3.6, D12): normal mode, a tracker, no face known, the up-frame unscanned */
+export function needsFaceScan(s: {
+  cache: { faces: readonly unknown[]; faceScans: readonly FaceScan[] } | null;
+  geometry: Geometry;
+  mode: 'crop' | 'normal';
+  hasTracker: boolean;
+}): boolean {
+  if (s.mode !== 'normal' || !s.hasTracker || !s.cache || s.cache.faces.length > 0) return false;
+  const q = upQuarter(s.geometry);
+  return !s.cache.faceScans.some((x) => x.quarter === q);
+}
+
+/** nobody was found, and this up-frame was not tried yet (absent bodyScans = [0], S D5) */
+export function needsBodyScan(cache: { bodies: readonly unknown[] | null; bodyScans?: readonly number[] } | null, geometry: Geometry): boolean {
+  if (!cache || !cache.bodies || cache.bodies.length > 0) return false;
+  return !(cache.bodyScans ?? [0]).includes(upQuarter(geometry));
+}
+
+export function addBodyScan(scans: readonly Quarter[] | undefined, q: Quarter): Quarter[] {
+  const s = scans ? [...scans] : [0 as Quarter];
+  return s.includes(q) ? s : [...s, q];
 }
 
 /** non-answers in a row before the editor stops re-detecting; = tracker ESCALATE_AFTER, so repeated throws reach its instance replacement */
@@ -261,7 +291,9 @@ export function bodyInputKey(i: BodyFieldInput): string {
  * not re-upload it. A drag step asks for a `draft` (built at BODY_DRAFT_LONG_EDGE; the field is in UV units, so any size
  * is a valid preview); the commit / an export asks again without it, which rebuilds the same input at full resolution.
  * A full field also answers a later draft request for the same input. The previous field is passed to the build (it may
- * refill the same buffer: `changed` then reads its version).
+ * refill the same buffer: `changed` then reads its version). `up` is the up-frame the field is built in (S §3.4): part of
+ * the key, so a 旋轉 rebuilds the field and a 翻轉 (same upQuarter) does not; the previous field is handed to the build
+ * only in the upright frame (an odd U grid has swapped sides).
  */
 export class BodyFieldMemo {
   private key: string | null = null;
@@ -271,12 +303,13 @@ export class BodyFieldMemo {
   constructor(private readonly build: (input: BodyFieldInput, prev?: BodyField | null, longEdge?: number) => BodyField | null) {}
 
   /** changed → hand `field` to the session (it may be the same object with a new version). */
-  update(input: BodyFieldInput, draft = false): { field: BodyField | null; changed: boolean } {
-    const key = bodyInputKey(input);
+  update(input: BodyFieldInput, draft = false, up: Quarter = 0): { field: BodyField | null; changed: boolean } {
+    const key = `${bodyInputKey(input)}|${up}`;
     if (key === this.key && (draft || !this.draft)) return { field: this.field, changed: false };
     const before = this.field;
     const beforeVersion = before?.version;
-    this.field = draft ? this.build(input, before, BODY_DRAFT_LONG_EDGE) : this.build(input, before);
+    const prev = up === 0 ? before : null;
+    this.field = draft ? this.build(input, prev, BODY_DRAFT_LONG_EDGE) : this.build(input, prev);
     this.key = key;
     this.draft = draft && this.field !== null;
     return { field: this.field, changed: this.field !== before || this.field?.version !== beforeVersion };

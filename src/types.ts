@@ -260,6 +260,8 @@ export interface DetectionCache {
   bodies: CachedBody[] | null;
   /** false for a v0.3 cache with people ≥ 2: the others are unknown */
   bodiesComplete: boolean;
+  /** quarters the 美體 detection ran in (step-3 spec §3.6, D5); absent = [0] */
+  bodyScans?: (0 | 1 | 2 | 3)[];
   /** display order: left to right when first built, later persons appended */
   persons: PersonInfoCached[];
   primary: PersonId;

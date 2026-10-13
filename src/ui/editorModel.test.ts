@@ -8,9 +8,12 @@ import { cacheBody, makeCache } from '../detect/testCaches';
 import { applyPreset, setHeightBand, setParam } from '../engine/params';
 import type { BeautyParams, BodyField, EditState, Face, ParamId, PersonId, RegionStatus, Selection, TrackerState } from '../types';
 import { lensFor, P0_INFO } from '../edit/lens';
+import { flipView, IDENTITY_GEOMETRY, rotateLeft, upQuarter } from '../geometry/view';
 import { editFromLegacy } from '../edit/legacy';
 import { assignPersons, withPersons } from '../edit/state';
 import {
+  addBodyScan,
+  addFaceScan,
   answerNotices,
   ANY_FIELD,
   BODY_DRAFT_LONG_EDGE,
@@ -31,6 +34,8 @@ import {
   measuredAvailable,
   measurePersons,
   needsBodyMeasure,
+  needsBodyScan,
+  needsFaceScan,
   protectRequests,
   rebaseStamp,
   RedetectBudget,
@@ -508,6 +513,58 @@ describe('BodyFieldMemo (multi-person)', () => {
       { ...base, aspect: 0.5 },
     ];
     for (const v of variants) expect(bodyInputKey(v)).not.toBe(k);
+  });
+  it('BodyFieldMemo rebuilds on a 旋轉 (new up-frame) and not on a 翻轉', () => {
+    const build = vi.fn((_i: BodyFieldInput, _p?: BodyField | null, _e?: number) => makeBodyField());
+    const memo = new BodyFieldMemo(build);
+    // the input shape of this file's existing BodyFieldMemo tests; draft = false, then `up`
+    const input: BodyFieldInput = { edited: [{ id: 'f0', measure: {} as BodyMeasure, values: { 'body.slim': 0.6 } as never }], masks: [], heightBand: null, legs: { value: 0, measure: null }, bodyProtect: true, aspect: 0.75 };
+    memo.update(input, false, 0);
+    memo.update(input, false, upQuarter(flipView(IDENTITY_GEOMETRY)));
+    expect(build).toHaveBeenCalledTimes(1);
+    memo.update(input, false, upQuarter(rotateLeft(IDENTITY_GEOMETRY)));
+    expect(build).toHaveBeenCalledTimes(2);
+  });
+  it('BodyFieldMemo hands the previous field to the build only in the upright frame (an odd U grid has swapped sides)', () => {
+    const build = vi.fn((_i: BodyFieldInput, _p?: BodyField | null, _e?: number) => makeBodyField());
+    const memo = new BodyFieldMemo(build);
+    const slim = (x: number): BodyFieldInput => ({ edited: [{ id: 'f0', measure: {} as BodyMeasure, values: { 'body.slim': x } as never }], masks: [], heightBand: null, legs: { value: 0, measure: null }, bodyProtect: true, aspect: 0.75 });
+    const a = memo.update(slim(0.6), false, 1);
+    memo.update(slim(0.7), false, 1);
+    expect(build.mock.calls[1][1]).toBeNull();
+    memo.update(slim(0.7), false, 0);
+    memo.update(slim(0.8), false, 0);
+    expect(build.mock.calls[3][1]).toBe(build.mock.results[2].value);
+    expect(a.field).not.toBeNull();
+  });
+});
+
+describe('scans in the up frame (S §3.6, D5, D12)', () => {
+  const turned = rotateLeft(IDENTITY_GEOMETRY); // upQuarter 3
+  const empty = { faces: [], faceScans: [{ quarter: 0 as const, flipH: false }] }; // DetectionCache['faceScans'] quarters
+  it('a face scan only in normal mode, with a tracker, an empty face cache and an unscanned up-frame', () => {
+    expect(needsFaceScan({ cache: empty, geometry: turned, mode: 'normal', hasTracker: true })).toBe(true);
+    expect(needsFaceScan({ cache: empty, geometry: turned, mode: 'crop', hasTracker: true })).toBe(false);
+    expect(needsFaceScan({ cache: empty, geometry: turned, mode: 'normal', hasTracker: false })).toBe(false);
+    expect(needsFaceScan({ cache: empty, geometry: IDENTITY_GEOMETRY, mode: 'normal', hasTracker: true })).toBe(false);
+    expect(needsFaceScan({ cache: { ...empty, faces: [{}] }, geometry: turned, mode: 'normal', hasTracker: true })).toBe(false);
+    expect(needsFaceScan({ cache: null, geometry: turned, mode: 'normal', hasTracker: true })).toBe(false);
+  });
+
+  it('a scan counts for both flip states', () => {
+    const scanned = { faces: [], faceScans: addFaceScan(empty.faceScans, 3) };
+    expect(needsFaceScan({ cache: scanned, geometry: turned, mode: 'normal', hasTracker: true })).toBe(false);
+    expect(needsFaceScan({ cache: scanned, geometry: flipView(turned), mode: 'normal', hasTracker: true })).toBe(false);
+    expect(addFaceScan(scanned.faceScans, 3)).toEqual(scanned.faceScans);
+  });
+
+  it('a body re-scan only when nobody was found and the up-frame is new; absent bodyScans = [0]', () => {
+    expect(needsBodyScan({ bodies: [] }, turned)).toBe(true);
+    expect(needsBodyScan({ bodies: [] }, IDENTITY_GEOMETRY)).toBe(false);
+    expect(needsBodyScan({ bodies: [{}] }, turned)).toBe(false);
+    expect(needsBodyScan({ bodies: null }, turned)).toBe(false);
+    expect(needsBodyScan({ bodies: [], bodyScans: addBodyScan(undefined, 3) }, turned)).toBe(false);
+    expect(addBodyScan(undefined, 3)).toEqual([0, 3]);
   });
 });
 

@@ -5881,7 +5881,7 @@ EOF
 - Produces (`editorModel.ts`): `needsFaceScan(s: { cache: { faces: readonly unknown[]; faceScans: readonly { quarter: number; flipH: boolean }[] } | null; geometry: Geometry; mode: 'crop' | 'normal'; hasTracker: boolean }): boolean`; `needsBodyScan(cache: { bodies: readonly unknown[] | null; bodyScans?: readonly number[] } | null, geometry: Geometry): boolean`; `addFaceScan(scans, q)` (defined in `src/detect/cache.ts`, so the pure `firstAnswer` can use it without importing the UI layer; `editorModel.ts` re-exports it); `addBodyScan(scans: readonly Quarter[] | undefined, q): Quarter[]`; `BodyFieldMemo.update(input, draft = false, up: Quarter = 0)` (last parameter, part of the key).
 - Produces (`DetectionCache`): `bodyScans?: (0 | 1 | 2 | 3)[]` (absent = `[0]`, S D5), validated by `normalizeDetect`. (`AnswerInput`): `quarter?: Quarter` (the up-frame the face detection ran in; default 0).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/geometry/upFrame.test.ts`:
 
@@ -6006,12 +6006,12 @@ it('bodyScans is kept only as distinct quarters 0–3', () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to see them fail**
+- [x] **Step 2: Run the tests to see them fail**
 
 Run: `npx vitest run src/geometry/upFrame.test.ts src/ui/editorModel.test.ts src/detect/cache.test.ts`
 Expected: FAIL — `Failed to resolve import "./upFrame"`, `needsFaceScan is not exported`.
 
-- [ ] **Step 3: Implement `src/geometry/upFrame.ts`**
+- [x] **Step 3: Implement `src/geometry/upFrame.ts`**
 
 ```ts
 // The up frame U (C §3.5, S §3.4, §3.6): O turned by whole quarters only, so that U-up = E-up and E rows = U rows. Detectors
@@ -6177,7 +6177,7 @@ export function upTracker(t: Tracker, q: Quarter): Tracker {
 
 (`pointsOToU` writes into a `Float32Array`, so the round trip compares float32 values: the test's `Math.fround` is that rounding.)
 
-- [ ] **Step 4: Scan rules and the memo key in `editorModel.ts`**
+- [x] **Step 4: Scan rules and the memo key in `editorModel.ts`**
 
 ```ts
 import { upQuarter, type Quarter } from '../geometry/view';
@@ -6251,7 +6251,7 @@ export function addFaceScan(scans: DetectionCache['faceScans'], q: 0 | 1 | 2 | 3
 
 `src/edit/migrate.ts`: `AnswerInput` (`:101-110`) gains `/** the up-frame the face detection ran in (S §3.6); default 0 */ quarter?: 0 | 1 | 2 | 3;`, and `firstAnswer`'s first line (`:145`) becomes `const scans: DetectionCache['faceScans'] = a.prepared ? addFaceScan(a.detect?.faceScans ?? [], a.quarter ?? 0) : [];` (import `addFaceScan` from `../detect/cache`). At quarter 0 this is step 1's `[{ quarter: 0, flipH: false }]` for every cache step 1 can pass here (none, or one with `[]`: `sessionPlan` reuses a scanned-upright cache instead of detecting).
 
-- [ ] **Step 5: Wire U into the Editor**
+- [x] **Step 5: Wire U into the Editor**
 
 In `src/ui/screens/Editor.tsx`, import `bodiesUToO, faceOToU, fieldUToO, maskOToU, maskUToO, poseOToU, upImage, upTracker` from `../../geometry/upFrame`, `upQuarter, type Quarter` (joining Task 14's `../../geometry/view` import), `addBodyScan, needsBodyScan, needsFaceScan` (joining the `../editorModel` import; `addFaceScan` is `firstAnswer`'s now) and `type BodyFieldInput` (joining the `../../body/field` import); then:
 
@@ -6305,7 +6305,7 @@ In the session effect (`Editor.tsx:392-463`; it re-runs on `[currentEngine, dete
 
 and the memo (`Editor.tsx:216`, `useState(() => new BodyFieldMemo(buildBodyField))`) is built as `new BodyFieldMemo((input, prev, edge) => buildInU(input, prev, edge))`: the arrow reads `buildInU` only when the memo builds, so `buildInU` may be declared further down the component (a direct reference in the `useState` initializer would hit its temporal dead zone on the first render). The one `fieldMemo.update(…)` call, step 1's `applyField` (`fieldMemo.update(fieldInputOf(…), draft)`, `Editor.tsx:666`), passes `upQuarter(editRef.current.photo.geometry)` as its new last argument. `heightBand` stays as stored: E rows = U rows.
 
-- [ ] **Step 6: A sideways photo is scanned once, after 裁切**
+- [x] **Step 6: A sideways photo is scanned once, after 裁切**
 
 Add to `tests/e2e/crop.spec.ts` (import `PNG` from `pngjs` and `readFileSync` from `node:fs`):
 
@@ -6342,14 +6342,14 @@ test('a sideways photo: 旋轉 and 翻轉 run no detector; leaving 裁切 scans 
 });
 ```
 
-- [ ] **Step 7: Run everything touched**
+- [x] **Step 7: Run everything touched**
 
 Run: `npx vitest run src/geometry/ src/ui/editorModel.test.ts src/detect/ src/edit/migrate.test.ts`
 Expected: PASS.
 Run: `npm run build && npx playwright test tests/e2e/crop.spec.ts tests/e2e/body.spec.ts tests/e2e/faceProtect.spec.ts`
 Expected: all passed (identity geometry: `upQuarter` 0 everywhere, so body and 瘦臉-limit paths are today's).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/geometry/upFrame.ts src/geometry/upFrame.test.ts src/ui/editorModel.ts src/ui/editorModel.test.ts src/detect/ src/edit/migrate.ts src/types.ts src/ui/screens/Editor.tsx tests/e2e/crop.spec.ts

@@ -127,6 +127,10 @@ export function normalizeDetect(raw: unknown): { cache: DetectionCache | null; s
   const faceScans = arr(raw.faceScans)
     .filter((s): s is { quarter: 0 | 1 | 2 | 3; flipH: boolean } => isRecord(s) && [0, 1, 2, 3].includes(s.quarter as number) && typeof s.flipH === 'boolean')
     .map((s) => ({ quarter: s.quarter, flipH: s.flipH }));
+  // quarters the 美體 detection ran in (S §3.6, D5): only distinct integers 0–3, else dropped (absent = [0])
+  const bs = raw.bodyScans;
+  const bodyScans =
+    Array.isArray(bs) && bs.every((x) => x === 0 || x === 1 || x === 2 || x === 3) && new Set(bs).size === bs.length ? ([...bs] as (0 | 1 | 2 | 3)[]) : undefined;
   const dropped = isRecord(raw.dropped) ? raw.dropped : {};
   const count = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 ? (v as number) : 0);
   const base = {
@@ -139,6 +143,7 @@ export function normalizeDetect(raw: unknown): { cache: DetectionCache | null; s
     bodies,
     bodiesComplete: typeof raw.bodiesComplete === 'boolean' ? raw.bodiesComplete : true,
     dropped: { tooSmall: count(dropped.tooSmall), overCap: count(dropped.overCap) },
+    ...(bodyScans ? { bodyScans } : {}),
   };
   if (!faces.length && !bodies?.length) {
     // p0 only in the stored no-face form (faces = [], bodies null or []). A record whose faces or bodies were all
@@ -183,6 +188,11 @@ export function cachedFits(cache: DetectionCache, width: number, height: number)
 /** a definite upright face answer exists (faceScans holds {0, false}; [] = 基本模式) */
 export function scanned0(cache: DetectionCache): boolean {
   return cache.faceScans.some((s) => s.quarter === 0 && !s.flipH);
+}
+
+/** a scan counts for both flip states (a mirror does not change detectability), so it is recorded with flipH false */
+export function addFaceScan(scans: DetectionCache['faceScans'], q: 0 | 1 | 2 | 3): DetectionCache['faceScans'] {
+  return scans.some((x) => x.quarter === q) ? [...scans] : [...scans, { quarter: q, flipH: false }];
 }
 
 /** what the lens needs per person; before any cache the implicit person edits everything */
@@ -290,7 +300,9 @@ export function buildCache(
  * person keeps its id and params); the other faces are appended. The primary is kept unless it was p0. */
 export function withFaces(cache: DetectionCache, prepared: PreparedFaces, faceScans: DetectionCache['faceScans']): DetectionCache {
   if (!cache.bodies?.length) {
-    return buildCache({ width: cache.width, height: cache.height }, prepared, cache.bodies, { faceScans, bodiesComplete: cache.bodiesComplete });
+    // buildCache knows no bodyScans: a "nobody" body answer keeps the up-frames it was tried in (S D5)
+    const built = buildCache({ width: cache.width, height: cache.height }, prepared, cache.bodies, { faceScans, bodiesComplete: cache.bodiesComplete });
+    return cache.bodyScans ? { ...built, bodyScans: cache.bodyScans } : built;
   }
   const pairs = pairPersons(prepared.faces, cache.bodies, cache.width / cache.height);
   const faceOfBody = new Map(pairs.map(([f, b]) => [b, f]));

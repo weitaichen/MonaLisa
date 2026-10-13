@@ -1,5 +1,7 @@
 // 裁切／旋轉／翻轉 and full-resolution export in the app (S §8.2). Imports go through the file chooser like a user's.
+import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
+import { PNG } from 'pngjs';
 import { debugState, expect, SAMPLE_FACE, test } from './fixtures';
 
 async function importInto(page: Page, file: string | { name: string; mimeType: string; buffer: Buffer }) {
@@ -140,4 +142,98 @@ test('旋轉 turns the canvas the short way over 240 ms; nothing animates under 
   const reduced = await turns();
   expect(reduced.length).toBeGreaterThan(0);
   expect(reduced.every((s) => !s.transition.includes(EASE))).toBe(true);
+});
+
+/** sample_face.png turned 90° clockwise (a sideways photo) */
+function sidewaysFace(): Buffer {
+  const src = PNG.sync.read(readFileSync(SAMPLE_FACE));
+  const out = new PNG({ width: src.height, height: src.width });
+  for (let y = 0; y < src.height; y++)
+    for (let x = 0; x < src.width; x++) {
+      const s = (y * src.width + x) * 4;
+      const d = (x * out.width + (out.width - 1 - y)) * 4;
+      src.data.copy(out.data, d, s, s + 4);
+    }
+  return PNG.sync.write(out);
+}
+
+test('a sideways photo: 旋轉 and 翻轉 run no detector; leaving 裁切 scans the new up-frame once', async ({ page }) => {
+  await importInto(page, { name: 'sideways.png', mimeType: 'image/png', buffer: sidewaysFace() });
+  const before = await debugState(page);
+  await tab(page, '裁切').click();
+  await option(page, '旋轉').click();
+  await option(page, '翻轉').click();
+  await option(page, '翻轉').click();
+  expect((await debugState(page)).detectCalls).toBe(before.detectCalls);
+  await tab(page, '美膚').click();
+  if (before.faces === 0) {
+    await expect.poll(async () => (await debugState(page)).detectCalls).toBe(before.detectCalls + 1);
+    await expect.poll(async () => (await debugState(page)).faces).toBe(1);
+  } else {
+    await page.waitForTimeout(1500);
+    expect((await debugState(page)).detectCalls).toBe(before.detectCalls);
+  }
+});
+
+/** a face-free grey gradient (as persons.spec.ts / editor.spec.ts noFacePng) */
+function noFacePng(): Buffer {
+  const png = new PNG({ width: 600, height: 800 });
+  for (let i = 0; i < 600 * 800; i++) {
+    const v = 90 + Math.round((70 * ((i % 600) + Math.floor(i / 600))) / 1400);
+    png.data.set([v, v, v + 6, 255], i * 4);
+  }
+  return PNG.sync.write(png);
+}
+
+test('nobody found upright: each new up-frame is scanned once on leaving 裁切; 翻轉, scanned up-frames and ↶ run no detector', async ({ page }) => {
+  await importInto(page, { name: 'noface.png', mimeType: 'image/png', buffer: noFacePng() });
+  const before = await debugState(page);
+  expect(before.faces).toBe(0);
+  const calls = async () => (await debugState(page)).detectCalls;
+  // whether 正在重新偵測臉部… showed at any point (it may be up for well under a poll interval)
+  await page.evaluate(() => {
+    const w = window as unknown as { __scanSeen: boolean };
+    w.__scanSeen = false;
+    new MutationObserver(() => {
+      if (document.body.textContent?.includes('正在重新偵測臉部…')) w.__scanSeen = true;
+    }).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+  const ready = () => expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 60_000 });
+
+  // 旋轉 → up-frame 3: nothing in 裁切, one scan on leaving
+  await tab(page, '裁切').click();
+  await option(page, '旋轉').click();
+  await page.waitForTimeout(300);
+  expect(await calls()).toBe(before.detectCalls);
+  await tab(page, '美膚').click();
+  await expect.poll(calls).toBe(before.detectCalls + 1);
+  expect(await page.evaluate(() => (window as unknown as { __scanSeen: boolean }).__scanSeen)).toBe(true);
+  await ready();
+  expect((await debugState(page)).faces).toBe(0);
+
+  // 翻轉 keeps the up-frame; one more 旋轉 is upright again (scanned when the photo opened): no scan
+  await tab(page, '裁切').click();
+  await option(page, '翻轉').click();
+  await option(page, '旋轉').click();
+  await tab(page, '美膚').click();
+  await page.waitForTimeout(1000);
+  expect(await calls()).toBe(before.detectCalls + 1);
+
+  // a new up-frame (1), turned and mirrored back and forth in 裁切: one scan on leaving
+  await tab(page, '裁切').click();
+  await option(page, '旋轉').click();
+  await option(page, '翻轉').click();
+  await option(page, '翻轉').click();
+  await page.waitForTimeout(300);
+  expect(await calls()).toBe(before.detectCalls + 1);
+  await tab(page, '美膚').click();
+  await expect.poll(calls).toBe(before.detectCalls + 2);
+  await ready();
+
+  // ↶ through every step back to the photo as opened: every up-frame on the way was scanned
+  for (let i = 0; i < 6; i++) await page.getByRole('button', { name: '復原' }).click();
+  await expect(page.getByRole('button', { name: '復原' })).toBeDisabled();
+  await page.waitForTimeout(1000);
+  expect(await calls()).toBe(before.detectCalls + 2);
+  expect((await debugState(page)).lastError).toBeNull();
 });

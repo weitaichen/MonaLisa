@@ -2,7 +2,7 @@
 // trust, and what the first face answer merges or rematches (whether a detection runs is the editor's sessionPlan).
 // Nothing is rewritten in bulk; the first write after an open writes v2.
 // The answer-time half (pairing, the p0 hand-over, A13) is firstAnswer; a later 美體 detection's is bodyAnswer.
-import { aspectFits, boxScore, buildCache, cachedFits, noFaceCache, poseBox, rematchByIoU, withBodies, withFaces } from '../detect/cache';
+import { addFaceScan, aspectFits, boxScore, buildCache, cachedFits, noFaceCache, poseBox, rematchByIoU, withBodies, withFaces } from '../detect/cache';
 import { adaptCached, EMPTY_PREPARED, type PreparedFaces } from '../detect/faces';
 import { seedPrimary } from '../detect/persons';
 import { stableKey } from '../store/undo';
@@ -110,6 +110,8 @@ export interface AnswerInput {
   v1Body: V1Bodies | null;
   rematch: Record<PersonId, Rect> | null;
   faceSeed: FaceSeed;
+  /** the up-frame the face detection ran in (step-3 spec §3.6); default 0 */
+  quarter?: 0 | 1 | 2 | 3;
 }
 export interface Answer {
   detect: DetectionCache;
@@ -145,7 +147,8 @@ function splitBodyLook(p: PersonParams): { face: PersonParams; body: PersonParam
  * cache gaining faces, A15) passes null for them, or the A13 split would run again on persons that no longer hold p0.
  */
 export function firstAnswer(a: AnswerInput): Answer {
-  const scans: DetectionCache['faceScans'] = a.prepared ? [{ quarter: 0, flipH: false }] : [];
+  // a later scan in another up-frame (a sideways photo, S §3.6) appends its quarter: the cache only grows
+  const scans: DetectionCache['faceScans'] = a.prepared ? addFaceScan(a.detect?.faceScans ?? [], a.quarter ?? 0) : [];
   let cache: DetectionCache;
   if (a.detect) cache = a.prepared ? withFaces(a.detect, a.prepared, scans) : a.detect;
   else if (a.prepared || a.v1Body?.bodies.length) {

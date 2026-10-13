@@ -349,7 +349,7 @@ git commit -m "v0.4 step 4 (1/20): tone params, Spot model, spot caps, debug fie
   export function sanitizeSpots(raw: unknown, personIds: ReadonlySet<PersonId> | null, hasOSize: boolean): Spot[];
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/edit/spots.test.ts`:
 ```ts
@@ -480,12 +480,12 @@ describe('step 4: sanitizeEditState keeps valid spots', () => {
 ```
 (Step 1's `sanitizeEditState(raw, personIds: readonly PersonId[] | null)` takes the person ids as an array (step-1 plan Task 5); `assignPersons(edit, ids: readonly PersonId[], primary, opts?)` is in `src/edit/state.ts` (step-1 plan Task 5), and so are `resetAll(edit)` (重置, step-1 plan Task 5: `{ ...edit, photo: defaultPhoto(), persons }`) and `editKey` (step-1 plan Task 4) — add whichever of them the test file's `./state` import lacks (step 1's tests already import `editKey`, `assignPersons`, `renamePersons` and `resetAll` there). `rebase` (step-1 plan Task 7) maps every stored undo state through `assignPersons`, so the `assignPersons` line is the rebase pin.)
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `npx vitest run src/edit/spots.test.ts src/edit/state.test.ts`
 Expected: FAIL — `Failed to resolve import "./spots"`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/edit/spots.ts`:
 ```ts
@@ -566,12 +566,12 @@ The sanitized photo is built by step 1's `sanitizePhoto(raw, persons: ReadonlySe
 ```
 and add `import { sanitizeSpots } from './spots';`. (`persons` is the set of persons the sanitized edit keeps, so an owner outside it becomes `null`; the camera look sanitizes without an O size and keeps no spots.)
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/edit/spots.test.ts src/edit/state.test.ts && npm run typecheck`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/edit/spots.ts src/edit/spots.test.ts src/edit/state.ts src/edit/state.test.ts

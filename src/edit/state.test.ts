@@ -279,3 +279,37 @@ describe('step 4: spots in the photo params', () => {
     expect(defaultPhoto().spots).toEqual([]);
   });
 });
+
+describe('step 4: sanitizeEditState keeps valid spots', () => {
+  it('sanitizes spots with the O size and drops them without it', () => {
+    const raw = {
+      v: 2,
+      photo: {
+        ...defaultPhoto(),
+        spots: [
+          { x: 0.3, y: 0.4, r: 0.02, dx: 0.05, dy: 0, owner: 'f0' },
+          { x: NaN, y: 0.4, r: 0.02, dx: 0, dy: 0, owner: null },
+          { x: 0.6, y: 0.4, r: 0.02, dx: 0, dy: 0, owner: 'f9' },
+        ],
+      },
+      persons: { f0: neutralPerson() },
+      template: neutralPerson(),
+      primaryInit: null,
+    };
+    const withSize = sanitizeEditState(raw, ['f0'], { width: 1000, height: 1500 });
+    expect(withSize.photo.spots).toEqual([
+      { x: 0.3, y: 0.4, r: 0.02, dx: 0.05, dy: 0, owner: 'f0' },
+      { x: 0.6, y: 0.4, r: 0.02, dx: 0, dy: 0, owner: null },
+    ]);
+    expect(sanitizeEditState(raw, ['f0']).photo.spots).toEqual([]);
+  });
+
+  it('spots are part of the output key, a detection rebase keeps them, 重置 clears them (S §5, §8.1, C §3.4)', () => {
+    const e = { v: 2 as const, photo: { ...defaultPhoto(), spots: [] }, persons: { p0: neutralPerson() }, template: neutralPerson(), primaryInit: null };
+    const withSpot = { ...e, photo: { ...e.photo, spots: [{ x: 0.3, y: 0.4, r: 0.02, dx: 0.05, dy: 0, owner: null }] } };
+    expect(editKey(withSpot)).not.toBe(editKey(e));
+    const next = assignPersons(withSpot, ['f0'], 'f0');
+    expect(next.photo.spots).toEqual(withSpot.photo.spots);
+    expect(resetAll(withSpot).photo.spots).toEqual([]);
+  });
+});

@@ -4,6 +4,7 @@ import { isLookId } from '../engine/looks';
 import { applyPreset, BLUSH_SHADES, FILTERS, LIP_SHADES, neutralValue, PARAM_DEFS, paramsInGroup, PRESETS, sanitizeBand } from '../engine/params';
 import { clampStraighten, cropConstrain, cropValid, flipView, IDENTITY_GEOMETRY, isIdentity, rotateLeft } from '../geometry/view';
 import { stableKey } from '../store/undo';
+import { sanitizeSpots } from './spots';
 import type {
   AdjustId,
   CameraLook,
@@ -277,7 +278,7 @@ export function sanitizePhoto(raw: unknown, persons: ReadonlySet<PersonId> | nul
     heightBand: sanitizeBand(r.heightBand),
     legsAnchor: typeof la === 'string' && PERSON_ID.test(la) && (!persons || persons.has(la)) ? la : null,
     geometry: sanitizeGeometry(r.geometry, oSize),
-    spots: [],
+    spots: sanitizeSpots(r.spots, persons, !!oSize),
   };
   if (photo.presetLink && !matchesPhotoLink(photo, photo.presetLink)) photo.presetLink = null;
   return photo;

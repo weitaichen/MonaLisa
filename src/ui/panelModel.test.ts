@@ -212,8 +212,8 @@ const ready = (over: Partial<BodyContext> = {}): BodyContext => ({
 const bodySel = (body: PanelSelection['body'] = 'body.legs') => sel({ tab: 'body', body });
 
 describe('美體 tab', () => {
-  it('sits after 美型: 一鍵 · 美膚 · 美型 · 美體 · 濾鏡 · 美妝', () => {
-    expect(TABS.map((t) => t.label)).toEqual(['一鍵', '美膚', '美型', '美體', '濾鏡', '美妝']);
+  it('sits after 美型: 一鍵 · 美膚 · 美型 · 美體 · 濾鏡 · 美妝 · 調節', () => {
+    expect(TABS.map((t) => t.label)).toEqual(['一鍵', '美膚', '美型', '美體', '濾鏡', '美妝', '調節']);
   });
   it('strip: ⊘ 原圖 · 增高 · the 10 sliders in schema order · 背景保護', () => {
     const items = itemsFor(lensOf(defaultParams()), bodySel(), ready());

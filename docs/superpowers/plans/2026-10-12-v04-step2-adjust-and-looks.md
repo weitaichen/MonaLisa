@@ -4286,12 +4286,12 @@ git commit -m "v0.4 step 2: sessions load 濾鏡 and 質感 LUTs, export readine
   - step 1's `photoScoped(sel, lens)` is true on both photo-level tabs; `personNote('adjust', lens)` is null; `photoTouchToast` gives one 「調節套用於整張照片」 for the 12 items (seen key `'adjust'`) and, like a look tile through `tapToast` (`TILE_ITEMS.look = '質感'`), one 「質感套用於整張照片」 for the 程度 slider (seen key `'look'`); `sliderEmptyText` is null on 一鍵 › 質感
   - `lookFailedNotice(id: string): string`
 
-- [ ] **Step 0: Confirm the step-1 panel API**
+- [x] **Step 0: Confirm the step-1 panel API**
 
 Run: `grep -n "export function \(itemsFor\|activate\|sliderFor\|tabHasValue\)\|export interface ActivateResult\|export interface SliderBinding\|const done" src/ui/panelModel.ts`
 Expected (step-1 plan Task 10): `itemsFor(lens, sel, body?)`, `activate(item, lens, sel)`, `sliderFor(lens, sel, body?)`, `tabHasValue(lens, tab, body?)`; `ActivateResult { edit; sel; changed; notice? }`; `SliderBinding` with `param` and `mixed`; inside `activate`, `const edit = lens.edit;` and `const done = (next: EditState = edit, nextSel = sel, notice?: string)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/ui/panelModel.adjust.test.ts`:
 
@@ -4528,12 +4528,12 @@ describe('step-1 panel functions dispatch to 調節 and 質感', () => {
 
 In `src/ui/panelModel.test.ts`, port the tab-order assertion (lines 215-216 at `9eec432`) mechanically: `['一鍵', '美膚', '美型', '美體', '濾鏡', '美妝']` → `['一鍵', '美膚', '美型', '美體', '濾鏡', '美妝', '調節']` (the test title `sits after 美型: 一鍵 · 美膚 · 美型 · 美體 · 濾鏡 · 美妝` gains `· 調節`).
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run src/ui/panelModel.adjust.test.ts`
 Expected: FAIL — `adjustItems` (and the other new names) are not exported.
 
-- [ ] **Step 3: Types and the new section**
+- [x] **Step 3: Types and the new section**
 
 In `src/ui/panelModel.ts` (CRLF — Edit tool):
 1. Imports: add `neutralValue` to the `../engine/params` import; add `import { lookDef, LOOKS, lookThumbUrl } from '../engine/looks';`, `adjustIsNeutral` to the existing `import { personOf } from '../edit/state';` and the types `AdjustId`, `LookId`, `PhotoParams` to the `../types` type import.
@@ -4698,7 +4698,7 @@ export function lookFailedNotice(id: string): string {
 }
 ```
 
-- [ ] **Step 4: Dispatch from step 1's panel functions**
+- [x] **Step 4: Dispatch from step 1's panel functions**
 
 Still in `src/ui/panelModel.ts`:
 1. Add before `activate`:
@@ -4751,12 +4751,12 @@ export interface ActivateContext {
    - `TILE_ITEMS`: add `look: '質感'` (a look tile that changes the photo is the 質感 first touch; its seen key is the action type `'look'`, the same as the 程度 slider's).
    - `sliderEmptyText(lens, sel)`: `sel.tab === 'preset' && …` → `sel.tab === 'preset' && sel.presetPart !== 'look' && …` (no 「各人不同」 under 質感 while it is 無).
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `npx vitest run src/ui/panelModel.adjust.test.ts src/ui/panelModel.test.ts && npm run typecheck`
 Expected: PASS; `tsc` exits 0.
 
-- [ ] **Step 6: Full suite and commit**
+- [x] **Step 6: Full suite and commit**
 
 Run: `npm test`
 Expected: PASS.

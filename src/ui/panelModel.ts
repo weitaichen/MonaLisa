@@ -1,10 +1,11 @@
 // BeautyPanel logic (spec §7.3), kept pure so it can be unit-tested without a DOM.
-import { BLUSH_SHADES, FILTERS, hasValue, LIP_SHADES, MAKEUP_PICK_DEFAULT, paramDef, paramsInGroup, PRESETS } from '../engine/params';
+import { BLUSH_SHADES, FILTERS, hasValue, LIP_SHADES, MAKEUP_PICK_DEFAULT, neutralValue, paramDef, paramsInGroup, PRESETS } from '../engine/params';
+import { lookDef, LOOKS, lookThumbUrl } from '../engine/looks';
 import { NO_BODY_NOTE, NO_FACE_NOTE, type Lens } from '../edit/lens';
-import { personOf } from '../edit/state';
-import type { EditState, HeightBand, ParamDef, ParamId, PersonId, PersonParamId, PresetId, RegionStatus } from '../types';
+import { adjustIsNeutral, personOf } from '../edit/state';
+import type { AdjustId, EditState, HeightBand, LookId, ParamDef, ParamId, PersonId, PersonParamId, PhotoParams, PresetId, RegionStatus } from '../types';
 
-export type TabId = 'preset' | 'skin' | 'shape' | 'body' | 'filter' | 'makeup';
+export type TabId = 'preset' | 'skin' | 'shape' | 'body' | 'filter' | 'makeup' | 'adjust';
 export type MakeupPart = 'lip' | 'blush';
 /** what the 美體 strip has selected: one of the 10 body sliders, or the manual 增高 tool */
 export type BodySel = ParamId | 'height';
@@ -16,11 +17,19 @@ export const TABS: readonly { id: TabId; label: string }[] = [
   { id: 'body', label: '美體' },
   { id: 'filter', label: '濾鏡' },
   { id: 'makeup', label: '美妝' },
+  { id: 'adjust', label: '調節' },
 ];
 
 export const MAKEUP_PARTS: readonly { id: MakeupPart; label: string }[] = [
   { id: 'lip', label: '口紅' },
   { id: 'blush', label: '腮紅' },
+];
+
+/** 一鍵's parts (step-2 spec §2.2): the beauty presets (person-level) and the 質感 looks (photo-level) */
+export type PresetPart = 'beauty' | 'look';
+export const PRESET_PARTS: readonly { id: PresetPart; label: string; icon: string }[] = [
+  { id: 'beauty', label: '美顏', icon: 'presetGlow' },
+  { id: 'look', label: '質感', icon: 'look' },
 ];
 
 export interface PanelSelection {
@@ -29,6 +38,8 @@ export interface PanelSelection {
   shape: ParamId;
   body: BodySel;
   makeupPart: MakeupPart;
+  adjust: AdjustId;
+  presetPart: PresetPart;
 }
 
 export const INITIAL_SELECTION: PanelSelection = {
@@ -37,6 +48,8 @@ export const INITIAL_SELECTION: PanelSelection = {
   shape: 'shape.eyeEnlarge',
   body: 'body.legs',
   makeupPart: 'lip',
+  adjust: 'adjust.brightness',
+  presetPart: 'beauty',
 };
 
 // ───────────── 美體 context (fed by the screen: Editor detects, Camera is unsupported) ─────────────
@@ -156,7 +169,7 @@ export interface PersonNote {
  * Editor's photo-level faceNote.
  */
 export function personNote(tab: TabId, lens: Lens): PersonNote | null {
-  if (!multiPerson(lens) || lens.noFace || lens.sel.kind !== 'person' || tab === 'body' || tab === 'filter') return null;
+  if (!multiPerson(lens) || lens.noFace || lens.sel.kind !== 'person' || tab === 'body' || tab === 'filter' || tab === 'adjust') return null;
   const id = lens.sel.id;
   const me = lens.persons.find((p) => p.id === id);
   if (!me || me.face) return null;
@@ -188,6 +201,7 @@ export function bodyNoteFor(body: BodyContext | undefined, lens: Lens, sel: Pane
  * the primary whoever is selected (S §2.4 美膚), and a chip tap would change nothing they do.
  */
 export function photoScoped(sel: PanelSelection, lens: Lens): boolean {
+  if (photoTabLabel(sel) !== null) return true;
   if (sel.tab === 'filter') return true;
   if (sel.tab === 'skin') return photoLike(lens, sel.skin);
   if (sel.tab === 'body') return sel.body === 'height' || sel.body === 'body.legs';
@@ -262,7 +276,7 @@ export function bandOrSuggested(edit: EditState, body: BodyContext | undefined):
 
 export type ItemVisual =
   | { kind: 'icon'; icon: string }
-  | { kind: 'thumb'; src: string }
+  | { kind: 'thumb'; src: string; /** icon under the image (shown when it fails to load); default 'filter' */ fallback?: string }
   /** null colour = 原色 (GPUPixel texture) */
   | { kind: 'swatch'; color: string | null };
 
@@ -276,7 +290,9 @@ export type ItemAction =
   /** 美體: select the manual 增高 tool (the screen shows HeightBandOverlay) */
   | { type: 'height' }
   /** 美體: toggle 背景保護 */
-  | { type: 'protect' };
+  | { type: 'protect' }
+  /** 一鍵 › 質感: pick a look, or 無 (null) */
+  | { type: 'look'; id: LookId | null };
 
 export interface PanelItem {
   key: string;
@@ -294,6 +310,8 @@ export interface PanelItem {
   pressed?: boolean;
   /** short tile badge: 「整張」 on photo-level items with ≥ 2 persons (A9; step 5 adds 「左右」) */
   badge?: string;
+  /** a strip divider is drawn before this item (調節: light │ colour │ effects) */
+  divider?: 'before';
 }
 
 const ENABLED = { disabled: false, reason: null } as const;
@@ -389,6 +407,144 @@ function bodyItems(lens: Lens, sel: PanelSelection, body: BodyContext | undefine
   ];
 }
 
+// ───────────── 調節 and 質感 (v0.4 step 2) ─────────────
+
+/** the 調節 strip splits light │ colour │ effects: dividers before 色溫 and 褪色 (step-2 spec §2.1) */
+const ADJUST_DIVIDERS: ReadonlySet<string> = new Set(['adjust.temperature', 'adjust.fade']);
+
+/** ⊘ 原圖 · 亮度 … 暗角; `value` reads the user's stored value (lens.get(id).value) */
+export function adjustItems(value: (id: AdjustId) => number, sel: PanelSelection): PanelItem[] {
+  return [
+    RESET_ITEM(),
+    ...paramsInGroup('adjust').map(
+      (d): PanelItem => ({
+        key: d.id,
+        label: d.label,
+        visual: { kind: 'icon', icon: d.icon },
+        selected: sel.adjust === d.id,
+        hasValue: hasValue(d, value(d.id as AdjustId)),
+        action: { type: 'param', id: d.id },
+        ...(ADJUST_DIVIDERS.has(d.id) ? { divider: 'before' as const } : {}),
+        ...ENABLED,
+      }),
+    ),
+  ];
+}
+
+/** 無 · 膠片 · CCD · 直閃 · 藍調 · 電影感: exactly one selected (無 while no look), thumbnails over the look icon */
+export function lookItems(look: PhotoParams['look']): PanelItem[] {
+  return [
+    { ...RESET_ITEM('無'), key: 'look.none', selected: look === null, action: { type: 'look', id: null } },
+    ...LOOKS.map(
+      (l): PanelItem => ({
+        key: `look.${l.id}`,
+        label: l.label,
+        visual: { kind: 'thumb', src: lookThumbUrl(l.id), fallback: 'look' },
+        selected: look?.id === l.id,
+        hasValue: false,
+        action: { type: 'look', id: l.id },
+        ...ENABLED,
+      }),
+    ),
+  ];
+}
+
+/** 調節 slider: −50…+50 or 0–100, double tap → neutral, no default dot, coloured tracks for 色溫 / 色調 */
+export function adjustSlider(value: (id: AdjustId) => number, sel: PanelSelection): SliderBinding {
+  const id = sel.adjust;
+  const d = paramDef(id);
+  return {
+    key: id,
+    param: id,
+    label: d.label,
+    bidirectional: d.bidirectional,
+    value: value(id),
+    mixed: false,
+    defaultValue: neutralValue(d),
+    hideDefault: true,
+    ...(id === 'adjust.temperature' ? { track: 'temperature' as const } : id === 'adjust.tint' ? { track: 'tint' as const } : {}),
+    apply: (lens, v) => lens.set(id, v),
+  };
+}
+
+/** 質感 程度 (0–100, default dot at the look's defaultAmount); keyed by look so a hop resets the drag; none while 無 */
+export function lookSlider(look: PhotoParams['look']): SliderBinding | null {
+  if (!look) return null;
+  const id = look.id;
+  return {
+    key: `look.${id}`,
+    param: null,
+    label: '程度',
+    bidirectional: false,
+    value: look.amount,
+    mixed: false,
+    defaultValue: lookDef(id)?.defaultAmount ?? 0.8,
+    apply: (lens, v) => lens.setLook(id, v),
+  };
+}
+
+export type LookActivation = { kind: 'none' } | { kind: 'retry'; id: LookId } | { kind: 'set'; id: LookId | null; amount: number };
+
+/**
+ * A tap in 一鍵 › 質感 (step-2 spec §2.2): from 無 a look starts at its default 程度; hopping keeps the 程度; the
+ * selected look is a no-op unless its LUT failed (then the tap only retries the load); 無 clears.
+ */
+export function lookActivation(target: LookId | null, look: PhotoParams['look'], failed: (id: LookId) => boolean): LookActivation {
+  if (target === null) return look === null ? { kind: 'none' } : { kind: 'set', id: null, amount: look.amount };
+  if (look?.id === target) return failed(target) ? { kind: 'retry', id: target } : { kind: 'none' };
+  return { kind: 'set', id: target, amount: look ? look.amount : (lookDef(target)?.defaultAmount ?? 0.8) };
+}
+
+/** 調節 tab dot: any of the 12 user values is not neutral */
+export function adjustTabHasValue(value: (id: AdjustId) => number): boolean {
+  return paramsInGroup('adjust').some((d) => hasValue(d, value(d.id as AdjustId)));
+}
+
+export interface PartButton {
+  id: string;
+  label: string;
+  icon: string;
+  active: boolean;
+  hasValue: boolean;
+}
+
+/** The part row that leads the strip: 美妝's 口紅／腮紅 and 一鍵's 美顏／質感 (step-2 spec §2.2); null on other tabs. */
+export function partButtons(sel: PanelSelection, state: { makeupOn(part: MakeupPart): boolean; look: PhotoParams['look'] }): PartButton[] | null {
+  if (sel.tab === 'makeup')
+    return MAKEUP_PARTS.map((p) => ({ id: p.id, label: p.label, icon: p.id, active: sel.makeupPart === p.id, hasValue: state.makeupOn(p.id) }));
+  if (sel.tab === 'preset')
+    return PRESET_PARTS.map((p) => ({ id: p.id, label: p.label, icon: p.icon, active: sel.presetPart === p.id, hasValue: p.id === 'look' && state.look !== null }));
+  return null;
+}
+
+export function selectPart(sel: PanelSelection, id: string): PanelSelection {
+  if (sel.tab === 'makeup') return { ...sel, makeupPart: id as MakeupPart };
+  if (sel.tab === 'preset') return { ...sel, presetPart: id as PresetPart };
+  return sel;
+}
+
+/** 調節's lead chip 「質感：{label}」 while a look is set; tapping it opens 一鍵 › 質感 (step-2 spec §2.1) */
+export function leadChip(sel: PanelSelection, look: PhotoParams['look']): { label: string; target: PanelSelection } | null {
+  if (sel.tab !== 'adjust' || !look) return null;
+  const def = lookDef(look.id);
+  return def ? { label: `質感：${def.label}`, target: { ...sel, tab: 'preset', presetPart: 'look' } } : null;
+}
+
+/**
+ * Tabs whose every item acts on the whole photo (調節, 一鍵 › 質感; step-2 spec §2.1–2.2): the person strip dims with
+ * 「整張照片」 (photoScoped), the face boxes hide (Editor), no per-person strip note (BeautyPanel). null → step 1's rules.
+ */
+export function photoTabLabel(sel: PanelSelection): '調節' | '質感' | null {
+  if (sel.tab === 'adjust') return '調節';
+  if (sel.tab === 'preset' && sel.presetPart === 'look') return '質感';
+  return null;
+}
+
+/** shown once per look per session when its LUT cannot load (hooks.ts requestLut) */
+export function lookFailedNotice(id: string): string {
+  return `無法載入「${lookDef(id)?.label ?? id}」質感，請稍後再試`;
+}
+
 /** the preset the 一鍵 strip highlights: the targets' common preset; for a body-only person, the photo's link */
 function shownPreset(lens: Lens): PresetId | 'custom' | null {
   const { ref, mixed } = lens.preset();
@@ -401,6 +557,7 @@ export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext): P
   const edit = lens.edit;
   switch (sel.tab) {
     case 'preset': {
+      if (sel.presetPart === 'look') return lookItems(lens.look());
       const cur = shownPreset(lens);
       const items: PanelItem[] = PRESETS.map((p) => ({
         key: p.id,
@@ -472,6 +629,8 @@ export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext): P
         ),
       ];
     }
+    case 'adjust':
+      return adjustItems((id) => lens.get(id).value, sel);
   }
 }
 
@@ -482,9 +641,16 @@ export interface ActivateResult {
   changed: boolean;
   /** text to show as a toast (a disabled item's reason, or what a toggle just did) */
   notice?: string;
+  /** the tapped look is selected but its LUT failed: the screen retries the load (no edit, no undo step) */
+  retryLook?: LookId;
 }
 
-export function activate(item: PanelItem, lens: Lens, sel: PanelSelection): ActivateResult {
+/** what activate needs to know beyond the edit (step 2): whether a look's LUT failed (a re-tap then retries it) */
+export interface ActivateContext {
+  lookFailed?: (id: LookId) => boolean;
+}
+
+export function activate(item: PanelItem, lens: Lens, sel: PanelSelection, ctx: ActivateContext = {}): ActivateResult {
   const a = item.action;
   const edit = lens.edit;
   const done = (next: EditState = edit, nextSel = sel, notice?: string): ActivateResult => ({
@@ -497,6 +663,12 @@ export function activate(item: PanelItem, lens: Lens, sel: PanelSelection): Acti
   switch (a.type) {
     case 'custom':
       return done();
+    case 'look': {
+      const r = lookActivation(a.id, lens.look(), (id) => ctx.lookFailed?.(id) ?? false);
+      if (r.kind === 'retry') return { ...done(edit), retryLook: r.id };
+      if (r.kind === 'none') return done(edit);
+      return done(lens.setLook(r.id, r.amount));
+    }
     case 'preset': {
       const { ref, mixed } = lens.preset();
       const linked = edit.photo.presetLink?.id === a.id;
@@ -507,6 +679,7 @@ export function activate(item: PanelItem, lens: Lens, sel: PanelSelection): Acti
       return done(lens.applyPreset(a.id, amount));
     }
     case 'reset':
+      if (sel.tab === 'adjust') return adjustIsNeutral(edit.photo) ? done(edit) : done(lens.resetGroup('adjust'));
       if (sel.tab === 'makeup') {
         const s = lens.shade(sel.makeupPart);
         // already off everywhere: tapping the selected 無 is a no-op (no haptic, no undo step, no flip to 自訂)
@@ -518,6 +691,7 @@ export function activate(item: PanelItem, lens: Lens, sel: PanelSelection): Acti
       if (sel.tab === 'skin' || sel.tab === 'shape' || sel.tab === 'filter') return done(lens.resetGroup(sel.tab));
       return done();
     case 'param':
+      if (sel.tab === 'adjust') return done(edit, sel.adjust === a.id ? sel : { ...sel, adjust: a.id as AdjustId });
       if (sel.tab === 'body') return done(edit, sel.body === a.id ? sel : { ...sel, body: a.id });
       return done(edit, sel.tab === 'shape' ? { ...sel, shape: a.id } : { ...sel, skin: a.id });
     case 'height':
@@ -554,6 +728,10 @@ export interface SliderBinding {
   mixed: boolean;
   /** recommended-default dot / double-tap target */
   defaultValue: number;
+  /** 色溫 / 色調: a coloured track (CSS .track-temperature / .track-tint) */
+  track?: 'temperature' | 'tint';
+  /** no recommended-default dot (調節: neutral is the default) */
+  hideDefault?: boolean;
   apply(lens: Lens, v: number): EditState;
 }
 
@@ -588,6 +766,10 @@ export function sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext): 
   const edit = lens.edit;
   switch (sel.tab) {
     case 'preset': {
+      if (sel.presetPart === 'look') {
+        const b = lookSlider(lens.look());
+        return b && decorate(b, lens, true);
+      }
       const { ref, mixed } = lens.preset();
       const link = edit.photo.presetLink;
       const id = ref === null ? (link?.id ?? null) : ref !== 'custom' && !mixed ? ref.id : null;
@@ -620,12 +802,14 @@ export function sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext): 
       const b = paramBinding(lens, key);
       return decorate({ ...b, label: sel.makeupPart === 'lip' ? '口紅' : '腮紅', defaultValue: MAKEUP_PICK_DEFAULT[sel.makeupPart] }, lens, false);
     }
+    case 'adjust':
+      return decorate(adjustSlider((id) => lens.get(id).value, sel), lens, true);
   }
 }
 
 /** the slider row's text when there is no slider: 程度 under 全部 with different presets (S §2.4) */
 export function sliderEmptyText(lens: Lens, sel: PanelSelection): string | null {
-  return sel.tab === 'preset' && lens.sel.kind === 'all' && lens.preset().mixed ? MIXED : null;
+  return sel.tab === 'preset' && sel.presetPart !== 'look' && lens.sel.kind === 'all' && lens.preset().mixed ? MIXED : null;
 }
 
 /**
@@ -640,6 +824,9 @@ function firstPhotoTouch(lens: Lens, seen: Set<string>, id: string, label: strin
 
 /** the first touch through a slider: a photo-level param, or 增高 */
 export function photoTouchToast(b: SliderBinding, lens: Lens, seen: Set<string>): string | null {
+  // 調節 and 質感: one first touch per tab, not per item (step-2 spec §2.1–2.2)
+  if (b.param?.startsWith('adjust.')) return firstPhotoTouch(lens, seen, 'adjust', '調節');
+  if (b.param === null && /(^|:)look\./.test(b.key)) return firstPhotoTouch(lens, seen, 'look', '質感');
   const id = b.param ?? (b.key.endsWith('body.height') ? 'height' : null);
   if (id === null || (id !== 'height' && !photoLike(lens, id))) return null;
   return firstPhotoTouch(lens, seen, id, id === 'height' ? '增高' : paramDef(id).label);
@@ -651,7 +838,7 @@ export function bandTouchToast(lens: Lens, seen: Set<string>): string | null {
 }
 
 /** tiles whose tap writes a photo-level item (S §1.1 item 5): every 濾鏡 tile is the one item 濾鏡 */
-const TILE_ITEMS: Partial<Record<ItemAction['type'], string>> = { filter: '濾鏡', protect: '背景保護' };
+const TILE_ITEMS: Partial<Record<ItemAction['type'], string>> = { filter: '濾鏡', protect: '背景保護', look: '質感' };
 
 /**
  * The toast of a tile tap: the first touch of a photo-level item, when the tap changed it (a 濾鏡 tile, 背景保護), then
@@ -669,7 +856,9 @@ export function tapToast(item: PanelItem, lens: Lens, r: ActivateResult, seen?: 
 export function tabHasValue(lens: Lens, tab: TabId, body?: BodyContext): boolean {
   switch (tab) {
     case 'preset':
-      return false;
+      return lens.look() !== null;
+    case 'adjust':
+      return adjustTabHasValue((id) => lens.get(id).value);
     case 'filter':
       return lens.edit.photo.filterId !== 'none';
     case 'body':

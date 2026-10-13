@@ -864,7 +864,7 @@ git commit -m "v0.4 step 4 (3/20): tone gate in the lens, ⊘ covers tone, owner
   export function nasolabialGeometry(face: Face, side: Side, aspect: number): Float32Array;
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/engine/passes/toneGeometry.test.ts`:
 ```ts
@@ -1058,12 +1058,12 @@ describe('crescents and nasolabial bands', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `npx vitest run src/engine/passes/toneGeometry.test.ts`
 Expected: FAIL — `Failed to resolve import "./toneGeometry"`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/engine/passes/toneGeometry.ts`:
 ```ts
@@ -1264,12 +1264,12 @@ export function nasolabialGeometry(face: Face, side: Side, aspect: number): Floa
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/engine/passes/toneGeometry.test.ts && npm run typecheck`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/engine/passes/toneGeometry.ts src/engine/passes/toneGeometry.test.ts

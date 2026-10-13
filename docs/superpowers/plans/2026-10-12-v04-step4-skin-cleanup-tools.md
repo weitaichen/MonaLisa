@@ -3071,7 +3071,7 @@ git commit -m "v0.4 step 4 (8/20): TONE table and the CPU reference of the tone 
   export function renderToneCpu(img: Rgba8, face: Face, v: ToneValues): Rgba8;
   ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/engine/toneCalibration.test.ts`:
 ```ts
@@ -3119,12 +3119,12 @@ describe('TONE calibration on sample_face_tone.png', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [x] **Step 2: Run it to see it fail**
 
 Run: `npx vitest run src/engine/toneCalibration.test.ts`
 Expected: FAIL — `Failed to resolve import "./toneStats.node"`.
 
-- [ ] **Step 3: Implement the statistics**
+- [x] **Step 3: Implement the statistics**
 
 Create `src/engine/toneStats.node.ts`:
 ```ts
@@ -3415,7 +3415,7 @@ export function renderToneCpu(img: Rgba8, face: Face, v: ToneValues): Rgba8 {
 }
 ```
 
-- [ ] **Step 4: Run the calibration and tune `TONE` until every check passes**
+- [x] **Step 4: Run the calibration and tune `TONE` until every check passes**
 
 Run: `npx vitest run src/engine/toneCalibration.test.ts`
 Expected (first run): the log prints a table per tool; some lines may read `FAIL`.
@@ -3427,7 +3427,7 @@ Tuning rules, applied one tool at a time and re-running after each change (all e
 
 Expected (final run): `7 passed`. Then run `npx vitest run src/engine/toneCpu.test.ts` again — it must still pass (the synthetic tests bound the gains).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 npx vitest run src/engine/toneCalibration.test.ts 2>&1 | grep -E "^(even|warmUp|warmDown|darkCircle|nasolabial|teeth|eyeBright)$|^  (ok|FAIL) " > .superpowers/step4-calibration.txt

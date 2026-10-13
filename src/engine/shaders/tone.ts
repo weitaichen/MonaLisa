@@ -1,7 +1,11 @@
 // 膚質 shaders and their shared constants (skin-cleanup spec §4.3–4.4). The TONE table is baked into the GLSL text, so the
 // hash pin in toneCpu.test.ts covers it; src/engine/toneCpu.ts mirrors every stage. Original work.
 
-/** Every tunable constant of the tone field and the retouch. Task 9 calibrates the gains on the fixture. */
+/**
+ * Every tunable constant of the tone field and the retouch. The gains are calibrated on sample_face_tone.png by
+ * toneCalibration.test.ts (plan Task 9): from the spec's starting values, 勻膚 even.chroma ×1.2, 膚色 warm and cool ×1.2,
+ * 亮眼 eye.detint ×2 and eye.clarity ×1.1; every other entry is the spec's (S §4.3–4.4).
+ */
 export const TONE = {
   /** conf = smoothstep(conf0, conf1, L.a): how much skin the low-pass reference saw */
   conf: [0.15, 0.3],
@@ -9,12 +13,12 @@ export const TONE = {
   evenGuard: [0.06, 0.14],
   /** 黑眼圈 / 法令紋 leave darkness beyond these alone (lashes, frames) */
   darkGuard: [0.2, 0.3],
-  even: { chroma: 0.9, lift: 0.45 },
+  even: { chroma: 1.08, lift: 0.45 },
   darkCircle: { lift: 0.85, chroma: 0.7 },
   nasolabial: { lift: 0.8, chroma: 0.3 },
   /** 膚色 RGB gains per unit of s: warm (s > 0) and cool (s < 0) */
-  warm: [0.06, 0.02, -0.07],
-  cool: [-0.03, -0.02, 0.07],
+  warm: [0.072, 0.024, -0.084],
+  cool: [-0.036, -0.024, 0.084],
   /** skin(c): soft box on Cb and Cr (Chai & Ngan 1999, 8-bit 77–127 and 133–173) */
   skinCb: [0.302, 0.498],
   skinCr: [0.522, 0.678],
@@ -25,13 +29,13 @@ export const TONE = {
   eye: {
     scY: [0.32, 0.5],
     scCh: [0.1, 0.2],
-    detint: 0.6,
+    detint: 1.2,
     scLift: 0.05,
     irCh: [0.05, 0.12],
     irY0: [0.06, 0.12],
     irY1: [0.45, 0.6],
     irLift: 0.04,
-    clarity: 0.7,
+    clarity: 0.77,
     clamp: 0.12,
   },
 } as const;

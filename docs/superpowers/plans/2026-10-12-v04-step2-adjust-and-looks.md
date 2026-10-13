@@ -5265,7 +5265,7 @@ git commit -m "v0.4 step 2: screens load 濾鏡 + 質感 LUTs, failure notices, 
 - Consumes: everything above through the built app (`npm run build` + `vite preview`), the fake front camera (`tests/fixtures/face.y4m`), `tests/e2e/fixtures.ts` helpers (`debugState`, `decodeDataUrl`, `dragSlider`, `grab`, `mad`, `meanLuma`, `SAMPLE_FACE`, `settled`, `shot`, `test`, `Pixels`); step 1's camera look key `meiyan.look.v1` holding `{photo, person}` JSON.
 - Produces: `tests/e2e/adjust.spec.ts` with two tests (editor, camera).
 
-- [ ] **Step 1: Write the spec**
+- [x] **Step 1: Write the spec**
 
 Create `tests/e2e/adjust.spec.ts`:
 
@@ -5572,12 +5572,12 @@ test('camera: 調節 tab, 暗角, CCD, moving grain; shot → 編輯 keeps them;
 });
 ```
 
-- [ ] **Step 2: Build and run it**
+- [x] **Step 2: Build and run it**
 
 Run: `npm run build && npx playwright test tests/e2e/adjust.spec.ts`
 Expected: both tests PASS. (Before Tasks 12–14 existed they would fail at `tab(page, '調節')`; this task adds no product code, so a failure here is a defect in an earlier task: fix it there, in its own files, and rerun that task's tests.)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/e2e/adjust.spec.ts

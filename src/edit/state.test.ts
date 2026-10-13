@@ -21,7 +21,11 @@ import {
 describe('scope table (RM §3.1, step-1 subset)', () => {
   it('every ParamId has exactly one scope and the layers do not overlap', () => {
     for (const d of PARAM_DEFS) expect(['photo', 'person']).toContain(d.scope);
-    expect([...PHOTO_IDS].sort()).toEqual(['body.legs', 'filter.amount', 'skin.sharpen', 'skin.whiten']);
+    expect([...PHOTO_IDS].sort()).toEqual([
+      'adjust.brightness', 'adjust.contrast', 'adjust.exposure', 'adjust.fade', 'adjust.grain', 'adjust.highlights',
+      'adjust.saturation', 'adjust.shadows', 'adjust.temperature', 'adjust.tint', 'adjust.vibrance', 'adjust.vignette',
+      'body.legs', 'filter.amount', 'skin.sharpen', 'skin.whiten',
+    ]);
     expect(PHOTO_IDS.length + PERSON_IDS.length).toBe(PARAM_DEFS.length);
     expect(PHOTO_IDS.filter((id) => (PERSON_IDS as readonly string[]).includes(id))).toEqual([]);
     const person = PARAM_DEFS.filter((d) => d.scope === 'person').map((d) => d.id);

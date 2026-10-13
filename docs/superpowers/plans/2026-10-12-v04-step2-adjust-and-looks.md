@@ -135,12 +135,12 @@ Step 1 is implemented before this plan runs (its plan: `docs/superpowers/plans/2
   - `type LutKind = 'filter' | 'look'`; `type LutState = 'none' | 'loading' | 'ready' | 'failed'`
   - `paramsInGroup('adjust')` returns the 12 defs in strip order.
 
-- [ ] **Step 0: Confirm the step-1 shapes**
+- [x] **Step 0: Confirm the step-1 shapes**
 
 Run: `grep -n "PhotoParamId\|scope:\|live:\|LookId" src/types.ts | head -20`
 Expected: `PhotoParamId` defined as in S1 §3.2; `ParamDef` has `scope` and `live`. If step 1 already declared `LookId` (C §3.2 lists it), do not declare it twice in Step 3.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/engine/params.adjust.test.ts`:
 
@@ -199,12 +199,12 @@ describe('調節 params (step-2 spec §3.1)', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run src/engine/params.adjust.test.ts`
 Expected: FAIL — `paramsInGroup('adjust')` returns `[]` (and `npm run typecheck` reports `"adjust"` not assignable to `ParamGroup`).
 
-- [ ] **Step 3: Add the types**
+- [x] **Step 3: Add the types**
 
 In `src/types.ts` change line 6 to:
 
@@ -262,7 +262,7 @@ export type LutKind = 'filter' | 'look';
 export type LutState = 'none' | 'loading' | 'ready' | 'failed';
 ```
 
-- [ ] **Step 4: Add the 12 defs**
+- [x] **Step 4: Add the 12 defs**
 
 In `src/engine/params.ts`, after the `makeup.blush` entry of `PARAM_DEFS` (line 37), add (the `scope`/`live` fields are step 1's; keep the field order step 1 uses for the other entries):
 
@@ -284,7 +284,7 @@ In `src/engine/params.ts`, after the `makeup.blush` entry of `PARAM_DEFS` (line 
 
 `PRESETS` builds its `values` from `neutralValues()` / `defaultValues()` over `PARAM_DEFS` (`params.ts:87-97`), so every preset gets the neutral adjust values without further edits.
 
-- [ ] **Step 5: Port the schema assertions that count params (mechanical, C §1.1)**
+- [x] **Step 5: Port the schema assertions that count params (mechanical, C §1.1)**
 
 Run: `grep -n "toHaveLength(26)\|toBe(26)\|GROUPS: ParamGroup\|const BIDIRECTIONAL\|'makeup.blush': 0," src/engine/params.test.ts`
 In `src/engine/params.test.ts` (wherever step 1 left these assertions):
@@ -302,17 +302,17 @@ In `src/engine/params.test.ts` (wherever step 1 left these assertions):
   ```
   (the person-side assertions next to them — `person.filter((id) => id.startsWith('body.'))` has length 9, `live` is `group !== 'body'` — hold unchanged, because every adjust def is `scope: 'photo'`, `live: true`).
 
-- [ ] **Step 6: Run the tests and the typecheck**
+- [x] **Step 6: Run the tests and the typecheck**
 
 Run: `npx vitest run src/engine/params.adjust.test.ts src/engine/params.test.ts src/edit && npm run typecheck`
 Expected: PASS, and `tsc` exits 0. If `tsc` reports a `Record<ParamId, …>` or `Record<PhotoParamId, …>` literal that now misses the adjust keys, fill those keys with the neutral value (0.5 bidirectional, 0 one-way) in that literal. (`PhotoParams` has no `look` field yet: Task 3 adds it, so `defaultPhoto()` / `splitLegacy` compile unchanged here.)
 
-- [ ] **Step 7: Run the whole unit suite**
+- [x] **Step 7: Run the whole unit suite**
 
 Run: `npm test`
 Expected: PASS (the new defs are neutral and photo-level, so no render or panel changes).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/types.ts src/engine/params.ts src/engine/params.adjust.test.ts src/engine/params.test.ts

@@ -46,7 +46,11 @@ describe('splitLegacy / legacyProjection (RM §3.2)', () => {
   });
   it('splits photo items to the photo and the rest to the person', () => {
     const { photo, person } = splitLegacy(applyPreset('glow', 1));
-    expect(Object.keys(photo.values).sort()).toEqual(['body.legs', 'filter.amount', 'skin.sharpen', 'skin.whiten']);
+    expect(Object.keys(photo.values).sort()).toEqual([
+      'adjust.brightness', 'adjust.contrast', 'adjust.exposure', 'adjust.fade', 'adjust.grain', 'adjust.highlights',
+      'adjust.saturation', 'adjust.shadows', 'adjust.temperature', 'adjust.tint', 'adjust.vibrance', 'adjust.vignette',
+      'body.legs', 'filter.amount', 'skin.sharpen', 'skin.whiten',
+    ]);
     expect('skin.whiten' in person.values).toBe(false);
     expect(person.shades).toEqual({ lip: 'bean', blush: 'peach' });
     expect(person.preset).toEqual({ id: 'glow', amount: 1 });

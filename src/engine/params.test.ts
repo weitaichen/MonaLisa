@@ -29,8 +29,23 @@ import {
 } from './params';
 
 const PRESET_IDS: PresetId[] = ['original', 'natural', 'refined', 'glow'];
-const GROUPS: ParamGroup[] = ['skin', 'shape', 'body', 'filter', 'makeup'];
-const BIDIRECTIONAL: ParamId[] = ['shape.chin', 'shape.forehead', 'shape.mouthSize', 'shape.eyeDistance', 'body.hip'];
+const GROUPS: ParamGroup[] = ['skin', 'shape', 'body', 'filter', 'makeup', 'adjust'];
+const BIDIRECTIONAL: ParamId[] = [
+  'shape.chin',
+  'shape.forehead',
+  'shape.mouthSize',
+  'shape.eyeDistance',
+  'body.hip',
+  'adjust.brightness',
+  'adjust.exposure',
+  'adjust.contrast',
+  'adjust.highlights',
+  'adjust.shadows',
+  'adjust.temperature',
+  'adjust.tint',
+  'adjust.saturation',
+  'adjust.vibrance',
+];
 
 function deepFreeze<T>(o: T): T {
   if (o && typeof o === 'object') {
@@ -41,9 +56,9 @@ function deepFreeze<T>(o: T): T {
 }
 
 describe('PARAM_DEFS schema (RB §5)', () => {
-  it('has the 26 params (16 face/colour + 10 美體), unique ids, valid groups', () => {
-    expect(PARAM_DEFS).toHaveLength(26);
-    expect(new Set(PARAM_DEFS.map((d) => d.id)).size).toBe(26);
+  it('has the 38 params (16 face/colour + 10 美體 + 12 調節), unique ids, valid groups', () => {
+    expect(PARAM_DEFS).toHaveLength(38);
+    expect(new Set(PARAM_DEFS.map((d) => d.id)).size).toBe(38);
     for (const d of PARAM_DEFS) {
       expect(GROUPS).toContain(d.group);
       expect(d.id.startsWith(`${d.group}.`)).toBe(true);
@@ -54,7 +69,7 @@ describe('PARAM_DEFS schema (RB §5)', () => {
     }
   });
 
-  it('bidirectional params are exactly chin / forehead / mouth / eye distance / 美臀, neutral 0.5', () => {
+  it('bidirectional params are exactly chin / forehead / mouth / eye distance / 美臀 and the 9 bidirectional 調節 items, neutral 0.5', () => {
     expect(PARAM_DEFS.filter((d) => d.bidirectional).map((d) => d.id).sort()).toEqual([...BIDIRECTIONAL].sort());
     for (const d of PARAM_DEFS) {
       expect(neutralValue(d)).toBe(d.bidirectional ? 0.5 : 0);
@@ -91,6 +106,19 @@ describe('PARAM_DEFS schema (RB §5)', () => {
       'filter.amount': 0.5,
       'makeup.lip': 0,
       'makeup.blush': 0,
+      // 調節: neutral by default (never part of a preset)
+      'adjust.brightness': 0.5,
+      'adjust.exposure': 0.5,
+      'adjust.contrast': 0.5,
+      'adjust.highlights': 0.5,
+      'adjust.shadows': 0.5,
+      'adjust.temperature': 0.5,
+      'adjust.tint': 0.5,
+      'adjust.saturation': 0.5,
+      'adjust.vibrance': 0.5,
+      'adjust.fade': 0,
+      'adjust.grain': 0,
+      'adjust.vignette': 0,
     };
     for (const d of PARAM_DEFS) expect(d.default).toBe(expected[d.id]);
   });

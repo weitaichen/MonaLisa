@@ -35,6 +35,19 @@ export const PARAM_DEFS: readonly ParamDef[] = [
   // 美妝
   { id: 'makeup.lip', label: '口紅', group: 'makeup', bidirectional: false, default: 0, icon: 'lip', scope: 'person', live: true },
   { id: 'makeup.blush', label: '腮紅', group: 'makeup', bidirectional: false, default: 0, icon: 'blush', scope: 'person', live: true },
+  // 調節 — photo-level and live; neutral by default and never part of a beauty preset (step-2 spec §3.1)
+  { id: 'adjust.brightness', label: '亮度', group: 'adjust', bidirectional: true, default: 0.5, icon: 'brightness', scope: 'photo', live: true },
+  { id: 'adjust.exposure', label: '曝光', group: 'adjust', bidirectional: true, default: 0.5, icon: 'exposure', scope: 'photo', live: true },
+  { id: 'adjust.contrast', label: '對比', group: 'adjust', bidirectional: true, default: 0.5, icon: 'contrast', scope: 'photo', live: true },
+  { id: 'adjust.highlights', label: '高光', group: 'adjust', bidirectional: true, default: 0.5, icon: 'highlights', scope: 'photo', live: true },
+  { id: 'adjust.shadows', label: '陰影', group: 'adjust', bidirectional: true, default: 0.5, icon: 'shadows', scope: 'photo', live: true },
+  { id: 'adjust.temperature', label: '色溫', group: 'adjust', bidirectional: true, default: 0.5, icon: 'temperature', scope: 'photo', live: true },
+  { id: 'adjust.tint', label: '色調', group: 'adjust', bidirectional: true, default: 0.5, icon: 'tint', scope: 'photo', live: true },
+  { id: 'adjust.saturation', label: '飽和', group: 'adjust', bidirectional: true, default: 0.5, icon: 'saturation', scope: 'photo', live: true },
+  { id: 'adjust.vibrance', label: '鮮艷度', group: 'adjust', bidirectional: true, default: 0.5, icon: 'vibrance', scope: 'photo', live: true },
+  { id: 'adjust.fade', label: '褪色', group: 'adjust', bidirectional: false, default: 0, icon: 'fade', scope: 'photo', live: true },
+  { id: 'adjust.grain', label: '顆粒', group: 'adjust', bidirectional: false, default: 0, icon: 'grain', scope: 'photo', live: true },
+  { id: 'adjust.vignette', label: '暗角', group: 'adjust', bidirectional: false, default: 0, icon: 'vignette', scope: 'photo', live: true },
 ];
 
 const DEF_BY_ID = new Map(PARAM_DEFS.map((d) => [d.id, d]));

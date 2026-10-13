@@ -3,7 +3,7 @@
 
 // ───────────────────────── Parameters ─────────────────────────
 
-export type ParamGroup = 'skin' | 'shape' | 'body' | 'filter' | 'makeup';
+export type ParamGroup = 'skin' | 'shape' | 'body' | 'filter' | 'makeup' | 'adjust';
 
 export type ParamId =
   | 'skin.smooth'
@@ -31,7 +31,20 @@ export type ParamId =
   | 'body.head'
   | 'filter.amount'
   | 'makeup.lip'
-  | 'makeup.blush';
+  | 'makeup.blush'
+  // 調節 (v0.4 step 2): photo-level, live, neutral by default, outside every beauty preset
+  | 'adjust.brightness'
+  | 'adjust.exposure'
+  | 'adjust.contrast'
+  | 'adjust.highlights'
+  | 'adjust.shadows'
+  | 'adjust.temperature'
+  | 'adjust.tint'
+  | 'adjust.saturation'
+  | 'adjust.vibrance'
+  | 'adjust.fade'
+  | 'adjust.grain'
+  | 'adjust.vignette';
 
 export type ParamScope = 'photo' | 'person';
 
@@ -51,6 +64,27 @@ export interface ParamDef {
   /** offered in the live camera */
   live: boolean;
 }
+
+/** the 12 調節 items (v0.4 step-2 spec §3.1) */
+export type AdjustId = Extract<ParamId, `adjust.${string}`>;
+
+/** 一鍵 › 質感 looks (v0.4 roadmap §3.2) */
+export type LookId = 'film' | 'ccd' | 'flash' | 'blue' | 'cinema';
+
+export interface LookDef {
+  id: LookId;
+  /** 膠片 · CCD · 直閃 · 藍調 · 電影感 */
+  label: string;
+  /** 程度 when the look is picked from 無 (0..1) */
+  defaultAmount: number;
+  /** at 程度 100, in display units (−50…+50 bidirectional, 0–100 one-way); scaled by 程度 in shader space */
+  offsets: Readonly<Partial<Record<AdjustId, number>>>;
+}
+
+/** engine LUT kinds: 濾鏡 /luts/filters/<id>.png, 質感 /luts/looks/look_<id>.png */
+export type LutKind = 'filter' | 'look';
+/** none = not resident (never asked, or evicted / dropped with a lost context) */
+export type LutState = 'none' | 'loading' | 'ready' | 'failed';
 
 export type PresetId = 'original' | 'natural' | 'refined' | 'glow';
 
@@ -114,7 +148,7 @@ export interface HeightBand {
 
 // ───────────────────────── v0.4 edit model (RM §3.2, step-1 subset) ─────────────────────────
 
-export type PhotoParamId = Extract<ParamId, 'skin.whiten' | 'skin.sharpen' | 'filter.amount' | 'body.legs'>;
+export type PhotoParamId = Extract<ParamId, 'skin.whiten' | 'skin.sharpen' | 'filter.amount' | 'body.legs' | `adjust.${string}`>;
 export type PersonParamId = Exclude<ParamId, PhotoParamId>;
 export type ShadePart = 'lip' | 'blush';
 /**

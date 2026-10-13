@@ -1,12 +1,14 @@
 // Phase 0 export rows (step-3 spec §6.4) on synthetic frames, so no photo is needed: decode of 12 / 24 / 48 MP JPEGs to
 // a 4096 long edge, a tiled render of 4096 × 3072 (6 faces, body field, θ = 12°) at TILE 512 / 1024 / 2048 with the
-// putImageData into the output canvas, JPEG q 0.95 and PNG encode, a canvas-area probe, and P2's cost with geometry at
-// 2048. The share-activation row is manual on the device.
+// putImageData into the output canvas, JPEG q 0.95 and PNG encode through the export's own opaque surface, a canvas-area
+// probe, and P2's cost with geometry at 2048. The frames carry seeded noise, so file sizes and codec times are a photo's.
+// A picked photo adds its own decode and encode rows. The share-activation row is manual on the device.
 import { defaultPhoto, naturalPerson } from '../edit/state';
 import { FACE_TEMPLATE } from '../engine/passes/faceMesh';
 import { IDENTITY_GEOMETRY, setStraighten, snapCrop, viewSize } from '../geometry/view';
 import { browserRunnerDeps, type TileInputBase } from '../media/exportFull';
 import { faceBoundsFor, planTiles, type TileGrid } from '../media/exportPlan';
+import { createSurface, FULL_JPEG_QUALITY } from '../media/exporter';
 import { importPhotoInfo } from '../media/importer';
 import type { BodyField, Engine, Face, RenderFace, RenderInput } from '../types';
 import { type ExportBenchRow, median } from './report';
@@ -31,11 +33,39 @@ export function gridFaces(): RenderFace[] {
   return out;
 }
 
-async function synthJpeg(w: number, h: number): Promise<Blob> {
+/** rows of one noise strip: a whole strip (≥ 64 rows of ≥ 2048 px) is far past deflate's 32 KB window, so PNG gains nothing from the repeat */
+export const NOISE_ROWS = 64;
+/** ± per channel around 128 under 'overlay': at 4096 × 3072 the export's JPEG q 0.95 is about 4 MB and its PNG about 25 MB on desktop Chromium, S §4.5's 12 MP estimates (4–7 MB, 15–25 MB) */
+export const NOISE_AMP = 16;
+
+/**
+ * `width` × `rows` RGBA of seeded uniform noise in 128 ± `amp` per channel, alpha 255 (a 32-bit LCG's top byte). A
+ * camera photo's sensor noise and texture stand-in: without it the gradient-and-rectangles frame's 4096 × 3072 decode
+ * encodes to 0.2 MB of JPEG (3× faster) and 0.7 MB of PNG (15× faster) on desktop Chromium.
+ */
+export function noiseStrip(width: number, rows: number, seed = 0x9e3779b9, amp = NOISE_AMP): Uint8ClampedArray<ArrayBuffer> {
+  const out = new Uint8ClampedArray(width * rows * 4);
+  const span = 2 * amp + 1;
+  let x = seed >>> 0;
+  for (let i = 0; i < out.length; i += 4) {
+    for (let k = 0; k < 3; k++) {
+      x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
+      out[i + k] = 128 - amp + (((x >>> 24) * span) >>> 8);
+    }
+    out[i + 3] = 255;
+  }
+  return out;
+}
+
+/** a JPEG (q 0.92) with a camera photo's entropy: a gradient, 400 flat patches, then the noise strip overlaid every NOISE_ROWS rows */
+export async function synthJpeg(w: number, h: number): Promise<Blob> {
   const c = new OffscreenCanvas(w, h);
+  // full width, so no row of the frame repeats within deflate's window (a narrow tile would let a PNG of it cheat)
+  const strip = new OffscreenCanvas(w, NOISE_ROWS);
   try {
     const ctx = c.getContext('2d');
-    if (!ctx) throw new Error(`no 2D context at ${w}×${h}`);
+    const sctx = strip.getContext('2d');
+    if (!ctx || !sctx) throw new Error(`no 2D context at ${w}×${h}`);
     const g = ctx.createLinearGradient(0, 0, w, h);
     g.addColorStop(0, '#d8b49a');
     g.addColorStop(1, '#4a6680');
@@ -45,12 +75,38 @@ async function synthJpeg(w: number, h: number): Promise<Blob> {
       ctx.fillStyle = `hsl(${(i * 37) % 360} 40% 50%)`;
       ctx.fillRect(((i * 97) % 100) * (w / 100), ((i * 53) % 100) * (h / 100), w / 40, h / 40);
     }
+    // no full-frame getImageData (a 48 MP one is 190 MB): one W × 64 ImageData, drawn down the frame
+    sctx.putImageData(new ImageData(noiseStrip(w, NOISE_ROWS), w, NOISE_ROWS), 0, 0);
+    ctx.globalCompositeOperation = 'overlay';
+    for (let y = 0; y < h; y += NOISE_ROWS) ctx.drawImage(strip, 0, y);
+    ctx.globalCompositeOperation = 'source-over';
     return await c.convertToBlob({ type: 'image/jpeg', quality: 0.92 });
   } finally {
     // iOS frees canvas backing stores only on GC: release eagerly
     c.width = c.height = 0;
+    strip.width = strip.height = 0;
   }
 }
+
+const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
+
+/**
+ * Row 3 through the export's own encoder: exportFull's output canvas is an opaque createSurface of the output type
+ * (browserRunnerDeps.createCanvas), so the PNG is encoded the way the export encodes it. Only toBlob is timed.
+ */
+export async function timeEncode(src: ImageBitmap, type: 'image/jpeg' | 'image/png'): Promise<{ ms: number; bytes: number }> {
+  const s = createSurface(src.width, src.height, { type, alpha: false });
+  try {
+    s.ctx.drawImage(src, 0, 0);
+    const t = now();
+    const b = await s.toBlob(type === 'image/jpeg' ? FULL_JPEG_QUALITY : undefined);
+    return { ms: now() - t, bytes: b.size };
+  } finally {
+    s.release();
+  }
+}
+
+const ENCODE_TYPES = ['image/jpeg', 'image/png'] as const;
 
 function synthField(): BodyField {
   const w = 32;
@@ -73,20 +129,40 @@ export async function runExportBench(engine: Engine, onRow: (r: ExportBenchRow) 
   };
   const fail = (name: string, e: unknown) => push({ name, ms: null, detail: `failed: ${errText(e)}` });
 
-  // row 1 — a real photo from 照片 (HEIC cannot be synthesized): its decode to 4096
+  /** row 3 for one bitmap, both output types; the MB lets a reader check the content was photo-like */
+  const encodeRows = async (src: ImageBitmap, prefix: string) => {
+    for (const type of ENCODE_TYPES) {
+      const name = `${prefix}${type}`;
+      try {
+        const r = await timeEncode(src, type);
+        push({ name, ms: r.ms, detail: `${mb(r.bytes)} MB at ${src.width}×${src.height}` });
+      } catch (e) {
+        fail(name, e);
+      }
+    }
+  };
+
+  // rows 1 and 3 — a real photo from 照片 (HEIC cannot be synthesized): its decode to 4096, then its encodes. Encoded
+  // and closed here, before the synthetic rows, so its 4096 bitmap never adds to their peaks.
   if (picked) {
     const name = `decode picked ${picked.type || 'unknown'}`;
+    let bmp: ImageBitmap | null = null;
     try {
       const t = now();
       const info = await importPhotoInfo(picked, 4096);
+      bmp = info.bitmap;
       push({
         name,
         ms: now() - t,
-        detail: `${info.bitmap.width}×${info.bitmap.height} from ${info.oriented.width}×${info.oriented.height}, ${(picked.size / 1048576).toFixed(1)} MB, via ${info.path}`,
+        detail: `${info.bitmap.width}×${info.bitmap.height} from ${info.oriented.width}×${info.oriented.height}, ${mb(picked.size)} MB, via ${info.path}`,
       });
-      info.bitmap.close();
     } catch (e) {
       fail(name, e);
+    }
+    try {
+      if (bmp) await encodeRows(bmp, 'encode picked ');
+    } finally {
+      bmp?.close();
     }
   }
 
@@ -100,7 +176,11 @@ export async function runExportBench(engine: Engine, onRow: (r: ExportBenchRow) 
       const blob = await synthJpeg(w, h);
       const t = now();
       const info = await importPhotoInfo(blob, 4096);
-      push({ name: `decode ${label}`, ms: now() - t, detail: `${info.bitmap.width}×${info.bitmap.height} from ${info.oriented.width}×${info.oriented.height}, via ${info.path}` });
+      push({
+        name: `decode ${label}`,
+        ms: now() - t,
+        detail: `${info.bitmap.width}×${info.bitmap.height} from ${info.oriented.width}×${info.oriented.height}, ${mb(blob.size)} MB, via ${info.path}`,
+      });
       info.bitmap.close();
     } catch (e) {
       fail(`decode ${label}`, e);
@@ -173,26 +253,7 @@ export async function runExportBench(engine: Engine, onRow: (r: ExportBenchRow) 
       }
     }
 
-    const oc = new OffscreenCanvas(decode.width, decode.height);
-    try {
-      const octx = oc.getContext('2d');
-      if (!octx) throw new Error(`no 2D context at ${decode.width}×${decode.height}`);
-      octx.drawImage(full, 0, 0);
-      for (const [type, quality] of [
-        ['image/jpeg', 0.95],
-        ['image/png', undefined],
-      ] as const) {
-        try {
-          const t = now();
-          const b = await oc.convertToBlob(quality === undefined ? { type } : { type, quality });
-          push({ name: `encode ${type}`, ms: now() - t, detail: `${(b.size / 1048576).toFixed(1)} MB at ${decode.width}×${decode.height}` });
-        } catch (e) {
-          fail(`encode ${type}`, e);
-        }
-      }
-    } finally {
-      oc.width = oc.height = 0;
-    }
+    await encodeRows(full, 'encode ');
   } catch (e) {
     fail('tiled render', e);
   } finally {

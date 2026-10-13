@@ -40,3 +40,19 @@ test('bench.html: 調節效能 — base vs 調節 program, compile time, grain h
   for (const id of ['film', 'ccd', 'flash', 'blue', 'cinema']) expect(text).toMatch(new RegExp(`質感 ${id}\\s+[\\d.]+ ms 調節`));
   await shot(page, '41-bench-adjust');
 });
+
+test('輸出測試 frame: photo-like file sizes through the export encoders (S §4.5 estimates, S §6.4 rows 1 and 3)', async ({ page }) => {
+  // the dev server: the harness imports src/bench/exportBench.ts directly
+  await page.goto('http://127.0.0.1:5190/tests/e2e/pages/exportBench.html');
+  await page.waitForFunction(() => typeof window.runBenchFrame === 'function');
+  const r = await page.evaluate(() => window.runBenchFrame!());
+  const MB = 1048576;
+  console.log(`source ${(r.sourceBytes / MB).toFixed(1)} MB, JPEG q 0.95 ${(r.jpegBytes / MB).toFixed(1)} MB, PNG ${(r.pngBytes / MB).toFixed(1)} MB at ${r.w}×${r.h}`);
+  expect([r.w, r.h]).toEqual([4096, 3072]);
+  // without the noise overlay these were 0.1, 0.2 and 0.7 MB, and the encodes 3× (JPEG) and 15× (PNG) faster
+  expect(r.sourceBytes).toBeGreaterThan(2 * MB);
+  expect(r.jpegBytes).toBeGreaterThan(3 * MB);
+  expect(r.jpegBytes).toBeLessThan(8 * MB);
+  expect(r.pngBytes).toBeGreaterThan(15 * MB);
+  expect(r.pngBytes).toBeLessThan(35 * MB);
+});

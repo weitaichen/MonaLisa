@@ -340,7 +340,7 @@ git commit -m "v0.4 step 2: 調節 params in the schema (12 photo-level, live, n
   - `function photoLuts(photo: { filterId: string; look: { id: string } | null }): LutRef[]`
   - `function lookThumbUrl(id: LookId): string`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/engine/looks.test.ts`:
 
@@ -415,12 +415,12 @@ describe('質感 looks (step-2 spec §3.2)', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run src/engine/looks.test.ts`
 Expected: FAIL — `Failed to resolve import "./looks"`.
 
-- [ ] **Step 3: Write the module**
+- [x] **Step 3: Write the module**
 
 Create `src/engine/looks.ts`:
 
@@ -505,12 +505,12 @@ export function lookThumbUrl(id: LookId): string {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run src/engine/looks.test.ts && npm run typecheck`
 Expected: PASS (7 tests); `tsc` exits 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/engine/looks.ts src/engine/looks.test.ts

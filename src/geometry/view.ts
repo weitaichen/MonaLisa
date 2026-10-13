@@ -220,22 +220,38 @@ export function isMaxFit(g: Geometry, oSize: Size): boolean {
 /**
  * Valid and idempotent (S §3.3): 1. the centre into the valid region (toward the E centre), 2. shrink about the centre,
  * 3. the minimum size, moving the centre toward the E centre until it fits. The pixel aspect is kept whenever a crop of
- * that aspect can meet the minimum size; a sliver aspect that cannot (only a corrupt record has one: gestures and ratios
- * never make it) becomes the max-fit of the E frame's own aspect, so the result is always valid. A photo too small for
- * MIN_CROP_PX keeps its full frame at θ = 0 (S §7); at θ ≠ 0 it gets the max-fit, which fits but cannot be full.
+ * that aspect can meet the minimum size. One that cannot (a sliver from a corrupt record; a wide panorama straightened
+ * far) becomes the max-fit of the E frame's own aspect or, when that is under the minimum too, the max-fit of the valid
+ * aspect nearest the kept one. The valid region is convex and symmetric about the E centre, so a crop that fits can be
+ * centred and still fit: whenever any valid crop exists the centred minimum box fits, the aspects whose max-fit is valid
+ * are an interval around that box's aspect, and the result is valid. A photo too small for MIN_CROP_PX keeps its full
+ * frame at θ = 0 (S §7); at θ ≠ 0 no crop is valid and it gets the frame aspect's max-fit, which fits but cannot be full.
  */
 export function cropConstrain(g: Geometry, oSize: Size): Geometry {
   if (cropValid(g, oSize)) return g;
   const e = eSize(g, oSize);
+  // before `fallback`, which the non-finite check below calls
+  const m = minCrop(g, oSize);
   const k = g.crop;
   const aspect = Number.isFinite(k.w / k.h) && k.w > 0 && k.h > 0 ? (k.w * e.width) / (k.h * e.height) : e.width / e.height;
   const fit = (a: number): Geometry => ({ ...g, crop: maxFit(g.straighten, e.width, e.height, a) });
   const fallback = (): Geometry => {
     const kept = fit(aspect);
-    return cropValid(kept, oSize) ? kept : fit(e.width / e.height);
+    if (cropValid(kept, oSize)) return kept;
+    const frame = fit(e.width / e.height);
+    if (cropValid(frame, oSize)) return frame;
+    // the minimum box's aspect has a valid max-fit whenever any crop is valid; bisect (log aspect) toward the kept one
+    let lo = Math.log((m.w * e.width) / (m.h * e.height));
+    if (!cropValid(fit(Math.exp(lo)), oSize)) return frame;
+    let hi = Math.log(aspect);
+    for (let i = 0; i < STEPS; i++) {
+      const t = (lo + hi) / 2;
+      if (cropValid(fit(Math.exp(t)), oSize)) lo = t;
+      else hi = t;
+    }
+    return fit(Math.exp(lo));
   };
   if (![k.x, k.y, k.w, k.h].every(Number.isFinite) || !(k.w > 0 && k.h > 0)) return fallback();
-  const m = minCrop(g, oSize);
   const fitsAt = (cx: number, cy: number, w: number, h: number) => cropFits({ ...g, crop: { x: cx - w / 2, y: cy - h / 2, w, h } }, oSize);
   let cx = k.x + k.w / 2;
   let cy = k.y + k.h / 2;
@@ -299,13 +315,17 @@ export function clampStraighten(theta: number): number {
   return r === 0 ? 0 : r;
 }
 
-/** one 拉直 drag step, always from the gesture's start geometry (S §3.3) */
+/**
+ * one 拉直 drag step, always from the gesture's start geometry (S §3.3). A max-fit start stays a max-fit of its aspect;
+ * when that is under the minimum size at θ (a wide panorama turned far), cropConstrain picks the nearest valid aspect.
+ */
 export function setStraighten(start: Geometry, theta: number, oSize: Size): Geometry {
   const t = clampStraighten(theta);
   if (t === start.straighten) return start;
   if (isMaxFit(start, oSize)) {
     const e = eSize(start, oSize);
-    return { ...start, straighten: t, crop: maxFit(t, e.width, e.height, cropAspectPx(start, oSize)) };
+    const fitted: Geometry = { ...start, straighten: t, crop: maxFit(t, e.width, e.height, cropAspectPx(start, oSize)) };
+    return cropValid(fitted, oSize) ? fitted : cropConstrain(fitted, oSize);
   }
   return cropConstrain({ ...start, straighten: t }, oSize);
 }
@@ -326,12 +346,16 @@ export function lockAspect(lock: CropLock, g: Pick<Geometry, 'quarter'>, oSize: 
   return FIXED[lock];
 }
 
-/** the centred max-fit of the lock's aspect; unchanged for 自由 or when the crop already has that aspect */
+/**
+ * the centred max-fit of the lock's aspect; unchanged for 自由, when the crop already has that aspect, or when that
+ * max-fit is under the minimum size (9:16 on a wide panorama): then no crop of the aspect is valid (see cropConstrain)
+ */
 export function applyRatio(g: Geometry, lock: CropLock, oSize: Size): Geometry {
   const a = lockAspect(lock, g, oSize);
   if (a === null || Math.abs(cropAspectPx(g, oSize) / a - 1) <= 0.005) return g;
   const e = eSize(g, oSize);
-  return { ...g, crop: maxFit(g.straighten, e.width, e.height, a) };
+  const fitted: Geometry = { ...g, crop: maxFit(g.straighten, e.width, e.height, a) };
+  return cropValid(fitted, oSize) ? fitted : g;
 }
 
 export function lockFor(g: Geometry, oSize: Size): CropLock {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Geometry, Rect } from '../types';
+import type { Geometry, Rect, Size } from '../types';
 import {
   apply,
   applyRatio,
@@ -36,6 +36,7 @@ import {
   viewSize,
   vToO,
   type Quarter,
+  type Vec2,
 } from './view';
 
 const O = { width: 1600, height: 1200 };
@@ -62,6 +63,12 @@ function randomGeometry(r: () => number, theta?: number): Geometry {
     crop: { x: r() * 0.5, y: r() * 0.5, w: 0.1 + r() * 0.8, h: 0.1 + r() * 0.8 },
   };
   return cropConstrain(g, O);
+}
+
+/** a valid crop exists iff the centred minimum box fits (the valid region is convex and symmetric about the centre) */
+function centredMinimumFits(g: Geometry, size: Size): boolean {
+  const m = minCrop(g, size);
+  return cropFits({ ...g, crop: { x: 0.5 - m.w / 2, y: 0.5 - m.h / 2, w: m.w, h: m.h } }, size);
 }
 
 const close = (a: readonly number[], b: readonly number[], eps = 1e-9) => a.every((v, i) => Math.abs(v - b[i]) <= eps);
@@ -103,6 +110,46 @@ describe('affines', () => {
     expect(apply(oToE({ flipH: false, quarter: 3 }), p)).toEqual([0.7, 1 - 0.2]);
     expect(apply(oToE({ flipH: true, quarter: 0 }), p)).toEqual([1 - 0.2, 0.7]);
     expect(eSize({ quarter: 1 }, O)).toEqual({ width: 1200, height: 1600 });
+  });
+
+  it('a crop that fits never samples outside O, and a max-fit touches its edge (cropFits and maxFit agree with vToO, the uGeo map)', () => {
+    const r = rng(8);
+    const corners: Vec2[] = [
+      [0, 0],
+      [1, 0],
+      [0, 1],
+      [1, 1],
+    ];
+    /** how far V's corners land inside O: < 0 is off the image */
+    const margin = (g: Geometry) => Math.min(...corners.map((p) => apply(vToO(g, O), p)).map(([x, y]) => Math.min(x, y, 1 - x, 1 - y)));
+    let fitting = 0;
+    let worst = Infinity;
+    for (const flipH of [false, true])
+      for (const quarter of QUARTERS)
+        for (const theta of [...THETAS, clampStraighten(-45 + 90 * r()), clampStraighten(-45 + 90 * r())]) {
+          for (let i = 0; i < 40; i++) {
+            const g: Geometry = { flipH, quarter, straighten: theta, crop: { x: r() * 0.6, y: r() * 0.6, w: 0.05 + r() * 0.6, h: 0.05 + r() * 0.6 } };
+            if (!cropFits(g, O, 0)) continue;
+            fitting++;
+            worst = Math.min(worst, margin(g));
+          }
+          if (theta === 0) continue;
+          // for aspects in [1/2, 2] the straightened image, not the E frame, bounds the max-fit at any θ ≠ 0
+          const e = eSize({ quarter }, O);
+          for (const a of [0.5, 0.75, 1, 4 / 3, 2]) {
+            const tight = margin({ flipH, quarter, straighten: theta, crop: maxFit(theta, e.width, e.height, a) });
+            expect(tight).toBeGreaterThanOrEqual(-1e-9);
+            expect(tight).toBeLessThanOrEqual(1e-6);
+          }
+        }
+    expect(fitting).toBeGreaterThan(500);
+    expect(worst).toBeGreaterThanOrEqual(-1e-12);
+    // the plane map in closed form: the rotation is in pixels about the E centre (rigid although W ≠ H)
+    const full = { ...IDENTITY_GEOMETRY, straighten: 30 };
+    const c = Math.cos(Math.PI / 6);
+    const s = Math.sin(Math.PI / 6);
+    expect(close(apply(eToV(full, O), [0.5 + 100 / 1600, 0.5]), [0.5 + (100 * c) / 1600, 0.5 + (100 * s) / 1200], 1e-12)).toBe(true);
+    expect(close(apply(eToV(full, O), [0.5, 0.5 + 100 / 1200]), [0.5 - (100 * s) / 1600, 0.5 + (100 * c) / 1200], 1e-12)).toBe(true);
   });
 
   it('positive θ turns the picture clockwise on a y-down screen', () => {
@@ -225,15 +272,76 @@ describe('maxFit and cropConstrain', () => {
   });
 
   it('extreme aspects stay finite and valid (Review Focus 4)', () => {
-    for (const size of [{ width: 2048, height: 512 }, { width: 2048, height: 1 }, { width: 50, height: 40 }]) {
-      for (const theta of [0, 30, -45]) {
-        const g = cropConstrain({ ...IDENTITY_GEOMETRY, straighten: theta, crop: { x: 0.1, y: 0.1, w: 0.8, h: 0.8 } }, size);
-        for (const v of [g.crop.x, g.crop.y, g.crop.w, g.crop.h]) expect(Number.isFinite(v)).toBe(true);
-        expect(g.crop.w).toBeGreaterThan(0);
-        expect(g.crop.h).toBeGreaterThan(0);
-        expect(cropFits(g, size, 1e-7)).toBe(true);
+    const panoramas: Size[] = [
+      { width: 2048, height: 512 },
+      { width: 2048, height: 292 },
+      { width: 2048, height: 200 },
+      { width: 2048, height: 150 },
+    ];
+    // no crop is valid: the minimum is the full height (2048 × 1) or the full frame (50 × 40), which cannot fit at θ ≠ 0
+    const infeasible: Size[] = [
+      { width: 2048, height: 1 },
+      { width: 50, height: 40 },
+    ];
+    for (const size of [...panoramas, ...infeasible]) {
+      for (const theta of [0, 10, 20, 30, 45, -45]) {
+        const constrained = cropConstrain({ ...IDENTITY_GEOMETRY, straighten: theta, crop: { x: 0.1, y: 0.1, w: 0.8, h: 0.8 } }, size);
+        const straightened = setStraighten(IDENTITY_GEOMETRY, theta, size);
+        for (const g of [constrained, straightened]) {
+          for (const v of [g.crop.x, g.crop.y, g.crop.w, g.crop.h]) expect(Number.isFinite(v)).toBe(true);
+          expect(g.crop.w).toBeGreaterThan(0);
+          expect(g.crop.h).toBeGreaterThan(0);
+          expect(cropFits(g, size, 1e-7)).toBe(true);
+          expect(centredMinimumFits(g, size)).toBe(panoramas.includes(size) || theta === 0);
+          if (centredMinimumFits(g, size)) expect(cropValid(g, size, 1e-7)).toBe(true);
+        }
       }
     }
+  });
+
+  it('cropConstrain on wide panoramas (fuzzed): valid and idempotent wherever a valid crop exists', () => {
+    const r = rng(9);
+    for (const size of [{ width: 2048, height: 292 }, { width: 2048, height: 256 }, { width: 2048, height: 200 }, { width: 2048, height: 150 }]) {
+      let checked = 0;
+      for (let i = 0; i < 500; i++) {
+        const g: Geometry = {
+          flipH: r() < 0.5,
+          quarter: QUARTERS[Math.floor(r() * 4)],
+          straighten: clampStraighten(-45 + 90 * r()),
+          crop: { x: -0.3 + 1.2 * r(), y: -0.3 + 1.2 * r(), w: 0.01 + 1.2 * r(), h: 0.01 + 1.2 * r() },
+        };
+        if (!centredMinimumFits(g, size)) continue;
+        checked++;
+        const out = cropConstrain(g, size);
+        expect(cropValid(out, size, 1e-7)).toBe(true);
+        expect(cropConstrain(out, size)).toBe(out);
+        const turned = setStraighten(out, clampStraighten(-45 + 90 * r()), size);
+        expect(cropValid(turned, size, 1e-7)).toBe(true);
+      }
+      expect(checked).toBeGreaterThan(400);
+    }
+  });
+
+  it('a wide panorama turned far keeps the widest valid aspect; a ratio no valid crop can have changes nothing', () => {
+    const size = { width: 2048, height: 292 };
+    // the frame aspect's max-fit at 45° is 51.5 px tall, under the 64 px minimum
+    expect(cropValid({ ...IDENTITY_GEOMETRY, straighten: 45, crop: maxFit(45, 2048, 292, 2048 / 292) }, size)).toBe(false);
+    const s = setStraighten(IDENTITY_GEOMETRY, 45, size);
+    expect(cropValid(s, size, 1e-7)).toBe(true);
+    expect(isMaxFit(s, size)).toBe(true);
+    expect(s.crop.h * 292).toBeCloseTo(64, 3);
+    const a = cropAspectPx(s, size);
+    expect(a).toBeLessThan(2048 / 292);
+    expect(cropValid({ ...s, crop: maxFit(45, 2048, 292, a * 1.001) }, size)).toBe(false);
+
+    const pano = { width: 2048, height: 150 };
+    // 9:16 is at most 84 px wide here (the minimum is 102.4 px)
+    expect(applyRatio(IDENTITY_GEOMETRY, '9:16', pano)).toBe(IDENTITY_GEOMETRY);
+    for (const theta of [0, 20, 45])
+      for (const lock of ['original', '1:1', '3:4', '4:3', '9:16', '16:9'] as const) {
+        const g = setStraighten(IDENTITY_GEOMETRY, theta, pano);
+        expect(cropValid(applyRatio(g, lock, pano), pano, 1e-7)).toBe(true);
+      }
   });
 
   it('setStraighten: a max-fit crop re-expands at 0°; a hand-shaped crop only shrinks', () => {

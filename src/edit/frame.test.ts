@@ -4,7 +4,7 @@ import { makeFace } from '../app/testFakes';
 import type { EditState, FaceProtect } from '../types';
 import { buildFrame, legacyFrame } from './frame';
 import { splitLegacy } from './legacy';
-import { defaultPhoto, naturalPerson, neutralPerson } from './state';
+import { defaultPhoto, editRotateLeft, naturalPerson, neutralPerson } from './state';
 
 const prot: FaceProtect = { width: 1, height: 1, data: new Float32Array(1), version: 1 };
 const edit: EditState = { v: 2, photo: defaultPhoto(), persons: { f0: naturalPerson(), b1: naturalPerson() }, template: neutralPerson(), primaryInit: null };
@@ -23,6 +23,11 @@ describe('buildFrame (S §4.1)', () => {
   it('no face: all-skin 磨皮／紅潤 from the primary person', () => {
     const f = buildFrame(edit, [], [], new Map(), 'b1');
     expect(f.globalSkin).toEqual({ smooth: 0.55, rosy: 0.25, weight: 1 });
+  });
+  it('the frame carries the photo geometry (the engine reads RenderInput.geometry, step 3)', () => {
+    const edit = editRotateLeft({ v: 2, photo: defaultPhoto(), persons: { p0: naturalPerson() }, template: neutralPerson(), primaryInit: null });
+    const frame = buildFrame(edit, [], [], new Map(), 'p0');
+    expect(frame.geometry).toBe(edit.photo.geometry);
   });
 });
 

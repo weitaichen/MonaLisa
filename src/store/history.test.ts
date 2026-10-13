@@ -7,6 +7,7 @@ import { editFromLegacy, legacyProjection } from '../edit/legacy';
 import { openState } from '../edit/migrate';
 import { assignPersons, defaultPhoto, naturalPerson, neutralPerson, renamePersons } from '../edit/state';
 import { applyPreset, defaultParams, sanitizeParams, setParam } from '../engine/params';
+import { cropConstrain } from '../geometry/view';
 import type { BodyDetection, DetectionCache, EditState, HistoryEntry } from '../types';
 import {
   addEntry,
@@ -768,5 +769,15 @@ describe('v2 entries with 調節 and 質感 (step-2 spec §5)', () => {
     expect(back.photo.values['adjust.exposure']).toBe(0.65);
     expect(back.photo.values['adjust.grain']).toBe(0.35);
     expect(back.photo.values['adjust.vignette']).toBe(1);
+  });
+});
+
+describe('v2 entries with geometry (step-3 spec §5)', () => {
+  it('getEntry and listEntries keep a saved crop and rotation: the stored edit is validated against the entry size', async () => {
+    const geometry = cropConstrain({ flipH: false, quarter: 1, straighten: 5, crop: { x: 0.1, y: 0.1, w: 0.7, h: 0.7 } }, { width: 1536, height: 2048 });
+    const e: EditState = { v: 2, photo: { ...defaultPhoto(), geometry }, persons: { p0: naturalPerson() }, template: neutralPerson(), primaryInit: null };
+    const id = await addEntry({ ...entry('geo'), schema: 2, edit: e });
+    expect((await getEntry(id))!.edit!.photo.geometry).toEqual(geometry);
+    expect((await listEntries()).find((x) => x.id === id)!.edit!.photo.geometry).toEqual(geometry);
   });
 });

@@ -8,7 +8,7 @@ import { seedPrimary } from '../detect/persons';
 import { stableKey } from '../store/undo';
 import type { BodyDetections, CachedBody, CameraLook, DetectionCache, EditState, FaceSeed, HistoryEntry, PersonId, PersonParams, Rect } from '../types';
 import { editFromLegacy, splitLegacy } from './legacy';
-import { assignPersons, neutralPerson, P0, renamePersons, sanitizeEditState, withPersons } from './state';
+import { assignPersons, neutralPerson, P0, renamePersons, sanitizeEditState, sanitizeGeometry, withPersons } from './state';
 
 export interface V1Bodies {
   bodies: CachedBody[];
@@ -61,7 +61,10 @@ export function openState(entry: HistoryEntry, size: { width: number; height: nu
     }
     return { edit, detect: null, rematch: null, v1Body: v1BodiesOf(entry, size), cacheDropped: false };
   }
-  let edit = v2Edit;
+  // the geometry is validated against the stored size of `original` (step-3 spec §5, D13: never the decode size) on
+  // every v2 path, the ones that hand the stored edit back as it is included
+  const oSize = { width: entry.width, height: entry.height };
+  let edit: EditState = { ...v2Edit, photo: { ...v2Edit.photo, geometry: sanitizeGeometry(v2Edit.photo.geometry, oSize) } };
   if (entry.paramsKey !== undefined && entry.paramsKey !== stableKey(entry.params)) {
     // 0.3 edited this entry after a rollback: its params win for the photo and the primary person. A cache that does
     // not fit still names the primary its params projected (its persons go to the rematch under their old ids).
@@ -71,7 +74,7 @@ export function openState(entry: HistoryEntry, size: { width: number; height: nu
   }
   if (d && fits) {
     return {
-      edit: sanitizeEditState(edit, d.persons.map((p) => p.id)),
+      edit: sanitizeEditState(edit, d.persons.map((p) => p.id), oSize),
       detect: d,
       rematch: null,
       v1Body: null,

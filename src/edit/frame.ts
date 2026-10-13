@@ -35,6 +35,7 @@ export function buildFrame(
     obstacles: obstacles.map((o) => boxCentre(o.box)),
     globalSkin: faces.length ? null : { smooth: skin['skin.smooth'], rosy: skin['skin.rosy'], weight: 1 },
     photo: edit.photo,
+    geometry: edit.photo.geometry,
   };
 }
 

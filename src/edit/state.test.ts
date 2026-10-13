@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { applyPreset, PARAM_DEFS } from '../engine/params';
-import type { EditState } from '../types';
+import { cropConstrain, IDENTITY_GEOMETRY, rotateLeft } from '../geometry/view';
+import type { EditState, Geometry } from '../types';
 import {
   assignPersons,
   cameraEdit,
   defaultPhoto,
+  editFlipView,
   editKey,
+  editResetGeometry,
+  editRotateLeft,
+  editSetGeometry,
   isEditStateRecord,
   lookOf,
   naturalPerson,
@@ -15,6 +20,7 @@ import {
   renamePersons,
   resetAll,
   sanitizeEditState,
+  sanitizeGeometry,
   withPersons,
 } from './state';
 
@@ -200,5 +206,61 @@ describe('sanitizeEditState (RM §3.4)', () => {
     expect(s.photo.filterId).toBe('none');
     expect(isEditStateRecord({ v: 1, photo: {}, persons: {} })).toBe(false);
     expect(isEditStateRecord({ v: 2, photo: {}, persons: {} })).toBe(true);
+  });
+});
+
+const OSIZE = { width: 1536, height: 2048 };
+const base = (): EditState => ({ v: 2, photo: defaultPhoto(), persons: { p0: naturalPerson() }, template: neutralPerson(), primaryInit: null });
+
+describe('geometry in the edit state (step 3)', () => {
+  it('defaultPhoto carries the identity geometry, so 重置 resets crop and rotation', () => {
+    expect(defaultPhoto().geometry).toEqual(IDENTITY_GEOMETRY);
+  });
+
+  it('旋轉 clears the 增高 band in the same state; ↶ to the previous state brings both back (Review Focus 2)', () => {
+    const banded: EditState = { ...base(), photo: { ...base().photo, heightBand: { top: 0.5, bottom: 0.9, amount: 0.6 } } };
+    const turned = editRotateLeft(banded);
+    expect(turned.photo.heightBand).toBeNull();
+    expect(turned.photo.geometry.quarter).toBe(3);
+    // one new state: the previous one is untouched, so one undo step restores geometry and band together
+    expect(banded.photo.heightBand).toEqual({ top: 0.5, bottom: 0.9, amount: 0.6 });
+    expect(banded.photo.geometry).toEqual(IDENTITY_GEOMETRY);
+    expect(turned.persons).toBe(banded.persons);
+  });
+
+  it('翻轉 keeps the band; 還原 is one state and a no-op at identity; geometry changes the edit key', () => {
+    const banded: EditState = { ...base(), photo: { ...base().photo, heightBand: { top: 0.5, bottom: 0.9, amount: 0.6 } } };
+    const flipped = editFlipView(banded);
+    expect(flipped.photo.heightBand).toEqual(banded.photo.heightBand);
+    expect(flipped.photo.geometry.flipH).toBe(true);
+    expect(editKey(flipped)).not.toBe(editKey(banded));
+    const reset = editResetGeometry(flipped);
+    expect(reset.photo.geometry).toEqual(IDENTITY_GEOMETRY);
+    expect(editResetGeometry(reset)).toBe(reset);
+    const g: Geometry = rotateLeft(IDENTITY_GEOMETRY);
+    const e = editSetGeometry(base(), g);
+    expect(editSetGeometry(e, g)).toBe(e);
+  });
+
+  it('sanitizeGeometry: identity without oSize; mistyped fields reset; float noise constrained; a far crop resets all', () => {
+    const ok: Geometry = cropConstrain({ flipH: true, quarter: 1, straighten: 12.3, crop: { x: 0.1, y: 0.1, w: 0.7, h: 0.6 } }, OSIZE);
+    expect(sanitizeGeometry(ok)).toEqual(IDENTITY_GEOMETRY);
+    expect(sanitizeGeometry(ok, OSIZE)).toEqual(ok);
+    const small: Geometry = { flipH: false, quarter: 0, straighten: 99, crop: { x: 0.4, y: 0.4, w: 0.2, h: 0.2 } };
+    expect(sanitizeGeometry(small, OSIZE).straighten).toBe(45);
+    expect(sanitizeGeometry({ ...ok, quarter: 7, flipH: 'yes' }, OSIZE)).toMatchObject({ quarter: 0, flipH: false });
+    const noisy = { ...ok, crop: { ...ok.crop, w: ok.crop.w + 5e-5 } };
+    const fixed = sanitizeGeometry(noisy, OSIZE);
+    expect(fixed).not.toEqual(IDENTITY_GEOMETRY);
+    expect(fixed.crop.w).toBeLessThanOrEqual(noisy.crop.w);
+    expect(sanitizeGeometry({ ...ok, crop: { x: 0.6, y: 0.6, w: 0.9, h: 0.9 } }, OSIZE)).toEqual(IDENTITY_GEOMETRY);
+    expect(sanitizeGeometry({ ...ok, crop: { x: Number.NaN, y: 0, w: 1, h: 1 } }, OSIZE)).toEqual(IDENTITY_GEOMETRY);
+    expect(sanitizeGeometry('garbage', OSIZE)).toEqual(IDENTITY_GEOMETRY);
+  });
+
+  it('sanitizeEditState threads oSize to the geometry (S D13); the camera look (no oSize) is always identity', () => {
+    const raw = { ...base(), photo: { ...base().photo, geometry: rotateLeft(IDENTITY_GEOMETRY) } };
+    expect(sanitizeEditState(raw, null, OSIZE).photo.geometry.quarter).toBe(3);
+    expect(sanitizeEditState(raw, null).photo.geometry).toEqual(IDENTITY_GEOMETRY);
   });
 });

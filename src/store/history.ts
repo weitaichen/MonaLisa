@@ -188,8 +188,9 @@ export function normalizeEntry(raw: unknown): HistoryEntry | null {
   const faceMask = normalizeMask(r.faceMask);
   if (faceMask) entry.faceMask = faceMask;
   if (r.schema === 2) entry.schema = 2;
-  // persons unfiltered here: openState filters them against the cache (or keeps them all for a rematch)
-  if (isEditStateRecord(r.edit)) entry.edit = sanitizeEditState(r.edit, null);
+  // persons unfiltered here: openState filters them against the cache (or keeps them all for a rematch); the geometry is
+  // validated against the entry's own size (step-3 spec D13), or every read would reset a saved crop to identity
+  if (isEditStateRecord(r.edit)) entry.edit = sanitizeEditState(r.edit, null, { width, height });
   if (typeof r.paramsKey === 'string') entry.paramsKey = r.paramsKey;
   const d = normalizeDetect(r.detect);
   if (d.cache) entry.detect = d.cache;

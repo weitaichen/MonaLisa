@@ -2,11 +2,13 @@
 // returns a new object and shares what it did not change, so UndoStack keeps states by reference ({clone: false}).
 import { isLookId } from '../engine/looks';
 import { applyPreset, BLUSH_SHADES, FILTERS, LIP_SHADES, neutralValue, PARAM_DEFS, paramsInGroup, PRESETS, sanitizeBand } from '../engine/params';
+import { clampStraighten, cropConstrain, cropValid, flipView, IDENTITY_GEOMETRY, isIdentity, rotateLeft } from '../geometry/view';
 import { stableKey } from '../store/undo';
 import type {
   AdjustId,
   CameraLook,
   EditState,
+  Geometry,
   LookId,
   PersonId,
   PersonParamId,
@@ -16,6 +18,7 @@ import type {
   PresetId,
   PresetRef,
   ShadePart,
+  Size,
 } from '../types';
 
 export const P0: PersonId = 'p0';
@@ -47,12 +50,12 @@ export function naturalPerson(): PersonParams {
   return personFromPreset('natural', 1);
 }
 
-/** the 自然 photo part, everything else neutral or identity (重置, RM §3.4) */
+/** the 自然 photo part, everything else neutral or identity, the geometry included (重置, RM §3.4, C §12 #23) */
 export function defaultPhoto(): PhotoParams {
   const p = applyPreset('natural', 1);
   const values = {} as Record<PhotoParamId, number>;
   for (const k of PHOTO_IDS) values[k] = p.values[k];
-  return { values, filterId: p.filterId, look: null, presetLink: { id: 'natural', amount: 1 }, bodyProtect: true, heightBand: null, legsAnchor: null };
+  return { values, filterId: p.filterId, look: null, presetLink: { id: 'natural', amount: 1 }, bodyProtect: true, heightBand: null, legsAnchor: null, geometry: IDENTITY_GEOMETRY };
 }
 
 /** The output de-dupe and undo key (RM §3.4; step 6 replaces stroke points by stroke ids here). */
@@ -159,6 +162,26 @@ export function resetAdjust(edit: EditState): EditState {
   return { ...edit, photo: { ...edit.photo, values } };
 }
 
+/** a geometry change (a 裁切 gesture step or commit): one undo step at commit, like a slider. Unchanged → the same object. */
+export function editSetGeometry(edit: EditState, g: Geometry): EditState {
+  return g === edit.photo.geometry ? edit : { ...edit, photo: { ...edit.photo, geometry: g } };
+}
+
+/** 旋轉: E turns a quarter, so the 增高 band (E rows) is removed in the same state, one undo step (C §3.5) */
+export function editRotateLeft(edit: EditState): EditState {
+  return { ...edit, photo: { ...edit.photo, geometry: rotateLeft(edit.photo.geometry), heightBand: null } };
+}
+
+/** 翻轉: E rows are unchanged, so the band is kept */
+export function editFlipView(edit: EditState): EditState {
+  return { ...edit, photo: { ...edit.photo, geometry: flipView(edit.photo.geometry) } };
+}
+
+/** 還原: the identity geometry; already identity → the same object */
+export function editResetGeometry(edit: EditState): EditState {
+  return isIdentity(edit.photo.geometry) ? edit : editSetGeometry(edit, IDENTITY_GEOMETRY);
+}
+
 /** the person part of `ref` (face items within 1e-6, lip / blush shades) is what `p` holds (RM §3.4 matching) */
 export function matchesPersonPreset(p: PersonParams, ref: PresetRef): boolean {
   const q = personFromPreset(ref.id, ref.amount);
@@ -208,8 +231,34 @@ export function sanitizePhotoLook(raw: unknown): PhotoParams['look'] {
   return { id: r.id, amount: clampAmount(r.amount) };
 }
 
-/** Untrusted photo layer → valid; `persons` (when known) bounds the 長腿 anchor; a link survives only while it matches. */
-export function sanitizePhoto(raw: unknown, persons: ReadonlySet<PersonId> | null = null): PhotoParams {
+const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+/**
+ * Stored geometry → a valid one (step-3 spec §5): without the O size (the camera look) identity; a mistyped or
+ * non-finite field → that field's identity; `straighten` clamped to ±45 and rounded to 0.1; a crop off the valid region
+ * by ≤ 1e-4 (float noise) → cropConstrain; farther → the whole geometry identity.
+ */
+export function sanitizeGeometry(raw: unknown, oSize?: Size | null): Geometry {
+  if (!oSize || !(oSize.width > 0 && oSize.height > 0) || !isRecord(raw)) return IDENTITY_GEOMETRY;
+  const c = isRecord(raw.crop) ? raw.crop : null;
+  const crop = c && finite(c.x) && finite(c.y) && finite(c.w) && finite(c.h) && c.w > 0 && c.h > 0 ? { x: c.x, y: c.y, w: c.w, h: c.h } : { ...IDENTITY_GEOMETRY.crop };
+  const q = raw.quarter;
+  const g: Geometry = {
+    flipH: raw.flipH === true,
+    quarter: q === 1 || q === 2 || q === 3 ? q : 0,
+    straighten: clampStraighten(finite(raw.straighten) ? raw.straighten : 0),
+    crop,
+  };
+  if (cropValid(g, oSize)) return isIdentity(g) ? IDENTITY_GEOMETRY : g;
+  if (cropValid(g, oSize, 1e-4)) return cropConstrain(g, oSize);
+  return IDENTITY_GEOMETRY;
+}
+
+/**
+ * Untrusted photo layer → valid; `persons` (when known) bounds the 長腿 anchor; a link survives only while it matches.
+ * `oSize` (the entry's O size) validates the geometry; without it the geometry is identity (S D13).
+ */
+export function sanitizePhoto(raw: unknown, persons: ReadonlySet<PersonId> | null = null, oSize?: Size | null): PhotoParams {
   const base = defaultPhoto();
   const r = isRecord(raw) ? raw : {};
   const rv = isRecord(r.values) ? r.values : {};
@@ -227,6 +276,7 @@ export function sanitizePhoto(raw: unknown, persons: ReadonlySet<PersonId> | nul
     bodyProtect: typeof r.bodyProtect === 'boolean' ? r.bodyProtect : true,
     heightBand: sanitizeBand(r.heightBand),
     legsAnchor: typeof la === 'string' && PERSON_ID.test(la) && (!persons || persons.has(la)) ? la : null,
+    geometry: sanitizeGeometry(r.geometry, oSize),
   };
   if (photo.presetLink && !matchesPhotoLink(photo, photo.presetLink)) photo.presetLink = null;
   return photo;
@@ -241,8 +291,10 @@ export function isEditStateRecord(raw: unknown): boolean {
  * Untrusted edit → valid EditState (RM §3.4): values clamped to 0..1, filter / shade / preset ids validated, a preset
  * id kept only while the values match it. `personIds` (the detection cache's persons) drops persons not in it and
  * adds missing ones from the template; null (no cache, or one dropped for a rematch) keeps every valid person.
+ * `oSize` is the O size the geometry is validated against (HistoryEntry.width/height); without it (the camera look) the
+ * geometry is identity (step-3 spec D13).
  */
-export function sanitizeEditState(raw: unknown, personIds: readonly PersonId[] | null): EditState {
+export function sanitizeEditState(raw: unknown, personIds: readonly PersonId[] | null, oSize?: Size): EditState {
   const r = isRecord(raw) ? raw : {};
   const template = sanitizePerson(r.template, neutralPerson());
   const primaryInit = r.primaryInit === undefined || r.primaryInit === null ? null : sanitizePerson(r.primaryInit, template);
@@ -255,5 +307,5 @@ export function sanitizeEditState(raw: unknown, personIds: readonly PersonId[] |
   if (personIds) {
     for (const id of personIds) if (!persons[id]) persons[id] = id === P0 ? (primaryInit ?? template) : template;
   } else if (!Object.keys(persons).length) persons[P0] = primaryInit ?? template;
-  return { v: 2, photo: sanitizePhoto(r.photo, new Set(Object.keys(persons))), persons, template, primaryInit };
+  return { v: 2, photo: sanitizePhoto(r.photo, new Set(Object.keys(persons)), oSize), persons, template, primaryInit };
 }

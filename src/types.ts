@@ -195,6 +195,8 @@ export interface PhotoParams {
   heightBand: HeightBand | null;
   /** the person 長腿 is measured on; null = the primary person */
   legsAnchor: PersonId | null;
+  /** crop, rotate, straighten, flip (step 3); photo-level, identity by default */
+  geometry: Geometry;
 }
 export interface PersonParams {
   values: Record<PersonParamId, number>;
@@ -484,6 +486,8 @@ export interface RenderInput {
   pictureFrame?: Rect;
   /** step 2: grain seed; 0 in the editor and exports, a frame counter in the camera */
   grainSeed?: number;
+  /** crop / rotate / straighten / flip, applied as the final transform in P2 (step 3); default identity */
+  geometry?: Geometry;
 }
 
 /** What a still session renders: the frame without its source, size and body field (the session adds those, S1). */

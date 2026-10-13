@@ -1206,7 +1206,7 @@ EOF
 - Consumes (step 1, S1 §3.1–3.2, §5.3–5.4; C §3.2): `EditState`, `PhotoParams`, `defaultPhoto()`, `neutralPerson()`, `naturalPerson()`, `sanitizePhoto(raw, persons)`, `sanitizeEditState(raw, personIds | null)`, `editKey(edit)`, `buildFrame(edit, …)` (returns the `StillFrame` passed to `session.render`), `openState(entry, size)`. (Task 1): `IDENTITY_GEOMETRY`, `isIdentity`, `rotateLeft`, `flipView`, `cropValid`, `cropConstrain`, `clampStraighten`.
 - Produces: `PhotoParams.geometry: Geometry`; `defaultPhoto().geometry === IDENTITY_GEOMETRY` (so 重置 resets geometry, C §12 #23); in `src/edit/state.ts`: `editSetGeometry(edit, g): EditState`, `editRotateLeft(edit): EditState` (clears `heightBand`), `editFlipView(edit): EditState` (keeps it), `editResetGeometry(edit): EditState`, `sanitizeGeometry(raw: unknown, oSize?: Size | null): Geometry`; `sanitizePhoto(raw, persons, oSize?: Size | null)`; `sanitizeEditState(raw, personIds, oSize?: Size)` (S D13); `RenderInput.geometry?: Geometry` (moved here from Task 8: `buildFrame` returns a `StillFrame` literal, so the field must exist before the frame can carry it); `buildFrame(...)` result gains `geometry: edit.photo.geometry`; `openState` validates the stored geometry against `{width: entry.width, height: entry.height}` on every v2 path; `normalizeEntry` (`history.ts:192`) sanitizes a stored edit with the entry's `{width, height}` (without it every read would reset the geometry to identity).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `src/edit/state.test.ts`:
 
@@ -1313,12 +1313,12 @@ it('opens a v2 entry with its stored geometry, validated against the entry size 
 
 (`defaultParams` from `src/engine/params.ts`; add the imports the snippets use.)
 
-- [ ] **Step 2: Run the tests to see them fail**
+- [x] **Step 2: Run the tests to see them fail**
 
 Run: `npx vitest run src/edit/state.test.ts src/edit/frame.test.ts src/edit/migrate.test.ts`
 Expected: FAIL — `editRotateLeft is not a function` / `sanitizeGeometry is not exported` / `frame.geometry` undefined.
 
-- [ ] **Step 3: Add `geometry` to `PhotoParams` and every literal**
+- [x] **Step 3: Add `geometry` to `PhotoParams` and every literal**
 
 In `src/types.ts`, the step-1 `PhotoParams` gains (keep CRLF):
 
@@ -1336,7 +1336,7 @@ and `RenderInput` (`types.ts:444-469`, after step 2's `grainSeed?`) gains the fi
 
 Run `npm run typecheck`; at every reported `PhotoParams` literal (step 1's `defaultPhoto`, `splitLegacy`, `cameraShotEdit`, test builders) add `geometry: IDENTITY_GEOMETRY` (import from `../geometry/view`). This is a mechanical port; no assertion changes.
 
-- [ ] **Step 4: Implement the reducers and the sanitizer in `src/edit/state.ts`**
+- [x] **Step 4: Implement the reducers and the sanitizer in `src/edit/state.ts`**
 
 ```ts
 import { clampStraighten, cropConstrain, cropValid, flipView, IDENTITY_GEOMETRY, isIdentity, rotateLeft } from '../geometry/view';
@@ -1399,12 +1399,12 @@ In `src/edit/migrate.ts` (`openState(entry, size)`): step 1 calls `sanitizeEditS
 
 (The v1 path builds its edit from `editFromLegacy`, whose photo comes from `defaultPhoto()`: identity.)
 
-- [ ] **Step 5: Run the tests to see them pass**
+- [x] **Step 5: Run the tests to see them pass**
 
 Run: `npx vitest run src/edit/ src/store/history.test.ts`
 Expected: PASS (all `src/edit/*.test.ts`, history unchanged). Then `npm run typecheck` — no errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/types.ts src/edit/ src/app src/ui src/store tests

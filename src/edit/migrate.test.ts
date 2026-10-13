@@ -5,11 +5,12 @@ import { makeBodyDetection } from '../app/testFakes';
 import { prepareFaces } from '../detect/faces';
 import { withBodies } from '../detect/cache';
 import { cacheBody, makeCache } from '../detect/testCaches';
+import { IDENTITY_GEOMETRY } from '../geometry/view';
 import { stableKey } from '../store/undo';
 import type { Face, HistoryEntry, Landmarks478, Pose33 } from '../types';
 import { editFromLegacy, legacyProjection, splitLegacy } from './legacy';
 import { bodyAnswer, cameraShotEdit, firstAnswer, importEdit, openState } from './migrate';
-import { assignPersons, naturalPerson, neutralPerson, personFromPreset, withPersons } from './state';
+import { assignPersons, defaultPhoto, editFlipView, naturalPerson, neutralPerson, personFromPreset, withPersons } from './state';
 import { sessionPlan } from '../ui/editorModel';
 
 const SIZE = { width: 2048, height: 1536 };
@@ -108,6 +109,17 @@ describe('openState (S §5.3)', () => {
     expect(o.edit.persons.f0).toEqual(splitLegacy(sanitizeParams(edited)).person);
     expect(o.edit.persons.f1).toEqual(v2().edit!.persons.f1);
     expect(o).toMatchObject({ detect: null, cacheDropped: true });
+  });
+  it('opens a v2 entry with its stored geometry, validated against the entry size (S §5)', () => {
+    const edit = editFlipView({ v: 2, photo: defaultPhoto(), persons: { p0: naturalPerson() }, template: neutralPerson(), primaryInit: null });
+    const entry = {
+      id: 'g1', createdAt: 1, updatedAt: 1,
+      original: new Blob(['o'], { type: 'image/jpeg' }), thumb: new Blob(['t'], { type: 'image/jpeg' }),
+      width: 1536, height: 2048, schema: 2 as const, edit, params: defaultParams(),
+    };
+    expect(openState(entry, { width: 1536, height: 2048 }).edit.photo.geometry.flipH).toBe(true);
+    const broken = { ...entry, edit: { ...edit, photo: { ...edit.photo, geometry: { ...edit.photo.geometry, crop: { x: 2, y: 2, w: 1, h: 1 } } } } };
+    expect(openState(broken, { width: 1536, height: 2048 }).edit.photo.geometry).toEqual(IDENTITY_GEOMETRY);
   });
 });
 

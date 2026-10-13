@@ -1,6 +1,7 @@
 // v1 (BeautyParams, the 0.3 storage shape) ↔ v2 (EditState), RM §3.2 / §5. BeautyParams stays the shape of history v1
 // records and meiyan.params.v1, and of the legacy projection 0.4 keeps writing so a rollback to 0.3 still opens 0.4
 // entries with the primary person's look. New code never takes BeautyParams.
+import { IDENTITY_GEOMETRY } from '../geometry/view';
 import type { BeautyParams, EditState, ParamId, PersonId, PersonParamId, PersonParams, PhotoParamId, PhotoParams } from '../types';
 import { neutralPerson, P0, PERSON_IDS, PHOTO_IDS } from './state';
 
@@ -11,7 +12,7 @@ export function splitLegacy(p: BeautyParams): { photo: PhotoParams; person: Pers
   const personValues = {} as Record<PersonParamId, number>;
   for (const id of PERSON_IDS) personValues[id] = p.values[id];
   return {
-    photo: { values: photoValues, filterId: p.filterId, look: null, presetLink: ref, bodyProtect: p.bodyProtect, heightBand: p.heightBand, legsAnchor: null },
+    photo: { values: photoValues, filterId: p.filterId, look: null, presetLink: ref, bodyProtect: p.bodyProtect, heightBand: p.heightBand, legsAnchor: null, geometry: IDENTITY_GEOMETRY },
     person: { values: personValues, shades: { lip: p.lipShade, blush: p.blushShade }, preset: ref ?? 'custom' },
   };
 }

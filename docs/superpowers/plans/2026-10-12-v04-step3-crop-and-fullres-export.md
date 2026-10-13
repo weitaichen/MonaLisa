@@ -2225,7 +2225,7 @@ EOF
 - Consumes: `NewHistoryEntry` (`history.ts:15`, `Omit<HistoryEntry, …>`: picks the new fields up automatically).
 - Produces: `HistoryEntry.source?: Blob`, `sourceWidth?: number`, `sourceHeight?: number`; `addEntry` stores them and, when the put fails with `QuotaExceededError`, puts the entry once more without `source` (same id, sizes kept); `normalizeEntry` keeps `source` only as a non-empty `Blob` and the sizes only as positive integers; `isQuotaError(err): boolean` (exported); internal `withStore(mode, fallback, body, onError?: (err) => 'retry' | 'stop')`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `src/store/history.test.ts`:
 
@@ -2305,12 +2305,12 @@ describe('source file (HistoryEntry.source, step 3)', () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to see them fail**
+- [x] **Step 2: Run the tests to see them fail**
 
 Run: `npx vitest run src/store/history.test.ts`
 Expected: FAIL — a type error on `source` in `NewHistoryEntry`, or `expected undefined to be an instance of Blob`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/types.ts` `HistoryEntry` (CRLF), after `faceMask?`:
 
@@ -2443,12 +2443,12 @@ async function withStore<T>(
 
 `deleteEntry` and the `HISTORY_LIMIT` eviction remove the source with the record (no change).
 
-- [ ] **Step 4: Run the tests to see them pass**
+- [x] **Step 4: Run the tests to see them pass**
 
 Run: `npx vitest run src/store/history.test.ts`
 Expected: PASS (every existing test unchanged).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/types.ts src/store/history.ts src/store/history.test.ts

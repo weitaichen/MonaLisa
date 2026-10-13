@@ -621,6 +621,11 @@ export interface HistoryEntry {
   faceProtect?: boolean;
   /** the selfie segmenter's person mask the limit was built from (reopening needs no model); absent = none / 美體's */
   faceMask?: PersonMask;
+  /** the full-resolution file as picked (step 3, C §4.6): written once by the add that creates the entry, never patched */
+  source?: Blob;
+  /** oriented size of the picked file, recorded whenever it exceeded the working edge (also when the file was not kept) */
+  sourceWidth?: number;
+  sourceHeight?: number;
   /** 2 for entries written by 0.4; absent = v1 (RM §5.1) */
   schema?: 2;
   /** v2 edit (RM §3.2) */

@@ -18,6 +18,7 @@ import {
   deleteEntry,
   getEntry,
   HISTORY_LIMIT,
+  isQuotaError,
   listEntries,
   normalizeBody,
   normalizeEntry,
@@ -779,5 +780,87 @@ describe('v2 entries with geometry (step-3 spec §5)', () => {
     const id = await addEntry({ ...entry('geo'), schema: 2, edit: e });
     expect((await getEntry(id))!.edit!.photo.geometry).toEqual(geometry);
     expect((await listEntries()).find((x) => x.id === id)!.edit!.photo.geometry).toEqual(geometry);
+  });
+});
+
+describe('source file (HistoryEntry.source, step 3)', () => {
+  const source = new Blob([new Uint8Array(64)], { type: 'image/jpeg' });
+
+  it('round-trips the source and its oriented size; updateEntry never touches them', async () => {
+    const id = await addEntry({ ...entry('s'), source, sourceWidth: 4032, sourceHeight: 3024 });
+    const got = await getEntry(id);
+    expect(got?.source).toBeInstanceOf(Blob);
+    expect(got?.source?.size).toBe(64);
+    expect([got?.sourceWidth, got?.sourceHeight]).toEqual([4032, 3024]);
+    await updateEntry(id, { thumb: jpeg('t2') });
+    expect((await getEntry(id))?.source?.size).toBe(64);
+  });
+
+  it('sizes are recorded without a kept file (the "only 2048 kept" note)', async () => {
+    const id = await addEntry({ ...entry('n'), sourceWidth: 8064, sourceHeight: 6048 });
+    const got = await getEntry(id);
+    expect(got?.source).toBeUndefined();
+    expect(got?.sourceWidth).toBe(8064);
+  });
+
+  it('invalid fields are dropped and the entry kept', () => {
+    const raw = {
+      id: 'x',
+      createdAt: 1,
+      updatedAt: 1,
+      original: jpeg('o'),
+      thumb: jpeg('t'),
+      params: defaultParams(),
+      width: 10,
+      height: 10,
+      source: new Blob([]),
+      sourceWidth: 4032.5,
+      sourceHeight: -1,
+    };
+    const e = normalizeEntry(raw);
+    expect(e).not.toBeNull();
+    expect(e?.source).toBeUndefined();
+    expect(e?.sourceWidth).toBeUndefined();
+    expect(e?.sourceHeight).toBeUndefined();
+  });
+
+  it('a QuotaExceededError add is put once more without the source, with the same id', async () => {
+    const put = FDBObjectStore.prototype.put;
+    const calls: { id: string; source?: Blob }[] = [];
+    vi.spyOn(FDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      calls.push(value as { id: string; source?: Blob });
+      if ((value as { source?: Blob }).source) throw new DOMException('quota', 'QuotaExceededError');
+      return put.call(this, value, key);
+    });
+    const id = await addEntry({ ...entry('q'), source, sourceWidth: 4032, sourceHeight: 3024 });
+    expect(calls).toHaveLength(2);
+    expect(calls.map((c) => c.id)).toEqual([id, id]);
+    expect(calls[1].source).toBeUndefined();
+    const got = await getEntry(id);
+    expect(got).toBeDefined();
+    expect(got?.source).toBeUndefined();
+    expect(got?.sourceWidth).toBe(4032);
+  });
+
+  it("other errors keep today's reconnect retry (the file is not dropped)", async () => {
+    const put = FDBObjectStore.prototype.put;
+    let failed = false;
+    vi.spyOn(FDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      if (!failed) {
+        failed = true;
+        throw new DOMException('lost', 'UnknownError');
+      }
+      return put.call(this, value, key);
+    });
+    const id = await addEntry({ ...entry('r'), source, sourceWidth: 4032, sourceHeight: 3024 });
+    expect((await getEntry(id))?.source?.size).toBe(64);
+  });
+
+  it('isQuotaError recognises only a QuotaExceededError', () => {
+    expect(isQuotaError(new DOMException('full', 'QuotaExceededError'))).toBe(true);
+    expect(isQuotaError({ name: 'QuotaExceededError' })).toBe(true);
+    for (const other of [new DOMException('lost', 'UnknownError'), new Error('QuotaExceededError'), null, undefined, 'QuotaExceededError', 22]) {
+      expect(isQuotaError(other)).toBe(false);
+    }
   });
 });

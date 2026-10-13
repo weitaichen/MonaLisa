@@ -28,7 +28,7 @@ let warned = false;
 /** Stores the entry and evicts the oldest (by updatedAt) beyond HISTORY_LIMIT. Resolves with the id even if not stored. */
 export async function addEntry(e: NewHistoryEntry): Promise<string> {
   const id = createId();
-  await withStore('readwrite', undefined, (store) => {
+  const put = (withSource: boolean) => (store: IDBObjectStore) => {
     const now = stamp();
     const entry: HistoryEntry = {
       id,
@@ -44,10 +44,16 @@ export async function addEntry(e: NewHistoryEntry): Promise<string> {
     if (e.body !== undefined) entry.body = e.body;
     if (e.faceProtect === true) entry.faceProtect = true;
     if (e.faceMask) entry.faceMask = e.faceMask;
+    // step 1's HistoryEntry v2 fields (unchanged)
     if (e.schema === 2) entry.schema = 2;
     if (e.edit) entry.edit = e.edit;
     if (e.paramsKey !== undefined) entry.paramsKey = e.paramsKey;
     if (e.detect) entry.detect = e.detect;
+    if (withSource && e.source) entry.source = e.source;
+    if (e.sourceWidth !== undefined && e.sourceHeight !== undefined) {
+      entry.sourceWidth = e.sourceWidth;
+      entry.sourceHeight = e.sourceHeight;
+    }
     store.put(entry);
     // Requests in one transaction run in order, so the count already includes the new entry.
     const index = store.index(UPDATED_INDEX);
@@ -68,8 +74,22 @@ export async function addEntry(e: NewHistoryEntry): Promise<string> {
       };
     };
     return () => undefined;
+  };
+  // the entry must never be lost because of the file: a quota failure is put once more without it (S §5)
+  let quota = false;
+  await withStore('readwrite', undefined, put(true), (err) => {
+    if (e.source && isQuotaError(err)) {
+      quota = true;
+      return 'stop';
+    }
+    return 'retry';
   });
+  if (quota) await withStore('readwrite', undefined, put(false));
   return id;
+}
+
+export function isQuotaError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'QuotaExceededError';
 }
 
 /**
@@ -196,6 +216,12 @@ export function normalizeEntry(raw: unknown): HistoryEntry | null {
   if (d.cache) entry.detect = d.cache;
   if (d.stale) entry.staleBoxes = d.stale;
   if (d.lost) entry.detectLost = true;
+  // a missing or unreadable source only costs this entry's 原始解析度 export
+  if (isBlob(r.source) && r.source.size > 0) entry.source = r.source;
+  if (isPositiveInt(r.sourceWidth) && isPositiveInt(r.sourceHeight)) {
+    entry.sourceWidth = r.sourceWidth;
+    entry.sourceHeight = r.sourceHeight;
+  }
   return entry;
 }
 
@@ -229,6 +255,10 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v);
 }
 
+function isPositiveInt(v: unknown): v is number {
+  return Number.isInteger(v) && (v as number) > 0;
+}
+
 function isBlob(v: unknown): v is Blob {
   return typeof Blob !== 'undefined' && v instanceof Blob;
 }
@@ -242,11 +272,13 @@ function warnOnce(err: unknown): void {
 /**
  * Run `body` in one transaction; resolve with its result getter once the transaction commits.
  * `body` must issue all requests synchronously or from request callbacks (IDB auto-commits).
+ * `onError` decides what a failed attempt does: 'retry' (the default: reconnect and run once more) or 'stop'.
  */
 async function withStore<T>(
   mode: IDBTransactionMode,
   fallback: T,
   body: (store: IDBObjectStore) => () => T,
+  onError?: (err: unknown) => 'retry' | 'stop',
 ): Promise<T> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const db = await getDb();
@@ -255,6 +287,7 @@ async function withStore<T>(
       return await runTx(db, mode, body);
     } catch (err) {
       warnOnce(err);
+      if (onError?.(err) === 'stop') return fallback;
       dropConnection(db);
     }
   }

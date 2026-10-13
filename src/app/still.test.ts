@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EDIT_DETECT_FACES } from '../config/limits';
 import { legacyFrame } from '../edit/frame';
 import { splitLegacy } from '../edit/legacy';
+import { defaultPhoto } from '../edit/state';
 import { applyPreset, setParam } from '../engine/params';
 import { adapt } from '../tracking/adapter111';
-import type { BeautyParams } from '../types';
+import type { BeautyParams, PhotoParams, StillFrame } from '../types';
 import { createStillSession, type StillSession } from './still';
 import { faceOf, fakeEngine, fakeTracker, makeBodyField, makeFace, makeLandmarks, stubRaf, weightOf } from './testFakes';
 
@@ -462,5 +463,63 @@ describe('createStillSession', () => {
     expect(engine.lastInput()!.faces[0].protect).toBe(prot);
     s.exportImageData(frame);
     expect(engine.renderToImageData.mock.calls[0][0].faces[0].protect).toBe(prot);
+  });
+});
+
+describe('濾鏡 and 質感 LUTs in the still session (step-2 spec §3.5)', () => {
+  const frameOf = (photo: Partial<PhotoParams>): StillFrame => ({ faces: [], globalSkin: null, photo: { ...defaultPhoto(), ...photo } });
+
+  it('prepareExport loads both LUTs; exportReady waits for the look LUT', async () => {
+    const engine = fakeEngine();
+    let done!: () => void;
+    engine.loadLook.mockImplementation(() => new Promise<void>((r) => (done = r)));
+    const s = createStillSession(engine, fakeTracker(), bitmap());
+    const f = frameOf({ filterId: 'warm', look: { id: 'ccd', amount: 0.8 } });
+    const p = s.prepareExport(f);
+    expect(engine.loadLut).toHaveBeenCalledWith('filter', 'warm');
+    expect(engine.loadLut).toHaveBeenCalledWith('look', 'ccd');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(s.exportReady(f)).toBe(false);
+    done();
+    await p;
+    expect(s.exportReady(f)).toBe(true);
+  });
+
+  it('a LUT the LRU evicted turns exportReady false again', async () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, fakeTracker(), bitmap());
+    const f = frameOf({ look: { id: 'film', amount: 0.8 } });
+    await s.prepareExport(f);
+    expect(s.exportReady(f)).toBe(true);
+    engine.lutStates.delete('look:film');
+    expect(s.exportReady(f)).toBe(false);
+  });
+
+  it('a failed look LUT counts as settled (the preview skips it too)', async () => {
+    const engine = fakeEngine();
+    engine.loadLook.mockImplementation(() => Promise.reject(new Error('offline')));
+    const s = createStillSession(engine, fakeTracker(), bitmap());
+    const f = frameOf({ look: { id: 'blue', amount: 0.8 } });
+    await s.prepareExport(f);
+    expect(engine.lutState('look', 'blue')).toBe('failed');
+    expect(s.exportReady(f)).toBe(true);
+  });
+
+  it('redraws when a LUT that the screen started loading arrives', async () => {
+    const engine = fakeEngine();
+    let done!: () => void;
+    engine.loadLook.mockImplementation(() => new Promise<void>((r) => (done = r)));
+    void engine.loadLut('look', 'blue'); // the screen's useLutLoader asked first
+    const s = createStillSession(engine, fakeTracker(), bitmap());
+    s.render(frameOf({ look: { id: 'blue', amount: 0.8 } }));
+    vi.advanceTimersByTime(16);
+    const renders = engine.render.mock.calls.length;
+    done();
+    await Promise.resolve();
+    await Promise.resolve();
+    vi.advanceTimersByTime(16);
+    expect(engine.render.mock.calls.length).toBe(renders + 1);
+    expect(engine.loadLook).toHaveBeenCalledTimes(1);
   });
 });

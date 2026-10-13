@@ -12,6 +12,8 @@ import type {
   Face,
   Facing,
   Landmarks478,
+  LutKind,
+  LutState,
   Prefs,
   RenderInput,
   Tier,
@@ -126,6 +128,13 @@ export interface FakeEngine extends Engine {
   setTier: ReturnType<typeof vi.fn<(t: Tier) => void>>;
   setOptions: ReturnType<typeof vi.fn<Engine['setOptions']>>;
   loadFilter: ReturnType<typeof vi.fn<Engine['loadFilter']>>;
+  loadLut: ReturnType<typeof vi.fn<Engine['loadLut']>>;
+  lutState: ReturnType<typeof vi.fn<Engine['lutState']>>;
+  /** settles 質感 loads (filter loads go through loadFilter, so v0.3 tests keep counting them there) */
+  loadLook: ReturnType<typeof vi.fn<(id: string) => Promise<void>>>;
+  /** what lutState reports, keyed `${kind}:${id}`; delete a key to simulate the LRU evicting that LUT */
+  lutStates: Map<string, LutState>;
+  adjustUnavailable: boolean;
   render: ReturnType<typeof vi.fn<Engine['render']>>;
   renderToImageData: ReturnType<typeof vi.fn<Engine['renderToImageData']>>;
   renderOriginal: ReturnType<typeof vi.fn<Engine['renderOriginal']>>;
@@ -145,7 +154,36 @@ export function fakeEngine(clock?: { work(ms: number): void }, tier: Tier = 'M')
       e.tier = t;
     }),
     setOptions: vi.fn(),
-    loadFilter: vi.fn(() => Promise.resolve()),
+    loadFilter: vi.fn<Engine['loadFilter']>(() => Promise.resolve()),
+    loadLook: vi.fn<(id: string) => Promise<void>>(() => Promise.resolve()),
+    lutStates: new Map<string, LutState>(),
+    /** in-flight loads (the real cache answers a repeated request with the same promise) */
+    lutPending: new Map<string, Promise<void>>(),
+    /** bumped on webglcontextrestored: loads begun before it settle without leaving a texture, as in the engine */
+    lutGen: 0,
+    adjustUnavailable: false,
+    loadLut: vi.fn((kind: LutKind, id: string): Promise<void> => {
+      if (kind === 'filter' && id === 'none') return Promise.resolve();
+      const key = `${kind}:${id}`;
+      const pending = e.lutPending.get(key);
+      if (pending && e.lutStates.get(key) === 'loading') return pending;
+      const gen = e.lutGen;
+      e.lutStates.set(key, 'loading');
+      const p = kind === 'filter' ? e.loadFilter(id) : e.loadLook(id);
+      e.lutPending.set(key, p);
+      p.then(
+        () => {
+          if (gen === e.lutGen) e.lutStates.set(key, 'ready');
+        },
+        () => {
+          if (gen === e.lutGen) e.lutStates.set(key, 'failed');
+        },
+      );
+      return p;
+    }),
+    lutState: vi.fn((kind: LutKind, id: string): LutState =>
+      kind === 'filter' && id === 'none' ? 'ready' : (e.lutStates.get(`${kind}:${id}`) ?? 'none'),
+    ),
     render: vi.fn((input: RenderInput) => {
       clock?.work(e.cost);
       return { cpuMs: e.cost, width: input.width, height: input.height, passes: [] };
@@ -163,6 +201,12 @@ export function fakeEngine(clock?: { work(ms: number): void }, tier: Tier = 'M')
       return calls.length ? calls[calls.length - 1][0] : undefined;
     },
   };
+  // registered before any session's listener, as the real engine's own listener is (index.ts:163-164)
+  e.canvas.addEventListener('webglcontextrestored', () => {
+    e.lutGen++;
+    e.lutStates.clear();
+    e.lutPending.clear();
+  });
   return e as unknown as FakeEngine;
 }
 

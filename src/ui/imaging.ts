@@ -1,6 +1,6 @@
 // Pixel helpers for capture: the viewfinder crops the canvas with object-fit: cover, so the saved
 // image is centre-cropped to the same ratio here (on the ImageData, before encoding).
-import type { FaceSeed } from '../types';
+import type { FaceSeed, Rect as UvRect } from '../types';
 
 export interface Rect {
   x: number;
@@ -21,6 +21,13 @@ export function centerCropRect(w: number, h: number, ratio: number): Rect {
   cw = Math.min(w, Math.max(1, cw));
   ch = Math.min(h, Math.max(1, ch));
   return { x: Math.floor((w - cw) / 2), y: Math.floor((h - ch) / 2), width: cw, height: ch };
+}
+
+/** centerCropRect as normalized source UV (the camera's picture frame, step-2 spec §4.5); the whole frame when empty. */
+export function normalizedCropRect(w: number, h: number, ratio: number): UvRect {
+  if (!(w > 0 && h > 0)) return { x: 0, y: 0, w: 1, h: 1 };
+  const r = centerCropRect(w, h, ratio);
+  return { x: r.x / w, y: r.y / h, w: r.width / w, h: r.height / h };
 }
 
 /** Copy `rect` out of `src` (rows are top-first, as returned by the engine). */

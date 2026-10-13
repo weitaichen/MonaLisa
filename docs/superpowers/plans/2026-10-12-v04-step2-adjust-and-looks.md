@@ -3897,12 +3897,12 @@ git commit -m "v0.4 step 2: GPU composite harness vs compositeCpu (each item at 
   - still `exportReady(frame)` true only when `lutState` of the frame's 濾鏡 and 質感 is `ready` or `failed`
   - `FakeEngine.loadLut`, `.lutState`, `.loadLook`, `.lutStates: Map<string, LutState>`, `.adjustUnavailable`
 
-- [ ] **Step 0: Confirm the step-1 shapes**
+- [x] **Step 0: Confirm the step-1 shapes**
 
 Run: `grep -n "requestedFilters\|settledFilters\|ensureFilter\|StillFrame\|frame\b" src/app/still.ts | head -30; grep -n "getParams\|getLook\|ensureFilter\|requestedFilters\|capture()" src/app/live.ts`
 Expected: the v0.3 filter bookkeeping is still in both files; the still session stores the latest `StillFrame` (this plan calls that variable `frame`); the live loop reads the camera look through one accessor (this plan calls it `getLook`). Use step 1's names where they differ.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/ui/imaging.frame.test.ts`:
 
@@ -4050,12 +4050,12 @@ describe('調節 and 質感 in the live loop (step-2 spec §2.3, §4.4–4.5)', 
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run src/ui/imaging.frame.test.ts src/app/still.test.ts src/app/live.test.ts`
 Expected: FAIL — `normalizedCropRect` is not exported; `engine.loadLook` is undefined; `grainSeed` is undefined.
 
-- [ ] **Step 3: The fake engine tracks LUT states like the real cache**
+- [x] **Step 3: The fake engine tracks LUT states like the real cache**
 
 In `src/app/testFakes.ts` (CRLF — Edit tool): add `LutKind`, `LutState` to its `../types` type import; add to `interface FakeEngine` after `loadFilter`:
 
@@ -4069,10 +4069,10 @@ In `src/app/testFakes.ts` (CRLF — Edit tool): add `LutKind`, `LutState` to its
   adjustUnavailable: boolean;
 ```
 
-and in the object literal of `fakeEngine` (after `loadFilter: vi.fn(() => Promise.resolve()),`):
+and in the object literal of `fakeEngine` (after `loadFilter: vi.fn(() => Promise.resolve()),`, which becomes `loadFilter: vi.fn<Engine['loadFilter']>(() => Promise.resolve()),` so that `e.loadFilter(id)` below typechecks):
 
 ```ts
-    loadLook: vi.fn(() => Promise.resolve()),
+    loadLook: vi.fn<(id: string) => Promise<void>>(() => Promise.resolve()),
     lutStates: new Map<string, LutState>(),
     /** in-flight loads (the real cache answers a repeated request with the same promise) */
     lutPending: new Map<string, Promise<void>>(),
@@ -4106,7 +4106,7 @@ and in the object literal of `fakeEngine` (after `loadFilter: vi.fn(() => Promis
 and directly before `return e as unknown as FakeEngine;`:
 
 ```ts
-  // registered before any session's listener, as the real engine's own listener is (index.ts:144-145)
+  // registered before any session's listener, as the real engine's own listener is (index.ts:163-164)
   e.canvas.addEventListener('webglcontextrestored', () => {
     e.lutGen++;
     e.lutStates.clear();
@@ -4114,7 +4114,7 @@ and directly before `return e as unknown as FakeEngine;`:
   });
 ```
 
-- [ ] **Step 4: Still session**
+- [x] **Step 4: Still session**
 
 In `src/app/still.ts`:
 1. Add `import { photoLuts } from '../engine/looks';`.
@@ -4196,7 +4196,7 @@ In `src/app/still.ts`:
       });
 ```
 
-- [ ] **Step 5: Live loop**
+- [x] **Step 5: Live loop**
 
 In `src/app/live.ts` (CRLF — Edit tool):
 1. Add `import { photoLuts } from '../engine/looks';` and `Rect` to the `../types` type import.
@@ -4227,7 +4227,7 @@ In `src/app/live.ts` (CRLF — Edit tool):
 
 7. In `capture()`, add `pictureFrame: deps.getFrame?.(), grainSeed,` to the `renderToImageData({ … })` input.
 
-- [ ] **Step 6: The normalized crop**
+- [x] **Step 6: The normalized crop**
 
 In `src/ui/imaging.ts` change its type import `import type { FaceSeed } from '../types';` to `import type { FaceSeed, Rect as UvRect } from '../types';` (the module has its own pixel `Rect`) and add after `centerCropRect`:
 
@@ -4240,15 +4240,17 @@ export function normalizedCropRect(w: number, h: number, ratio: number): UvRect 
 }
 ```
 
-- [ ] **Step 7: Run the tests**
+- [x] **Step 7: Run the tests**
 
 Run: `npx vitest run src/ui/imaging.frame.test.ts src/app/still.test.ts src/app/live.test.ts && npm run typecheck`
 Expected: PASS — including every pre-existing still/live test: the fake's `loadLut('filter', id)` calls `loadFilter(id)`, so their `loadFilter` counts are unchanged, and `exportReady` sees the same settle points through `lutState`.
 
-- [ ] **Step 8: Full suite and commit**
+- [x] **Step 8: Full suite and commit**
 
 Run: `npm test`
 Expected: PASS.
+
+Implementation note (Task 11): the new tests failed first as expected (8 failures: `normalizedCropRect is not a function`, `engine.loadLook` / `engine.lutStates` / `engine.loadLut` undefined, `grainSeed` undefined). With the plan's literal `loadFilter: vi.fn(() => Promise.resolve())` and `loadLook: vi.fn(() => Promise.resolve())`, `npm run typecheck` fails (TS2554 on `e.loadFilter(id)` / `e.loadLook(id)`: the literals infer zero-argument mocks), so both `vi.fn`s take an explicit signature (`vi.fn<Engine['loadFilter']>`, `vi.fn<(id: string) => Promise<void>>`); Step 3 above shows the committed form. The engine listener anchor moved to `index.ts:163-164` after Task 8. The `StillSession` doc comments and the restore comment now say "濾鏡 and 質感 LUTs" instead of "the filter LUT", and `staticsSettled` keeps its own comment (the removed `settledFilters` comment described both). Result: the three files 68/68, `npm test` 71 files / 1303 tests, `npm run typecheck` clean.
 
 ```bash
 git add src/app/still.ts src/app/live.ts src/app/testFakes.ts src/app/still.test.ts src/app/live.test.ts src/ui/imaging.ts src/ui/imaging.frame.test.ts

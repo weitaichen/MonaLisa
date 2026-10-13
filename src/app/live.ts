@@ -1,6 +1,7 @@
 // OWNER: app-glue agent. Live camera loop: rVFC → detect → adapt → render, face easing, auto-tier, debug state.
 import { LIVE_DETECT_FACES, MAX_RENDER_FACES } from '../config/limits';
-import type { CameraController, CameraLook, Engine, EngineOptions, FaceSeed, Landmarks478, Prefs, StillFrame, Tier, Tracker } from '../types';
+import { photoLuts } from '../engine/looks';
+import type { CameraController, CameraLook, Engine, EngineOptions, FaceSeed, Landmarks478, Prefs, Rect, StillFrame, Tier, Tracker } from '../types';
 import { debugState, reportError } from './debug';
 import { FaceTracks, type CameraSelection, type LiveTrackView, type TrackId } from './faceTracks';
 import { createVideoFrameSource, type FrameInfo, type FrameSource } from './frameSource';
@@ -44,6 +45,11 @@ export interface LiveDeps {
   /** 全部套用 (S §2.5): every face beautified */
   getAll: () => boolean;
   getPrefs: () => Prefs;
+  /**
+   * step 2: the picture the shutter keeps, as normalized source UV (the ratio's centre crop, Camera.tsx); read every
+   * frame, so a ratio change moves the vignette at once. Absent → the whole video frame.
+   */
+  getFrame?: () => Rect;
   onStats?: (s: LiveStats) => void;
 }
 
@@ -98,9 +104,10 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
   const fpsEma = new TimeEma(STAT_TAU_MS);
   const detectEma = new TimeEma(STAT_TAU_MS);
   const renderEma = new TimeEma(STAT_TAU_MS);
-  const requestedFilters = new Set<string>();
   const applied: Partial<EngineOptions> = {};
 
+  /** grain seed: advanced once per drawn camera frame (moving grain, C §12 #11); redraws and the capture reuse it */
+  let grainSeed = 0;
   let stopped = false;
   let compare = false;
   let paused = true;
@@ -152,7 +159,7 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
     const look = deps.getLook();
     syncOptions(prefs, facing === 'user');
     syncTier(prefs.tier);
-    ensureFilter(look.photo.filterId);
+    ensureLuts(look.photo);
 
     const interval = lastTs === null ? null : now - lastTs;
 
@@ -168,6 +175,7 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
     tracks.step(interval ?? 0, deps.getAll(), now);
 
     const t1 = performance.now();
+    grainSeed = (grainSeed + 1) >>> 0;
     draw(look, w, h);
     const renderMs = performance.now() - t1;
     haveFrame = true;
@@ -201,7 +209,15 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
 
   function draw(look: CameraLook, w: number, h: number): void {
     if (compare) engine.renderOriginal({ source: video, width: w, height: h });
-    else engine.render({ source: video, width: w, height: h, ...liveFrame(tracks.views(), tracks.anyFace, look) });
+    else
+      engine.render({
+        source: video,
+        width: w,
+        height: h,
+        ...liveFrame(tracks.views(), tracks.anyFace, look),
+        pictureFrame: deps.getFrame?.(),
+        grainSeed,
+      });
   }
 
   /** New measurement window + fresh face state (start, resume, flip / resolution change). */
@@ -260,10 +276,12 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
     auto.restart();
   }
 
-  function ensureFilter(id: string): void {
-    if (id === 'none' || requestedFilters.has(id)) return;
-    requestedFilters.add(id);
-    engine.loadFilter(id).catch((err: unknown) => reportError(`filter ${id}`, err));
+  /** the photo's 濾鏡 and 質感 LUTs; the frame path draws each once resident, so only unasked LUTs need a request */
+  function ensureLuts(photo: { filterId: string; look: { id: string } | null }): void {
+    for (const r of photoLuts(photo)) {
+      if (engine.lutState(r.kind, r.id) !== 'none') continue;
+      engine.loadLut(r.kind, r.id).catch((err: unknown) => reportError(`${r.kind} ${r.id}`, err));
+    }
   }
 
   function publish(now: number, force: boolean): void {
@@ -354,7 +372,14 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
       if (stopped || paused || !haveFrame || !isLive() || !hasVideoFrame()) return null;
       const prefs = deps.getPrefs();
       const image = engine.renderToImageData(
-        { source: video, width: video.videoWidth, height: video.videoHeight, ...liveFrame(tracks.views(), tracks.anyFace, deps.getLook()) },
+        {
+          source: video,
+          width: video.videoWidth,
+          height: video.videoHeight,
+          ...liveFrame(tracks.views(), tracks.anyFace, deps.getLook()),
+          pictureFrame: deps.getFrame?.(),
+          grainSeed,
+        },
         { mirror: prefs.mirrorOnSave && camera.snapshot.facing === 'user' },
       );
       // the hand-over seed (C2): the beautified track's last RAW box centre (not the smoothed one), unmirrored video UV

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { splitLegacy } from '../edit/legacy';
+import { defaultPhoto, naturalPerson } from '../edit/state';
 import { applyPreset } from '../engine/params';
-import type { DebugState, Face, Prefs } from '../types';
+import type { CameraLook, DebugState, Face, Prefs, Rect } from '../types';
 import { AUTO_TIER, FACE_EASE_MS } from './liveCore';
 import { type LiveDeps, type LiveStats, autoTierSession, resetAutoTierSession, startLiveLoop } from './live';
 import {
@@ -538,6 +539,61 @@ describe('live loop on face tracks (S §3.3 Live camera, §3.4 T4)', () => {
     const { stats, loop } = setup({ faces: 2 });
     vi.advanceTimersByTime(600);
     expect(stats.at(-1)!.faces).toBe(2);
+    loop.stop();
+  });
+});
+
+describe('調節 and 質感 in the live loop (step-2 spec §2.3, §4.4–4.5)', () => {
+  const lookWith = (photo: Partial<CameraLook['photo']> = {}): CameraLook => ({
+    photo: { ...defaultPhoto(), ...photo },
+    person: naturalPerson(),
+  });
+
+  it('reads the picture frame every frame; the grain seed advances once per drawn frame, not on redraw; capture uses it', () => {
+    const clock = installWorkClock();
+    const video = new FakeVideo();
+    const engine = fakeEngine(clock);
+    let frame: Rect = { x: 0.25, y: 0, w: 0.5, h: 1 };
+    const look = lookWith();
+    const loop = startLiveLoop({
+      camera: fakeCamera(video),
+      engine,
+      tracker: null,
+      getLook: () => look,
+      getAll: () => false,
+      getPrefs: () => makePrefs(),
+      getFrame: () => frame,
+    });
+    video.play();
+    vi.advanceTimersByTime(33 * 4 + 1);
+    const seeds = engine.render.mock.calls.map(([i]) => i.grainSeed!);
+    expect(seeds.length).toBeGreaterThanOrEqual(2);
+    for (let i = 1; i < seeds.length; i++) expect(seeds[i]).toBe(seeds[i - 1] + 1);
+    expect(engine.lastInput()!.pictureFrame).toEqual(frame);
+    frame = { x: 0, y: 0.2, w: 1, h: 0.6 }; // ratio change: the vignette follows at once
+    vi.advanceTimersByTime(33);
+    expect(engine.lastInput()!.pictureFrame).toEqual(frame);
+    const seed = engine.lastInput()!.grainSeed;
+    loop.setCompare(true);
+    loop.setCompare(false); // a redraw of the same video frame keeps its grain
+    expect(engine.lastInput()!.grainSeed).toBe(seed);
+    expect(loop.capture()).not.toBeNull();
+    const [shot] = engine.renderToImageData.mock.calls.at(-1)!;
+    expect(shot.grainSeed).toBe(seed);
+    expect(shot.pictureFrame).toEqual(frame);
+    loop.stop();
+  });
+
+  it('requests the 質感 LUT with the 濾鏡 LUT, once each', () => {
+    const clock = installWorkClock();
+    const video = new FakeVideo();
+    const engine = fakeEngine(clock);
+    const look = lookWith({ filterId: 'warm', look: { id: 'ccd', amount: 0.8 } });
+    const loop = startLiveLoop({ camera: fakeCamera(video), engine, tracker: null, getLook: () => look, getAll: () => false, getPrefs: () => makePrefs() });
+    video.play();
+    vi.advanceTimersByTime(33 * 5 + 1);
+    expect(engine.loadLut.mock.calls.filter(([k, id]) => k === 'filter' && id === 'warm')).toHaveLength(1);
+    expect(engine.loadLut.mock.calls.filter(([k, id]) => k === 'look' && id === 'ccd')).toHaveLength(1);
     loop.stop();
   });
 });

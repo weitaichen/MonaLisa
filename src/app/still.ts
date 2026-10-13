@@ -3,6 +3,7 @@
 // frame (src/edit/frame.ts buildFrame), each face carrying its own 瘦臉 limit (A6).
 import { EDIT_DETECT_FACES } from '../config/limits';
 import { adaptCached, prepareFaces } from '../detect/faces';
+import { photoLuts } from '../engine/looks';
 import type { BodyField, CachedFace, CachedObstacle, Engine, Face, Rect, RenderInput, StillFrame, Tracker } from '../types';
 import { debugState, reportError } from './debug';
 
@@ -41,14 +42,14 @@ export interface StillSession {
   /** the field set last (a replacement session is seeded with it) */
   readonly body: BodyField | null;
   /**
-   * Resolves once what an export of `frame` needs is resident (the filter LUT may still be downloading:
+   * Resolves once what an export of `frame` needs is resident (the 濾鏡 and 質感 LUTs may still be downloading:
    * no SW, Lockdown Mode, slow network). Never rejects: a LUT that fails to load is skipped by the preview
-   * too, so the export then matches it without the filter.
+   * too, so the export then matches it without that LUT.
    */
   prepareExport(frame: StillFrame): Promise<void>;
   /**
-   * true when an export of `frame` would match the preview right now: the static textures and the filter
-   * LUT have settled (loaded or failed) on the current context. false → prepareExport first.
+   * true when an export of `frame` would match the preview right now: the static textures and the engine's 濾鏡 and
+   * 質感 LUT states have settled (ready or failed) on the current context. false → prepareExport first.
    */
   exportReady(frame: StillFrame): boolean;
   /**
@@ -102,9 +103,9 @@ export function createStillSession(
     dbg.faces = detected.faces.length;
     dbg.boxes = detected.faces.map((f) => ({ id: f.id, ...f.box }));
   }
-  const requestedFilters = new Set<string>();
-  /** filters whose load settled (loaded or failed) on the current context, and whether `ready` has */
-  const settledFilters = new Set<string>();
+  /** LUT loads this session waits on to redraw (`${kind}:${id}`); cleared on restore */
+  const waiting = new Set<string>();
+  /** whether `ready` (the static textures) has settled on the current context */
   let staticsSettled = false;
   /** bumped on every restore: loads started against the old context no longer count as settled */
   let gen = 0;
@@ -141,24 +142,29 @@ export function createStillSession(
     }
   }
 
-  function ensureFilter(id: string): void {
-    if (id === 'none' || requestedFilters.has(id)) return;
-    requestedFilters.add(id);
-    const g = gen;
-    const settled = () => {
-      if (g === gen) settledFilters.add(id);
-    };
-    // the first render may have gone out before the LUT was uploaded → draw again once it is
-    engine.loadFilter(id).then(
-      () => {
-        settled();
-        schedule();
-      },
-      (err: unknown) => {
-        settled();
-        reportError(`filter ${id}`, err);
-      },
-    );
+  /**
+   * Ask for every LUT the photo draws with (濾鏡 and 質感) and redraw when one arrives: the first frame may have gone
+   * out without it. A LUT already resident needs nothing; a failed one is retried only by an explicit tap (the
+   * screen's requestLut), so the preview and the export both skip it.
+   */
+  function ensureLuts(photo: StillFrame['photo']): void {
+    for (const r of photoLuts(photo)) {
+      const state = engine.lutState(r.kind, r.id);
+      if (state === 'ready' || state === 'failed') continue;
+      const key = `${r.kind}:${r.id}`;
+      if (waiting.has(key)) continue;
+      waiting.add(key);
+      engine.loadLut(r.kind, r.id).then(
+        () => {
+          waiting.delete(key);
+          schedule();
+        },
+        (err: unknown) => {
+          waiting.delete(key);
+          reportError(`${r.kind} ${r.id}`, err);
+        },
+      );
+    }
   }
 
   function trackStatics(): void {
@@ -182,16 +188,15 @@ export function createStillSession(
   trackStatics();
 
   // After a restore the drawing buffer is blank and every texture reloads asynchronously, but nothing
-  // else asks for a frame: redraw now, re-request the filter (dropped with the old context) and redraw
+  // else asks for a frame: redraw now, re-request the LUTs (dropped with the old context) and redraw
   // again once the static textures are back. The engine's own listener was added first, so it has
   // already rebuilt by the time this runs.
   const onRestored = () => {
     if (disposed) return;
     gen++;
-    requestedFilters.clear();
-    settledFilters.clear();
+    waiting.clear();
     staticsSettled = false;
-    if (frame) ensureFilter(frame.photo.filterId);
+    if (frame) ensureLuts(frame.photo);
     trackStatics();
     schedule();
   };
@@ -203,27 +208,23 @@ export function createStillSession(
     const ready = engine.ready;
     const g = gen;
     const statics = ready.catch(() => undefined);
-    const filterId = f.photo.filterId;
-    let load: Promise<void>;
-    if (filterId === 'none') load = Promise.resolve();
-    else {
+    const loads = photoLuts(f.photo).map((r) => {
       try {
-        load = engine.loadFilter(filterId);
-      } catch (err) {
-        load = Promise.reject(err);
+        return engine.loadLut(r.kind, r.id).catch(() => undefined);
+      } catch {
+        return Promise.resolve(undefined);
       }
-    }
-    return Promise.all([statics, load.catch(() => undefined)]).then(() => {
+    });
+    return Promise.all([statics, ...loads]).then(() => {
       // still lost (or closed): exportImageData throws and the callers handle that
       if (disposed || engine.lost) return;
-      // lost and restored meanwhile: the loads above settled against the dead context without leaving
-      // their textures behind, so wait for the reloaded ones (new `ready`, a fresh filter load)
+      // lost and restored meanwhile: the loads above settled against the dead context without leaving their
+      // textures behind, so wait for the reloaded ones (new `ready`, fresh LUT loads)
       if (engine.ready !== ready || g !== gen) {
         if (retries > 0) return prepare(f, retries - 1);
         return;
       }
       staticsSettled = true;
-      if (filterId !== 'none') settledFilters.add(filterId);
     });
   }
 
@@ -237,7 +238,7 @@ export function createStillSession(
     render(f) {
       if (disposed) return;
       frame = f;
-      ensureFilter(f.photo.filterId);
+      ensureLuts(f.photo);
       schedule();
     },
     setCompare(on) {
@@ -258,12 +259,15 @@ export function createStillSession(
     },
     exportReady(f) {
       if (disposed || engine.lost || !staticsSettled) return false;
-      const id = f.photo.filterId;
-      return id === 'none' || settledFilters.has(id);
+      // ask the engine, not a local set: the LRU may have evicted a LUT this session loaded earlier
+      return photoLuts(f.photo).every((r) => {
+        const s = engine.lutState(r.kind, r.id);
+        return s === 'ready' || s === 'failed';
+      });
     },
     exportImageData(f, b) {
       if (disposed) throw new Error('StillSession: disposed');
-      ensureFilter(f.photo.filterId);
+      ensureLuts(f.photo);
       const img = engine.renderToImageData(input(f, b === undefined ? body : b), { mirror: false });
       // the display keeps showing the last frame; redraw in case the offscreen render disturbed it
       schedule();

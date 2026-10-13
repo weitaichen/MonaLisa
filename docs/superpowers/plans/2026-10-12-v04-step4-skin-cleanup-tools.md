@@ -10,6 +10,26 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-12-skin-cleanup-tools-design.md` (called **S** below), inside the contract `docs/superpowers/specs/2026-10-12-v04-roadmap.md` (**C**; status accepted, every §12 question at its recommended default). Names consumed from earlier steps come from `2026-10-12-face-person-select-design.md` (step 1), `2026-10-12-adjust-and-looks-design.md` (step 2) and `2026-10-12-crop-and-fullres-export-design.md` (step 3).
 
+## Reconciliation (step 4)
+
+Checked against the code at the step base `0203207` (steps 1–3 fully committed, fixes included). Task 1 Step 1's name check prints `ok` for every line. Every name this plan produces is unchanged, so steps 5–6 still find them. These edits were made:
+
+- **Anchors:** the **Files** lines and step instructions cite `0203207` lines where they had moved (types, debug, mask, global-setup, .gitignore, NOTICE, pipeline, index, still, exporter, zoomPan, panelModel, Slider, BeautyPanel, icons, theme.css, Editor, bench main). Line numbers inside spec quotes and code comments may still read older lines: when an anchor has moved, find the quoted code.
+- **Line endings** (`git ls-files --eol` at `0203207`): the CRLF working-tree files this plan edits are `src/types.ts`, `src/engine/index.ts`, `src/engine/pipeline.ts`, `src/engine/passes/mask.ts`, `src/ui/panelModel.ts`, `src/ui/components/Slider.tsx`, `src/ui/components/BeautyPanel.tsx`, `src/ui/icons.tsx`, `src/ui/theme.css`, `src/ui/screens/zoomPan.ts` and `src/bench/main.ts`. Every other edited file is LF.
+- **Task 1:** step 1's `state.test.ts` case 'live: everything but 美體 is offered in the camera' must also exempt the `'tone'` group (the six are `live: false`).
+- **Task 3:** step 3 already passes the entry's `{ width, height }` from `normalizeEntry` (`history.ts:213`), so `history.ts` is not changed and both history tests pass once Task 2 is in. The second history test stores person `f3`, because `sanitizeEditState` always bounds owners by the stored persons. `legacyProjection` writes the six `tone.*` values as **neutral** instead of dropping their keys. The projection stays a complete `BeautyParams`, so step 1's round-trip tests (`legacy.test.ts`, the `lens.test.ts` parity case, `migrate.test.ts`) still pass. Only the 500-random round trip generates its raw tone values as neutral, since a v1 record never holds a 膚質 value. The stored `params` are the same as with dropped keys, because `sanitizeParams` fills them with the same neutral values. This keeps S §5's "0.3 opens a 0.4 entry without them".
+- **Task 5:** `buildMaskGeometry` returns step 1's `[count, base, fanEnd]`.
+- **Task 7:** `global-setup.ts` already imports `existsSync, statSync` and has a `stale()` helper; the fixture uses it.
+- **Task 11:** `base` / `baseFb` are declared right after the P0 mask block (`pipeline.ts:456-457`), and the tone block goes after them. Step 3's `releaseBuffers` loops over every FBO, so it gets the explicit six-name list. `still.ts` publishes the stats in `flush()`, next to step 3's `renderCount`.
+- **Task 13:** the exporter's `ctxOpts` line carries a type annotation, and the replacement keeps it.
+- **Task 15:** `ZoomPanOptions` already exists (step 1 / 3) with `onTap(uv, layer: DOMRect)` and `resetWhen`, read through `optsRef`. `spotTap` takes the same `(uv, layer)` form. In view mode a `pointercancel` still never calls `onTap` (step 1), but it still counts toward the double tap.
+- **Task 16:** `ends` goes on `SliderView`, which is what `SliderRow` reads (`SliderBinding` extends it). `sliderFor` keeps step 1's `usable` gate and `decorate`. Tone dots use step 1's `itemDot`. `aria-valuetext` keeps 「，各人不同」. BeautyPanel's note line is step 1's `bodyNoteFor(body, lens, sel)`. The valueText test goes into the existing `Slider.test.tsx`. The Editor's selection is `selected` (there is no `personSel`), and `selectPerson(page, 0)` selects 全部. `tabHasValue`'s 4th parameter and tone.spec's `defect` helper move to Task 17, where they are first used (`noUnusedParameters` / `noUnusedLocals`).
+- **Task 17:** `photoScoped` handles `sel.skin === 'spot'`, because `photoLike` takes a `ParamId`. The Editor already has a `scope` (`photoScoped`), so the 清除 scope is named `clearSc`. The tap builds its frame with step 1's `frameOf(cur, s)` (there is no `frameRef`). The person-tap callback becomes the named `onPersonTap`. The `SpotControls` ternary keeps step 3's `SliderRow` props (`straightenView`, `emptyText`). `backMapFrameOf` applies each face's `warpScale` (λ_f), as `index.ts` does. BeautyPanel passes `skin` to `tabHasValue`.
+- **Task 19:** `main.ts` already imports an equal `median` from `./report`. The bench input sets the geometry on `RenderInput`, because the engine reads `input.geometry`, not `photo.geometry`.
+- **Task 20:** the base file, the commit count and Step 5's expected test edits follow the changes above and the workflow's commits.
+- **Commits:** the `git commit -m "v0.4 step 4 (N/20): …"` blocks show each task's file list and intent. The workflow's message format replaces them: `v0.4 step 4 task <N>: <title>`, fixes `v0.4 step 4 task <N> fix: …`, written to a file, committed with `git commit -F` and ending with the `Co-Authored-By` line. Task 9's calibration table goes into its message body.
+- **Imports:** put new names into a file's existing import declarations. A name that is already imported (for example the Editor's `debug`, `reportError`, `toast` and `haptic`) is not imported again.
+
 ## Global Constraints
 
 - Contract §12 defaults are decisions: one spot list per photo, each spot tagged with its `owner` (#24); 膚質 runs in O **before** 美型／美妝 (#25); editor only, never in the camera (#26); 膚色 reaches face + upper neck only (#27); one 勻膚 slider (#28); no 一鍵祛痘 (#29); 全部清除 / 清除此人 need a second tap 「確定清除？」 within 3 s (#30); every beauty preset resets the tone items to neutral (#31).
@@ -48,7 +68,7 @@
 | `src/edit/spots.ts` | create | spot list edits, sanitize, owners; radius, regions, snap, donor (`planSpot`) | 2, 13 |
 | `src/edit/toneCopy.ts` | create | every step-4 string | 3 |
 | `src/edit/lens.ts`, `src/edit/legacy.ts` (step 1) | modify | tone gate, ⊘ covers tone, v1 projection | 3 |
-| `src/store/history.ts` (step 1's `normalizeEntry`) | modify | sanitize a loaded edit with the entry's O size, so spots survive | 3 |
+| `src/store/history.ts` (step 1's `normalizeEntry`) | unchanged | already sanitizes a loaded edit with the entry's O size (step 3), so spots survive; Task 3 adds the tests | 3 |
 | `src/engine/passes/toneGeometry.ts` | create | face frame, gates, region triangle lists, R/Q draw lists, `TONE_ZERO` | 4, 5 |
 | `src/engine/passes/mask.ts` | modify | optional ring width for `buildMaskGeometry` | 5 |
 | `src/engine/passes/toneMask.ts` | create | GL pass drawing R and Q | 6 |
@@ -84,11 +104,11 @@
 ### Task 1: Tone params, the Spot model, caps and debug fields
 
 **Files:**
-- Modify: `src/types.ts:6` (`ParamGroup`), `:8-34` (`ParamId`), step 1's `PhotoParams`, `:409-421` (`DebugState`)
+- Modify: `src/types.ts:6` (`ParamGroup`), `:8-47` (`ParamId`), step 1's `PhotoParams` (`:187-200`), `:668-697` (`DebugState`)
 - Modify: `src/config/limits.ts` (created by step 1)
 - Modify: `src/engine/params.ts:6-9` (after the four 美膚 rows)
-- Modify: `src/edit/state.ts` (step 1: `defaultPhoto`)
-- Modify: `src/app/debug.ts:8-17`, `src/ui/debug.ts:6-16`
+- Modify: `src/edit/state.ts` (step 1: `defaultPhoto`, `:54-59`)
+- Modify: `src/app/debug.ts:8-23`, `src/ui/debug.ts:6-21`
 - Test: `src/engine/params.test.ts`, `src/edit/state.test.ts`
 
 **Interfaces:**
@@ -109,7 +129,7 @@
 
 - [ ] **Step 1: Check the consumed names and record the baseline**
 
-Run (Git Bash, repo root):
+Run (Git Bash, repo root; HEAD is the plan's reconcile commit, which changes no code, on top of the step base `0203207`):
 ```bash
 mkdir -p .superpowers
 git rev-parse HEAD > .superpowers/step4-base.txt
@@ -196,6 +216,12 @@ In the existing `describe('PARAM_DEFS schema (RB §5)')` of the same file:
   ```
 - in step 1's scope-table test (`git grep -n "scope" src/**/*.test.ts` finds it; C §3.1 "a unit test checks … that the table below matches PARAM_DEFS"), add the six tone ids to the person list.
 
+In `src/edit/state.test.ts`, step 1's case `'live: everything but 美體 is offered in the camera'` (`state.test.ts:42-44`) asserts `d.live === (d.group !== 'body')`; the six tone items are editor-only too, so it becomes
+```ts
+    for (const d of PARAM_DEFS) expect(d.live, d.id).toBe(d.group !== 'body' && d.group !== 'tone');
+```
+(its title may add 「and 膚質」). The scope-table case in the same describe (`state.test.ts:28-41`) lists the person items with `expect.arrayContaining`, so adding the tone ids there is optional; its `PHOTO_IDS` list is unchanged.
+
 Append to `src/edit/state.test.ts`:
 ```ts
 describe('step 4: spots in the photo params', () => {
@@ -213,7 +239,7 @@ Expected: FAIL — `expected [] to deeply equal [ 'tone.even', … ]` and `expec
 
 - [ ] **Step 4: Implement**
 
-`src/types.ts` — append `| 'tone'` to `ParamGroup` (line 6) and the six ids to `ParamId` (after `'makeup.blush'`, line 34, or after step 2's `adjust.*` ids):
+`src/types.ts` (CRLF) — append `| 'tone'` to `ParamGroup` (line 6) and the six ids to `ParamId` (after step 2's last id `'adjust.vignette'`, line 47, moving its `;` to the new last line):
 ```ts
   | 'tone.even'
   | 'tone.warmth'
@@ -222,7 +248,7 @@ Expected: FAIL — `expected [] to deeply equal [ 'tone.even', … ]` and `expec
   | 'tone.teeth'
   | 'tone.eyeBright';
 ```
-Below `HeightBand` (after line 107) add:
+Below `HeightBand` (after line 147) add:
 ```ts
 /** 祛痘 spot (skin-cleanup spec §3.2; replaces C §3.2's Spot). Photo-level, stored in EditState.photo.spots. */
 export interface Spot {
@@ -240,12 +266,12 @@ export interface Spot {
 /** 祛痘 大小 小／中／大 */
 export type SpotSize = 'S' | 'M' | 'L';
 ```
-(If step 1 already declared a `Spot`, replace it with this one.) In step 1's `PhotoParams` add, after the last field:
+(If step 1 already declared a `Spot`, replace it with this one; at `0203207` none exists.) In step 1's `PhotoParams` (`types.ts:187-200`) add, after the last field (step 3's `geometry`):
 ```ts
   /** 祛痘 spots, at most SPOT_CAP (skin-cleanup spec §3.2, C §5.3) */
   spots: readonly Spot[];
 ```
-In `DebugState` (`types.ts:409-421`) add:
+In `DebugState` (`types.ts:668-697`) add:
 ```ts
   /** 祛痘 spots of the open photo (editor; skin-cleanup spec §3.2) */
   spots: number;
@@ -277,9 +303,9 @@ export const HEAL_RING_SAMPLES = 32;
 ```
 (`PRESETS` builds `values` from `neutralValues()` / `defaultValues()`, so every preset holds these at neutral with no further change.)
 
-`src/edit/state.ts` — in `defaultPhoto()` add `spots: [],` to the returned object. Run `npm run typecheck`; every `Property 'spots' is missing in type` error (object literals typed `PhotoParams`, e.g. in `sanitizePhoto`, `splitLegacy`, test helpers) gets `spots: []` — Task 2 replaces the one in `sanitizePhoto` with the sanitizer.
+`src/edit/state.ts` — in `defaultPhoto()` add `spots: [],` to the returned object. Run `npm run typecheck`; every `Property 'spots' is missing in type` error (object literals typed `PhotoParams`: at `0203207` the `photo` literal in `sanitizePhoto`, `state.ts:271-280`, and the one in `splitLegacy`, `legacy.ts:15`) gets `spots: []` — Task 2 replaces the one in `sanitizePhoto` with the sanitizer.
 
-`src/app/debug.ts:8-17` and `src/ui/debug.ts:6-16` — add to the initial object:
+`src/app/debug.ts:8-23` and `src/ui/debug.ts:6-21` — add to the initial object:
 ```ts
     spots: 0,
     lastSpot: null,
@@ -558,12 +584,13 @@ git commit -m "v0.4 step 4 (2/20): spot list edits and sanitizer" -m "Co-Authore
 
 **Files:**
 - Create: `src/edit/toneCopy.ts`
-- Modify: `src/edit/lens.ts` (step 1: `applies`, `resetGroup`), `src/edit/state.ts` (step 1: `renamePersons`, step-1 plan Task 5), `src/edit/legacy.ts` (step 1: `legacyProjection`), `src/store/history.ts` (LF; step 1's `normalizeEntry`, step-1 plan Task 8)
+- Modify: `src/edit/lens.ts` (step 1: `applies` `:151-156`, `resetGroup` `:226-254`, `groupNeutral` / `groupHasValue` `:255-269`), `src/edit/state.ts` (step 1: `renamePersons` `:124-133`), `src/edit/legacy.ts` (step 1: `legacyProjection` `:24-40`)
+- No change: `src/store/history.ts` — step 3 already hands `normalizeEntry`'s sanitizer the entry's O size (`history.ts:213`)
 - Test: `src/edit/lens.test.ts`, `src/edit/state.test.ts`, `src/edit/legacy.test.ts`, `src/store/history.test.ts`
 
 **Interfaces:**
-- Consumes: Task 1 ids, Task 2 `remapSpotOwners` (and its spot sanitizer, reached through `sanitizeEditState`); step 1 `lensFor(edit, sel, persons, primary): Lens` with `get`, `set`, `applies`, `applyPreset`, `resetGroup` (C §3.3), `renamePersons(edit, map: Readonly<Record<PersonId, PersonId | null>>)` (`src/edit/state.ts`, step-1 plan Task 5; step-1 spec §5.3), `legacyProjection(edit, primary)` (C §3.2; step 1 builds its `values` as `{ ...edit.photo.values, ...person.values }`, step-1 plan Task 4), `normalizeEntry(raw)` with step 1's line `if (isEditStateRecord(r.edit)) entry.edit = sanitizeEditState(r.edit, null);` (step-1 plan Task 8), `addEntry` / `getEntry` and the test helpers `entry`, `rawPut`, `validRecord` (`src/store/history.ts:27, 115`, `history.test.ts:44-91`); step 3's third `sanitizeEditState` parameter `oSize` (step-3 plan Task 3).
-- Why `normalizeEntry` changes here: every stored entry passes through it on load, and it sanitizes the edit **without** an O size, so Task 2's rule (no O size = the camera look = no spots) would drop every spot of every photo on reopen. Its `width` and `height` are the entry's validated O size (C §3.2: "`oSize` is the entry's stored `width × height`").
+- Consumes: Task 1 ids, Task 2 `remapSpotOwners` (and its spot sanitizer, reached through `sanitizeEditState`); step 1 `lensFor(edit, sel, persons, primary): Lens` with `get`, `set`, `applies`, `applyPreset`, `resetGroup` (C §3.3), `renamePersons(edit, map: Readonly<Record<PersonId, PersonId | null>>)` (`src/edit/state.ts`, step-1 plan Task 5; step-1 spec §5.3), `legacyProjection(edit, primary)` (C §3.2; step 1 builds its `values` as `{ ...edit.photo.values, ...person.values }`, step-1 plan Task 4), `normalizeEntry(raw)` with step 3's line `if (isEditStateRecord(r.edit)) entry.edit = sanitizeEditState(r.edit, null, { width, height });` (`history.ts:213`), `addEntry` / `getEntry` and the test helpers `entry`, `rawPut`, `validRecord` (`src/store/history.ts:29, 146`, `history.test.ts:52-99`); step 3's third `sanitizeEditState` parameter `oSize` (step-3 plan Task 3).
+- Why `normalizeEntry` matters here: every stored entry passes through it on load. Without an O size, Task 2's rule (no O size = the camera look = no spots) would drop every spot of every photo on reopen. Step 3 already passes the entry's validated `{ width, height }` (C §3.2: "`oSize` is the entry's stored `width × height`"; `history.ts:213`), so the history tests below pin that behaviour and `history.ts` itself is not changed.
 - Produces:
   ```ts
   // src/edit/toneCopy.ts
@@ -662,23 +689,27 @@ describe('step 4: renamePersons remaps spot owners (C §5.2)', () => {
 ```
 (Step 1's `renamePersons(edit, map: Readonly<Record<PersonId, PersonId | null>>)`: null drops a person, an id absent from the map keeps its name — step-1 plan Task 5.)
 
-Append to `src/edit/legacy.test.ts` (it imports `legacyProjection` from `./legacy`; add `defaultPhoto`, `neutralPerson` from `./state` if missing):
+Append to `src/edit/legacy.test.ts` (it imports `legacyProjection` from `./legacy`; add `defaultPhoto`, `neutralPerson` from `./state` and `neutralValue`, `paramsInGroup` to its `../engine/params` import):
 ```ts
 describe('step 4: the legacy projection drops tone values and spots (§5 rollback)', () => {
-  it('writes no tone.* value into BeautyParams', () => {
+  it('writes every tone.* value neutral into BeautyParams, and no spots', () => {
     const p = neutralPerson();
     const e = {
       v: 2 as const,
       photo: { ...defaultPhoto(), spots: [{ x: 0.5, y: 0.5, r: 0.02, dx: 0, dy: 0, owner: null }] },
-      persons: { f0: { ...p, values: { ...p.values, 'tone.even': 0.7 } } },
+      persons: { f0: { ...p, values: { ...p.values, 'tone.even': 0.7, 'tone.warmth': 0.9 } } },
       template: neutralPerson(),
       primaryInit: null,
     };
     const legacy = legacyProjection(e, 'f0');
-    expect(Object.keys(legacy.values).filter((k) => k.startsWith('tone.'))).toEqual([]);
+    for (const d of paramsInGroup('tone')) expect(legacy.values[d.id], d.id).toBe(neutralValue(d));
     expect('spots' in legacy).toBe(false);
   });
 });
+```
+In the same file, step 1's case `'round-trips 500 random sanitized v1 params'` (`legacy.test.ts:29-46`) draws a random value for every `PARAM_DEFS` id; a v1 record never holds a 膚質 value (the projection writes them neutral), so its `values:` line becomes
+```ts
+        values: Object.fromEntries(PARAM_DEFS.map((d) => [d.id, d.group === 'tone' ? neutralValue(d) : r()])),
 ```
 Append to `src/store/history.test.ts` (it already stubs IndexedDB with fake-indexeddb and has the `entry()` helper):
 ```ts
@@ -709,7 +740,7 @@ describe('step 4: a v2 entry keeps spots and tone values (§5)', () => {
         edit: {
           v: 2,
           photo: { ...defaultPhoto(), spots: [good, { x: Infinity, y: 0, r: 0.02, dx: 0, dy: 0, owner: null }] },
-          persons: { p0: neutralPerson() },
+          persons: { f3: neutralPerson() },
           template: neutralPerson(),
           primaryInit: null,
         },
@@ -719,12 +750,12 @@ describe('step 4: a v2 entry keeps spots and tone values (§5)', () => {
   });
 });
 ```
-(`rawPut` writes raw records through a second connection and `validRecord` is a valid v1 record of 10 × 20 px, both helpers of this file; `normalizeEntry` passes `personIds` null, so owners are kept until `openState` filters them against the detection cache.)
+(`rawPut` writes raw records through a second connection and `validRecord` is a valid v1 record of 10 × 20 px, both helpers of this file (`history.test.ts:68-99`); `normalizeEntry` passes `personIds` null, so every stored person (here `f3`) is kept and so is an owner among them, until `openState` filters them against the detection cache. `sanitizeEditState` always hands `sanitizePhoto` the set of persons it keeps, so an owner that is not a stored person becomes null even here.)
 
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `npx vitest run src/edit/lens.test.ts src/edit/state.test.ts src/edit/legacy.test.ts src/store/history.test.ts`
-Expected: FAIL — `Failed to resolve import "./toneCopy"`; once that exists: the no-face reason, the ⊘ reset, the owner rename, the legacy projection (it still carries the `tone.*` values) and both history tests (load drops every spot: no O size reaches the sanitizer).
+Expected: FAIL — `Failed to resolve import "./toneCopy"`; once that exists: the no-face reason, the ⊘ reset, the owner rename and the legacy projection (it still carries the person's `tone.*` values). Both history tests already pass: step 3 hands `normalizeEntry`'s sanitizer the entry's O size, and Task 2's spot sanitizer is in place.
 
 - [ ] **Step 3: Implement**
 
@@ -775,24 +806,18 @@ In `src/edit/state.ts`, `renamePersons` (step-1 plan Task 5) ends with
 ```
 (Add `remapSpotOwners` to the `./spots` import Task 2 added to `state.ts`; `spots.ts` imports only types, so there is no cycle.)
 
-In `src/edit/legacy.ts`, step 1's `legacyProjection` builds `values: { ...edit.photo.values, ...person.values } as Record<ParamId, number>`, which now carries the six `tone.*` values. S §5 rollback: 0.3 opens a 0.4 entry without them (a 0.3 build would ignore unknown ids anyway, but the projection is the documented v1 view; spots are not part of `BeautyParams` at all). Replace that `values:` line with
+In `src/edit/legacy.ts`, step 1's `legacyProjection` builds `values: { ...edit.photo.values, ...person.values } as Record<ParamId, number>` (`legacy.ts:30`), which now carries the person's six `tone.*` values. S §5 rollback: 0.3 opens a 0.4 entry without them (a 0.3 build would ignore unknown ids anyway, but the projection is the documented v1 view; spots are not part of `BeautyParams` at all). The projection keeps every key, written neutral, so it stays a complete `BeautyParams` and step 1's round trips (`legacy.test.ts`, `lens.test.ts` 'one person p0 is v0.3', `migrate.test.ts`) still hold. Add above `legacyProjection`
 ```ts
-    // the 0.3 view (skin-cleanup spec §5 rollback): no 膚質 values; the stored `params` re-gains them, neutral, from sanitizeParams
-    values: Object.fromEntries(Object.entries({ ...edit.photo.values, ...person.values }).filter(([k]) => !k.startsWith('tone.'))) as Record<ParamId, number>,
+/** the 0.3 view carries no 膚質 edit (skin-cleanup spec §5 rollback): the six tone.* values, neutral */
+const TONE_NEUTRAL = Object.fromEntries(paramsInGroup('tone').map((d) => [d.id, neutralValue(d)]));
 ```
-(If a later step already rewrote the line into an explicit v1 id list, leave that list alone — the test then passes unchanged. Every writer of `HistoryEntry.params` wraps the projection in `sanitizeParams`, so the stored record stays complete.)
+and replace that `values:` line with
+```ts
+    values: { ...edit.photo.values, ...person.values, ...TONE_NEUTRAL } as Record<ParamId, number>,
+```
+(import `neutralValue`, `paramsInGroup` from `../engine/params`; `params.ts` imports nothing from `edit/`, so there is no cycle. Every writer of `HistoryEntry.params` wraps the projection in `sanitizeParams`, which would fill a missing id with the same neutral value, so the stored record is the same as with the keys dropped.)
 
-In `src/store/history.ts` (LF), `normalizeEntry` — replace step 1's line
-```ts
-  if (isEditStateRecord(r.edit)) entry.edit = sanitizeEditState(r.edit, null);
-```
-with
-```ts
-  // the entry's own O size (validated above): without it the sanitizer treats the edit as the camera look and drops
-  // every 祛痘 spot (skin-cleanup spec §5; C §3.2 `oSize`). Step 6 relies on the same argument for its strokes.
-  if (isEditStateRecord(r.edit)) entry.edit = sanitizeEditState(r.edit, null, { width, height });
-```
-(`width` and `height` are the destructured, already validated fields at the top of `normalizeEntry`, `history.ts:164-167`. If the call already passes a size, keep it.)
+`src/store/history.ts` needs no change: step 3 already wrote `normalizeEntry`'s line as `if (isEditStateRecord(r.edit)) entry.edit = sanitizeEditState(r.edit, null, { width, height });` (`history.ts:213`, the entry's validated O size), which is what keeps the spots on load (skin-cleanup spec §5; C §3.2 `oSize`; step 6 relies on the same argument for its strokes).
 
 - [ ] **Step 4: Run the tests**
 
@@ -802,7 +827,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/edit/toneCopy.ts src/edit/lens.ts src/edit/state.ts src/edit/legacy.ts src/store/history.ts src/edit/lens.test.ts src/edit/state.test.ts src/edit/legacy.test.ts src/store/history.test.ts
+git add src/edit/toneCopy.ts src/edit/lens.ts src/edit/state.ts src/edit/legacy.ts src/edit/lens.test.ts src/edit/state.test.ts src/edit/legacy.test.ts src/store/history.test.ts
 git commit -m "v0.4 step 4 (3/20): tone gate in the lens, ⊘ covers tone, owners follow renames, spots survive a load" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
@@ -815,7 +840,7 @@ git commit -m "v0.4 step 4 (3/20): tone gate in the lens, ⊘ covers tone, owner
 - Test: `src/engine/passes/toneGeometry.test.ts`
 
 **Interfaces:**
-- Consumes: `Face` (`src/types.ts:117-130`; pts111 indices `src/tracking/adapter111.ts:17-43`), `adapt` (`adapter111.ts:106`), the recorded face `tests/fixtures/landmarks_sample_face.json` (1000 × 1500, yaw −0.15).
+- Consumes: `Face` (`src/types.ts:285-298`; pts111 indices `src/tracking/adapter111.ts:17-43`), `adapt` (`adapter111.ts:106`), the recorded face `tests/fixtures/landmarks_sample_face.json` (1000 × 1500, yaw −0.15).
 - Produces (all distances iso: fractions of the image width on both axes; `aspect` = W/H; the iso point of a uv is `(x, y / aspect)`):
   ```ts
   export type V2 = [number, number];
@@ -1257,11 +1282,11 @@ git commit -m "v0.4 step 4 (4/20): tone region geometry — gates, crescents, na
 
 **Files:**
 - Modify: `src/engine/passes/toneGeometry.ts`
-- Modify: `src/engine/passes/mask.ts:58, 95` (`buildMaskGeometry` gains an optional ring width)
+- Modify: `src/engine/passes/mask.ts:81, 118` (CRLF; `buildMaskGeometry` gains an optional ring width)
 - Test: `src/engine/passes/toneGeometry.test.ts`, `src/engine/passes/mask.test.ts`
 
 **Interfaces:**
-- Consumes: Task 4's helpers; `buildMaskGeometry(face, aspect, out)` whose first two returned numbers are `count` and `base` (fans + rings first, holes after; step 1 keeps that meaning, step-1 spec §4.2), `MASK_MAX_FLOATS`, `MASK_FEATHER.ring` (`mask.ts:19-26, 127-128`); step 1's per-face influence cap (centre `c_f` in UV, `cap_f` iso, −1 = none; step-1 spec §4.1 item 3, face-table texel 73).
+- Consumes: Task 4's helpers; `buildMaskGeometry(face, aspect, out)` whose first two returned numbers are `count` and `base` (fans + rings first, holes after; step 1 keeps that meaning and adds a third, `fanEnd`: it returns `[count, base, fanEnd]`, step-1 spec §4.2), `MASK_MAX_FLOATS`, `MASK_FEATHER.ring` (`mask.ts:39-46, 152`); step 1's per-face influence cap (centre `c_f` in UV, `cap_f` iso, −1 = none; step-1 spec §4.1 item 3, face-table texel 73).
 - Produces:
   ```ts
   // mask.ts
@@ -1445,11 +1470,11 @@ Expected: FAIL — `mouthGeometry is not a function` (missing exports) and the r
 
 - [ ] **Step 3: Implement**
 
-`src/engine/passes/mask.ts` — line 58 gains the parameter and line 95 uses it:
+`src/engine/passes/mask.ts` (CRLF) — line 81 gains the parameter and line 118 uses it:
 ```ts
-export function buildMaskGeometry(face: Face, aspect: number, out: Float32Array, ringIso?: number): [number, number] {
+export function buildMaskGeometry(face: Face, aspect: number, out: Float32Array, ringIso?: number): [number, number, number] {
 ```
-(keep step 1's return type if it widened the tuple), and
+(step 1's return type, `[vertexCount, base, fanEnd]`, is unchanged), and
 ```ts
   const ring = ringIso ?? MASK_FEATHER.ring * faceW;
 ```
@@ -1641,7 +1666,7 @@ export function toneDrawsQ(faces: readonly ToneFaceInput[], aspect: number): Ton
 - [ ] **Step 4: Run the tests**
 
 Run: `npx vitest run src/engine/passes && npm run typecheck`
-Expected: PASS (the two existing `mask.test.ts` cases are unchanged).
+Expected: PASS (the existing `mask.test.ts` cases are unchanged).
 
 - [ ] **Step 5: Commit**
 
@@ -2034,7 +2059,7 @@ git commit -m "v0.4 step 4 (6/20): R and Q targets on the GPU, tone engine harne
 
 **Files:**
 - Create: `scripts/gen-tone-fixture.mjs`, `tests/unit/toneFixture.test.ts`
-- Modify: `tests/e2e/global-setup.ts:10-12`, `.gitignore` (after line 15), `LICENSES/NOTICE.txt` (test-data list, after the `sample_face.png` entry, lines 58-59)
+- Modify: `tests/e2e/global-setup.ts:17-29` (`globalSetup`), `.gitignore` (after line 13), `LICENSES/NOTICE.txt` (test-data list, after the `sample_face.png` entry, lines 60-61)
 
 **Interfaces:**
 - Consumes: `tests/fixtures/sample_face.png` (1000 × 1500), `tests/fixtures/landmarks_sample_face.json`, `pngjs`, `adapt` (for the pin test).
@@ -2373,26 +2398,22 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   console.log(`sample_face_tone.png: ${json.defects.length} defects, ${json.defects.reduce((s, d) => s + d.pixels.length, 0)} listed pixels`);
 }
 ```
-`tests/e2e/global-setup.ts` — replace the import line and add the generation after the `face.y4m` block (lines 4 and 12):
+`tests/e2e/global-setup.ts` — it already imports `existsSync, statSync` (line 5) and rebuilds a generated file through its `stale(out, ...inputs)` helper (lines 10-15). Add the generation after the `group.y4m` block (after line 25, before the `dist/` check):
 ```ts
-import { existsSync, statSync } from 'node:fs';
-```
-```ts
-  const tonePng = resolve(root, 'tests/fixtures/sample_face_tone.png');
-  const toneScript = resolve(root, 'scripts/gen-tone-fixture.mjs');
-  if (!existsSync(tonePng) || !existsSync(tonePng.replace(/\.png$/, '.json')) || statSync(tonePng).mtimeMs < statSync(toneScript).mtimeMs) {
-    execFileSync(process.execPath, [toneScript], { cwd: root, stdio: 'inherit' });
+  const toneInputs = ['scripts/gen-tone-fixture.mjs', 'tests/fixtures/sample_face.png', 'tests/fixtures/landmarks_sample_face.json'];
+  if (stale(resolve(root, 'tests/fixtures/sample_face_tone.png'), ...toneInputs) || stale(resolve(root, 'tests/fixtures/sample_face_tone.json'), ...toneInputs)) {
+    execFileSync(process.execPath, [resolve(root, 'scripts/gen-tone-fixture.mjs')], { cwd: root, stdio: 'inherit' });
   }
 ```
 and extend its header comment: "…, and tests/fixtures/sample_face_tone.{png,json} (gitignored, generated from sample_face.png by scripts/gen-tone-fixture.mjs) …".
 
-`.gitignore` — after `tests/fixtures/face.y4m` (line 15):
+`.gitignore` — after `tests/fixtures/*.y4m` (line 13):
 ```
 # the 膚質 engine-harness fixture (scripts/gen-tone-fixture.mjs, made by tests/e2e/global-setup.ts)
 tests/fixtures/sample_face_tone.png
 tests/fixtures/sample_face_tone.json
 ```
-`LICENSES/NOTICE.txt` — in the test-data list, after the `sample_face.png` entry and its `sample_face.pose.json` continuation line (lines 58-59 at `892ea61`):
+`LICENSES/NOTICE.txt` — in the test-data list, after the `sample_face.png` entry and its `sample_face.pose.json` continuation line (lines 60-61 at `0203207`):
 ```
   - tests/fixtures/sample_face_tone.png (generated, not committed): modified derivative of sample_face.png
     (Apache-2.0 §4(b) change notice): synthetic blemishes, blotches, dark circles, nasolabial folds, yellow teeth and
@@ -3421,11 +3442,11 @@ git commit -m "v0.4 step 4 (9/20): calibrate TONE on the 膚質 fixture" -m "$(c
 ### Task 10: Ping-pong the two full-size buffers
 
 **Files:**
-- Modify: `src/engine/pipeline.ts` (new helper next to `fb()`, `pipeline.ts:233-243`; the makeup target, v0.3 `pipeline.ts:394`; the reshape target, v0.3 `pipeline.ts:408`)
+- Modify: `src/engine/pipeline.ts` (CRLF; new helper next to `fb()`, `pipeline.ts:340-350`; the makeup target, `pipeline.ts:460`; the reshape target, `pipeline.ts:474`)
 - Test: `src/engine/pipeline.test.ts`
 
 **Interfaces:**
-- Consumes: `fb(name, size)`, `fbs` (`pipeline.ts:233-243`); step 3's per-pass sizes (`job.srcSize` for O passes, `job.size` for P2; crop spec §4.1, §4.3).
+- Consumes: `fb(name, size)`, `fbs` (`pipeline.ts:340-350`); step 3's per-pass sizes (`job.srcSize` for O passes, `job.size` for P2; crop spec §4.1, §4.3).
 - Produces:
   ```ts
   export function pickFull(prefer: 'A' | 'B', input: 'A' | 'B' | null): 'A' | 'B';
@@ -3469,7 +3490,7 @@ Expected: FAIL — `pickFull is not a function`.
 
 - [ ] **Step 3: Implement**
 
-In `src/engine/pipeline.ts`, above `createPipeline` (after `bodyUploadNeeded`, v0.3 line 205):
+In `src/engine/pipeline.ts`, above `createPipeline` (after `bodyUploadNeeded`, `pipeline.ts:312-321`):
 ```ts
 /**
  * Which full-size buffer a pass writes (skin-cleanup spec §4.1): its preferred one, unless that is its input. Heal and
@@ -3488,9 +3509,9 @@ Inside `createPipeline`, right after `fb()`:
   }
 ```
 Then in `run()`:
-- the makeup target `const a = fb('A', …)` (v0.3 line 394) becomes `const a = full('A', baseFb, job.srcSize);` (P1 renders at the source size, crop spec §4.2);
-- the reshape target `const b = fb('B', …)` (v0.3 line 408) becomes `const b = full('B', baseFb, job.size);` (P2 renders at the V size, crop spec §4.3).
-The capture rule (v0.3 lines 434-437, "whichever full-size buffer is not the composite input") stays as it is.
+- the makeup target `const a = fb('A', job.srcSize);` (`pipeline.ts:460`) becomes `const a = full('A', baseFb, job.srcSize);` (P1 renders at the source size, crop spec §4.2);
+- the reshape target `const b = fb('B', job.size);` (`pipeline.ts:474`) becomes `const b = full('B', baseFb, job.size);` (P2 renders at the V size, crop spec §4.3).
+The capture rule (`pipeline.ts:500-502`, "whichever full-size buffer is not the composite input") stays as it is.
 
 - [ ] **Step 4: Run the tests and the existing engine checks**
 
@@ -3513,7 +3534,7 @@ git commit -m "v0.4 step 4 (10/20): ping-pong the two full-size buffers" -m "Co-
 **Files:**
 - Modify: `src/engine/shaders/tone.ts` (GLSL)
 - Create: `src/engine/passes/toneField.ts`, `src/engine/toneJob.ts`, `src/engine/toneJob.test.ts`
-- Modify: `src/engine/pipeline.ts` (`FrameJob`, `FrameResult`, `FbName`, `run()`, `dispose()`, step 3's `releaseBuffers`), `src/engine/index.ts` (`job()`, `render()`), `src/types.ts:276-301` (`RenderInput.toneSource`, `RenderStats.toneBuilt`), `src/app/still.ts` (display render: debug `passes`, `toneBuilds`)
+- Modify: `src/engine/pipeline.ts` (CRLF; `FrameJob` `:79-122`, `FrameResult` `:124-128`, `FbName` `:246`, `run()` `:433-539`, step 3's `releaseBuffers` `:562-565`, `dispose()` `:573-590`), `src/engine/index.ts` (CRLF; `job()` `:300-354`, `render()` `:384-397`), `src/types.ts:466-519` (CRLF; `RenderInput.toneSource`, `RenderStats.toneBuilt`), `src/app/still.ts` (`flush()` `:188-207`: debug `passes`, `toneBuilds`)
 - Test: `src/engine/toneCpu.test.ts` (hash pin), `tests/e2e/pages/tone.ts`, `tests/e2e/tone-engine.spec.ts`
 
 **Interfaces:**
@@ -4236,7 +4257,7 @@ export function buildToneJob(i: { faces: readonly ToneJobFace[]; spots: readonly
   /** step 4: the working-resolution image the tone field is built from when `source` is only a tile window */
   toneSource?: { source: TexImageSource; width: number; height: number };
 ```
-and in `RenderStats` (`types.ts:294-301`):
+(after step 3's `oAspect`, the last field, `types.ts:497-498`), and in `RenderStats` (`types.ts:512-519`):
 ```ts
   /** the tone field (P0c) was rebuilt by this frame */
   toneBuilt?: boolean;
@@ -4267,7 +4288,7 @@ and in `RenderStats` (`types.ts:294-301`):
     return toneTex;
   }
   ```
-- in `run()`, right before the makeup block (after the P0 mask block), and declare `let toneBuilt = false;` at the top of `run()`:
+- in `run()`, right before the makeup block — after the P0 mask block and step 3's declarations `let base: Texture = job.src;` / `let baseFb: Framebuffer | null = null;` (`pipeline.ts:456-457`), before `if (plan.makeup && makeup)` — and declare `let toneBuilt = false;` at the top of `run()`:
   ```ts
       // ── step 4: P0c tone field (cached) and P0d retouch, in O before P1 (skin-cleanup spec §4.1) ──
       const tj = job.tone;
@@ -4296,10 +4317,10 @@ and in `RenderStats` (`types.ts:294-301`):
         passes.push('retouch');
       }
   ```
-  (`base` / `baseFb` are the variables v0.3 declares at lines 391-392 — move their declarations above this block if step 3 placed them later.)
-- `run()` returns `{ passes, output, toneBuilt }`.
+  (`base` / `baseFb` are step 3's variables at `pipeline.ts:456-457`; the block needs no move.)
+- `run()` returns `{ passes, output, toneBuilt }` (today `return { passes, output };`, `pipeline.ts:538`).
 - `dispose()`: in the `!lost` branch add `toneMask?.dispose(); toneField?.dispose(); retouch?.dispose();`, and in the reset part `toneMask = toneField = retouch = null; toneKey = null; toneTex = null;` — so a restored context rebuilds the field (Review Focus 1).
-- step 3's `releaseBuffers` must leave the field targets alone (S §4.3: they are freed only on dispose or context loss): if it loops over every entry of `fbs`, restrict the loop to `(['A', 'B', 'C', 'D', 'M', 'N'] as const)`.
+- step 3's `releaseBuffers` must leave the field targets alone (S §4.3: they are freed only on dispose or context loss). It loops over every entry of `fbs` (`for (const f of Object.values(fbs)) if (f) resizeFramebuffer(gl, f, 1, 1);`, `pipeline.ts:564`), so restrict that loop to `for (const k of ['A', 'B', 'C', 'D', 'M', 'N'] as const) { const f = fbs[k]; if (f) resizeFramebuffer(gl, f, 1, 1); }`.
 
 `src/engine/index.ts`, in `job()` — step 1 builds `const listed = input.faces.slice(0, MAX_RENDER_FACES);` and `const faces: FrameFace[] = listed.map(…)` with `centre: boxCentre(ovalBox(f.face))` and `presence: f.presence ?? 1`, and returns `obstacles: input.obstacles ?? []` (step-1 plan Task 18); step 3 computes `const view = viewFields(input, size);` first and spreads it into the result, so the O aspect is `view.oAspect` (step-3 plan Task 8). Before the `return`, add
 ```ts
@@ -4323,17 +4344,24 @@ function toneCapOf(centre: readonly [number, number], cap: number): ToneCap | nu
   return cap >= 0 ? { c: [centre[0], centre[1]], r: cap } : null;
 }
 ```
-(Imports: `capsFor` from `./passes/faceCap` (step 1 already imports `boxCentre, ovalBox` from there), `buildToneJob`, `objectId` from `./toneJob`, `type ToneCap` from `./passes/toneGeometry`. If step 3's `job()` holds the view fields under another local name than `view`, use it; `oAspect` is the working bitmap's aspect that the pipeline also hands to `tableFaces`.) In `render()`, return `toneBuilt: res.toneBuilt` alongside `passes`.
+(Imports: add `capsFor` to step 1's `import { boxCentre, ovalBox } from './passes/faceCap';` (`index.ts:20`); `buildToneJob`, `objectId` from `./toneJob`; `type ToneCap` from `./passes/toneGeometry`. `job()` holds step 3's view fields as `view` (`index.ts:301`); `oAspect` is the working bitmap's aspect that the pipeline also hands to `tableFaces`.) In `render()`, return `toneBuilt: res.toneBuilt` alongside `passes` (`index.ts:396`).
 
-`src/app/still.ts` — where the session's frame callback calls `engine.render(…, { still: true })` (v0.3 `still.ts:131`), keep the result and publish it:
+`src/app/still.ts` — in `flush()` (`still.ts:188-207`) the display render is `engine.render({ ...input(frame), geometry: viewGeometry(frame) }, { still: true })` (`compare` draws `renderOriginal` instead) and step 3 already publishes `renderCount` through `const d = debugState();`. Keep the render's stats and publish them there:
 ```ts
-        const st = engine.render(input(params), { still: true });
-        if (dbg) {
-          dbg.passes = st.passes;
-          if (st.toneBuilt) dbg.toneBuilds += 1;
+      let st: RenderStats | null = null;
+      if (compare) engine.renderOriginal({ source: bitmap, width, height, geometry: viewGeometry(frame) }, { still: true });
+      else st = engine.render({ ...input(frame), geometry: viewGeometry(frame) }, { still: true });
+      drawn = frame;
+      const d = debugState();
+      if (d) {
+        d.renderCount = (d.renderCount ?? 0) + 1;
+        if (st) {
+          d.passes = st.passes;
+          if (st.toneBuilt) d.toneBuilds += 1;
         }
+      }
 ```
-(`dbg` is the session's `debugState()` object, `still.ts:85`; use the input expression step 1 put there.)
+(add `RenderStats` to the file's `../types` type import, `still.ts:10`.)
 
 - [ ] **Step 4: Pin the shader hash and run the unit tests**
 
@@ -5021,17 +5049,18 @@ Expected: FAIL — `regionAt is not a function` and `Failed to resolve import ".
 
 - [ ] **Step 3: Implement**
 
-`src/media/exporter.ts` — step 3 already exports `createSurface(width, height, opts: SurfaceOptions = {})`, `Surface` and `SurfaceOptions { type?; alpha? }` (step-3 plan Task 5). Add to `SurfaceOptions`
+`src/media/exporter.ts` (LF) — step 3 already exports `createSurface(width, height, opts: SurfaceOptions = {})` (`exporter.ts:129`), `Surface` (`:114`) and `SurfaceOptions { type?; alpha? }` (`:121-126`) (step-3 plan Task 5). Add to `SurfaceOptions`
 ```ts
   /** the patch reader reads its pixels back on every tap (skin-cleanup spec §3.4) */
   willReadFrequently?: boolean;
 ```
-and replace its line `const ctxOpts = opts.alpha === false ? { alpha: false } : undefined;` with
+and replace its line (`exporter.ts:132`, under its comment about the annotation)
+`const ctxOpts: CanvasRenderingContext2DSettings | undefined = opts.alpha === false ? { alpha: false } : undefined;` with
 ```ts
   const settings: CanvasRenderingContext2DSettings = {};
   if (opts.alpha === false) settings.alpha = false;
   if (opts.willReadFrequently) settings.willReadFrequently = true;
-  const ctxOpts = Object.keys(settings).length ? settings : undefined;
+  const ctxOpts: CanvasRenderingContext2DSettings | undefined = Object.keys(settings).length ? settings : undefined;
 ```
 Both `getContext('2d', ctxOpts)` calls (OffscreenCanvas and the `<canvas>` fallback) already take `ctxOpts`, and every existing caller still gets exactly step 3's settings.
 
@@ -5707,21 +5736,20 @@ git commit -m "v0.4 step 4 (14/20): heal pass P0b on the GPU" -m "Co-Authored-By
 ### Task 15: The tap rule of zoomPan and its 祛痘 tap mode
 
 **Files:**
-- Modify: `src/ui/screens/zoomPan.ts` (v0.3 lines 12, 33-126 as step 1 changed them)
+- Modify: `src/ui/screens/zoomPan.ts` (CRLF; `ZoomPanOptions` `:33-41`, the `useZoomPan` effect `:54-140`, its tap bookkeeping `:61-63` and `up` handler `:109-127`, the listeners `:129-139`)
 - Test: `src/ui/screens/zoomPan.test.ts` (new)
 
 **Interfaces:**
-- Consumes: step 1's `useZoomPan(stage, layer, enabled, opts?: { onTap?(uv: [number, number]): void })` — the tap uv taken from the transformed `.zoom-layer` rect, `onTap` read through a ref, `--zs` written by `apply` (step-1 spec §2.1, §2.3); step 3's extra option `resetWhen?: boolean` (step-3 plan Task 13), kept as it is. If step 1's `onTap` hands its uv over as `{ x, y }` (step-3 plan Task 14 reads `uv.x, uv.y`), `spotTap` uses that same form and Task 17's `tapSpot` starts with `const v: [number, number] = [uv.x, uv.y];`.
+- Consumes: step 1's `useZoomPan(stageRef, layerRef, enabled, opts: ZoomPanOptions = {})` with `ZoomPanOptions { onTap?(uv: [number, number], layer: DOMRect): void; resetWhen?: boolean }` (`zoomPan.ts:33-48`) — the tap uv taken from the transformed `.zoom-layer` rect and handed over with that rect, `onTap` called on `pointerup` only (never on `pointercancel`), read through `optsRef`, `--zs` written by `apply` (step-1 spec §2.1, §2.3); step 3's `resetWhen` (step-3 plan Task 13), kept as it is.
 - Produces:
   ```ts
   export const TAP_SLOP_PX = 8;
   export interface GestureEvent { type: 'down' | 'move' | 'up' | 'cancel'; id: number; x: number; y: number; t: number }
   export interface TapResult { tap: { x: number; y: number; t: number } | null; fit: boolean }
   export function tapOutcome(events: readonly GestureEvent[], lastTapT: number, mode: 'view' | 'spot'): TapResult;
-  export interface ZoomPanOptions { onTap?(uv: [number, number]): void; resetWhen?: boolean; spotTap?(uv: [number, number]): void }
-  export function useZoomPan(stage, layer, enabled: boolean, opts?: ZoomPanOptions): void;
+  // ZoomPanOptions (step 1 / 3) gains: spotTap?(uv: [number, number], layer: DOMRect): void
   ```
-  With `spotTap` set (祛痘 mode, S §2.3): a one-finger tap that moved ≤ 8 px fires `spotTap(uv)` on pointer-up, never on `pointercancel`, never waits for a double tap, and double-tap-to-fit is off; `onTap` is not called. Pinch and one-finger pan while zoomed work as before.
+  With `spotTap` set (祛痘 mode, S §2.3): a one-finger tap that moved ≤ 8 px fires `spotTap(uv, layer)` on pointer-up, never on `pointercancel`, never waits for a double tap, and double-tap-to-fit is off; `onTap` is not called. Pinch and one-finger pan while zoomed work as before.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -5771,7 +5799,7 @@ Expected: FAIL — `tapOutcome is not a function`.
 
 - [ ] **Step 3: Implement**
 
-In `src/ui/screens/zoomPan.ts`, below `pinchView` (v0.3 line 31), add:
+In `src/ui/screens/zoomPan.ts` (CRLF), below `pinchView` (line 31), add:
 ```ts
 export const TAP_SLOP_PX = 8;
 
@@ -5790,9 +5818,9 @@ export interface TapResult {
 
 /**
  * The tap rule of one gesture, from its first pointer down to its last pointer up or cancel. One pointer that never moved
- * more than 8 px is a tap, reported at its up. 'view': a cancel ends the gesture like an up (as before), and a tap within
- * DOUBLE_TAP_MS of `lastTapT` also fits the view (step 1 fires onTap on both taps). 'spot' (祛痘, skin-cleanup spec §2.3):
- * a gesture that ends in a cancel never taps, and nothing fits.
+ * more than 8 px is a tap, reported at its up. 'view': a cancel ends the gesture like an up for the double tap (as before;
+ * the hook still calls onTap on a pointerup only), and a tap within DOUBLE_TAP_MS of `lastTapT` also fits the view (step 1
+ * fires onTap on both taps). 'spot' (祛痘, skin-cleanup spec §2.3): a gesture that ends in a cancel never taps, and nothing fits.
  */
 export function tapOutcome(events: readonly GestureEvent[], lastTapT: number, mode: 'view' | 'spot'): TapResult {
   const none: TapResult = { tap: null, fit: false };
@@ -5805,23 +5833,13 @@ export function tapOutcome(events: readonly GestureEvent[], lastTapT: number, mo
   if (mode === 'spot') return last.type === 'cancel' ? none : { tap, fit: false };
   return { tap, fit: last.t - lastTapT < DOUBLE_TAP_MS };
 }
-
-export interface ZoomPanOptions {
-  /** step 1: a tap on the photo (layer uv), fired on the first tap without waiting for a double tap */
-  onTap?(uv: [number, number]): void;
-  /** step 3: reset the view to fit when this flips (裁切 mode) */
-  resetWhen?: boolean;
-  /** step 4 (祛痘): a tap adds a spot — on pointer-up, never on pointercancel, double-tap-to-fit off; onTap is skipped */
-  spotTap?(uv: [number, number]): void;
-}
 ```
-(If step 1/3 already declare the options type, add only `spotTap` to it, under its existing name, and keep their members and uv form as they are.)
-Then, inside `useZoomPan` (signature `opts?: ZoomPanOptions`; step 1 already reads `opts` through a ref — call it `optsRef` here; if the hook has no such ref yet, add at its top, next to `const view = useRef<View>(…)`:
+In step 1's `ZoomPanOptions` (`zoomPan.ts:33-41`: `onTap(uv, layer)` and step 3's `resetWhen`, kept as they are) add
 ```ts
-  const optsRef = useRef(opts);
-  optsRef.current = opts; // read at pointer-up, so a mode change never re-registers the listeners
+  /** step 4 (祛痘): a tap adds a spot — on pointer-up, never on pointercancel, double-tap-to-fit off; onTap is skipped */
+  spotTap?(uv: [number, number], layer: DOMRect): void;
 ```
-), replace the tap bookkeeping — v0.3's `lastTap`, `moved`, `downAt` and the `up` handler (lines 48-50, 81-113) — with gesture recording and the pure rule:
+Then, inside `useZoomPan`'s effect (step 1 already reads `opts` through `optsRef`, `zoomPan.ts:50-52`, and the effect depends on `[enabled]` only), replace the tap bookkeeping — `let lastTap = 0; let moved = false; let downAt = …` (`zoomPan.ts:61-63`) — and the `down` / `move` / `up` handlers (`zoomPan.ts:97-127`) with gesture recording and the pure rule:
 ```ts
     let lastTap = -Infinity;
     let gesture: GestureEvent[] = [];
@@ -5852,13 +5870,17 @@ Then, inside `useZoomPan` (signature `opts?: ZoomPanOptions`; step 1 already rea
       record(e.type === 'pointercancel' ? 'cancel' : 'up', e);
       if (pts.size === 0) {
         const o = optsRef.current;
-        const r = tapOutcome(gesture, lastTap, o?.spotTap ? 'spot' : 'view');
+        const r = tapOutcome(gesture, lastTap, o.spotTap ? 'spot' : 'view');
         gesture = [];
         if (r.tap) {
-          const uv = uvAt(r.tap.x, r.tap.y);
-          if (o?.spotTap) o.spotTap(uv);
-          else {
-            o?.onTap?.(uv);
+          const rect = layer.getBoundingClientRect();
+          const sized = rect.width > 0 && rect.height > 0;
+          const uv: [number, number] = [(r.tap.x - rect.left) / rect.width, (r.tap.y - rect.top) / rect.height];
+          if (o.spotTap) {
+            if (sized) o.spotTap(uv, rect);
+          } else {
+            // a pointercancel (the browser took the gesture over) is no tap, but it still ends a double tap (step 1)
+            if (sized && e.type === 'pointerup') o.onTap?.(uv, rect);
             if (r.fit) {
               lastTap = -Infinity;
               apply({ s: 1, x: 0, y: 0 }, true);
@@ -5869,14 +5891,7 @@ Then, inside `useZoomPan` (signature `opts?: ZoomPanOptions`; step 1 already rea
       begin();
     };
 ```
-register `end` for both `pointerup` and `pointercancel` (in place of `up`, v0.3 lines 117-123). `uvAt(x, y)` is step 1's mapping of a client point through `layer.getBoundingClientRect()` to `[u, v]` (step-1 spec §2.3) — keep step 1's helper; if it is inline, factor it as:
-```ts
-    const uvAt = (x: number, y: number): [number, number] => {
-      const r = layer.getBoundingClientRect();
-      return [(x - r.left) / r.width, (y - r.top) / r.height];
-    };
-```
-Keep everything else step 1 put in the hook (`--zs` in `apply`, the ref, the `[enabled]` dependency).
+Register `end` for both `pointerup` and `pointercancel`, in place of `up` (`zoomPan.ts:129-139`, the removals too). Keep everything else step 1 and step 3 put in the hook (`--zs` in `apply`, `optsRef`, the `[enabled]` dependency, the `resetWhen` effect).
 
 - [ ] **Step 4: Run the tests**
 
@@ -5897,13 +5912,13 @@ git commit -m "v0.4 step 4 (15/20): pure tap rule in zoomPan, 祛痘 tap mode" -
 ### Task 16: The six tone sliders in the 美膚 strip
 
 **Files:**
-- Modify: `src/ui/panelModel.ts` (types and helpers; wiring in `itemsFor` 'skin' v0.3 `:326-341`, `sliderFor` 'skin' `:494-505`, `tabHasValue` `:547-561`, `SliderBinding` `:457-466`)
-- Modify: `src/ui/components/Slider.tsx:143-180` (end captions, `aria-valuetext`), `src/ui/components/BeautyPanel.tsx:64` (skin note), `src/ui/icons.tsx` (six icons, after `eyeDistance`, v0.3 line 101), `src/ui/theme.css` (`.slider-ends`, after `.slider-track`, v0.3 line ~727)
-- Modify: `src/ui/screens/Editor.tsx` (the skin context, next to the face note, v0.3 `:785-797`)
-- Test: `src/ui/panelModel.test.ts`, `src/ui/components/Slider.test.ts`, `tests/e2e/tone.spec.ts` (new)
+- Modify: `src/ui/panelModel.ts` (CRLF; types and helpers; wiring in `itemsFor` 'skin' `:590-608`, `sliderFor` 'skin' `:819-824`, `SliderView` `:748-766`)
+- Modify: `src/ui/components/Slider.tsx` (CRLF; `aria-valuetext` `:190`, the `.slider-track` element `:208-215`), `src/ui/components/BeautyPanel.tsx` (CRLF; `Props` `:34-63`, the `itemsFor` call `:87`, the strip note `:97`), `src/ui/icons.tsx` (CRLF; six icons, after `eyeDistance`, `:96-101`), `src/ui/theme.css` (CRLF; `.slider-ends`, after the `.slider-track` rules, `:741-757`)
+- Modify: `src/ui/screens/Editor.tsx` (the skin context, above `const binding = sliderFor(lens, sel, bodyCtx);` `:1408`; the `BeautyPanel` element `:1617-1628`)
+- Test: `src/ui/panelModel.test.ts`, `src/ui/components/Slider.test.tsx` (step 1's file), `tests/e2e/tone.spec.ts` (new)
 
 **Interfaces:**
-- Consumes: Task 1 defs, Task 3 lens gate and `TONE_COPY`, Task 4 `mouthOpen`, `earOf`; step 1's `Lens` (`get`, `applies`), `lensFor`, the ported panel functions `itemsFor(lens, sel, body?)`, `sliderFor(lens, sel, body?)`, `tabHasValue(lens, tab, body?)` and `BeautyPanel` props `{lens, sel, onSel, onEdit, collapsed?, faceNote?, body?, id?}` (step-1 plan Task 10), `BodyNote` and `bodyNote` (`panelModel.ts:115-123`); step 2's `PanelItem.divider?: 'before'` and its `strip-divider` rendering in `BeautyPanel`; step 1's e2e helpers `selectPerson(page, n | '全部')` and `__meiyan.boxes` (V-normalized after step 3).
+- Consumes: Task 1 defs, Task 3 lens gate and `TONE_COPY`, Task 4 `mouthOpen`, `earOf`; step 1's `Lens` (`get`, `applies`), `lensFor`, the ported panel functions `itemsFor(lens, sel, body?)`, `sliderFor(lens, sel, body?)`, `tabHasValue(lens, tab, body?)` and `BeautyPanel` props `{lens, sel, onSel, onEdit, collapsed?, faceNote?, body?, photoTouched?, lookFailed?, onRetryLook?, crop?, id?}` (step-1 plan Task 10, steps 2–3), `BodyNote` (`panelModel.ts:121-127`), `bodyNoteFor` (`:188-204`), `itemDot` (`:358-363`), `gated` / `ENABLED` (`:371-373`, `:331`), `usable` / `photoLike` / `decorate` (`:223-226`, `:797-801`); step 2's `PanelItem.divider?: 'before'` and its `strip-divider` rendering in `BeautyPanel`; step 1's e2e helpers `selectPerson(page, n)` (`n = 0` is 全部, `tests/e2e/fixtures.ts:252-255`) and `__meiyan.boxes` (V-normalized after step 3).
 - Produces (`src/ui/panelModel.ts`):
   ```ts
   export type FaceAnswer = 'faces' | 'noFace' | 'basic' | 'recovering' | 'paused' | 'failed';
@@ -5916,8 +5931,9 @@ git commit -m "v0.4 step 4 (15/20): pure tap rule in zoomPan, 祛痘 tap mode" -
   export function toneHasValue(lens: Lens): boolean;
   export function skinNote(lens: Lens, sel: PanelSelection, skin: SkinPanelContext | undefined): BodyNote | null;
   export const WARM_ENDS: readonly [string, string];      // ['冷', '暖']
-  // SliderBinding gains: ends?: readonly [string, string];
-  // itemsFor / sliderFor / tabHasValue gain a 4th optional parameter skin?: SkinPanelContext (the editor passes it; the camera never does)
+  // SliderView (and so SliderBinding, which extends it) gains: ends?: readonly [string, string];
+  // itemsFor / sliderFor gain a 4th optional parameter skin?: SkinPanelContext (the editor passes it; the camera never does);
+  // tabHasValue gains it in Task 17, where it is first read (noUnusedParameters)
   // BeautyPanel Props gain skin?: SkinPanelContext
   // src/ui/components/Slider.tsx
   export function valueText(text: string, n: number, ends?: readonly [string, string]): string;
@@ -5994,11 +6010,8 @@ describe('step 4: 膚質 items (skin-cleanup spec §2.1, §2.2, §3.6)', () => {
   });
 });
 ```
-Create `src/ui/components/Slider.test.ts` (or append if step 3 created it):
+Append to step 1's `src/ui/components/Slider.test.tsx` (LF; add `valueText` to its `import { SliderRow } from './Slider';`, and `describe` / `expect` / `it` are already imported from `vitest`):
 ```ts
-import { describe, expect, it } from 'vitest';
-import { valueText } from './Slider';
-
 describe('valueText (膚色 ends, skin-cleanup spec §2.2)', () => {
   it('names the end the value leans to', () => {
     expect(valueText('−20', -20, ['冷', '暖'])).toBe('−20 冷');
@@ -6036,7 +6049,7 @@ interface Fixture {
 }
 /** read lazily: global-setup generates the file after the specs are collected */
 const fixture = (): Fixture => JSON.parse(readFileSync(resolve(import.meta.dirname, '../fixtures/sample_face_tone.json'), 'utf8')) as Fixture;
-const defect = (fx: Fixture, name: string) => fx.defects.find((d) => d.name === name)!;
+// (Task 17 adds `defect(fx, name)` with its first user: an unused top-level const fails `noUnusedLocals`)
 
 async function importPhoto(page: Page, file: string | { name: string; mimeType: string; buffer: Buffer }): Promise<void> {
   await page.goto('/');
@@ -6124,7 +6137,7 @@ test('a 瘦臉 drag reuses the tone field; a 勻膚 drag rebuilds it', async ({ 
 
 test('per person: 膚色 on person 2 changes only face 2; under 全部 every face', async ({ page }) => {
   await importPhoto(page, GROUP_PNG);
-  await selectPerson(page, '全部');
+  await selectPerson(page, 0);
   await plain(page);
   const boxes = (await debugState(page)).boxes;
   expect(boxes.length).toBe(3);
@@ -6142,7 +6155,7 @@ test('per person: 膚色 on person 2 changes only face 2; under 全部 every fac
   expect(mad(one, base, inShot(one, boxes[1]))).toBeGreaterThan(0.3);
   expect(mad(one, base, inShot(one, boxes[0]))).toBeLessThanOrEqual(0.1);
   expect(mad(one, base, inShot(one, boxes[2]))).toBeLessThanOrEqual(0.1);
-  await selectPerson(page, '全部');
+  await selectPerson(page, 0);
   await dragSlider(page, 400);
   const all = await settled(frame(page));
   for (const b of boxes) expect(mad(all, base, inShot(all, b))).toBeGreaterThan(0.3);
@@ -6188,16 +6201,16 @@ test('the camera offers none of the 膚質 tools', async ({ page }) => {
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `npx vitest run src/ui/panelModel.test.ts src/ui/components/Slider.test.ts`
+Run: `npx vitest run src/ui/panelModel.test.ts src/ui/components/Slider.test.tsx`
 Expected: FAIL — `toneItems is not a function`, `valueText is not a function`.
 
 - [ ] **Step 3: Implement**
 
-`src/ui/panelModel.ts` — add (imports: `TONE_COPY` from `../edit/toneCopy`; `type Lens` from `../edit/lens`; `paramDef`, `paramsInGroup`, `hasValue` are already imported):
+`src/ui/panelModel.ts` — add (imports: `TONE_COPY` from `../edit/toneCopy`; `type Lens` (`panelModel.ts:4`), `paramDef`, `paramsInGroup`, `hasValue` (`:2`) and `RegionStatus` (`:7`) are already imported):
 ```ts
 // ───────────── 膚質 (skin-cleanup spec §2.1–2.4, §3.6) ─────────────
 
-/** the photo's face answer, in the order of the editor's notes (Editor.tsx:789-797) */
+/** the photo's face answer, in the order of the editor's notes (Editor.tsx:1470-1479) */
 export type FaceAnswer = 'faces' | 'noFace' | 'basic' | 'recovering' | 'paused' | 'failed';
 export interface SkinPanelContext {
   answer: FaceAnswer;
@@ -6258,7 +6271,8 @@ export function toneItems(lens: Lens, sel: PanelSelection, skin: SkinPanelContex
         label: d.label,
         visual: { kind: 'icon', icon: d.icon },
         selected: sel.skin === d.id,
-        hasValue: hasValue(d, lens.get(d.id).value),
+        // step 1's item dot: the selected person's value, under 全部 any applicable person's (S1 §2.4 Dots)
+        hasValue: itemDot(lens, d),
         action: { type: 'param', id: d.id },
         ...ENABLED,
         ...(i === 0 ? { divider: 'before' as const } : {}),
@@ -6282,21 +6296,23 @@ export function skinNote(lens: Lens, sel: PanelSelection, skin: SkinPanelContext
   return null;
 }
 ```
-Wiring — step 1 ported the panel functions to `itemsFor(lens, sel, body?: BodyContext)`, `sliderFor(lens, sel, body?)`, `tabHasValue(lens, tab, body?)` (step-1 plan Task 10; the camera passes `cameraBody`, `Camera.tsx:266`, so `body` cannot tell the editor from the camera). Each gains a **fourth optional parameter `skin?: SkinPanelContext`**, which only the editor passes:
-- `SliderBinding` (`panelModel.ts:457-466`) gains `/** captions under the two track ends (膚色: 冷 / 暖) */ ends?: readonly [string, string];`
-- `itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext, skin?: SkinPanelContext)`: the shared `case 'skin': case 'shape':` returns `[RESET_ITEM(), ...paramsInGroup(sel.tab).map(…)]`; append to that array `...(sel.tab === 'skin' && skin ? toneItems(lens, sel, skin) : [])` (the camera passes no `skin`, so it gets neither the tone items nor the divider; if a later step already split the two cases, append it in the `'skin'` one).
-- `sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext, skin?: SkinPanelContext)`: replace the shared `case 'skin': case 'shape': return paramBinding(lens, sel[sel.tab]);` with
+Wiring — step 1 ported the panel functions to `itemsFor(lens, sel, body?: BodyContext)`, `sliderFor(lens, sel, body?)`, `tabHasValue(lens, tab, body?)` (step-1 plan Task 10; the camera passes `cameraBody`, so `body` cannot tell the editor from the camera). `itemsFor` and `sliderFor` gain a **fourth optional parameter `skin?: SkinPanelContext`**, which only the editor passes (`tabHasValue` gains it in Task 17, its first reader; `noUnusedParameters` rejects an unread one):
+- `SliderView` (`panelModel.ts:748-766`; `SliderBinding` extends it, and `SliderRow` takes a `SliderView`) gains `/** captions under the two track ends (膚色: 冷 / 暖) */ ends?: readonly [string, string];`
+- `itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext, skin?: SkinPanelContext)`: the shared `case 'skin': case 'shape':` (`panelModel.ts:590-608`) returns `[RESET_ITEM(), ...paramsInGroup(sel.tab).map(…)]`; append to that array `...(sel.tab === 'skin' && skin ? toneItems(lens, sel, skin) : [])` (the camera passes no `skin`, so it gets neither the tone items nor the divider).
+- `sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext, skin?: SkinPanelContext)`: step 1's shared case (`panelModel.ts:819-824`) is
+  `case 'skin': case 'shape': { const id = sel[sel.tab]; if (!usable(lens, id)) return null; return decorate(paramBinding(lens, id), lens, photoLike(lens, id)); }` — replace it with
   ```ts
       case 'skin':
       case 'shape': {
-        const id = sel.tab === 'skin' ? sel.skin : sel.shape;
+        const id = sel[sel.tab];
         if (sel.tab === 'skin' && isToneId(id) && !(skin && toneGate(lens, id, skin).ok)) return null;
-        const b = paramBinding(lens, id);
+        if (!usable(lens, id)) return null;
+        const b = decorate(paramBinding(lens, id), lens, photoLike(lens, id));
         return id === 'tone.warmth' ? { ...b, ends: WARM_ENDS } : b;
       }
   ```
-- `tabHasValue(lens: Lens, tab: TabId, body?: BodyContext, skin?: SkinPanelContext)`: no change in the body yet — the `'skin'` case's `lens.groupHasValue('skin')` already counts the tone items through Task 3; Task 17 uses the new parameter.
-- `BeautyPanel` (CRLF): `Props` gains `/** 膚質 context; the editor passes it, the camera never does */ skin?: SkinPanelContext;`, the destructuring gains `skin`, and its calls become `itemsFor(lens, sel, body, skin)` and `tabHasValue(lens, t.id, body, skin)`.
+- `tabHasValue`: unchanged in this task — its `'skin'` case's `lens.groupHasValue('skin')` already counts the tone items through Task 3.
+- `BeautyPanel` (CRLF): `Props` (`BeautyPanel.tsx:34-63`) gains `/** 膚質 context; the editor passes it, the camera never does */ skin?: SkinPanelContext;`, the destructuring (`:68`) gains `skin`, and the `itemsFor` call (`:87`) becomes `itemsFor(lens, sel, body, skin)` (the `tabHasValue` call follows in Task 17). Add `skinNote` and `type SkinPanelContext` to its `../panelModel` import.
 
 `src/ui/components/Slider.tsx`:
 ```ts
@@ -6305,7 +6321,11 @@ export function valueText(text: string, n: number, ends?: readonly [string, stri
   return ends && n !== 0 ? `${text} ${n < 0 ? ends[0] : ends[1]}` : text;
 }
 ```
-In `SliderRow`: `aria-valuetext={valueText(text, displayOf(bi, v), binding.ends)}` (v0.3 line 155; keep step 3's display function if it replaced `displayOf`), and after the `.slider-track` element (v0.3 line 177), inside `.slider`:
+In `SliderRow`, step 1's `aria-valuetext` (`Slider.tsx:190`) appends 「，各人不同」 to `text` when `binding.mixed`; keep that and name the end too:
+```tsx
+        aria-valuetext={binding.mixed ? `${valueText(text, displayOf(bi, v, sc), binding.ends)}，各人不同` : valueText(text, displayOf(bi, v, sc), binding.ends)}
+```
+(`displayOf(bi, v, sc)` is step 3's form, with the slider scale.) After the `.slider-track` element (`Slider.tsx:208-215`), still inside `.slider`, add:
 ```tsx
         {binding.ends && (
           <div class="slider-ends" aria-hidden="true">
@@ -6314,7 +6334,7 @@ In `SliderRow`: `aria-valuetext={valueText(text, displayOf(bi, v), binding.ends)
           </div>
         )}
 ```
-`src/ui/theme.css` (CRLF — edit in place) after the `.slider-track` rule:
+`src/ui/theme.css` (CRLF — edit in place) after the `.slider-track` rules (`theme.css:741-757`, including step 2's `.track-temperature` / `.track-tint`):
 ```css
 .slider-ends {
   position: absolute;
@@ -6329,12 +6349,12 @@ In `SliderRow`: `aria-valuetext={valueText(text, displayOf(bi, v), binding.ends)
   pointer-events: none;
 }
 ```
-`src/ui/components/BeautyPanel.tsx:64` — the strip note gains the 美膚 branch (`lens` since step 1, `skin` the new prop):
+`src/ui/components/BeautyPanel.tsx:97` — the strip note (step 1: `const note = sel.tab === 'body' ? bodyNoteFor(body, lens, sel) : null;`) gains the 美膚 branch (`skin` is the new prop):
 ```ts
-  const note = sel.tab === 'body' ? bodyNote(body) : sel.tab === 'skin' ? skinNote(lens, sel, skin) : null;
+  const note = sel.tab === 'body' ? bodyNoteFor(body, lens, sel) : sel.tab === 'skin' ? skinNote(lens, sel, skin) : null;
 ```
 (`StripBodyNote` renders it with the existing `body-note` style.)
-`src/ui/icons.tsx` — after `eyeDistance` (v0.3 line 101), original line icons on the 24 × 24 grid:
+`src/ui/icons.tsx` (CRLF) — after `eyeDistance` (`icons.tsx:96-101`; none of the seven names exists yet), original line icons on the 24 × 24 grid:
 ```tsx
   even: (
     <>
@@ -6378,11 +6398,11 @@ In `SliderRow`: `aria-valuetext={valueText(text, displayOf(bi, v), binding.ends)
     </>
   ),
 ```
-`src/ui/screens/Editor.tsx` — next to the face note (v0.3 `:785-797`), build the skin context and pass it to `sliderFor` and `BeautyPanel`:
+`src/ui/screens/Editor.tsx` (LF) — right above `const binding = sliderFor(lens, sel, bodyCtx);` (`Editor.tsx:1408`; the face note it mirrors is built at `:1470-1479`), build the skin context and pass it to `sliderFor` and `BeautyPanel`:
 ```ts
   // 膚質 (skin-cleanup spec §1.2, §2.2): the photo's face answer; the closed-mouth / closed-eye notes of the target faces
   const personOfFace = new Map((detect?.persons ?? []).filter((p) => p.face).map((p) => [p.face as string, p.id]));
-  const toneTargets = (session?.faces ?? []).filter((f) => personSel.kind === 'all' || personOfFace.get(f.id) === personSel.id).map((f) => f.face);
+  const toneTargets = (session?.faces ?? []).filter((f) => selected.kind === 'all' || personOfFace.get(f.id) === selected.id).map((f) => f.face);
   const skinCtx: SkinPanelContext = {
     // no answer yet while analysing (session null): no disabled flash, as the face note above (the slider row and the
     // canvas input are off until the session exists anyway)
@@ -6391,7 +6411,7 @@ In `SliderRow`: `aria-valuetext={valueText(text, displayOf(bi, v), binding.ends)
     eyesClosed: toneTargets.length > 0 && toneTargets.every((f) => earOf(f, 'L', bodyAspect) < 0.12 && earOf(f, 'R', bodyAspect) < 0.12),
   };
 ```
-(`detect` = step 1's detection-cache state of the Editor, `personSel` = its per-photo `Selection` state, `session.faces` = step 1's `SessionFace[]`; `bodyAspect` is the photo aspect, `Editor.tsx:147`. Imports: `faceAnswer`, `type SkinPanelContext` from `../panelModel`; `earOf`, `mouthOpen` from `../../engine/passes/toneGeometry`.) Then the binding line (v0.3 `:786`, step 1: `sliderFor(lens, sel, bodyCtx)`) becomes `const binding = sliderFor(lens, sel, bodyCtx, skinCtx);` (move the `skinCtx` block above it), and `<BeautyPanel … body={bodyCtx} …/>` (v0.3 `:869-875`) gains `skin={skinCtx}`. `Camera.tsx` (`:266`, `:391-399`) is not touched.
+(`detect` = step 1's detection-cache state of the Editor (`Editor.tsx:134`), `selected` = its resolved per-photo `Selection` (`:151`), `session.faces` = step 1's `SessionFace[]` (O-space, `id` = the cache face id), `bundle` / `bound` / `trackerHealth` as the face note uses them (`:128`, `:188`, `:127`); `bodyAspect` is the photo aspect, `Editor.tsx:266`. Imports: add `faceAnswer`, `type SkinPanelContext` to the `../panelModel` import (`:90-103`); `earOf`, `mouthOpen` from `../../engine/passes/toneGeometry`.) Then the binding line becomes `const binding = sliderFor(lens, sel, bodyCtx, skinCtx);`, and `<BeautyPanel … body={bodyCtx} …/>` (`:1617-1628`) gains `skin={skinCtx}`. `Camera.tsx` is not touched.
 
 - [ ] **Step 4: Run the tests**
 
@@ -6403,7 +6423,7 @@ Expected: all pass; the log prints each tool's `inside … background …` pair.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/ui/panelModel.ts src/ui/panelModel.test.ts src/ui/components/Slider.tsx src/ui/components/Slider.test.ts src/ui/components/BeautyPanel.tsx src/ui/icons.tsx src/ui/theme.css src/ui/screens/Editor.tsx tests/e2e/tone.spec.ts
+git add src/ui/panelModel.ts src/ui/panelModel.test.ts src/ui/components/Slider.tsx src/ui/components/Slider.test.tsx src/ui/components/BeautyPanel.tsx src/ui/icons.tsx src/ui/theme.css src/ui/screens/Editor.tsx tests/e2e/tone.spec.ts
 git commit -m "v0.4 step 4 (16/20): six 膚質 sliders in the 美膚 strip" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
@@ -6412,13 +6432,14 @@ git commit -m "v0.4 step 4 (16/20): six 膚質 sliders in the 美膚 strip" -m "
 ### Task 17: 祛痘 mode in the editor
 
 **Files:**
-- Modify: `src/ui/panelModel.ts` (`SkinSel`, `PanelSelection.skin` v0.3 `:41-47`, `ItemAction` `:194-204`, `activate` `:400-455`, `sliderFor`, `tabHasValue`; new helpers)
+- Modify: `src/ui/panelModel.ts` (CRLF; `SkinSel`, `PanelSelection.skin` `:40-50`, `photoScoped` `:211-219`, `ItemAction` `:295-309`, `activate` `:670-735`, `sliderFor`, `tabHasValue` `:897-916`; new helpers)
+- Modify: `src/ui/components/BeautyPanel.tsx` (CRLF; the `tabHasValue` call `:224`)
 - Create: `src/ui/components/SpotControls.tsx`, `src/ui/components/SpotOverlay.tsx`, `src/engine/backMapFrame.ts`
-- Modify: `src/ui/screens/Editor.tsx` (v0.3 `:66` `lastSel`, `:163-166` `setSel`, `:679` zoomPan, `:830-876` stage and panel), `src/ui/icons.tsx` (`spot`), `src/ui/theme.css` (spot styles)
+- Modify: `src/ui/screens/Editor.tsx` (LF; `lastSel` `:121`, `setSel` `:419-424`, the `useZoomPan` call `:1415-1427`, `showBoxes` `:1469`, the stage `:1525-1605` and the panel `:1607-1629`), `src/ui/icons.tsx` (`spot`), `src/ui/theme.css` (spot styles)
 - Test: `src/ui/panelModel.test.ts`, `src/engine/backMapFrame.test.ts`, `tests/e2e/tone.spec.ts`
 
 **Interfaces:**
-- Consumes: Tasks 2, 13 (`addSpot`, `clearSpots`, `clearScope`, `spotsInScope`, `spotRadius`, `regionAt`, `ownerAt`, `ownerCtxOf`, `planSpot`, `patchPlan`, `readPatch`), Task 15 (`spotTap`), Task 16 (`SkinPanelContext`, `skinToolGate`); `SPOT_CAP`, `TONE_COPY`; step 3's `backMapCpu(v: Vec2, frame: BackMapFrame)` with `BackMapFrame { geometry: Geometry; oSize: Size; oMap: UvMap }` (step-3 plan Task 9; it applies Geo⁻¹ and then `oMap`) and `viewSize(geometry, oPx)`; step 1's `tableFaces(job: Pick<FrameJob, 'faces' | 'obstacles'>, aspect)`, `FrameFace` (`src/engine/pipeline.ts`), `reshapeMapMulti(faces, aspect, { body, protects })` (`reshapeCpu.ts`), `boxCentre`, `ovalBox` (`faceCap.ts`), `makeupUniformsFor`, `reshapeUniforms`, `MAX_RENDER_FACES`, `RenderFace { face; weight; person; protect; presence? }`, the editor's `StillFrame` (`buildFrame`, step-1 plan Tasks 18 and 21); step 1's `Selection`, the person strip / face boxes and their visibility condition; `Segmented` (`Controls.tsx:47-74`); `toast`, `haptic`, `debug`.
+- Consumes: Tasks 2, 13 (`addSpot`, `clearSpots`, `clearScope`, `spotsInScope`, `spotRadius`, `regionAt`, `ownerAt`, `ownerCtxOf`, `planSpot`, `patchPlan`, `readPatch`), Task 15 (`spotTap`), Task 16 (`SkinPanelContext`, `skinToolGate`); `SPOT_CAP`, `TONE_COPY`; step 3's `backMapCpu(v: Vec2, frame: BackMapFrame)` with `BackMapFrame { geometry: Geometry; oSize: Size; oMap: UvMap }` (`src/engine/backMapCpu.ts:9-20`; it applies Geo⁻¹ and then `oMap`) and `viewSize(geometry, oPx)`; step 1's `tableFaces(job: Pick<FrameJob, 'faces' | 'obstacles'>, aspect)`, `FrameFace` (`src/engine/pipeline.ts:60-77`, `:207-221`), `reshapeMapMulti(faces, aspect, { body, protects })` (`reshapeCpu.ts:111`), `boxCentre`, `ovalBox` (`faceCap.ts`), `makeupUniformsFor`, `reshapeUniforms`, `MAX_RENDER_FACES`, `RenderFace { face; weight; person; protect; presence?; warpScale? }` (`types.ts:449-464`; `index.ts` scales each face's warp uniforms by `warpScale`, its private `scaleUniforms`, `index.ts:56-62`), the editor's `frameOf(e, s)` (`Editor.tsx:366-369`: `buildFrame` with the faces, obstacles, limits, primary and the λ_f `warpScales`); step 1's `Selection` (the Editor's resolved `selected`), the person strip / face boxes and their visibility condition (`showBoxes`); `Segmented` (`Controls.tsx:47-78`); `toast`, `haptic`, `debug` (already imported by the Editor).
 - Produces (`src/ui/panelModel.ts`):
   ```ts
   export type SkinSel = ParamId | 'spot';                 // PanelSelection.skin: SkinSel
@@ -6581,8 +6602,9 @@ describe('step 4: 祛痘 (skin-cleanup spec §2.3)', () => {
 ```
 (In Task 16's `skin()` helper of this file, add `spots: { inScope: 0, total: 0, onePerson: false }` once `SkinPanelContext` gains the field.)
 
-Append to `tests/e2e/tone.spec.ts`:
+Append to `tests/e2e/tone.spec.ts` (the `defect` helper joins the file here, with its first user):
 ```ts
+const defect = (fx: Fixture, name: string) => fx.defects.find((d) => d.name === name)!;
 /** an O point (photo W × H) in page CSS px, through the frame's fitted rectangle (no zoom) */
 async function pagePoint(page: Page, x: number, y: number, W: number, H: number): Promise<{ x: number; y: number }> {
   const b = (await frame(page).boundingBox())!;
@@ -6747,7 +6769,7 @@ test('per person: a tap on face 1 belongs to person 1; 清除此人 and 全部�
   await expect.poll(async () => (await debugState(page)).spots).toBe(1);
   expect((await debugState(page)).lastSpot!.owner).toBe('f0');
   await expect(page.getByRole('button', { name: '清除此人（0）' })).toBeDisabled();
-  await selectPerson(page, '全部');
+  await selectPerson(page, 0);
   const clear = page.getByRole('button', { name: '全部清除（1）' });
   await clear.click();
   await expect(page.getByRole('button', { name: '確定清除？' })).toBeVisible();
@@ -6792,7 +6814,7 @@ import type { BodyField, Geometry, RenderFace, Size } from '../types';
 import type { BackMapFrame } from './backMapCpu';
 import { boxCentre, ovalBox } from './passes/faceCap';
 import { makeupUniformsFor } from './passes/makeup';
-import { reshapeUniforms } from './passes/reshape';
+import { reshapeUniforms, type ReshapeUniforms } from './passes/reshape';
 import { reshapeMapMulti } from './passes/reshapeCpu';
 import { tableFaces, type FrameFace } from './pipeline';
 
@@ -6803,6 +6825,14 @@ export interface BackMapInput {
   geometry: Geometry;
 }
 
+/** λ_f of the editor's fold safety net (RenderFace.warpScale), applied as index.ts's scaleUniforms does */
+function scaled(u: ReshapeUniforms, k: number): ReshapeUniforms {
+  if (k === 1) return u;
+  const o = { ...u };
+  for (const key of Object.keys(o) as (keyof ReshapeUniforms)[]) o[key] *= Math.min(1, Math.max(0, k));
+  return o;
+}
+
 export function backMapFrameOf(input: BackMapInput, oSize: Size): BackMapFrame {
   const aspect = oSize.width / oSize.height;
   const faces: FrameFace[] = input.faces.slice(0, MAX_RENDER_FACES).map((f) => {
@@ -6810,7 +6840,7 @@ export function backMapFrameOf(input: BackMapInput, oSize: Size): BackMapFrame {
     return {
       face: f.face,
       weight: w,
-      reshape: reshapeUniforms(f.person.values, w),
+      reshape: scaled(reshapeUniforms(f.person.values, w), f.warpScale ?? 1),
       makeup: makeupUniformsFor(f.person, w),
       kS: 1, // tableFaces reads neither kS nor kR
       kR: 1,
@@ -6823,10 +6853,10 @@ export function backMapFrameOf(input: BackMapInput, oSize: Size): BackMapFrame {
   return { geometry: input.geometry, oSize, oMap: reshapeMapMulti(t.faces, aspect, { body: input.body ?? null, protects: t.protects }) };
 }
 ```
-(This mirrors step 1's `job()` face list, step-1 plan Task 18; if a later step adds an O-space map to P2 — step 6's liquify — it extends this function too.)
+(This mirrors `job()`'s face list, `index.ts:304-322`, λ_f included; if a later step adds an O-space map to P2 — step 6's liquify — it extends this function too.)
 
 `src/ui/panelModel.ts`:
-- `export type SkinSel = ParamId | 'spot';` and `PanelSelection.skin: SkinSel` (v0.3 line 43).
+- `export type SkinSel = ParamId | 'spot';` and `PanelSelection.skin: SkinSel` (`panelModel.ts:42`).
 - `ItemAction` gains `/** 美膚: select the 祛痘 tap mode (the screen shows SpotControls) */ | { type: 'spot' }`.
 - `SkinPanelContext` gains:
   ```ts
@@ -6889,14 +6919,15 @@ export function backMapFrameOf(input: BackMapInput, oSize: Size): BackMapFrame {
   }
   ```
 - `itemsFor` (the 4th parameter `skin` from Task 16): the Task 16 append becomes `...(sel.tab === 'skin' && skin ? [...toneItems(lens, sel, skin), spotItem(sel, skin)] : [])`.
-- `activate`: next to step 1's `case 'height': return done(edit, sel.body === 'height' ? sel : { ...sel, body: 'height' });` add (select only, no edit, like 增高)
+- `activate`: next to step 1's `case 'height': return done(edit, sel.body === 'height' ? sel : { ...sel, body: 'height' });` (`panelModel.ts:717-718`) add (select only, no edit, like 增高)
   ```ts
       case 'spot':
         return done(edit, sel.skin === 'spot' ? sel : { ...sel, skin: 'spot' });
   ```
   and in `case 'param'`, the non-body branch keeps `{ ...sel, skin: a.id }` (a param id leaves the 祛痘 mode).
-- `sliderFor`, Task 16's `case 'skin': case 'shape':` block: right after `const id = …;` add `if (id === 'spot') return null; // 祛痘: SpotControls takes the slider row` (this also narrows `id` to `ParamId` for `paramBinding`).
-- `tabHasValue`, case `'skin'` (shared with `'shape'` / `'makeup'` in step 1): put `if (tab === 'skin' && spotsOnTab(skin)) return true;` before `return lens.groupHasValue(tab);`.
+- `sliderFor`, Task 16's `case 'skin': case 'shape':` block: right after `const id = sel[sel.tab];` add `if (id === 'spot') return null; // 祛痘: SpotControls takes the slider row` (this also narrows `id` to `ParamId` for `isToneId`, `usable`, `paramBinding` and `photoLike`).
+- `tabHasValue(lens: Lens, tab: TabId, body?: BodyContext, skin?: SkinPanelContext)` (`panelModel.ts:897`; the 4th parameter moves here from Task 16): in its case `'skin'` (shared with `'shape'` / `'makeup'` in step 1, `:908-911`) put `if (tab === 'skin' && spotsOnTab(skin)) return true;` before `return lens.groupHasValue(tab);`. In `BeautyPanel.tsx:224` the call becomes `tabHasValue(lens, t.id, body, skin)`.
+- `photoScoped` (`panelModel.ts:211-219`): its line `if (sel.tab === 'skin') return photoLike(lens, sel.skin);` would hand `'spot'` to `photoLike` (a `ParamId` only; `paramDef('spot')` throws). In 祛痘 mode the chips stay live, because the selection picks 清除此人's person: write `if (sel.tab === 'skin') return sel.skin !== 'spot' && photoLike(lens, sel.skin);`.
 - Task 16's `toneItems` / `skinNote` compare `sel.skin` with tone ids; `isToneId(sel.skin)` is false for `'spot'`, so they need no change.
 
 Create `src/ui/components/SpotControls.tsx`:
@@ -7021,8 +7052,8 @@ export function SpotOverlay({ rings }: { rings: readonly SpotRing[] }) {
 }
 ```
 `src/ui/screens/Editor.tsx`:
-1. Module state next to `lastSel` (v0.3 line 66): `let lastSpotSize: SpotSize = 'M';` and `setSel` (v0.3 lines 163-166) stores `lastSel = rememberable(s);`.
-2. Component state:
+1. Module state next to `lastSel` (`Editor.tsx:121`): `let lastSpotSize: SpotSize = 'M';` and `setSel` (`:419-424`, today `lastSel = s;`) stores `lastSel = rememberable(s);`.
+2. Component state — top-level hooks, placed above Task 16's `skinCtx` block (which reads `clearSc` / `inScope`) and so above the `useZoomPan` call (which reads `spotMode`). The Editor already has a `const scope = multi && photoScoped(sel, lens);` (`:1445`, the strip's photo scope), so the 清除 scope is `clearSc`:
    ```ts
   const [spotSize, setSpotSizeState] = useState<SpotSize>(lastSpotSize);
   const setSpotSize = (s: SpotSize) => {
@@ -7034,9 +7065,9 @@ export function SpotOverlay({ rings }: { rings: readonly SpotRing[] }) {
   const ringSeq = useRef(0);
   const zoomHintDone = useRef(false);
   const spotMode = !!session && showsSpotMode(sel);
-  const scope = clearScope(personSel, detect?.persons.length ?? 0);
-  const inScope = spotsInScope(edit, scope);
-  const armKey = clearArmKey(String(scope), inScope, edit.photo.spots.length);
+  const clearSc = clearScope(selected, detect?.persons.length ?? 0);
+  const inScope = spotsInScope(edit, clearSc);
+  const armKey = clearArmKey(String(clearSc), inScope, edit.photo.spots.length);
   useEffect(() => setConfirmUntil(0), [armKey]);
   useEffect(() => {
     if (!confirmUntil) return;
@@ -7045,8 +7076,8 @@ export function SpotOverlay({ rings }: { rings: readonly SpotRing[] }) {
   }, [confirmUntil]);
   useEffect(() => debug({ spots: edit.photo.spots.length }), [edit.photo.spots]);
    ```
-   and Task 16's `skinCtx` gains `spots: { inScope, total: edit.photo.spots.length, onePerson: scope !== 'all' }`.
-3. The tap (S §3.4):
+   and Task 16's `skinCtx` gains `spots: { inScope, total: edit.photo.spots.length, onePerson: clearSc !== 'all' }`.
+3. The tap (S §3.4) — placed after item 2's block (so also after `const hold = useHold(…)`, `Editor.tsx:1143`) and before the `useZoomPan` call:
    ```ts
   /** 祛痘: a tap (V uv) → O through the CPU back-map → refusals, radius, patch, snap and donor, owner → one undo step */
   const tapSpot = (v: [number, number]) => {
@@ -7059,8 +7090,8 @@ export function SpotOverlay({ rings }: { rings: readonly SpotRing[] }) {
     }
     let o: [number, number];
     try {
-      const f = frameRef.current;
-      if (!f) return;
+      // the frame the session shows for `cur`: every face with its person's params, limit and λ_f (step 1's frameOf)
+      const f = frameOf(cur, s);
       o = backMapCpu(v, backMapFrameOf({ faces: f.faces, obstacles: f.obstacles, body: s.body, geometry: cur.photo.geometry }, photo));
     } catch (e) {
       reportError(e, 'backMapCpu');
@@ -7101,33 +7132,34 @@ export function SpotOverlay({ rings }: { rings: readonly SpotRing[] }) {
     update(addSpot(cur, spot), true);
   };
    ```
-   Names from earlier steps: `editRef` / `update(edit, commit)` are step 1's state ref and update function (v0.3's `paramsRef` / `update`, `Editor.tsx:78, 169`); `frameRef` holds the last `StillFrame` the editor passed to `session.render(frame)` (step 1 builds it with `buildFrame(edit, faces, obstacles, protects, primary)`) — if step 1/3 keep no such ref, add `const frameRef = useRef<StillFrame | null>(null)` and set `frameRef.current = frame` where `session.render(frame)` is called; `s.body` is the session's 美體 field (`StillSession.body`, `still.ts:26`); `s.faces` is step 1's `SessionFace[]`; `detect` and `personSel` as in Task 16; `photo` is `{width, height}` (`Editor.tsx:146`). Imports: `addSpot`, `clearScope`, `clearSpots`, `ownerAt`, `ownerCtxOf`, `planSpot`, `regionAt`, `spotRadius`, `spotsInScope`, `type PlanResult` from `../../edit/spots`; `patchPlan`, `readPatch` from `../../edit/patch`; `SPOT_CAP` from `../../config/limits`; `TONE_COPY` from `../../edit/toneCopy`; `backMapCpu` from `../../engine/backMapCpu`; `backMapFrameOf` from `../../engine/backMapFrame`; `viewSize` from `../../geometry/view`; `debug` from `../debug`; `clearArmKey`, `clearLabel`, `clearTap`, `rememberable`, `showsSpotMode`, `spotTapInside` from `../panelModel`; `SpotControls`; `SpotOverlay`, `type SpotRing`; `type SpotSize` from `../../types`.
+   Names from earlier steps: `editRef` / `update(edit, commit)` are step 1's state ref and update function (`Editor.tsx:130-132`, `:430`); `frameOf(e, s)` (`:366-369`) builds the `StillFrame` session `s` renders for `e` (`buildFrame` with the cache faces, obstacles, limits, primary and the λ_f `warpScales`), so no frame ref is needed; `s.body` is the session's 美體 field (`StillSession.body`); `s.faces` is step 1's `SessionFace[]`; `detect` and `selected` as in Task 16; `photo` is `{width, height}` (`Editor.tsx:265`); `reportError(err, where)` and `toast(text, ms)` as the Editor uses them. Imports (merged into the existing declarations): `addSpot`, `clearScope`, `clearSpots`, `ownerAt`, `ownerCtxOf`, `planSpot`, `regionAt`, `spotRadius`, `spotsInScope`, `type PlanResult` from `../../edit/spots`; `patchPlan`, `readPatch` from `../../edit/patch`; `SPOT_CAP` from `../../config/limits`; `TONE_COPY` from `../../edit/toneCopy`; `backMapCpu` from `../../engine/backMapCpu`; `backMapFrameOf` from `../../engine/backMapFrame`; `viewSize` added to the `../../geometry/view` import (`:42`); `clearArmKey`, `clearLabel`, `clearTap`, `rememberable`, `showsSpotMode`, `spotTapInside` added to the `../panelModel` import; `SpotControls`; `SpotOverlay`, `type SpotRing`; `type SpotSize` added to the `../../types` type import (`:33`). `debug`, `reportError`, `toast` and `haptic` are already imported.
 4. The clear:
    ```ts
   const onClear = () => {
     const r = clearTap(confirmUntil, performance.now(), inScope);
     setConfirmUntil(r.confirmUntil);
     haptic();
-    if (r.clear) update(clearSpots(editRef.current, scope), true);
+    if (r.clear) update(clearSpots(editRef.current, clearSc), true);
   };
    ```
-5. zoomPan (v0.3 line 679; after step 3 the call is `useZoomPan(stageRef, layerRef, !!session && !cropMode, { onTap, resetWhen: cropMode })`, its `onTap` being step 1's person hit-test callback). Name that callback `onPersonTap` in the Editor (rename the local if step 1 or 3 called it `onTap`; step 6's plan refers to it as `onPersonTap`, "as step 4 calls it"), then: `useZoomPan(stageRef, layerRef, !!session && !cropMode, { onTap: spotMode ? undefined : onPersonTap, spotTap: spotMode ? tapSpot : undefined, resetWhen: cropMode });`
-6. JSX: inside `.zoom-layer` (v0.3 lines 832-841) add `{spotMode && !hold.held && <SpotOverlay rings={rings} />}`; step 1's FaceBoxes visibility condition gains `&& !spotMode`; inside `.frame` next to the `原圖` corner label (v0.3 line 842) add `{spotMode && !hold.held && <span class="corner-label spot-hint">{TONE_COPY.spotHint}</span>}`; in `.editor-panel` (v0.3 lines 863-868) render
+5. zoomPan (`Editor.tsx:1415-1427`): step 1 / 3 pass the person hit test inline, `onTap: tapsOn ? (uv, rect) => { wakeBoxes(); … if (hit) choose({ kind: 'person', id: hit }); } : undefined`. Lift that expression unchanged into a named `const onPersonTap = tapsOn ? (uv: [number, number], rect: DOMRect) => { … } : undefined;` right above the call (step 6's plan refers to it as `onPersonTap`, "as step 4 calls it"), then: `useZoomPan(stageRef, layerRef, !!session && !cropMode, { onTap: spotMode ? undefined : onPersonTap, spotTap: spotMode ? tapSpot : undefined, resetWhen: cropMode });`
+6. JSX: inside `.zoom-layer` (`Editor.tsx:1527-1575`, after the `BandPlane` block) add `{spotMode && !hold.held && <SpotOverlay rings={rings} />}`; step 1's FaceBoxes visibility, `const showBoxes = … && !showsHeightBand(sel, bodyCtx);` (`:1469`), gains `&& !spotMode`; inside `.frame` next to the `原圖` corner label (`{hold.held && <span class="corner-label">原圖</span>}`, `:1586`) add `{spotMode && !hold.held && <span class="corner-label spot-hint">{TONE_COPY.spotHint}</span>}`; in `.editor-panel` (`:1607-1629`) wrap step 3's `<SliderRow … />` (`:1611-1616`, with its `cropMode ? straightenView(g) : binding` binding and `emptyText`, all kept) in the 祛痘 alternative:
    ```tsx
         {spotMode ? (
           <SpotControls
             size={spotSize}
             onSize={setSpotSize}
-            label={clearLabel(inScope, scope !== 'all', confirmUntil > 0)}
+            label={clearLabel(inScope, clearSc !== 'all', confirmUntil > 0)}
             disabled={inScope === 0}
             confirming={confirmUntil > 0}
             onClear={onClear}
           />
         ) : (
           <SliderRow
-            binding={session && !faceOff ? binding : null}
-            onChange={(v) => binding && slide(binding, v, false)}
-            onCommit={(v) => binding && slide(binding, v, true)}
+            binding={session && !faceOff ? (cropMode ? straightenView(g) : binding) : null}
+            onChange={(v) => (cropMode ? straightenTo(v, false) : binding && slide(binding, v, false))}
+            onCommit={(v) => (cropMode ? straightenTo(v, true) : binding && slide(binding, v, true))}
+            emptyText={session && !faceOff ? sliderEmptyText(lens, sel) : null}
           />
         )}
    ```
@@ -7151,8 +7183,8 @@ git commit -m "v0.4 step 4 (17/20): 祛痘 tap mode in the editor" -m "Co-Author
 ### Task 18: Tiled export — `toneSource`, the spot window rule, the GL budget; spots under the geometry
 
 **Files:**
-- Modify: `src/engine/pipeline.ts` (`Pipeline.toneFieldReady`, `Pipeline.prepareToneField`), `src/engine/index.ts` (step 3's `renderTile`), `src/app/still.ts` (step 3's `StillSession.tileInput`, `bounds`)
-- Modify: `src/media/exportPlan.ts` (step 3's module: `spotWindowGrowth`, `step4Active`, `spotBounds` — the values of its `TileBounds.spotWindowGrowth` / `oSpacePasses` hooks)
+- Modify: `src/engine/pipeline.ts` (CRLF; the `Pipeline` interface `:223-244` and object: `toneFieldReady`, `prepareToneField`), `src/engine/index.ts` (CRLF; step 3's `renderTile` `:431-447`), `src/app/still.ts` (LF; step 3's `StillSession.tileInput` `:359-366`, `bounds` `:367-369`)
+- Modify: `src/media/exportPlan.ts` (LF; step 3's module: `spotWindowGrowth`, `step4Active`, `spotBounds` — the values of its `TileBounds.spotWindowGrowth` / `oSpacePasses` hooks, `exportPlan.ts:116-127`, which `planTiles` (`:213`) and `chooseTile` / `tileBytes` (`:225-238`) already read)
 - Test: `src/media/exportPlan.test.ts`, `tests/e2e/pages/tone.ts` (`runToneTiles`), `tests/e2e/tone-engine.spec.ts`, `tests/e2e/tone.spec.ts`
 
 **Interfaces:**
@@ -7507,11 +7539,11 @@ export function spotBounds(frame: Pick<StillFrame, 'faces' | 'photo'>, oSize: Si
 ```
 (`toneValuesOf` takes the person's values record and `toneActive` its result, as in Task 11's `buildToneJob`.)
 
-`src/app/still.ts` (step 3's `StillSession`, step-3 plan Task 11): `bounds(f, b)` returns `{ body: b === undefined ? body : b, faces: faceBoundsFor(f.faces, width / height), ...spotBounds(f, { width, height }) }` (import `spotBounds` from `../media/exportPlan`), and `tileInput(f, b)` adds the working image to its result, so every tile carries it (crop spec §4.4 runner):
+`src/app/still.ts` (step 3's `StillSession`, step-3 plan Task 11): `bounds(f, b)` (`still.ts:367-369`) returns `{ body: b === undefined ? body : b, faces: faceBoundsFor(f.faces, width / height), ...spotBounds(f, { width, height }) }` (add `spotBounds` to the `../media/exportPlan` import, `still.ts:9`), and `tileInput(f, b)` (`still.ts:359-366`) adds the working image to its result, so every tile carries it (crop spec §4.4 runner):
 ```ts
       return { ...(all as TileInputBase), geometry: f.geometry ?? IDENTITY_GEOMETRY, oAspect: width / height, toneSource: { source: bitmap, width, height } };
 ```
-(`bitmap`, `width`, `height` are the session's working bitmap and size, `still.ts:79-81`.)
+(`bitmap`, `width`, `height` are the session's working bitmap and size, `still.ts:138-143`.)
 
 `src/engine/pipeline.ts` — the `Pipeline` interface and the returned object gain:
 ```ts
@@ -7545,7 +7577,7 @@ export function spotBounds(frame: Pick<StillFrame, 'faces' | 'photo'>, oSize: Si
       resetState();
     },
 ```
-`src/engine/index.ts`, in step 3's `renderTile(input, read)`: move its `job(…)` call (the FrameJob of the tile, called `j` here) above the upload of the tile's source, and put the field preparation between them:
+`src/engine/index.ts`, in step 3's `renderTile(input, read)` (`index.ts:431-447`; today `uploadSource(gl, srcTex, input.source, …)` then `const res = pipeline.run(job(input, srcTex, size, false, 'fbo', false));`): move its `job(…)` call (the FrameJob of the tile, called `j` here) above the upload of the tile's source, and put the field preparation between them:
 ```ts
       const ts = input.toneSource;
       if (j.tone && j.tone.mn8On && ts && !pipeline.toneFieldReady(j.tone.key)) {
@@ -7577,10 +7609,10 @@ git commit -m "v0.4 step 4 (18/20): tiled export with toneSource and spot window
 
 **Files:**
 - Create: `src/bench/toneBench.ts`, `src/bench/toneBench.test.ts`
-- Modify: `src/bench/main.ts` (a 「膚質量測」 button and section next to the 美體 bench, v0.3 `:476-543`; the copy-results report, `:684-702`)
+- Modify: `src/bench/main.ts` (CRLF; the `toneBtn` next to `bodyBtn` `:228` and in the panel row `:269`; a 「膚質量測」 section after the 美體 bench functions `runBodyBench` / `renderBodyTable` / `measureBody` `:606-763`; the copy-results report, `copyResults` `:781-784`)
 
 **Interfaces:**
-- Consumes: `Engine.renderToImageData` (`types.ts:322`), `RenderInput` (steps 1–3), Task 13 `planSpot`, `spotRadius`, `patchPlan`, `readPatch`; step 1's `Tracker.detectImage(image, { maxFaces })`, `adapt`; `importPhoto` (`src/media/importer.ts`).
+- Consumes: `Engine.renderToImageData` (`types.ts:549`), `RenderInput` (steps 1–3; the view is `RenderInput.geometry`, which the engine reads, `index.ts:287`), Task 13 `planSpot`, `spotRadius`, `patchPlan`, `readPatch`; step 1's `Tracker.detectImage(image, { maxFaces })`, `adapt`; `importPhoto` (`src/media/importer.ts`).
 - Produces:
   ```ts
   export interface ToneBenchRow { row: string; ms: number; delta: number | null }
@@ -7704,7 +7736,7 @@ export async function runToneBench(engine: Engine, cases: readonly ToneBenchCase
   return withDeltas(rows, base);
 }
 ```
-`src/bench/main.ts` — a third bench next to the 美體 one, following its pattern (`bodyInput`, `bodyTest`, `runBodyBench`, v0.3 `:476-543`):
+`src/bench/main.ts` — a third bench next to the 美體 one, following its pattern (`bodyInput`, `bodyTest`, `runBodyBench`, `main.ts:509-530`, `:606-639`):
 ```ts
 // ───────────────────────── 膚質 ─────────────────────────
 
@@ -7744,6 +7776,8 @@ async function runToneBenchUi(file: File): Promise<void> {
       obstacles: [],
       globalSkin: null,
       photo: { ...photo, spots, ...(geometry ? { geometry } : {}) },
+      // the engine draws the view from RenderInput.geometry (as still.ts passes it), not from photo.geometry
+      ...(geometry ? { geometry } : {}),
     });
     const all = { 'tone.even': 0.5, 'tone.warmth': 0.65, 'tone.darkCircle': 0.5, 'tone.nasolabial': 0.5, 'tone.teeth': 0.5, 'tone.eyeBright': 0.5 };
     const box = { x: 0.25, y: 0.3, w: 0.5, h: 0.4 };
@@ -7784,12 +7818,12 @@ async function runToneBenchUi(file: File): Promise<void> {
 }
 ```
 Mount it (the bench needs the engine, so it lives in the panel shown after 開始, not on the start gate):
-- next to `const bodyBtn = button('美體偵測', () => bodyTest());` (v0.3 `:202`) add
+- next to `const bodyBtn = button('美體偵測', () => bodyTest());` (`main.ts:228`) add
   ```ts
   const toneBtn = button('膚質量測', () => toneTest());
   ```
-- in the `panel` element (v0.3 `:231-240`), the row `el('div', { className: 'row' }, delegateBtn, landmarksBtn, compareBtn, captureBtn, stillBtn, bodyBtn, resumeBtn)` gains `toneBtn` after `bodyBtn`;
-- at the end of the 膚質 section above, after `let toneReport = '';`:
+- in the `panel` element (`main.ts:264-273`), the row `el('div', { className: 'row' }, delegateBtn, landmarksBtn, compareBtn, captureBtn, stillBtn, bodyBtn, exportBtn, exportPhotoBtn, resumeBtn)` (`:269`) gains `toneBtn` after `bodyBtn`;
+- place the 膚質 section above after the 美體 bench functions (`main.ts:606-763`, so `nextPaint`, `:604`, is declared before it) and before `copyResults`; at its end, after `let toneReport = '';`:
   ```ts
   panel.append(toneOut);
 
@@ -7798,12 +7832,12 @@ Mount it (the bench needs the engine, so it lives in the panel shown after 開�
     toneInput.click(); // synchronous inside the tap (iOS user-activation rule), as bodyTest
   }
   ```
-- in `copyResults()` (v0.3 `:684-702`), its first line becomes (keep whatever arguments steps 1–3 gave `formatReport`; only the appended 膚質 part is new)
+- in `copyResults()` (`main.ts:781-784`), steps 1–3 build `const text = formatReport(reportMeta(), samples, bodyRows) + multiText + exportText;`; append the 膚質 part:
   ```ts
-  const text = formatReport(reportMeta(), samples, bodyRows) + (toneReport ? `\n\n膚質\n${toneReport}` : '');
+  const text = formatReport(reportMeta(), samples, bodyRows) + multiText + exportText + (toneReport ? `\n\n膚質\n${toneReport}` : '');
   ```
 
-Imports: `adapt`; `defaultPhoto`, `neutralPerson` from `../edit/state`; `patchPlan`, `readPatch` from `../edit/patch`; `planSpot`, `spotRadius` from `../edit/spots`; `applyRatio`, `IDENTITY_GEOMETRY`, `rotateLeft` from `../geometry/view` (step 3's names; `applyRatio(g, lock, oSize)`, crop spec §3.3); `formatToneBench`, `median`, `runToneBench`, `spotGrid`, `type ToneBenchCase` from `./toneBench`; `type Geometry`, `type ParamId`, `type RenderInput`, `type Spot` from `../types`. `tracker`, `engine`, `busy`, `nextPaint`, `showError`, `errText`, `el`, `button`, `root` are main.ts's own.
+Imports: `adapt` from `../tracking/adapter111`; `defaultPhoto`, `neutralPerson` from `../edit/state`; `patchPlan`, `readPatch` from `../edit/patch`; `planSpot`, `spotRadius` from `../edit/spots`; `applyRatio`, `IDENTITY_GEOMETRY`, `rotateLeft` from `../geometry/view` (step 3's names; `applyRatio(g, lock, oSize)`, crop spec §3.3); `formatToneBench`, `runToneBench`, `spotGrid`, `type ToneBenchCase` from `./toneBench` (not `median`: `main.ts` already imports an equal `median` from `./report`, `:45`, and uses it here); `type Geometry`, `type ParamId`, `type RenderInput`, `type Spot` added to the `../types` type import (`:22-31`). `tracker`, `engine`, `busy`, `nextPaint`, `showError`, `errText`, `el`, `button`, `root`, `panel` are main.ts's own.
 
 - [ ] **Step 4: Run the tests and build the bench page**
 
@@ -7865,7 +7899,7 @@ Run:
 ```bash
 git diff "$(cat .superpowers/step4-base.txt)" -U0 -- 'src/**/*.test.ts' 'src/**/*.test.tsx' | grep -E '^-[^-]' || true
 ```
-Expected: the removed lines are only the ones this plan changes on purpose — the `PARAM_DEFS` count, `GROUPS`, `BIDIRECTIONAL` and defaults table in `params.test.ts` (Task 1), step 1's scope-table person list (Task 1), and — only if step 1's 美膚 strip test lists the whole strip with an editor context — that expected list (Task 16). Anything else is a regression to fix in its task.
+Expected: the removed lines are only the ones this plan changes on purpose — the `PARAM_DEFS` count, `GROUPS`, `BIDIRECTIONAL` and defaults table in `params.test.ts` (Task 1), step 1's scope-table person list and its `live` case in `state.test.ts` (Task 1), the 500-random round trip's `values:` line in `legacy.test.ts` (Task 3), import declarations that gained names (`legacy.test.ts`, `pipeline.test.ts`, `Slider.test.tsx`, `exportPlan.test.ts`, …), and — only if step 1's 美膚 strip test lists the whole strip with an editor context — that expected list (Task 16). Anything else is a regression to fix in its task.
 
 - [ ] **Step 6: Line endings, version, nothing pushed**
 
@@ -7882,7 +7916,7 @@ Expected:
 - the `join` prints nothing: every file that existed before step 4 keeps its working-tree ending (`w/crlf` stays `w/crlf`);
 - the version prints `0.3.0`;
 - `git status --short` prints nothing (everything committed; the generated `sample_face_tone.*` are ignored);
-- the log lists the 19 step-4 commits (Tasks 1–19);
+- the log lists the step-4 task commits (`v0.4 step 4 task 1` … `task 19`, plus any `task <N> fix` commits; the base file holds the reconcile commit, so it is not listed);
 - the branch line shows only local commits ahead (if the branch tracks a remote) — nothing was pushed.
 
 - [ ] **Step 7: Record the gate**
@@ -7890,6 +7924,7 @@ Expected:
 ```bash
 git commit --allow-empty -m "v0.4 step 4 (20/20): step gate — typecheck, unit, build, full e2e, parity, pins, line endings" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
+(As everywhere in this plan, the workflow's message format replaces this block: `v0.4 step 4 task 20: Step 4 gate`, written to a file and committed with `git commit --allow-empty -F`.)
 
 
 ---
@@ -7914,7 +7949,7 @@ git commit --allow-empty -m "v0.4 step 4 (20/20): step gate — typecheck, unit,
 | S §4.5 heal | 12, 14 |
 | S §4.6 tiled export | 18 |
 | S §4.7 GPU resources; §4.8 CPU ports and pins | 11, 12, 14 |
-| S §5 persistence and migration | 2, 3 (including `normalizeEntry` handing the entry's O size to the sanitizer, so spots survive a load) |
+| S §5 persistence and migration | 2, 3 (`normalizeEntry` already hands the entry's O size to the sanitizer since step 3; Task 3 pins that spots survive a load) |
 | S §6 bench rows | 19 |
 | S §7 edge cases | 13 (fill mode, refusals, cap), 16 (no face, 基本模式, tracker states), 17 (`readPatch` throws, `pointercancel`, letterbox, 按住對比), 18 (geometry, tiles) |
 | S §8.1 unit tests | 2, 3, 4, 5, 8, 11 (`toneJob`, shader pin), 12, 13, 15, 16, 17, 18 (`exportPlan`) |
@@ -7932,6 +7967,6 @@ Deliberate deviations from the letter of S (each keeps the requirement's intent)
 - S §2.4 notes render in the strip's existing note slot (`StripBodyNote`), as the 美體 notes do.
 - S §4.1 "`planPasses` gains `heal`, `toneField` and `retouch`": the decision lives in the pure `buildToneJob` (`src/engine/toneJob.ts`: `spots`, `fieldOn`, `mn8On`, `retouchOn`; null = none of them), which the pipeline reads as `FrameJob.tone`; `planPasses` is unchanged, so the v0.3 skip rules stay byte-identical. The unit test "neutral tone and no spots" and the engine harness's `passes` assertions pin the same behaviour.
 - S §8.2 case 5 / C §8.4 "tile cases in step 3's export harness": the step-4 tile case runs in its own page (`tests/e2e/pages/tone.ts`, `runToneTiles`), because it needs the warm/cold engine pair for the `toneSource` rebuild and step 3's `export.spec.ts` asserts its exact case list; the planner hook wiring (`spotBounds` through `planTiles`) is pinned by Task 18's `exportPlan.test.ts` coverage case, and step 6's release-gate case in `export.ts` sets the step-4 inputs itself (step-6 plan).
-- S §8.4 case 5 seeds the 100 spots by writing the stored record straight into IndexedDB from the page; C §8.4's `seedHistory(page, record)` belongs to step 1's not-yet-planned e2e helpers — use it instead if it exists when Task 17 runs.
+- S §8.4 case 5 seeds the 100 spots by editing the saved record straight in IndexedDB from the page. Step 1's `seedHistory(page, record, files, typed?)` (`tests/e2e/fixtures.ts:199`) exists, but it writes a whole new record from local files, so the in-place edit stays.
 
 Not implemented by this plan (conditional on later measurements): S §6 "Fallbacks if the iPhone numbers miss the budget" (`SPOT_CAP` 50, `HEAL_RING_SAMPLES` 24, the third O-size buffer `H`) and the on-device rows (iPhone via `/bench.html`, Web Inspector memory timeline) — they need a preview deploy the user has not approved; the bench rows and the one-line constants are in place for them.

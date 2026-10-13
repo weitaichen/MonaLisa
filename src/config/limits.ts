@@ -41,3 +41,19 @@ export const PROTECT_WINDOW = 128;
 export const MAX_OBSTACLES = 8;
 /** the face table's carrier (§4.4): the faster of the two on the test iPhone; a PG1 failure forces 'ubo' */
 export const FACE_TABLE_CARRIER: 'texture' | 'ubo' = 'texture';
+
+// ── step 3: crop and full-resolution export (step-3 spec §3.8) ──
+/** long edge of a 原始解析度 export (C §11 Q4: capped at 4096) */
+export const FULL_EXPORT_MAX_EDGE = 4096;
+/** the tile edge expected at 4096 × 3072 (the planner picks the largest of 2048/1024/512/256 within GL_TILE_BUDGET_MB) */
+export const TILE_DEFAULT = 1024;
+/** GL buffer budget of the worst tile, MiB */
+export const GL_TILE_BUDGET_MB = 40;
+/** the picked file is kept as HistoryEntry.source only up to this size, MiB */
+export const SOURCE_MAX_MB = 30;
+/** an export slower than this from the tap shares on a second tap (transient activation lasts 5 s) */
+export const SHARE_WINDOW_MS = 4000;
+/** smallest crop: this fraction of each E dimension… */
+export const MIN_CROP_FRAC = 0.05;
+/** …and at least this many working-resolution pixels per axis */
+export const MIN_CROP_PX = 64;

@@ -166,6 +166,24 @@ export interface Rect {
   w: number;
   h: number;
 }
+export interface Size {
+  width: number;
+  height: number;
+}
+
+/** step-3 spec §3.1. O → E is flipH, then `quarter` clockwise quarter turns; V is the crop of E straightened by θ. */
+export interface Geometry {
+  flipH: boolean;
+  /** clockwise quarter turns, applied after flipH (旋轉 turns counter-clockwise: quarter' = (quarter + 3) % 4) */
+  quarter: 0 | 1 | 2 | 3;
+  /** degrees, −45…45, rounded to 0.1, about the E-frame centre; positive turns the picture clockwise on screen */
+  straighten: number;
+  /** in the straighten plane, normalized to the E frame; axis-aligned in the view; every corner inside the straightened image and inside [0,1]² */
+  crop: Rect;
+}
+
+/** integer pixel rectangle (tile planner, readback) */
+export type PxRect = Rect;
 export interface PhotoParams {
   values: Record<PhotoParamId, number>;
   filterId: string;

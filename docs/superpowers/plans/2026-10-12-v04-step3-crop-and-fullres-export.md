@@ -100,7 +100,7 @@ Checked against the code at the step base `b975bcc` (steps 1 and 2 fully committ
 - Produces (`src/types.ts`): `interface Size { width: number; height: number }`, `interface Geometry { flipH: boolean; quarter: 0|1|2|3; straighten: number; crop: Rect }`, `type PxRect = Rect`.
 - Produces (`src/geometry/view.ts`): `type Quarter = 0|1|2|3`; `type Vec2 = readonly [number, number]`; `interface Affine {a,b,c,d,e,f}`; `IDENTITY_GEOMETRY: Geometry`; `IDENTITY_MAT3: Float32Array`; `isFullCrop(c: Rect): boolean`; `isIdentity(g: Geometry): boolean`; `compose(m, n): Affine` (m after n); `invert(m): Affine`; `apply(m, p: Vec2): [number, number]`; `applyVec(m, d: Vec2): [number, number]`; `quarterAffine(q): Affine`; `eSize(g, o: Size): Size`; `upQuarter(g): Quarter`; `oToE(g)`, `eToO(g)`, `eToV(g, oSize)`, `vToE(g, oSize)`, `oToV(g, oSize)`, `vToO(g, oSize)`: `Affine`; `glMat3(m): Float32Array`; `viewSize(g, oPx: Size): Size`; `snapCrop(g, oPx): Geometry`; `cropAspectPx(g, oSize): number`; `minCrop(g, oSize): {w, h}`; `cropFits(g, oSize, eps?)`, `cropValid(g, oSize, eps?)`: `boolean`; `maxFit(theta, W, H, a): Rect`; `isMaxFit(g, oSize): boolean`; `cropConstrain(g, oSize): Geometry`; `rotateLeft(g)`, `flipView(g)`: `Geometry`; `clampStraighten(theta): number`; `setStraighten(start, theta, oSize): Geometry`; `type CropLock = 'free'|'original'|'1:1'|'3:4'|'4:3'|'9:16'|'16:9'`; `CROP_LOCKS`; `lockAspect(lock, g, oSize): number | null`; `applyRatio(g, lock, oSize): Geometry`; `lockFor(g, oSize): CropLock`; `transposeLock(lock): CropLock`; `interface CropLayout {eBox, canvas, sx, angle, cropBox}`; `cropModeLayout(stage, oSize, g, inset?, prevAngle?): CropLayout`; `cssTurn(l): string`; `ovalViewBox(points: Float32Array, g, oSize): Rect`; `chipTransform(g): string`; `bandPlane(g): {left, top, width, height, rotate}`; `eYAt(g, oSize, v: Vec2): number`.
 
-- [ ] **Step 1: Add the limits and types**
+- [x] **Step 1: Add the limits and types**
 
 Append to `src/config/limits.ts`:
 
@@ -145,7 +145,7 @@ export interface Geometry {
 export type PxRect = Rect;
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Create `src/geometry/view.test.ts`:
 
@@ -483,12 +483,12 @@ describe('crop-mode layout and overlays', () => {
 });
 ```
 
-- [ ] **Step 3: Run the tests to see them fail**
+- [x] **Step 3: Run the tests to see them fail**
 
 Run: `npx vitest run src/geometry/view.test.ts`
 Expected: FAIL — `Failed to resolve import "./view"`.
 
-- [ ] **Step 4: Implement `src/geometry/view.ts`**
+- [x] **Step 4: Implement `src/geometry/view.ts`**
 
 ```ts
 // Geometry of the v0.4 crop / rotate / flip (contract §3.5, step-3 spec §3.1–3.3). Spaces: O (the EXIF-oriented original,
@@ -931,12 +931,12 @@ export function eYAt(g: Geometry, oSize: Size, v: Vec2): number {
 }
 ```
 
-- [ ] **Step 5: Run the tests to see them pass**
+- [x] **Step 5: Run the tests to see them pass**
 
 Run: `npx vitest run src/geometry/view.test.ts`
 Expected: PASS (all tests in `view.test.ts`). Then `npm run typecheck` — Expected: no errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/config/limits.ts src/types.ts src/geometry/view.ts src/geometry/view.test.ts

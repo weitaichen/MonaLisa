@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { PNG } from 'pngjs';
 import { apply, flipView, IDENTITY_GEOMETRY, oToV, rotateLeft, setStraighten, snapCrop, viewSize } from '../../src/geometry/view';
-import { closeFallback, debugState, expect, exportFile, makeJpeg, readHistory, SAMPLE_FACE, selectPerson, test, withExifOrientation } from './fixtures';
+import { closeFallback, debugState, expect, exportFile, exportResult, makeJpeg, readHistory, SAMPLE_FACE, selectPerson, test, withExifOrientation } from './fixtures';
 
 async function importInto(page: Page, file: string | { name: string; mimeType: string; buffer: Buffer }) {
   await page.goto('/');
@@ -606,6 +606,97 @@ test('PNG: the editor and the camera review save image/png named .png', async ({
   expect(await img.evaluate((i: HTMLImageElement) => i.dataset.name)).toMatch(/\.png$/);
   // the blob type from exportFile's URL.createObjectURL hook (still installed: the app never reloaded), not fetch(): the CSP
   expect(await img.evaluate((i: HTMLImageElement) => (window as unknown as { __blobTypes: Record<string, string> }).__blobTypes[i.src])).toBe('image/png');
+});
+
+/** the mean absolute RGB difference (0..255) of two stashed exports in each cell of a `cell`-pixel grid, row by row */
+function cellMad(page: Page, a: string, b: string, cell: number): Promise<number[]> {
+  return page.evaluate(
+    ([an, bn, c]) => {
+      const ex = (window as unknown as { __exports: Record<string, ImageData> }).__exports;
+      const A = ex[an];
+      const B = ex[bn];
+      const out: number[] = [];
+      for (let y0 = 0; y0 < A.height; y0 += c)
+        for (let x0 = 0; x0 < A.width; x0 += c) {
+          let sum = 0;
+          let n = 0;
+          for (let y = y0; y < Math.min(A.height, y0 + c); y++)
+            for (let x = x0; x < Math.min(A.width, x0 + c); x++) {
+              const p = (y * A.width + x) * 4;
+              for (let k = 0; k < 3; k++) sum += Math.abs(A.data[p + k] - B.data[p + k]);
+              n += 3;
+            }
+          out.push(sum / n);
+        }
+      return out;
+    },
+    [a, b, cell] as const,
+  );
+}
+
+// no service worker in between, so page.route sees (and holds) the 質感 LUT request
+test.describe('a 質感 LUT still downloading when 儲存 is tapped', () => {
+  test.use({ serviceWorkers: 'block' });
+
+  test('原始解析度 waits for it before the first tile; every tile carries the look', async ({ page }) => {
+    test.setTimeout(900_000);
+    const FILM = /\/luts\/looks\/look_film\.png$/;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    await page.route(FILM, async (r) => {
+      await gate;
+      await r.continue();
+    });
+    await usePng(page);
+    await page.goto('/');
+    await knob(page, { tile: 1024 });
+    await importInto(page, { name: 'big.jpg', mimeType: 'image/jpeg', buffer: await makeJpeg(page, 1600, 2400) });
+    // without the look: what a tile drawn without its LUT looks like
+    const plain = await exportFile(page);
+    expect([plain.width, plain.height]).toEqual([1600, 2400]);
+    expect((await debugState(page)).export).toMatchObject({ mode: 'tiled', tiles: 6 });
+    await stash(page, 'plain');
+    await closeFallback(page);
+
+    await tab(page, '一鍵').click();
+    await page.getByRole('button', { name: '質感', exact: true }).click();
+    const asked = page.waitForRequest(FILM);
+    await option(page, '膠片').click();
+    await asked;
+    await page.locator('.topbar .pill').click();
+    const overlay = page.locator('.status.scrim', { hasText: '正在輸出原始解析度…' });
+    await expect(overlay).toBeVisible();
+    // the LUT is held: no tile is drawn (no progress, and no breadcrumb: the runner writes it as it starts)
+    await page.waitForTimeout(2000);
+    await expect(overlay.locator('.status-detail')).toHaveText('0%');
+    expect(await page.evaluate(() => localStorage.getItem('meiyan.exportGuard.v1'))).toBeNull();
+    // 取消 ends the wait at once: it does not wait for the download
+    await overlay.getByRole('button', { name: '取消' }).click();
+    await expect(overlay).toHaveCount(0);
+    await expect(page.locator('.topbar .pill')).toHaveText('儲存');
+    await page.locator('.topbar .pill').click();
+    await expect(overlay).toBeVisible();
+    release();
+    const film = await exportResult(page);
+    expect([film.width, film.height]).toEqual([1600, 2400]);
+    expect((await debugState(page)).export).toMatchObject({ mode: 'tiled', tiles: 6 });
+    await stash(page, 'film');
+    await closeFallback(page);
+
+    // the same edit exported with the LUT resident from the start (↶ ↷ drop the finished file)
+    await page.getByRole('button', { name: '復原' }).click();
+    await page.getByRole('button', { name: '重做' }).click();
+    await exportFile(page);
+    await stash(page, 'resident');
+    await closeFallback(page);
+
+    const look = await cellMad(page, 'plain', 'film', 1024);
+    const resident = await cellMad(page, 'resident', 'film', 1024);
+    console.log(`per tile, film vs plain: ${look.map((d) => d.toFixed(2)).join(' ')}; vs resident: ${resident.map((d) => d.toFixed(3)).join(' ')}`);
+    expect(look).toHaveLength(6);
+    for (const d of look) expect(d, 'every tile carries the look').toBeGreaterThan(2);
+    for (const d of resident) expect(d, 'as exported with the LUT resident').toBeLessThan(0.1);
+  });
 });
 
 test('a crash breadcrumb: toast at launch, 標準 exports, 設定 shows why; 原始解析度 again lifts the cap', async ({ page }) => {

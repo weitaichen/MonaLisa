@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { IDENTITY_GEOMETRY } from '../geometry/view';
 import { defaultPhoto } from '../edit/state';
 import type { ExportPlan } from './exportPlan';
-import { ExportError, runTiledExport, type RunnerDeps, type TileInputBase } from './exportFull';
+import { abortable, ExportError, runTiledExport, type RunnerDeps, type TileInputBase } from './exportFull';
 
 const plan: ExportPlan = {
   mode: 'tiled',
@@ -130,5 +130,78 @@ describe('runTiledExport (S §4.4)', () => {
     const f = fakes();
     await runTiledExport(f.renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working, knob: { slowMs: 4500 } }, f.deps);
     expect(f.deps.sleep).toHaveBeenCalledWith(4500);
+  });
+});
+
+describe('runTiledExport drawState: one file never mixes tiles drawn with and without a LUT', () => {
+  const ready = Promise.resolve();
+
+  it('is read right before every tile; an unchanged state renders them all', async () => {
+    const f = fakes();
+    const drawState = vi.fn(() => {
+      f.log.push('state');
+      return [ready, 'ready'];
+    });
+    await runTiledExport(f.renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working, drawState }, f.deps);
+    expect(f.log.slice(0, 7)).toEqual(['guard', 'decode', 'state', 'tile', 'put 0', 'state', 'tile']);
+    expect(f.renderer.renderTile).toHaveBeenCalledTimes(2);
+  });
+
+  it('a LUT still loading at the first tile (null) fails before any tile is drawn; memory and guard are released', async () => {
+    const f = fakes();
+    const run = runTiledExport(f.renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working, drawState: () => null }, f.deps);
+    await expect(run).rejects.toMatchObject({ name: 'ExportError', kind: 'draw' });
+    expect(f.renderer.renderTile).not.toHaveBeenCalled();
+    expect(f.full.close).toHaveBeenCalled();
+    expect(f.renderer.releaseBuffers).toHaveBeenCalled();
+    expect(f.deps.clearGuard).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['evicted (no longer resident)', 'ready', null],
+    ['a failed one that loaded after all', 'failed', 'ready'],
+  ])('a LUT %s between tiles fails the export instead of drawing the rest differently', async (_name, first, later) => {
+    const f = fakes();
+    let look: string | null = first;
+    f.deps.nextFrame = vi.fn(async () => {
+      look = later; // (changes while the runner yields after the first tile)
+    });
+    const drawState = () => (look ? [ready, look] : null);
+    const run = runTiledExport(f.renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working, drawState }, f.deps);
+    await expect(run).rejects.toMatchObject({ name: 'ExportError', kind: 'draw' });
+    expect(f.renderer.renderTile).toHaveBeenCalledTimes(1);
+    expect(f.canvas.encode).not.toHaveBeenCalled();
+    expect(f.deps.clearGuard).toHaveBeenCalled();
+  });
+
+  it('a context restore between tiles (a new engine.ready) fails it too', async () => {
+    const f = fakes();
+    let statics = ready;
+    f.deps.nextFrame = vi.fn(async () => {
+      statics = Promise.resolve();
+    });
+    const run = runTiledExport(f.renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working, drawState: () => [statics] }, f.deps);
+    await expect(run).rejects.toMatchObject({ kind: 'draw' });
+    expect(f.renderer.renderTile).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('abortable', () => {
+  it('passes the promise through', async () => {
+    await expect(abortable(Promise.resolve(7), new AbortController().signal)).resolves.toBe(7);
+    await expect(abortable(Promise.reject(new Error('x')), new AbortController().signal)).rejects.toThrow('x');
+  });
+
+  it('rejects with AbortError as soon as the signal aborts, without waiting for the promise', async () => {
+    const ac = new AbortController();
+    const p = abortable(new Promise<void>(() => undefined), ac.signal);
+    ac.abort();
+    await expect(p).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('rejects at once on a signal aborted already', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    await expect(abortable(Promise.resolve(1), ac.signal)).rejects.toMatchObject({ name: 'AbortError' });
   });
 });

@@ -1,8 +1,9 @@
 // The 儲存 flow's rules (S §2.3), pure: which file a tap may share at once, when the pill asks for a second tap, what a
 // failure does, and when to say that only the 2048 copy was kept.
 import { SHARE_WINDOW_MS } from '../config/limits';
+import { photoLuts } from '../engine/looks';
 import type { ExportPlan, SourceInfo } from '../media/exportPlan';
-import type { Size } from '../types';
+import type { Engine, Size } from '../types';
 import { stampIs } from './editorModel';
 
 export type Pill = 'save' | 'preparing' | 'share';
@@ -50,6 +51,17 @@ export function tapAction(pill: Pill, hasPending: boolean): 'ignore' | 'sharePen
 /** 「取消」, ✕ and the background abort reject with AbortError (shows nothing); any other failure falls back once */
 export function exportOutcome(e: unknown): 'abort' | 'fallback' {
   return typeof e === 'object' && e !== null && (e as { name?: unknown }).name === 'AbortError' ? 'abort' : 'fallback';
+}
+
+/**
+ * The tiled export's drawState (runTiledExport): what a tile of `photo` draws with besides its input. The static
+ * textures stand as `engine.ready` (a context restore replaces it and reloads them), then each 濾鏡 / 質感 LUT's state.
+ * null while one of those LUTs has not settled: still loading, or not asked for (the engine's lutFor would start it and
+ * draw that tile without it).
+ */
+export function tileDrawState(engine: Pick<Engine, 'ready' | 'lutState'>, photo: Parameters<typeof photoLuts>[0]): unknown[] | null {
+  const states = photoLuts(photo).map((r) => engine.lutState(r.kind, r.id));
+  return states.every((s) => s === 'ready' || s === 'failed') ? [engine.ready, ...states] : null;
 }
 
 /** 「此照片只保留了 2048 解析度」: a working plan for want of a source, although the original was larger than the working copy */

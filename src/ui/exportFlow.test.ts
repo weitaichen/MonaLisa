@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ExportPlan } from '../media/exportPlan';
-import { exportOutcome, noSourceNote, pillLabel, planSig, preEncodes, shareNow, shareReady, tapAction } from './exportFlow';
+import type { LutKind, LutState } from '../types';
+import { exportOutcome, noSourceNote, pillLabel, planSig, preEncodes, shareNow, shareReady, tapAction, tileDrawState } from './exportFlow';
 
 const plan = (over: Partial<ExportPlan> = {}): ExportPlan => ({
   mode: 'working',
@@ -60,5 +61,32 @@ describe('export flow rules (S §2.3)', () => {
 
   it('pill copy', () => {
     expect([pillLabel('save'), pillLabel('preparing'), pillLabel('share')]).toEqual(['儲存', '準備中', '分享']);
+  });
+});
+
+describe('tileDrawState (the drawState of the tiled export)', () => {
+  const engine = (states: Record<string, LutState>, ready = Promise.resolve()) => ({
+    ready,
+    lutState: (kind: LutKind, id: string): LutState => states[`${kind}:${id}`] ?? 'none',
+  });
+  const photo = { filterId: 'f1', look: { id: 'film' } };
+
+  it('the static textures, then each 濾鏡 / 質感 LUT state, once all have settled (ready or failed)', () => {
+    const e = engine({ 'filter:f1': 'ready', 'look:film': 'failed' });
+    expect(tileDrawState(e, photo)).toEqual([e.ready, 'ready', 'failed']);
+    // 濾鏡 none is no LUT; no 質感 neither
+    expect(tileDrawState(e, { filterId: 'none', look: null })).toEqual([e.ready]);
+  });
+
+  it('null while a LUT is still loading or not asked for yet: that tile would draw without it', () => {
+    expect(tileDrawState(engine({ 'filter:f1': 'ready', 'look:film': 'loading' }), photo)).toBeNull();
+    expect(tileDrawState(engine({ 'filter:f1': 'ready' }), photo)).toBeNull();
+  });
+
+  it('a context restore (a new engine.ready) changes it', () => {
+    const states = { 'filter:f1': 'ready', 'look:film': 'ready' } as const;
+    const a = tileDrawState(engine(states), photo)!;
+    const b = tileDrawState(engine(states), photo)!;
+    expect(Object.is(a[0], b[0])).toBe(false);
   });
 });

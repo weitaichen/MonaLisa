@@ -25,6 +25,7 @@ import { measureBody, paramAvailability } from '../../body/measure';
 import { bodyBox, personInfos } from '../../detect/cache';
 import { hitPerson } from '../../detect/persons';
 import { sanitizeParams } from '../../engine/params';
+import { abortable } from '../../media/exportFull';
 import { EXPORT_COPY, NO_SOURCE, planExport, sourceSizeRecord, type ExportPlan, type SourceInfo } from '../../media/exportPlan';
 import { takePersonsHint } from '../../store/settings';
 import { stableKey } from '../../store/undo';
@@ -83,7 +84,7 @@ import {
   type BodyDet,
   type OutputStamp,
 } from '../editorModel';
-import { exportOutcome, noSourceNote, pillLabel, planSig, preEncodes, shareNow, shareReady, tapAction, type Pill, type ShareCache } from '../exportFlow';
+import { exportOutcome, noSourceNote, pillLabel, planSig, preEncodes, shareNow, shareReady, tapAction, tileDrawState, type Pill, type ShareCache } from '../exportFlow';
 import { FaceProtectSource, isContourEdit, maskCoversFace, paramsPatch, type FaceProtectRecord } from '../faceProtectModel';
 import { Icon } from '../icons';
 import {
@@ -1244,21 +1245,33 @@ export function Editor({ source }: { source: EditorSource }) {
     );
   };
 
-  /** the source decoded at up to 4096 and rendered in tiles; one fallback to the working size on failure (C §4.6) */
+  /**
+   * the source decoded at up to 4096 and rendered in tiles; one fallback to the working size on failure (C §4.6). Like
+   * encode(), it first waits for the 濾鏡 / 質感 LUTs and the static textures, so the file matches the settled preview:
+   * the engine draws a tile without a LUT that is still loading, and one landing between tiles would leave seams
+   */
   const runTiled = (s: StillSession, e: EditState, field: BodyField | null, plan: ExportPlan, key: string, gen: number, t0: number) => {
     const engine = sessionEngine.current!;
+    const blob = sourceRef.current.blob!;
     const ac = new AbortController();
     exportAbort.current = ac;
     setPill('preparing');
     setExporting({ progress: 0 });
     debug({ export: null });
-    s.pauseDisplay(true);
-    deps
-      .runTiledExport(engine, sourceRef.current.blob!, plan, s.tileInput(frameOf(e, s), field), {
-        signal: ac.signal,
-        working: photo,
-        knob: deps.readExportDebug(),
-        onProgress: (p) => setExporting({ progress: p }),
+    // 取消, ✕ and the background abort end this wait too (abortable); the display keeps drawing meanwhile, so a LUT
+    // landing shows in the preview
+    abortable(s.prepareExport(frameOf(e, s)), ac.signal)
+      .then(() => {
+        // the frame of now, as encode() takes it: a 瘦臉 limit that landed during the wait is in it
+        const frame = frameOf(e, s);
+        s.pauseDisplay(true);
+        return deps.runTiledExport(engine, blob, plan, s.tileInput(frame, field), {
+          signal: ac.signal,
+          working: photo,
+          knob: deps.readExportDebug(),
+          onProgress: (p) => setExporting({ progress: p }),
+          drawState: () => tileDrawState(engine, frame.photo),
+        });
       })
       .then(
         (file) => {

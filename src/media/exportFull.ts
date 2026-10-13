@@ -81,7 +81,7 @@ export const browserRunnerDeps: RunnerDeps = {
 
 export class ExportError extends Error {
   constructor(
-    readonly kind: 'aspect' | 'size' | 'knob',
+    readonly kind: 'aspect' | 'size' | 'knob' | 'draw',
     message: string,
   ) {
     super(message);
@@ -95,9 +95,40 @@ export interface RunOptions {
   /** the working bitmap's size: the decode must have its aspect within 1 % */
   working: Size;
   knob?: ExportDebugKnob;
+  /**
+   * What a tile draws with besides `input` (the static textures, each 濾鏡 / 質感 LUT's state), or null while some of it
+   * is not resident. Read right before every tile: null, or an entry that differs (Object.is) from the first tile's,
+   * fails the export with ExportError('draw') and the caller falls back, so one file never mixes tiles drawn with and
+   * without a LUT.
+   */
+  drawState?(): readonly unknown[] | null;
 }
 
 const abortError = () => new DOMException('export cancelled', 'AbortError');
+
+/** `p`, or an AbortError as soon as `signal` aborts: 取消, ✕ and the background abort do not wait for a LUT download */
+export function abortable<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    p.catch(() => undefined);
+    return Promise.reject(abortError());
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(
+      (v) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(v);
+      },
+      (e: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(e);
+      },
+    );
+  });
+}
+
+const sameState = (a: readonly unknown[], b: readonly unknown[]) => a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
 
 export async function runTiledExport(
   renderer: TileRenderer,
@@ -159,6 +190,8 @@ export async function runTiledExport(
     }
     canvas = deps.createCanvas(plan.width, plan.height, type);
     const geometry = snapCrop(input.geometry ?? IDENTITY_GEOMETRY, decode);
+    /** the first tile's drawState: every later tile must draw with the same */
+    let drawn: readonly unknown[] | null = null;
     for (let i = 0; i < plan.tiles.length; i++) {
       check();
       if (knob.failAt === 'tile') throw new ExportError('knob', 'injected tile failure');
@@ -170,6 +203,13 @@ export async function runTiledExport(
       }
       let img: ImageData;
       try {
+        // (here, not before the crop: renderTile is synchronous, so this is exactly what the tile draws with)
+        if (opts.drawState) {
+          const now = opts.drawState();
+          if (!now) throw new ExportError('draw', `tile ${i}: a LUT it draws with is not resident`);
+          if (!drawn) drawn = now;
+          else if (!sameState(drawn, now)) throw new ExportError('draw', `tile ${i}: what the tiles draw with changed mid-export`);
+        }
         img = renderer.renderTile(
           {
             ...input,

@@ -350,8 +350,12 @@ export async function exportFile(page: Page): Promise<{ width: number; height: n
       return u;
     };
   });
-  const pill = page.locator('.topbar .pill');
-  await pill.click();
+  await page.locator('.topbar .pill').click();
+  return exportResult(page);
+}
+
+/** the export a 儲存 tap started: (a second tap when the pill turned 分享 →) the long-press fallback's image */
+export async function exportResult(page: Page): Promise<{ width: number; height: number; type: string; name: string | null }> {
   const fallback = page.getByRole('dialog', { name: '儲存照片' });
   const shareAgain = page.locator('.topbar .pill', { hasText: '分享' });
   await expect(fallback.or(shareAgain)).toBeVisible({ timeout: 300_000 });

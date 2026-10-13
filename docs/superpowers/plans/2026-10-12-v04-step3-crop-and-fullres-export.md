@@ -10,14 +10,32 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-12-crop-and-fullres-export-design.md` (step-3 spec, **S** below), under the contract `docs/superpowers/specs/2026-10-12-v04-roadmap.md` (**C**, status accepted; every §12 default is decided: #15 cap 4096, #16 原始解析度 JPEG default, #17 按住對比 keeps the crop, #18 no metadata, #19 seven ratios only, #20 the box moves, #21 keep only larger originals, #22 增高 stays on the photo's rows, #23 重置 resets geometry). Names consumed from step 1 and step 2 come from `2026-10-12-face-person-select-design.md` (**S1**) and `2026-10-12-adjust-and-looks-design.md` (**S2**).
 
+## Reconciliation (step 3)
+
+Checked against the code at the step base `b975bcc` (steps 1 and 2 fully committed, follow-ups included). The CRLF list under Global Constraints was re-verified with `git ls-files --eol` (all 24 still `w/crlf`, the other edited files `w/lf`, only `tests/harness/t1/harness.ts` mixed). Every name this plan produces is unchanged, so steps 4–6 still find them. These edits were made:
+
+- **Anchors:** the **Files** lines and the step instructions of every task now cite `b975bcc` lines (types, settings, deps, app, exporter, importer, Camera, Review, state, history, reshape, pipeline, index, mask, makeup, testFakes, t7 fakes, still, panelModel, Slider, BeautyPanel, theme.css, zoomPan, HeightBandOverlay, Editor, editorModel, cache, migrate, flows, Home, bench main, NOTICE, editor.spec); `STEP3_BASE` is `b975bcc` (Before Task 1, Task 20).
+- **Task 3:** `RenderInput.geometry?` moves here from Task 8 (`buildFrame` returns a `StillFrame` literal: without the field, typecheck fails); `normalizeEntry` (`history.ts:192`) passes the entry's `{width, height}` to `sanitizeEditState`, or every history read would reset a saved crop; the frame test passes step 1's required `primary`.
+- **Task 4:** the `settings.ts` type import keeps `CameraLook`, and the `deps.ts` settings import keeps step 1's `loadLook` / `saveLook` (the plan's import lists were v0.3's).
+- **Task 7:** `runReshapePinView` is written on step 1's page helpers `context()` / `floatTex` / `rig()` / `compare` instead of a copy of v0.3's setup.
+- **Task 8:** run() calls `MaskPass.drawFaces` / `MakeupPass.drawFaces` and plans through `planFrame`, so those get the view, the window and the two plan flags; step 1's `aspect` (which also feeds `tableFaces`) becomes `job.oAspect`; `releaseBuffers` guards `Partial` `fbs`; `index.ts` drops the now-unused `frameFor` import and does not import `PxRect` (`noUnusedLocals`); the pipeline test's flag is `anyFace` (step 1), not `hasFace`.
+- **Task 11:** `StillFrame` is imported from `../types` (still.ts does not re-export it).
+- **Task 12:** `SliderView` carries every field `SliderRow` reads (step 1's `aria` / `mixed`, step 2's `track` / `hideDefault`); exact signatures of step 1's exhaustive switches (`activate`'s crop case is `done()`); 裁切 is photo-level through step 1's `photoScoped` / `personNote` (S §2.1: the person strip dims with 「整張照片」), with a test. This replaces Task 14's "add 'crop' to step 1's list of photo-level tabs" (step 1 has no such list).
+- **Task 13:** `ZoomPanOptions` gains `resetWhen`; the reset also restores step 1's `--zs`; `yAt` joins `HeightBandOverlay`'s destructuring.
+- **Task 14:** `Page` comes from `@playwright/test` (fixtures.ts does not export it); the crop block sits after `session` (it needs `stageRef` / `photo`); undo / redo use step 1's `e`; the tap maps step 1's `uv` tuple; face and body boxes, the debug `boxes` and step 1's `mapY` row shift map through the geometry; chip thumbnails get the turn through a new `PersonStrip` prop `thumbTransform`; the slider row keeps `emptyText`.
+- **Task 15:** step 1's definite answer is the pure `firstAnswer` (`edit/migrate.ts`): `AnswerInput.quarter?` and `addFaceScan`, which moves to `detect/cache.ts` (re-exported by `editorModel.ts`); `normalizeDetect` returns `{ cache, stale, lost }` and builds `base` (the test reads `.cache`, uses `makeCache()`); `withFaces` carries `bodyScans`; `DetectionCache.bodyScans` is new (step 1 has none); the memo test uses step 1's `update(input, draft)` signature; the Editor wiring follows step 1's `sessionPlan` / `detectBody` / `bodyAnswer` / `measurePersons` / `applyField` code, and the suggested 增高 band reads the U measure too.
+- **Task 16:** step 1's reopen passes the entry to `openInEditor` (no `historyId` / `source` options): the source is read from the entry there, Home's `openEntry` is unchanged, and the reopen test builds an entry.
+- **Task 17:** step 1 has no frame ref: `planFor`, `encode`, `save`, `runWorking` and `runTiled` take the tap's `EditState` and build frames with step 1's `frameOf(e, s)`; the tiled fallback logs with `console.warn`, because `tests/e2e/fixtures.ts` fails a test on any `console.error` and the knob-injected failures take that path.
+- **Commits:** the `git commit -m "v0.4 step 3: …"` blocks show each task's file list and intent; the workflow's own message format (`v0.4 step 3 task <N>: <title>`, fixes `v0.4 step 3 task <N> fix: …`, written to a file and committed with `git commit -F`) replaces them.
+
 ## Global Constraints
 
 - Branch `feat/meiyan-pwa`; every commit is **local only** (never `git push`, never deploy); `package.json` `"version"` stays `0.3.0` (only step 6's release task bumps it).
 - No new dependency: `package.json` / `package-lock.json` unchanged. MediaPipe stays `0.10.35`; CSP stays `connect-src 'self'`; no network request beyond localhost in any test.
 - Line endings are preserved per file. CRLF working-tree files this plan edits (from `git ls-files --eol`, `w/crlf`): `src/types.ts`, `src/engine/index.ts`, `src/engine/pipeline.ts`, `src/engine/passes/mask.ts`, `src/engine/passes/makeup.ts`, `src/engine/passes/reshape.test.ts`, `src/media/importer.ts`, `src/media/importer.test.ts`, `src/app/testFakes.ts`, `src/ui/app.tsx`, `src/ui/deps.ts`, `src/ui/state.ts`, `src/ui/flows.ts`, `src/ui/screens/Home.tsx`, `src/ui/components/Slider.tsx`, `src/ui/panelModel.ts`, `src/ui/components/BeautyPanel.tsx`, `src/ui/screens/zoomPan.ts`, `src/ui/components/HeightBandOverlay.tsx`, `src/ui/theme.css`, `src/ui/icons.tsx`, `src/ui/screens/Camera.tsx`, `src/ui/screens/Review.tsx`, `src/bench/main.ts`. Every other edited file is LF (`Editor.tsx`, `still.ts`, `history.ts`, `settings.ts`, `exporter.ts`, `reshape.ts`, `uniforms.ts`, `gl.ts`, `present.ts`, `Settings.tsx`, `Controls.tsx`, `CanvasHost.tsx`, `hooks.ts`, `LICENSES/NOTICE.txt`, …). New files are LF (`.gitattributes`: `* text=auto eol=lf`). `git diff` normalizes line endings, so it cannot show a lost CRLF: check with `git ls-files --eol -- <file>` (the `w/` column must stay `w/crlf` for the list above and never become `w/mixed`). Do not use `grep -c $'\r$'` inside `$(…)` in Git Bash: the CR is dropped from the pattern and every line matches.
-- **v0.3 parity (C §1.1):** with identity geometry, no window and no warps P2 stays skipped (`pipeline.ts:103-112`); every new uniform reduces to ×1 / +0 at identity (`uGeo` = exact identity `mat3`, `uTile = uWin = (0,0,1,1)`), so `tests/e2e/parity.spec.ts` (≤ 1/255 max, < 0.02/255 mean) stays green after every task.
+- **v0.3 parity (C §1.1):** with identity geometry, no window and no warps P2 stays skipped (`planPasses`, `pipeline.ts:146-157`); every new uniform reduces to ×1 / +0 at identity (`uGeo` = exact identity `mat3`, `uTile = uWin = (0,0,1,1)`), so `tests/e2e/parity.spec.ts` (≤ 1/255 max, < 0.02/255 mean) stays green after every task.
 - Shader pins: `RESHAPE_FS` is re-pinned in the same commit as its CPU port (C §8.2). Step 3 changes **no** composite text: both step-2 pins in `src/engine/compositeCpu.test.ts` must stay unchanged.
-- Anchors: `file:line` citations are at `1f0273d` (= v0.3 code at `892ea61`). Steps 1 and 2 move them; when an anchor has moved, find the quoted code. Step-1/2 names this plan consumes are listed in each task's **Consumes**.
+- Anchors: `file:line` citations were written at `1f0273d` (= v0.3 code at `892ea61`); the **Files** lines and the step instructions are moved to the step base `b975bcc` (see Reconciliation). Line numbers inside spec quotes and code comments may still read v0.3 lines: when an anchor has moved, find the quoted code. Step-1/2 names this plan consumes are listed in each task's **Consumes**.
 - Limits (`src/config/limits.ts`, created by step 1): `FULL_EXPORT_MAX_EDGE = 4096`, `TILE_DEFAULT = 1024`, `GL_TILE_BUDGET_MB = 40`, `SOURCE_MAX_MB = 30`, `SHARE_WINDOW_MS = 4000`, `MIN_CROP_FRAC = 0.05`, `MIN_CROP_PX = 64`.
 - Export: `full` long edge = `min(source long edge, 4096)`; `standard` = the working size (2048, or 1440 on tier L), untiled, today's path. JPEG quality 0.95 when the size pref is `'full'` (whatever the mode), 0.92 for `'standard'`; PNG lossless; no metadata. File name `meiyan-YYYYMMDD-HHMMSS.jpg|.png`.
 - Tiles: `TILE ∈ {2048, 1024, 512, 256}`, largest whose worst tile needs ≤ 40 MiB of GL buffers `(2·win² + 3·buf²)·4 B`; `apronV = ceil(14·k) + 2` rounded up to 4 with `k = fullShortEdge/720`; tile origins multiples of 4; snap outward first, clip last.
@@ -67,7 +85,7 @@
 | `tests/e2e/pages/export.{html,ts}` (new), `tests/e2e/{export,crop}.spec.ts` (new), `tests/e2e/fixtures.ts`, `tests/e2e/pages/reshape.ts`, `tests/e2e/reshape.spec.ts` | Engine tile harness, app specs, helpers |
 | `src/bench/exportBench.ts` (new), `src/bench/main.ts`, `LICENSES/NOTICE.txt` | Export bench rows; derived test image notice |
 
-**Before Task 1:** run `git rev-parse HEAD` and keep the hash as `STEP3_BASE` (the gate diffs against it).
+**Before Task 1:** `STEP3_BASE` is the step base commit `b975bcc` (the gate diffs against it; the reconcile commit on top of it touches only this plan).
 
 ---
 
@@ -785,7 +803,7 @@ export function setStraighten(start: Geometry, theta: number, oSize: Size): Geom
   return cropConstrain({ ...start, straighten: t }, oSize);
 }
 
-// ── ratio locks (S §2.1; the ratio is width:height like the camera's RATIO_VALUE, state.ts:12) ──
+// ── ratio locks (S §2.1; the ratio is width:height like the camera's RATIO_VALUE, ui/state.ts:14) ──
 
 export type CropLock = 'free' | 'original' | '1:1' | '3:4' | '4:3' | '9:16' | '16:9';
 export const CROP_LOCKS: readonly CropLock[] = ['free', 'original', '1:1', '3:4', '4:3', '9:16', '16:9'];
@@ -1181,12 +1199,12 @@ EOF
 ### Task 3: Geometry in the edit state
 
 **Files:**
-- Modify: `src/types.ts` (step-1 `PhotoParams`, S1 §3.2), `src/edit/state.ts` (step 1), `src/edit/frame.ts` (step 1, `buildFrame`), `src/edit/migrate.ts` (step 1, `openState`), every `PhotoParams` literal that `npm run typecheck` reports after the type change (step 1's `defaultPhoto`, `splitLegacy`, `cameraShotEdit` and their tests)
+- Modify: `src/types.ts` (step-1 `PhotoParams` `:169-180`, S1 §3.2; `RenderInput` `:444-469`), `src/edit/state.ts` (step 1: `defaultPhoto` `:51-57`, `sanitizePhoto` `:212-233`, `sanitizeEditState` `:245-259`), `src/edit/frame.ts` (step 1, `buildFrame` `:17-41`), `src/edit/migrate.ts` (step 1, `openState` `:51-85`), `src/store/history.ts` (`normalizeEntry` `:192`), every `PhotoParams` literal that `npm run typecheck` reports after the type change (step 1's `defaultPhoto`, `splitLegacy` and their tests; `cameraShotEdit` / `importEdit` reuse the camera look's photo, which has no literal)
 - Test: `src/edit/state.test.ts`, `src/edit/frame.test.ts`, `src/edit/migrate.test.ts` (step-1 files; add cases)
 
 **Interfaces:**
 - Consumes (step 1, S1 §3.1–3.2, §5.3–5.4; C §3.2): `EditState`, `PhotoParams`, `defaultPhoto()`, `neutralPerson()`, `naturalPerson()`, `sanitizePhoto(raw, persons)`, `sanitizeEditState(raw, personIds | null)`, `editKey(edit)`, `buildFrame(edit, …)` (returns the `StillFrame` passed to `session.render`), `openState(entry, size)`. (Task 1): `IDENTITY_GEOMETRY`, `isIdentity`, `rotateLeft`, `flipView`, `cropValid`, `cropConstrain`, `clampStraighten`.
-- Produces: `PhotoParams.geometry: Geometry`; `defaultPhoto().geometry === IDENTITY_GEOMETRY` (so 重置 resets geometry, C §12 #23); in `src/edit/state.ts`: `editSetGeometry(edit, g): EditState`, `editRotateLeft(edit): EditState` (clears `heightBand`), `editFlipView(edit): EditState` (keeps it), `editResetGeometry(edit): EditState`, `sanitizeGeometry(raw: unknown, oSize?: Size | null): Geometry`; `sanitizePhoto(raw, persons, oSize?: Size | null)`; `sanitizeEditState(raw, personIds, oSize?: Size)` (S D13); `buildFrame(...)` result gains `geometry: edit.photo.geometry`; `openState` validates the stored geometry against `{width: entry.width, height: entry.height}` on every v2 path.
+- Produces: `PhotoParams.geometry: Geometry`; `defaultPhoto().geometry === IDENTITY_GEOMETRY` (so 重置 resets geometry, C §12 #23); in `src/edit/state.ts`: `editSetGeometry(edit, g): EditState`, `editRotateLeft(edit): EditState` (clears `heightBand`), `editFlipView(edit): EditState` (keeps it), `editResetGeometry(edit): EditState`, `sanitizeGeometry(raw: unknown, oSize?: Size | null): Geometry`; `sanitizePhoto(raw, persons, oSize?: Size | null)`; `sanitizeEditState(raw, personIds, oSize?: Size)` (S D13); `RenderInput.geometry?: Geometry` (moved here from Task 8: `buildFrame` returns a `StillFrame` literal, so the field must exist before the frame can carry it); `buildFrame(...)` result gains `geometry: edit.photo.geometry`; `openState` validates the stored geometry against `{width: entry.width, height: entry.height}` on every v2 path; `normalizeEntry` (`history.ts:192`) sanitizes a stored edit with the entry's `{width, height}` (without it every read would reset the geometry to identity).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1270,12 +1288,12 @@ Add to `src/edit/frame.test.ts`:
 ```ts
 it('the frame carries the photo geometry (the engine reads RenderInput.geometry, step 3)', () => {
   const edit = editRotateLeft({ v: 2, photo: defaultPhoto(), persons: { p0: naturalPerson() }, template: neutralPerson(), primaryInit: null });
-  const frame = buildFrame(edit, [], [], new Map());
+  const frame = buildFrame(edit, [], [], new Map(), 'p0');
   expect(frame.geometry).toBe(edit.photo.geometry);
 });
 ```
 
-(Use the argument list the step-1 `buildFrame` tests already use for a photo without faces; the assertion is the new part.)
+(Step 1's `buildFrame(edit, faces, obstacles, protects, primary, warpScales?)`: the no-face call of the file's second test plus the primary; `editRotateLeft` joins the file's `./state` import.)
 
 Add to `src/edit/migrate.test.ts`:
 
@@ -1309,6 +1327,13 @@ In `src/types.ts`, the step-1 `PhotoParams` gains (keep CRLF):
   geometry: Geometry;
 ```
 
+and `RenderInput` (`types.ts:444-469`, after step 2's `grainSeed?`) gains the field Task 8's engine reads (until then the engine ignores it):
+
+```ts
+  /** crop / rotate / straighten / flip, applied as the final transform in P2 (step 3); default identity */
+  geometry?: Geometry;
+```
+
 Run `npm run typecheck`; at every reported `PhotoParams` literal (step 1's `defaultPhoto`, `splitLegacy`, `cameraShotEdit`, test builders) add `geometry: IDENTITY_GEOMETRY` (import from `../geometry/view`). This is a mechanical port; no assertion changes.
 
 - [ ] **Step 4: Implement the reducers and the sanitizer in `src/edit/state.ts`**
@@ -1317,7 +1342,7 @@ Run `npm run typecheck`; at every reported `PhotoParams` literal (step 1's `defa
 import { clampStraighten, cropConstrain, cropValid, flipView, IDENTITY_GEOMETRY, isIdentity, rotateLeft } from '../geometry/view';
 import type { EditState, Geometry, Size } from '../types';
 
-/** a geometry change (a 裁切 gesture step or commit): one undo step at commit, like a slider (Editor.tsx:169-180) */
+/** a geometry change (a 裁切 gesture step or commit): one undo step at commit, like a slider (Editor.tsx update, :303-321) */
 export function editSetGeometry(edit: EditState, g: Geometry): EditState {
   return g === edit.photo.geometry ? edit : { ...edit, photo: { ...edit.photo, geometry: g } };
 }
@@ -1364,7 +1389,7 @@ In step 1's `src/edit/state.ts` the sanitized photo is built by `sanitizePhoto(r
 - `sanitizePhoto` gains the third parameter `oSize?: Size | null` and its `photo: PhotoParams` literal gains `geometry: sanitizeGeometry(r.geometry, oSize),` (`r` = the raw photo record it already reads);
 - `sanitizeEditState` gains the third parameter `oSize?: Size` (S D13) and passes it: `sanitizePhoto(r.photo, new Set(Object.keys(persons)), oSize)`.
 
-Callers without `oSize` (the camera look in `settings.ts`, `cameraShotEdit`) keep identity geometry.
+Callers without `oSize` (the camera look in `settings.ts` `sanitizeLook`, `cameraShotEdit`) keep identity geometry. The one stored-edit caller that knows the size is `normalizeEntry` (`src/store/history.ts:192`, `sanitizeEditState(r.edit, null)`): pass the entry's own size, `sanitizeEditState(r.edit, null, { width, height })` (validated just above it), or every `getEntry` / `listEntries` read would reset a saved crop to identity before `openState` sees it.
 
 In `src/edit/frame.ts` (`buildFrame`), add `geometry: edit.photo.geometry` to the returned frame object.
 
@@ -1376,8 +1401,8 @@ In `src/edit/migrate.ts` (`openState(entry, size)`): step 1 calls `sanitizeEditS
 
 - [ ] **Step 5: Run the tests to see them pass**
 
-Run: `npx vitest run src/edit/`
-Expected: PASS (all `src/edit/*.test.ts`). Then `npm run typecheck` — no errors.
+Run: `npx vitest run src/edit/ src/store/history.test.ts`
+Expected: PASS (all `src/edit/*.test.ts`, history unchanged). Then `npm run typecheck` — no errors.
 
 - [ ] **Step 6: Commit**
 
@@ -1398,11 +1423,11 @@ EOF
 
 **Files:**
 - Create: `src/media/exportPlan.ts` (first part: types, `fullExportBlock`, `exportSizeView`), `src/media/exportPlan.test.ts`
-- Modify: `src/types.ts:370-377` (`Prefs`), `src/store/settings.ts:10-57` (+ new keys), `src/ui/components/Controls.tsx:47-74` (`Segmented`), `src/ui/screens/Settings.tsx:90-103` (new group between 拍攝 and 效能), `src/ui/deps.ts:12, 40-66` (CRLF), `src/ui/app.tsx:22-41` (CRLF, launch toast), the Prefs literals typecheck reports (`src/app/testFakes.ts:258-268` (CRLF), `src/bench/main.ts:76-83` (CRLF), `src/store/settings.test.ts:187-194`)
+- Modify: `src/types.ts:559-566` (`Prefs`), `src/store/settings.ts:10-85` (+ new keys), `src/ui/components/Controls.tsx:47-74` (`Segmented`), `src/ui/screens/Settings.tsx:88-103` (new group between 拍攝 and 效能), `src/ui/deps.ts:12, 41-70` (CRLF), `src/ui/app.tsx:22-41` (CRLF, launch toast), the Prefs literals typecheck reports (`src/app/testFakes.ts:337-347` (CRLF), `src/bench/main.ts:82-89` (CRLF), `src/store/settings.test.ts:194-201`)
 - Test: `src/store/settings.test.ts`, `src/media/exportPlan.test.ts`, `tests/e2e/settings.spec.ts` (new test)
 
 **Interfaces:**
-- Consumes: `Tier`, `Prefs` (`src/types.ts`); `autoTierSession()` (`src/app/live.ts:38`, already in `deps`).
+- Consumes: `Tier`, `Prefs` (`src/types.ts`); `autoTierSession()` (`src/app/live.ts:60`, already in `deps`).
 - Produces (`src/types.ts`): `type ExportFormat = 'jpeg' | 'png'`; `type ExportSize = 'full' | 'standard'`; `Prefs.exportFormat: ExportFormat`, `Prefs.exportSize: ExportSize`.
 - Produces (`src/store/settings.ts`): `EXPORT_GUARD_KEY = 'meiyan.exportGuard.v1'`, `EXPORT_CAP_KEY = 'meiyan.exportCap.v1'`, `EXPORT_DEBUG_KEY = 'meiyan.debug.export.v1'`, `EXPORT_CAP_EDGE = 2048`; `interface ExportGuard {at: number; w: number; h: number; format: ExportFormat}`; `writeExportGuard(g: ExportGuard): void`; `clearExportGuard(): void`; `readExportGuard(): ExportGuard | null`; `consumeExportGuardAtLaunch(): boolean`; `exportCapped(): boolean`; `clearExportCap(): void`; `interface ExportDebugKnob {tile?: 256|512|1024|2048; slowMs?: number; failAt?: 'decode'|'tile'|'encode'}`; `readExportDebug(): ExportDebugKnob`.
 - Produces (`src/media/exportPlan.ts`): re-exports `ExportFormat`, `ExportSize`; `type FullBlock = 'tierL'|'tierLow'|'device'|'guard'|null`; `interface ExportEnv {prefTier: Prefs['tier']; autoTier: Tier; screen: {width: number; height: number}; capped: boolean}`; `isSeClassScreen(s): boolean`; `fullExportBlock(env): FullBlock`; `interface ExportSizeView {value: ExportSize; fullDisabled: boolean; sub: string}`; `exportSizeView(pref: ExportSize, block: FullBlock): ExportSizeView`; `EXPORT_COPY` (the step's export strings).
@@ -1410,7 +1435,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `src/store/settings.test.ts` (and port the `const p: Prefs` literal at `settings.test.ts:187-194` by adding `exportFormat: 'png', exportSize: 'standard',` — the round trip then covers the new fields):
+Add to `src/store/settings.test.ts` (and port the `const p: Prefs` literal at `settings.test.ts:194-201` by adding `exportFormat: 'png', exportSize: 'standard',` — the round trip then covers the new fields):
 
 ```ts
 import {
@@ -1580,7 +1605,7 @@ and in `Prefs` after `installHintDismissed: boolean;`:
 
 Port the three Prefs literals typecheck reports (add `exportFormat: 'jpeg', exportSize: 'full',`; the settings test literal gets `'png'` / `'standard'` as in Step 1).
 
-`src/store/settings.ts` (LF): add `exportFormat: 'jpeg', exportSize: 'full',` to `DEFAULT_PREFS`; next to `TIERS` add `const FORMATS: readonly ExportFormat[] = ['jpeg', 'png'];` and `const SIZES: readonly ExportSize[] = ['full', 'standard'];`; extend the type import to `import type { BeautyParams, ExportFormat, ExportSize, Prefs } from '../types';`; in `sanitizePrefs` after the `DELEGATES` line:
+`src/store/settings.ts` (LF): add `exportFormat: 'jpeg', exportSize: 'full',` to `DEFAULT_PREFS`; next to `TIERS` add `const FORMATS: readonly ExportFormat[] = ['jpeg', 'png'];` and `const SIZES: readonly ExportSize[] = ['full', 'standard'];`; extend the type import to `import type { BeautyParams, CameraLook, ExportFormat, ExportSize, Prefs } from '../types';` (step 1's `CameraLook` stays: `sanitizeLook` / `loadLook` use it); in `sanitizePrefs` after the `DELEGATES` line:
 
 ```ts
   if (FORMATS.includes(r.exportFormat as ExportFormat)) out.exportFormat = r.exportFormat as ExportFormat;
@@ -1755,7 +1780,7 @@ Expected: PASS.
           aria-disabled={disabled?.includes(o.value) ? 'true' : undefined}
 ```
 
-`src/ui/deps.ts`: change the settings import to `import { clearExportCap, consumeExportGuardAtLaunch, exportCapped, loadParams, loadPrefs, readExportDebug, saveParams, savePrefs } from '../store/settings';` and add `consumeExportGuardAtLaunch, exportCapped, clearExportCap, readExportDebug,` to `deps`.
+`src/ui/deps.ts`: change the settings import (`deps.ts:12`, step 1 reads the camera look there) to `import { clearExportCap, consumeExportGuardAtLaunch, exportCapped, loadLook, loadPrefs, readExportDebug, saveLook, savePrefs } from '../store/settings';` and add `consumeExportGuardAtLaunch, exportCapped, clearExportCap, readExportDebug,` to `deps`.
 
 `src/ui/screens/Settings.tsx` (LF): import `deps` from `../deps` and `EXPORT_COPY, exportSizeView, fullExportBlock` from `../../media/exportPlan`; add
 
@@ -1818,7 +1843,7 @@ function ExportGroup({ prefs }: { prefs: Prefs }) {
 }
 ```
 
-`src/ui/app.tsx`: import `deps` from `./deps`, `toast` from `./state`, `reportError` from `./debug` and `EXPORT_COPY` from `../media/exportPlan`; at the start of the `App` mount effect (`app.tsx:22`, before `if (webgl2) prefetchWhenIdle();`):
+`src/ui/app.tsx`: import `deps` from `./deps`, `toast` from `./state` (it joins the existing `app, closeSaveFallback` import), `reportError` from `./debug` and `EXPORT_COPY` from `../media/exportPlan`; at the start of the `App` mount effect (`app.tsx:22`, before `if (webgl2) prefetchWhenIdle();`):
 
 ```ts
     // a full-resolution export died last time (S §3.7): from now on 標準, told once
@@ -1853,7 +1878,7 @@ EOF
 ### Task 5: JPEG/PNG encoding and the import probe
 
 **Files:**
-- Modify: `src/media/exporter.ts:5-26, 92-129`, `src/media/importer.ts:3-13, 49-109` (CRLF), `src/ui/deps.ts` (CRLF), `src/ui/screens/Camera.tsx:196-204` (CRLF), `src/ui/screens/Review.tsx:44-50` (CRLF), `src/ui/state.ts:59-62, 155-165` (CRLF), `src/ui/app.tsx:86-113` (CRLF)
+- Modify: `src/media/exporter.ts:5-26, 88-129`, `src/media/importer.ts:3-13, 49-109` (CRLF), `src/ui/deps.ts` (CRLF), `src/ui/screens/Camera.tsx:219-227` (CRLF), `src/ui/screens/Review.tsx:10, 46-56` (CRLF), `src/ui/state.ts:64-79, 90-101, 172-182` (CRLF), `src/ui/app.tsx:86-113` (CRLF)
 - Test: `src/media/exporter.test.ts`, `src/media/importer.test.ts` (CRLF)
 
 **Interfaces:**
@@ -2159,8 +2184,8 @@ Expected: PASS (every existing test unchanged).
 
 `src/ui/deps.ts`: import `encodeOutput`, `encodePng` (exporter) and `importPhotoInfo` (importer) and add them to `deps`.
 
-`src/ui/screens/Camera.tsx:200` (CRLF): `file = deps.encodeOutput(image, prefsRef.current.exportFormat, 0.92);`
-`src/ui/screens/Review.tsx:49` (CRLF): `p = deps.encodeOutput(shot.image, app.get().prefs.exportFormat, 0.92);` (import `app` from `../state` if missing). A camera frame is ≤ 1920 px, so 輸出解析度 does not apply (S §2.4).
+`src/ui/screens/Camera.tsx:223` (CRLF): `file = deps.encodeOutput(image, prefsRef.current.exportFormat, 0.92);`
+`src/ui/screens/Review.tsx:51` (CRLF): `p = deps.encodeOutput(shot.image, app.get().prefs.exportFormat, 0.92);` (`app` joins the `go, showSaveFallback, toast, type Shot` import from `../state`, `Review.tsx:10`). A camera frame is ≤ 1920 px, so 輸出解析度 does not apply (S §2.4).
 
 `src/ui/state.ts` (CRLF): `AppState` gains
 
@@ -2193,11 +2218,11 @@ EOF
 ### Task 6: The picked source in 最近編輯 (`HistoryEntry.source`) with the quota retry
 
 **Files:**
-- Modify: `src/types.ts:379-405` (`HistoryEntry`, CRLF), `src/store/history.ts:26-67, 160-180, 232-252`
+- Modify: `src/types.ts:568-607` (`HistoryEntry`, CRLF), `src/store/history.ts:28-73, 171-199, 241-261`
 - Test: `src/store/history.test.ts`
 
 **Interfaces:**
-- Consumes: `NewHistoryEntry` (`history.ts:13`, `Omit<HistoryEntry, …>`: picks the new fields up automatically).
+- Consumes: `NewHistoryEntry` (`history.ts:15`, `Omit<HistoryEntry, …>`: picks the new fields up automatically).
 - Produces: `HistoryEntry.source?: Blob`, `sourceWidth?: number`, `sourceHeight?: number`; `addEntry` stores them and, when the put fails with `QuotaExceededError`, puts the entry once more without `source` (same id, sizes kept); `normalizeEntry` keeps `source` only as a non-empty `Blob` and the sizes only as positive integers; `isQuotaError(err): boolean` (exported); internal `withStore(mode, fallback, body, onError?: (err) => 'retry' | 'stop')`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -2297,7 +2322,7 @@ Expected: FAIL — a type error on `source` in `NewHistoryEntry`, or `expected u
   sourceHeight?: number;
 ```
 
-`src/store/history.ts`: replace `addEntry` (`history.ts:26-67`, as step 1 left it: step-1 plan Task 8 Step 6 added the four v2 lines after `faceMask`, kept below; any other field step 1 copies there stays as well) with:
+`src/store/history.ts`: replace `addEntry` (`history.ts:28-73`, as step 1 left it: the four v2 lines after `faceMask` (`schema`, `edit`, `paramsKey`, `detect`) are kept below; no other field is copied there) with:
 
 ```ts
 /** Stores the entry and evicts the oldest (by updatedAt) beyond HISTORY_LIMIT. Resolves with the id even if not stored. */
@@ -2368,7 +2393,7 @@ export function isQuotaError(err: unknown): boolean {
 }
 ```
 
-In `normalizeEntry`, before `return entry;`:
+In `normalizeEntry` (`history.ts:171-199`), before `return entry;`:
 
 ```ts
   // a missing or unreadable source only costs this entry's 原始解析度 export
@@ -2387,7 +2412,7 @@ function isPositiveInt(v: unknown): v is number {
 }
 ```
 
-Replace `withStore` (`history.ts:232-252`) with:
+Replace `withStore` (`history.ts:241-261`) with:
 
 ```ts
 /**
@@ -2440,11 +2465,11 @@ EOF
 ### Task 7: P2 view uniforms (`uGeo`, `uTile`, `uWin`), the CPU port and the displacement bound
 
 **Files:**
-- Modify: `src/engine/passes/reshape.ts:214-319` (`RESHAPE_FS`), `:324-406` (`ReshapePass.draw`), new `displacementBound`; `src/engine/passes/reshapeCpu.ts` (`withView`); `tests/e2e/pages/reshape.ts` (new `runReshapePinView`); `tests/e2e/reshape.spec.ts` (new test)
+- Modify: `src/engine/passes/reshape.ts:244-391` (`reshapeFs`, its `main()` at `:363-390`), `:417-549` (`ReshapePass`: `drawFaces` `:505-541`, `draw` `:546-549`), new `displacementBound`; `src/engine/passes/reshapeCpu.ts` (`withView`); `tests/e2e/pages/reshape.ts` (new `runReshapePinView`); `tests/e2e/reshape.spec.ts` (new test)
 - Test: `src/engine/passes/reshapeCpu.test.ts` (hash pin, `withView`), `src/engine/passes/reshape.test.ts` (`displacementBound`)
 
 **Interfaces:**
-- Consumes (step 1, S1 §4.4, §8.1, and the step-1 plan's Tasks 16–17): `reshapeFs(carrier: 'texture' | 'ubo'): string` with `RESHAPE_FS = reshapeFs('texture')` (both carriers share `main()`: `vec2 tcB = vUv; if (uBodyOn != 0.0) tcB += uBodyOn * texture(uBodyDisp, vUv).xy; … outColor = texture(uSrc, tc);`); `ReshapePass.drawFaces(src, dst, faces: readonly TableFace[], opts?: { aspect?: number; body?: Texture | null; protects?: readonly FaceProtect[] })`; the one-face wrapper `ReshapePass.draw(src, dst, face, u, aspect?, body?, protect?: FaceProtect | null)`, which calls `drawFaces`; `reshapeMapCpu(face, u, aspect, body?, protect?)` (one face) and `reshapeMapMulti(faces: readonly TableFace[], aspect, opts?: { body?; protects? }): UvMap` (the N-face port); `UvMap` (`reshapeCpu.ts:25`); the pin constant `PINNED` in `reshapeCpu.test.ts`; `shaderHash` (step 2 moves it to `src/engine/shaderHash.ts`, S2 §4.7). (Task 1): `IDENTITY_MAT3`, `glMat3`, `vToO`, `IDENTITY_GEOMETRY`, `setStraighten`.
+- Consumes (step 1, S1 §4.4, §8.1, and the step-1 plan's Tasks 16–17): `reshapeFs(carrier: 'texture' | 'ubo'): string` with `RESHAPE_FS = reshapeFs('texture')` (both carriers share `main()`: `vec2 tcB = vUv; if (uBodyOn != 0.0) tcB += uBodyOn * texture(uBodyDisp, vUv).xy; … outColor = texture(uSrc, tc);`); `ReshapePass.drawFaces(src, dst, faces: readonly TableFace[], opts?: { aspect?: number; body?: Texture | null; protects?: readonly FaceProtect[] })`; the one-face wrapper `ReshapePass.draw(src, dst, face, u, aspect?, body?, protect?: FaceProtect | null)`, which calls `drawFaces`; `reshapeMapCpu(face, u, aspect, body?, protect?)` (one face) and `reshapeMapMulti(faces: readonly TableFace[], aspect, opts?: { body?; protects? }): UvMap` (the N-face port); `UvMap` (`reshapeCpu.ts:14`); the pin constant `PINNED` in `reshapeCpu.test.ts`; `shaderHash` (step 2 moves it to `src/engine/shaderHash.ts`, S2 §4.7). (Task 1): `IDENTITY_MAT3`, `glMat3`, `vToO`, `IDENTITY_GEOMETRY`, `setStraighten`.
 - Produces (`reshape.ts`): `interface ReshapeView { geo: Float32Array; tile: readonly [number, number, number, number]; win: readonly [number, number, number, number] }`; `IDENTITY_VIEW: ReshapeView`; `drawFaces` options gain `view?: ReshapeView`; `ReshapePass.draw(…, protect?, view?: ReshapeView)` (new last parameter, forwarded to `drawFaces`); `displacementBound(face: Face, aspect: number, u: ReshapeUniforms): number` (iso units: fractions of the O width; S §4.4 writes `displacementBound(face, u)`; the aspect is needed for `reshapeGeometry`).
 - Produces (`reshapeCpu.ts`): `withView(map: UvMap, view: ReshapeView): UvMap` (buffer uv → V → O → `map` → src uv).
 
@@ -2671,43 +2696,17 @@ Expected: PASS.
 
 - [ ] **Step 5: Add the GPU = CPU view cases to the reshape harness**
 
-In `tests/e2e/pages/reshape.ts`, add to the `declare global` block `runReshapePinView?: () => PinCase[];` and, after `window.runReshapePin`, a second entry with the same setup as `runReshapePin` (`reshape.ts:34-84` of the page: the identity coordinate texture, the RGBA32F target, the RG16F body field, the face) that draws the face warps through a view:
+In `tests/e2e/pages/reshape.ts`, add to the `declare global` block `runReshapePinView?: () => PinCase[];` and, after `window.runReshapePin` (`reshape.ts:105-151` of the page), a second entry built on step 1's page helpers — `context()`, `floatTex(…)` and `rig(gl)` (the identity coordinate texture, the RGBA32F 200 × 300 target and its `compare(name, map)`), plus `runReshapePin`'s RG16F body field and face — that draws the face warps through a view. Add `withView` to the page's `../../../src/engine/passes/reshapeCpu` import and `type ReshapeView` to its `../../../src/engine/passes/reshape` import; the one new import line is:
 
 ```ts
 import { glMat3, IDENTITY_GEOMETRY, setStraighten, vToO } from '../../../src/geometry/view';
-import { withView } from '../../../src/engine/passes/reshapeCpu';
-import type { ReshapeView } from '../../../src/engine/passes/reshape';
 
 window.runReshapePinView = () => {
-  const canvas = document.getElementById('gl') as HTMLCanvasElement;
-  const gl = canvas.getContext('webgl2');
-  if (!gl) throw new Error('no webgl2');
-  if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('EXT_color_buffer_float missing');
-  if (!gl.getExtension('OES_texture_float_linear')) throw new Error('OES_texture_float_linear missing');
-  const tex = (w: number, h: number, internal: number, format: number, data: Float32Array | null): Texture => {
-    const t = gl.createTexture();
-    if (!t) throw new Error('createTexture failed');
-    gl.bindTexture(gl.TEXTURE_2D, t);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, gl.FLOAT, data);
-    for (const p of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, p, gl.LINEAR);
-    for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, p, gl.CLAMP_TO_EDGE);
-    return { tex: t, width: w, height: h };
-  };
-  const id = new Float32Array(N * N * 4);
-  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) id.set([(x + 0.5) / N, (y + 0.5) / N, 0, 1], (y * N + x) * 4);
-  const src = tex(N, N, gl.RGBA32F, gl.RGBA, id);
+  const gl = context();
+  const r = rig(gl);
   const { width: W, height: H } = landmarks;
   const aspect = W / H;
-  const ow = 200;
-  const oh = 300;
-  const out = tex(ow, oh, gl.RGBA32F, gl.RGBA, null);
-  const fbo = gl.createFramebuffer();
-  if (!fbo) throw new Error('createFramebuffer failed');
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, out.tex, 0);
-  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('RGBA32F framebuffer incomplete');
-  const dst: Framebuffer = { fbo, tex: out, internalFormat: gl.RGBA32F, width: ow, height: oh };
+  // runReshapePin's smooth body field (RG16F from FLOAT data, like the engine)
   const bw = 24;
   const bh = 36;
   const bd = new Float32Array(bw * bh * 2);
@@ -2716,7 +2715,7 @@ window.runReshapePinView = () => {
       bd[(y * bw + x) * 2] = 0.012 * Math.sin((x / bw) * 6) * Math.cos((y / bh) * 4);
       bd[(y * bw + x) * 2 + 1] = 0.008 * Math.cos((x / bw) * 5);
     }
-  const bodyTex = tex(bw, bh, gl.RG16F, gl.RG, bd);
+  const bodyTex = floatTex(gl, bw, bh, gl.RG16F, gl.RG, bd);
   const bodyField: BodyField = { width: bw, height: bh, data: bd, version: 1 };
   const face = adapt({ points: new Float32Array(landmarks.points) }, W, H);
   const at = (ids: ParamId[]) => ids.reduce((p, k) => setParam(p, k, 1), applyPreset('original', 1)).values;
@@ -2731,41 +2730,20 @@ window.runReshapePinView = () => {
   const ids: ParamId[] = ['shape.faceSlim', 'shape.faceV', 'shape.faceNarrow', 'shape.chin', 'shape.noseSlim', 'shape.eyeEnlarge'];
   const u = reshapeUniforms(at(ids), 1);
   const pass = createReshapePass(gl);
-  const px = new Float32Array(ow * oh * 4);
   const res: PinCase[] = [];
-  const lo = 0.5 / N;
-  const hi = 1 - 0.5 / N;
   for (const { name, view } of views) {
-    // same leading arguments as runReshapePin's draw (step 1's signature); the view is the new last argument
-    pass.draw(src, dst, face, u, aspect, bodyTex, null, view);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-    gl.readPixels(0, 0, ow, oh, gl.RGBA, gl.FLOAT, px);
-    const map = withView(reshapeMapCpu(face, u, aspect, bodyField), view);
-    let n = 0;
-    let moved = 0;
-    let maxErr = 0;
-    const samples: number[][] = [];
-    for (let y = 0; y < oh; y++)
-      for (let x = 0; x < ow; x++) {
-        const uu = (x + 0.5) / ow;
-        const vv = (y + 0.5) / oh;
-        const s = map(uu, vv);
-        if (s[0] < lo || s[1] < lo || s[0] > hi || s[1] > hi) continue;
-        const gu = px[(y * ow + x) * 4];
-        const gv = px[(y * ow + x) * 4 + 1];
-        n++;
-        if (Math.hypot((s[0] - uu) * ow, (s[1] - vv) * oh) > 1) moved++;
-        maxErr = Math.max(maxErr, Math.hypot((gu - s[0]) * ow, (gv - s[1]) * oh));
-        if (x % 50 === 25 && y % 60 === 30) samples.push([uu, vv, gu, gv, s[0], s[1]]);
-      }
-    res.push({ name, n, moved, maxErrPx: maxErr, samples });
+    // runReshapePin's draw (step 1's one-face signature); the view is the new last argument
+    pass.draw(r.src, r.dst, face, u, aspect, bodyTex, null, view);
+    res.push(r.compare(name, withView(reshapeMapCpu(face, u, aspect, bodyField), view)));
   }
   pass.dispose();
+  gl.deleteTexture(bodyTex.tex);
+  r.dispose();
   return res;
 };
 ```
 
-(The setup is `runReshapePin`'s, line for line; if step 1 ported that function — `draw`'s leading parameters, how `at(...)` builds the values — use the ported forms here too: only the trailing `view` argument and `withView` are new. The CPU map uses `reshapeMapCpu(…, bodyField)`, as its "body field + contour" case does.)
+(`rig`'s `compare` skips pixels whose CPU source UV falls outside the identity texture's exact range and counts the pixels the warp moved by more than 1 px, as for the other cases. The CPU map uses `reshapeMapCpu(…, bodyField)`, as `runReshapePin`'s "body field + contour" case does.)
 
 - [ ] **Step 6: Run the harness spec**
 
@@ -2789,14 +2767,14 @@ EOF
 ### Task 8: Engine — V-sized frames, source windows, `renderTile`, `releaseBuffers`
 
 **Files:**
-- Modify: `src/types.ts:276-328` (`RenderInput`, `Engine`, CRLF), `src/engine/uniforms.ts:50-71` (+ `adjustFrameFor`), `src/engine/pipeline.ts:53-112, 207-226, 343-357, 382-466, 470-478, 492-511` (CRLF), `src/engine/index.ts:174-258` (CRLF), `src/engine/passes/mask.ts:33-38, 155-176` (CRLF), `src/engine/passes/makeup.ts:192-200` (CRLF), `src/engine/shaders/present.ts:15-21`, `src/engine/gl/gl.ts` (+ `shrinkTexture`), `src/app/testFakes.ts:106-152`, `tests/harness/t7/fakes.ts:74-120`
+- Modify: `src/types.ts:444-517` (`RenderInput`, `Engine`, CRLF), `src/engine/uniforms.ts:54-71` (+ `adjustFrameFor`), `src/engine/pipeline.ts:78-179, 200-216, 295-305, 387-517` (CRLF: `FrameJob`, `PassPlanInput`, `planPasses`, `planFrame`, `Pipeline`, `createPipeline`, `runMean`, `run`, `drawSource`), `src/engine/index.ts:1-22, 260-384` (CRLF), `src/engine/passes/mask.ts:15-30, 46-53, 172-219` (CRLF), `src/engine/passes/makeup.ts:119-127, 198-235` (CRLF), `src/engine/shaders/present.ts:15-21`, `src/engine/gl/gl.ts` (+ `shrinkTexture`), `src/app/testFakes.ts:123-211`, `tests/harness/t7/fakes.ts:92-153`
 - Test: `src/engine/uniforms.test.ts`, `src/engine/pipeline.test.ts`, `src/engine/index.test.ts`
 
 **Interfaces:**
-- Consumes: Task 1 (`IDENTITY_GEOMETRY`, `IDENTITY_MAT3`, `isIdentity`, `glMat3`, `vToO`, `viewSize`), Task 7 (`ReshapeView`, `ReshapePass.draw(…, view?)`); step 1 (`RenderInput` v0.4 fields, `FrameJob.faces`, the RGBA8 mask pass `MaskPass.draw(...)`, the per-face `MakeupPass.draw(src, dst, faces)`); step 2 (S2 §3.5, §4.5: `job()` builds `adjust = adjustUniforms(photo, lookDef, lookReady, frame)` whose `frame` argument carries the composite's `uVMap`, `uVAspect`, `uGrainScale` and the grain cell size).
-- Produces (`src/types.ts`): `interface RenderOutput { tile: Rect; pixelSize: Size; fullShortEdge: number }`; `RenderInput.geometry?: Geometry`, `sourceWindow?: Rect`, `output?: RenderOutput`, `oAspect?: number` (the working bitmap's width/height; tiles must pass it, S §4.1); `Engine.renderTile(input: RenderInput, read: PxRect): ImageData`; `Engine.releaseBuffers(): void`; `Engine.renderOriginal(input: Pick<RenderInput, 'source' | 'width' | 'height' | 'geometry'>, opts?)`.
+- Consumes: Task 1 (`IDENTITY_GEOMETRY`, `IDENTITY_MAT3`, `isIdentity`, `glMat3`, `vToO`, `viewSize`), Task 7 (`ReshapeView`, `ReshapePass.draw(…, view?)`); step 1 (`RenderInput` v0.4 fields, `FrameJob.faces`, the RGBA8 mask pass `MaskPass.drawFaces(dst, faces, clear)`, the per-face `MakeupPass.drawFaces(src, dst, faces)` — `run()` calls these two, the one-face `draw` wrappers stay identity; `planFrame(job, makeupReady, bodyOn)`, which `run()` plans with); Task 3 (`RenderInput.geometry?`); step 2 (S2 §3.5, §4.5: `job()` builds `adjust = adjustUniforms(photo, lookDef, lookReady, frame)` whose `frame` argument carries the composite's `uVMap`, `uVAspect`, `uGrainScale` and the grain cell size).
+- Produces (`src/types.ts`): `interface RenderOutput { tile: Rect; pixelSize: Size; fullShortEdge: number }`; `RenderInput.sourceWindow?: Rect` (next to Task 3's `geometry?`), `output?: RenderOutput`, `oAspect?: number` (the working bitmap's width/height; tiles must pass it, S §4.1); `Engine.renderTile(input: RenderInput, read: PxRect): ImageData`; `Engine.releaseBuffers(): void`; `Engine.renderOriginal(input: Pick<RenderInput, 'source' | 'width' | 'height' | 'geometry'>, opts?)`.
 - Produces (`uniforms.ts`): `meanStep(size, axis, fullShortEdge = min(size))`, `sharpenTexel(size, fullShortEdge = min(size))` (S §3.8 writes `meanStep(buf, fullShortEdge, axis)`; the trailing optional parameter keeps every existing call and test unchanged); `adjustFrameFor(input: Pick<RenderInput, 'output' | 'pictureFrame' | 'grainSeed'>, size: Size, fullShortEdge: number): AdjustFrame` (step 2's `AdjustFrame`, fed to `adjustUniforms`).
-- Produces (`pipeline.ts`): `FrameJob.win`, `tile: [number, number, number, number]`, `geo: Float32Array`, `geoIdentity: boolean`, `windowed: boolean`, `oAspect: number`, `srcSize: Size`, `fullShortEdge: number`; `PassPlanInput.geoIdentity?: boolean`, `windowed?: boolean`; `Pipeline.drawSource(src, mirror, geo?: Float32Array)`; `Pipeline.releaseBuffers(): void`.
+- Produces (`pipeline.ts`): `FrameJob.win`, `tile: [number, number, number, number]`, `geo: Float32Array`, `geoIdentity: boolean`, `windowed: boolean`, `oAspect: number`, `srcSize: Size`, `fullShortEdge: number`; `PassPlanInput.geoIdentity?: boolean`, `windowed?: boolean` (forwarded by `planFrame`); `MaskPass.drawFaces(…, view?)`, `MakeupPass.drawFaces(…, win?)`; `Pipeline.drawSource(src, mirror, geo?: Float32Array)`; `Pipeline.releaseBuffers(): void`.
 - Produces (`gl.ts`): `shrinkTexture(gl, tex): void` (1 × 1 RGBA8).
 
 - [ ] **Step 1: Write the failing tests**
@@ -2849,7 +2827,7 @@ Add to `src/engine/pipeline.test.ts`:
 
 ```ts
 describe('planPasses with geometry and windows (step 3)', () => {
-  const quiet: PassPlanInput = { ...base, hasFace: false, reshapeActive: false, bodyOn: false };
+  const quiet: PassPlanInput = { ...base, anyFace: false, reshapeActive: false, bodyOn: false };
   it('identity geometry and no window keep P2 skipped (v0.3 parity)', () => {
     expect(planPasses({ ...quiet, geoIdentity: true, windowed: false }).reshape).toBe(false);
     expect(planPasses(quiet).reshape).toBe(false);
@@ -2861,7 +2839,7 @@ describe('planPasses with geometry and windows (step 3)', () => {
 });
 ```
 
-(`base` is the step-1 `PassPlanInput` fixture at the top of the file; `quiet` turns off every face and body warp.)
+(`base` is the step-1 `PassPlanInput` fixture at the top of the file (`pipeline.test.ts:22-33`, whose face flag is `anyFace`); `quiet` turns off every face and body warp.)
 
 Add to `src/engine/index.test.ts` (extend the `vi.mock('./gl/gl', …)` override list with `shrinkTexture: vi.fn(),`; extend the mocked pipeline object with `releaseBuffers: vi.fn(),`; extend `fakeCanvas()`'s `gl` with `readPixels: vi.fn(), bindFramebuffer: vi.fn(), viewport: vi.fn(), drawingBufferWidth: 1, drawingBufferHeight: 1, FRAMEBUFFER: 1, RGBA: 2, UNSIGNED_BYTE: 3,`):
 
@@ -2988,11 +2966,9 @@ export interface RenderOutput {
 }
 ```
 
-and in `RenderInput` (after step 1/2's fields):
+and in `RenderInput` (after Task 3's `geometry?`):
 
 ```ts
-  /** crop / rotate / straighten / flip, applied as the final transform in P2 (step 3); default identity */
-  geometry?: Geometry;
   /** O-normalized rect `source` covers (a tile's window); default [0,0,1,1] */
   sourceWindow?: Rect;
   /** a V tile at a given pixel size (renderTile); default: the whole V at the processing size */
@@ -3087,25 +3063,27 @@ export function shrinkTexture(gl: GL, tex: Texture): void {
   fullShortEdge: number;
 ```
 
-`PassPlanInput` gains `/** step 3: false → P2 runs (default true) */ geoIdentity?: boolean;` and `/** step 3: true → P2 runs (default false) */ windowed?: boolean;`, and the `reshape` line of `planPasses` ends with `|| i.geoIdentity === false || i.windowed === true` (S §4.3).
+`PassPlanInput` (`pipeline.ts:114-128`) gains `/** step 3: false → P2 runs (default true) */ geoIdentity?: boolean;` and `/** step 3: true → P2 runs (default false) */ windowed?: boolean;`, and the `reshape` line of `planPasses` (`pipeline.ts:153`) ends with `|| i.geoIdentity === false || i.windowed === true` (S §4.3). `run()` plans through step 1's `planFrame(job, makeupReady, bodyOn)` (`pipeline.ts:160-179, 411`): its `job` parameter type gains `& Partial<Pick<FrameJob, 'geoIdentity' | 'windowed'>>` (optional, so its tests' literals stand) and its `planPasses({...})` call passes `geoIdentity: job.geoIdentity, windowed: job.windowed`.
 
-In `run(job)`:
-- the plan call passes `geoIdentity: job.geoIdentity, windowed: job.windowed`;
-- the mask target becomes `fb('M', maskBufferSize(job.srcSize), …)` and the mask draw gets the view as its new last argument: `{ win: job.win, aspect: job.geoIdentity && !job.windowed ? undefined : job.oAspect }`;
-- the makeup target becomes `fb('A', job.srcSize)` and the makeup draw gets `job.win` as its new last argument;
-- both P2 draws (step 1's `reshape.drawFaces(…)` for the image and for maskWarp) pass `aspect: job.oAspect` (today the main draw uses `dst.width / dst.height` = the `job.size` aspect and maskWarp `job.size.width / job.size.height`: identical numbers at identity, `pipeline.ts:409, 420`) and `view` in their options, with `const view: ReshapeView = { geo: job.geo, tile: job.tile, win: job.win };`;
-- `runMean` uses `meanStep(job.size, 'h', job.fullShortEdge)` and `meanStep(job.size, 'v', job.fullShortEdge)` (`pipeline.ts:350, 354`);
-- the composite uses `sharpenTexel(job.size, job.fullShortEdge)` (`pipeline.ts:454`);
-- the FBO output rule (`pipeline.ts:436`) is unchanged: `fb('A', job.size)` re-sizes A from `srcSize` to `size` after P2 has read it.
+In `run(job)` (`pipeline.ts:404-503`):
+- the plan call is step 1's `planFrame(job, makeupReady, body !== null)` (unchanged; it forwards the two flags);
+- the mask target (`pipeline.ts:417`) becomes `fb('M', maskBufferSize(job.srcSize))` and the mask draw `mask.drawFaces(m, …, job.maskClear)` (`:418`) gets the view as its new last argument: `{ win: job.win, aspect: job.geoIdentity && !job.windowed ? undefined : job.oAspect }`;
+- the makeup target (`:426`) becomes `fb('A', job.srcSize)` and `makeup.drawFaces(base, a, meshes)` (`:427`) gets `job.win` as its new last argument;
+- step 1's `const aspect = job.size.width / job.size.height;` (`:434`) becomes `const aspect = job.oAspect;`: it feeds `tableFaces(job, aspect)` (the caps live in O, `:437`) and both P2 draws — `reshape.drawFaces(base, b, t.faces, { aspect, body, protects: t.protects })` (`:439`) and the maskWarp one (`:450`) — identical numbers at identity; both draws' options also gain `view`, with `const view: ReshapeView = { geo: job.geo, tile: job.tile, win: job.win };`; B (`:438`) and N (`:449`) stay `job.size` / `maskBufferSize(job.size)` (V);
+- `runMean` uses `meanStep(job.size, 'h', job.fullShortEdge)` and `meanStep(job.size, 'v', job.fullShortEdge)` (`pipeline.ts:394, 398`);
+- the composite uses `sharpenTexel(job.size, job.fullShortEdge)` (`pipeline.ts:487`);
+- the FBO output rule (`pipeline.ts:466`) is unchanged: `fb('A', job.size)` re-sizes A from `srcSize` to `size` after P2 has read it.
 
-`drawSource(src, mirror, geo: Float32Array = IDENTITY_MAT3)` sets `gl.uniformMatrix3fv(presentProg.u('uGeo'), false, geo);` before drawing; `createPipeline` sets `uGeo` to `IDENTITY_MAT3` once at init (after `gl.uniform1i(presentProg.u('uSrc'), 0);`). Add to the returned object:
+`drawSource(src, mirror, geo: Float32Array = IDENTITY_MAT3)` (`pipeline.ts:509-517`) sets `gl.uniformMatrix3fv(presentProg.u('uGeo'), false, geo);` before drawing; `createPipeline` sets `uGeo` to `IDENTITY_MAT3` once at init (after `gl.uniform1i(presentProg.u('uSrc'), 0);`, `pipeline.ts:304`). Add to the returned object:
 
 ```ts
     releaseBuffers() {
       // every FBO to 1 × 1: the next frame re-allocates at its own size (S §4.4, after a tiled export)
-      for (const f of Object.values(fbs)) resizeFramebuffer(gl, f, 1, 1);
+      for (const f of Object.values(fbs)) if (f) resizeFramebuffer(gl, f, 1, 1);
     },
 ```
+
+(`fbs` is a `Partial<Record<FbName, Framebuffer>>`, so `Object.values` yields `Framebuffer | undefined`.)
 
 and `releaseBuffers(): void;` to the `Pipeline` interface. Import `IDENTITY_MAT3` from `../geometry/view` and `type ReshapeView` from `./passes/reshape`.
 
@@ -3122,7 +3100,7 @@ out vec4 outColor;
 void main() { outColor = vec4(texture(uSrc, (uGeo * vec3(vUv, 1.0)).xy).rgb, 1.0); }`;
 ```
 
-`src/engine/passes/mask.ts` (CRLF): `MASK_VS` becomes
+`src/engine/passes/mask.ts` (CRLF): `MASK_VS` (`mask.ts:46-53`) becomes
 
 ```ts
 const MASK_VS = /* glsl */ `#version 300 es
@@ -3137,9 +3115,9 @@ void main() {
 }`;
 ```
 
-`MaskPass.draw` gains the last parameter `view?: { win: readonly [number, number, number, number]; aspect?: number }`; in the implementation, after `prog.use()`, `const w = view?.win ?? [0, 0, 1, 1]; gl.uniform4f(prog.u('uWin'), w[0], w[1], w[2], w[3]);`, and the geometry aspect becomes `view?.aspect ?? dst.width / dst.height` (today's value when no view is given).
+`MaskPass.drawFaces` (interface `mask.ts:21`, implementation `:172-219`) gains the last parameter `view?: { win: readonly [number, number, number, number]; aspect?: number }`; in the implementation the geometry aspect (`const aspect = dst.width / dst.height;`, `:181`) becomes `view?.aspect ?? dst.width / dst.height` (today's value when no view is given), and after `prog.use();` (`:188`) `const w = view?.win ?? [0, 0, 1, 1]; gl.uniform4f(prog.u('uWin'), w[0], w[1], w[2], w[3]);`. The one-face `draw` (`:223-226`) passes no view.
 
-`src/engine/passes/makeup.ts` (CRLF): `MakeupPass.draw` gains the last parameter `win: readonly [number, number, number, number] = [0, 0, 1, 1]`, and the vertex loop (`makeup.ts:199`) maps each landmark into the target window on the CPU, exactly today's arithmetic at identity (`(p − 0) / 1 = p`):
+`src/engine/passes/makeup.ts` (CRLF): `MakeupPass.drawFaces` (interface `makeup.ts:125`, implementation `:198-235`) gains the last parameter `win: readonly [number, number, number, number] = [0, 0, 1, 1]`, and the vertex loop (`for (let i = 0; i < 222; i++) pos[i] = p[i] * 2 - 1;`, `makeup.ts:210`) maps each landmark into the target window on the CPU, exactly today's arithmetic at identity (`(p − 0) / 1 = p`); the one-face `draw` (`:239-241`) passes no window:
 
 ```ts
       for (let i = 0; i < 222; i += 2) {
@@ -3152,7 +3130,7 @@ void main() {
 
 - [ ] **Step 5: Engine entry points**
 
-`src/engine/index.ts` (CRLF): import `IDENTITY_GEOMETRY, IDENTITY_MAT3, glMat3, isIdentity, viewSize, vToO` from `../geometry/view`, `shrinkTexture` from `./gl/gl`, `adjustFrameFor` from `./uniforms`, and types `Geometry, PxRect, Rect`. Add helpers inside `createEngine`:
+`src/engine/index.ts` (CRLF): import `IDENTITY_GEOMETRY, IDENTITY_MAT3, glMat3, isIdentity, viewSize, vToO` from `../geometry/view`, `shrinkTexture` from `./gl/gl` (the `./gl/gl` import, `index.ts:7-15`), `adjustFrameFor` from `./uniforms` (`index.ts:22`), and types `Geometry, Rect` (`index.ts:5`; not `PxRect`: `renderTile`'s parameters are typed by `Engine`, and an unused import fails `noUnusedLocals`). Drop `frameFor` from the `./adjustMath` import (`index.ts:6`): `adjustFrameFor` replaces its one use, and `noUnusedLocals` rejects the leftover. Add helpers inside `createEngine` (next to `sizeCanvas`, `index.ts:260`):
 
 ```ts
   const rect4 = (r: Rect | undefined): [number, number, number, number] => (r ? [r.x, r.y, r.w, r.h] : [0, 0, 1, 1]);
@@ -3170,7 +3148,7 @@ void main() {
   }
 ```
 
-In `job(...)`, compute `const view = viewFields(input, size);` first and spread `...view` into the returned object (step 1/2's fields stay), with
+In `job(...)` (`index.ts:265-312`), compute `const view = viewFields(input, size);` first and spread `...view` into the returned object (step 1/2's fields stay), with
 
 ```ts
   function viewFields(input: RenderInput, size: Size) {
@@ -3188,7 +3166,7 @@ In `job(...)`, compute `const view = viewFields(input, size);` first and spread 
   }
 ```
 
-Where step 2's `job()` builds the frame for `adjustUniforms(values, look, lookReady, frame)` (step 2 passes `frameFor(size, input.pictureFrame, input.grainSeed)`), pass instead
+Where step 2's `job()` builds the frame for its memoized `adjustFor(values, look, lookReady, frame)` (`index.ts:306`: step 2 passes `frameFor(size, input.pictureFrame, input.grainSeed ?? 0)`), pass instead
 
 ```ts
     adjustFrameFor(input, size, view.fullShortEdge)
@@ -3196,7 +3174,7 @@ Where step 2's `job()` builds the frame for `adjustUniforms(values, look, lookRe
 
 (`view` = the `viewFields(...)` result). Without `output`, at identity, this is exactly step 2's frame (`fullShortEdge = min(size)`); with the camera's `pictureFrame` it is step 2's camera frame; a crop keeps the photo's short edge; a tile gets its slice of the whole V.
 
-`render`: `const size = frameSize(input, still);` (replacing `processingSize(...)` at `index.ts:224`). `renderToImageData`: `const size = frameSize(input, true);` (`index.ts:238`). Replace `renderOriginal` and add `renderTile` / `releaseBuffers`:
+`render`: `const size = frameSize(input, still);` (replacing `processingSize(...)` at `index.ts:350`). `renderToImageData`: `const size = frameSize(input, true);` (`index.ts:364`). Replace `renderOriginal` (`index.ts:378-384`) and add `renderTile` / `releaseBuffers`:
 
 ```ts
     renderOriginal(input, opts) {
@@ -3242,7 +3220,7 @@ Where step 2's `job()` builds the frame for `adjustUniforms(values, look, lookRe
 
 - [ ] **Step 6: Fakes**
 
-`src/app/testFakes.ts`: `FakeEngine` gains `renderTile: ReturnType<typeof vi.fn<Engine['renderTile']>>; releaseBuffers: ReturnType<typeof vi.fn<Engine['releaseBuffers']>>;` and `fakeEngine` gains
+`src/app/testFakes.ts`: `FakeEngine` (`testFakes.ts:123-143`) gains `renderTile: ReturnType<typeof vi.fn<Engine['renderTile']>>; releaseBuffers: ReturnType<typeof vi.fn<Engine['releaseBuffers']>>;` and `fakeEngine` (`:145-211`, next to `renderOriginal`) gains
 
 ```ts
     renderTile: vi.fn(
@@ -3252,7 +3230,7 @@ Where step 2's `job()` builds the frame for `adjustUniforms(values, look, lookRe
     releaseBuffers: vi.fn(),
 ```
 
-(import `PxRect`). `tests/harness/t7/fakes.ts` `FakeEngine` gains:
+(`PxRect` joins the `../types` type import). `tests/harness/t7/fakes.ts` `class FakeEngine implements Engine` (`fakes.ts:92-153`; `PxRect` joins its `../../../src/types` type import) gains:
 
 ```ts
   renderTile(input: RenderInput, read: PxRect) {
@@ -4444,7 +4422,7 @@ EOF
 ### Task 11: The still session — crop view mode, display pause, tile input
 
 **Files:**
-- Modify: `src/app/still.ts` (step-1 version; v0.3 anchors `still.ts:6-58` interface, `:99-141` render loop, `:228-293` returned object), `src/types.ts:409-421` (`DebugState`), `tests/harness/t7/fakes.ts` (`fakeStill`)
+- Modify: `src/app/still.ts` (step-1 version: `StillSession` interface `:18-68`, state and render loop `:112-143`, returned object `:231-294`), `src/types.ts:611-636` (`DebugState`), `tests/harness/t7/fakes.ts` (`fakeStill`, `:258-321`)
 - Test: `src/app/still.test.ts`
 
 **Interfaces:**
@@ -4456,10 +4434,10 @@ EOF
 Add to `src/app/still.test.ts`:
 
 ```ts
-import { defaultPhoto } from '../edit/state';
 import { applyRatio, IDENTITY_GEOMETRY, rotateLeft, snapCrop } from '../geometry/view';
-import type { Geometry } from '../types';
-import { sameDisplayFrame, type StillFrame } from './still';
+// merged into the file's existing imports: `Geometry` joins `import type { …, StillFrame } from '../types'` (still.ts
+// does not re-export StillFrame), `sameDisplayFrame` joins `import { createStillSession, … } from './still'`;
+// `defaultPhoto` is imported already
 
 describe('crop view mode, display pause and tiles (step 3)', () => {
   const photo = defaultPhoto();
@@ -4615,7 +4593,7 @@ export function sameDisplayFrame(a: StillFrame, b: StillFrame): boolean {
 }
 ```
 
-Inside `createStillSession`, next to the existing state (`displayOff`, `compare`, …):
+Inside `createStillSession`, next to the existing state (`displayOff`, `compare`, …, `still.ts:112-118`; before `input`):
 
 ```ts
   let mode: ViewMode = 'normal';
@@ -4626,18 +4604,18 @@ Inside `createStillSession`, next to the existing state (`displayOff`, `compare`
   const viewGeometry = (f: StillFrame) => (mode === 'crop' ? IDENTITY_GEOMETRY : snapCrop(f.geometry ?? IDENTITY_GEOMETRY, oSize));
 ```
 
-Changes to the existing functions (shown as the v0.3 lines; apply to step 1's equivalents):
-- the render-input builder (`still.ts:109-118`) adds `geometry: snapCrop(f.geometry ?? IDENTITY_GEOMETRY, oSize),` (exports and thumbnails: V);
-- `schedule()` (`still.ts:120-123`) returns early also when `paused`;
-- `flush()` (`still.ts:125-141`) returns early also when `paused`; the compare branch draws `engine.renderOriginal({ source: bitmap, width, height, geometry: viewGeometry(frame) }, { still: true })`; the normal branch draws `engine.render({ ...input(frame), geometry: viewGeometry(frame) }, { still: true })`; after a successful draw: `drawn = frame;` and
+Changes to the existing functions (step 1's lines at `b975bcc`):
+- the render-input builder, step 1's one-liner `const input = (f: StillFrame, b: BodyField | null = body): RenderInput => ({ source: bitmap, width, height, ...f, body: b });` (`still.ts:120`), adds `geometry: snapCrop(f.geometry ?? IDENTITY_GEOMETRY, oSize),` after `...f` (exports and thumbnails: V);
+- `schedule()` (`still.ts:122-125`) returns early also when `paused`;
+- `flush()` (`still.ts:127-143`) returns early also when `paused`; the compare branch draws `engine.renderOriginal({ source: bitmap, width, height, geometry: viewGeometry(frame) }, { still: true })`; the normal branch draws `engine.render({ ...input(frame), geometry: viewGeometry(frame) }, { still: true })`; after a successful draw: `drawn = frame;` and
 
 ```ts
       const d = debugState();
       if (d) d.renderCount = (d.renderCount ?? 0) + 1;
 ```
 
-- `render(f)` (`still.ts:233-238`): after storing the frame and requesting its LUTs, `if (mode === 'crop' && drawn && !raf && sameDisplayFrame(drawn, f)) return;` before `schedule()`;
-- `exportImageData` (`still.ts:267-274`): its closing redraw becomes `if (mode !== 'crop') schedule();` — an FBO export never touches the display canvas, and in 裁切 mode the debounced autosave after a gesture must not draw an engine frame (S §6.3: no engine frame during 裁切 gestures; e2e checks `renderCount`).
+- `render(f)` (`still.ts:238-243`): after storing the frame and requesting its LUTs, `if (mode === 'crop' && drawn && !raf && sameDisplayFrame(drawn, f)) return;` before `schedule()`;
+- `exportImageData` (`still.ts:268-275`): its closing redraw becomes `if (mode !== 'crop') schedule();` — an FBO export never touches the display canvas, and in 裁切 mode the debounced autosave after a gesture must not draw an engine frame (S §6.3: no engine frame during 裁切 gestures; e2e checks `renderCount`).
 
 Add to the returned object:
 
@@ -4697,12 +4675,12 @@ EOF
 
 **Files:**
 - Create: `src/ui/cropPanel.ts`, `src/ui/cropPanel.test.ts`
-- Modify: `src/ui/panelModel.ts:22-55, 188-221, 449-458` (CRLF), `src/ui/components/Slider.tsx:8-31, 47-181` (CRLF), `src/ui/components/BeautyPanel.tsx:23-41, 80-160, 214-221` (CRLF), `src/ui/icons.tsx` (CRLF) (the ratio icons reuse the strip's `.icon` style: no CSS change)
+- Modify: `src/ui/panelModel.ts:8-53, 171-209, 277-315, 556-872` (CRLF: tabs and selection, `personNote` / `photoScoped`, item types, the `itemsFor` / `activate` / `SliderBinding` / `sliderFor` / `tabHasValue` block), `src/ui/components/Slider.tsx:6-31, 41-196` (CRLF), `src/ui/components/BeautyPanel.tsx:5-28, 30-57, 62-219, 256-262` (CRLF), `src/ui/icons.tsx:236-243` (CRLF, `P` after `custom`) (the ratio icons reuse the strip's `.icon` style: no CSS change)
 - Test: `src/ui/cropPanel.test.ts`, `src/ui/ui.test.ts` (slider scale), `src/ui/panelModel.test.ts`
 
 **Interfaces:**
-- Consumes: Task 1 (`applyRatio`, `isIdentity`, `lockAspect`, `lockFor`, `setStraighten`, `transposeLock`, `CropLock`, `CROP_LOCKS`), Task 3 (`editRotateLeft`, `editFlipView`, `editResetGeometry`, `editSetGeometry`); step 1/2 `panelModel` (`itemsFor`, `activate`, `sliderFor`, `tabHasValue` ported to `(lens, sel, ctx)`; `PanelItem.divider?: 'before'` from step 2; `TABS` with 調節).
-- Produces (`panelModel.ts`): `TabId += 'crop'`; `EDITOR_TABS = [...TABS, { id: 'crop', label: '裁切' }]` (8 tabs, 裁切 last). `TABS` itself stays the 7 tabs the camera and the editor share: step 2's panelModel test asserts exactly those 7 (C §2.4: the camera has no 裁切); `PanelSelection.crop: CropLock` (initial `'free'`); `ItemVisual += { kind: 'ratio'; aspect: number | null }`; `ItemAction += { type: 'crop'; crop: CropAction }`; `interface SliderScale { min; max; step; snap; suffix }`; `interface SliderView { key; label; bidirectional; value; defaultValue; scale?: SliderScale }`; `SliderBinding extends SliderView`.
+- Consumes: Task 1 (`applyRatio`, `isIdentity`, `lockAspect`, `lockFor`, `setStraighten`, `transposeLock`, `CropLock`, `CROP_LOCKS`), Task 3 (`editRotateLeft`, `editFlipView`, `editResetGeometry`, `editSetGeometry`); step 1/2 `panelModel` (`itemsFor(lens, sel, body?)`, `activate(item, lens, sel, ctx?)`, `sliderFor(lens, sel, body?)`, `tabHasValue(lens, tab, body?)` — each an exhaustive `switch` without `default`, so the new tab needs a case in every one; `personNote(tab, lens)` and `photoScoped(sel, lens)`, step 1's photo-level rules (A11: the person strip dims with 「整張照片」); `SliderBinding` with step 1's `param` / `aria?` / `mixed` and step 2's `track?` / `hideDefault?`; `PanelItem.divider?: 'before'` from step 2; `TABS` with 調節).
+- Produces (`panelModel.ts`): `TabId += 'crop'`; `EDITOR_TABS = [...TABS, { id: 'crop', label: '裁切' }]` (8 tabs, 裁切 last). `TABS` itself stays the 7 tabs the camera and the editor share: step 2's panelModel test asserts exactly those 7 (C §2.4: the camera has no 裁切); `PanelSelection.crop: CropLock` (initial `'free'`); `ItemVisual += { kind: 'ratio'; aspect: number | null }`; `ItemAction += { type: 'crop'; crop: CropAction }`; `interface SliderScale { min; max; step; snap; suffix }`; `interface SliderView { key; label; aria?; bidirectional; value; mixed?; defaultValue; track?; hideDefault?; scale?: SliderScale }` (every field `SliderRow` reads); `SliderBinding extends SliderView` (keeps `param`, a required `mixed: boolean` and `apply`); `photoScoped` / `personNote` treat 裁切 as photo-level.
 - Produces (`cropPanel.ts`): `type CropAction = { type: 'ratio'; lock: CropLock } | { type: 'rotate' } | { type: 'flip' } | { type: 'geoReset' }`; `RATIO_ITEMS`; `cropItems(g, lock, oSize): PanelItem[]`; `interface CropResult { edit: EditState; lock: CropLock; changed: boolean; toast: string | null }`; `cropActivate(edit, a, lock, oSize): CropResult`; `ROTATE_BAND_TOAST = '旋轉後已移除增高'`; `STRAIGHTEN_SCALE: SliderScale`; `straightenView(g): SliderView`; `class StraightenGesture { step(current: Geometry, v: number, oSize: Size, commit: boolean): Geometry; reset(): void }`.
 - Produces (`Slider.tsx`): `displayOf(bi, v, scale?)`, `formatDisplay(bi, v, scale?)`, `dragValue(bi, startV, dx, width, scale?)` (no scale = today's exact output); `SliderRow` takes `binding: SliderView | null` and honours `scale`.
 - Produces (`BeautyPanel`): prop `crop?: { geometry: Geometry; lock: CropLock; oSize: Size; onAction(a: CropAction): void }` — without it the 裁切 tab is not listed (the camera keeps 7 tabs). Icons `rotateLeft`, `flipH`, `free` (S §3.8 names; the parametric `ratio` icon is BeautyPanel's `RatioIcon`, which draws 自由 with `free`).
@@ -4827,7 +4805,7 @@ describe('slider scale (拉直)', () => {
 });
 ```
 
-Add to `src/ui/panelModel.test.ts` (add `EDITOR_TABS` to its `./panelModel` import):
+Add to `src/ui/panelModel.test.ts` (add `EDITOR_TABS` to its `./panelModel` import; `sel` and `lensOf` are the file's helpers, and `defaultParams`, `personNote`, `photoScoped` are imported already):
 
 ```ts
 it('裁切 is the 8th editor tab; the shared (camera) tab list keeps 7; its selection starts at 自由', () => {
@@ -4836,6 +4814,12 @@ it('裁切 is the 8th editor tab; the shared (camera) tab list keeps 7; its sele
   expect(EDITOR_TABS.slice(0, -1)).toEqual(TABS);
   expect(TABS.some((t) => t.id === 'crop')).toBe(false);
   expect(INITIAL_SELECTION.crop).toBe('free');
+});
+
+it('裁切 is photo-level: the person strip dims with 整張照片, no person note (S §2.1, C §2.2)', () => {
+  const l = lensOf(defaultParams());
+  expect(photoScoped(sel({ tab: 'crop' }), l)).toBe(true);
+  expect(personNote('crop', l)).toBeNull();
 });
 ```
 
@@ -4864,17 +4848,25 @@ export interface SliderView {
   /** changes when the slider targets a different value (resets drag state) */
   key: string;
   label: string;
+  /** aria-label (S §2.4): 「{label}，人物 {n}」 / 「{label}，全部」 / 「{label}，整張照片」; absent → label */
+  aria?: string;
   bidirectional: boolean;
   value: number;
+  /** the targets disagree under 全部 (the label adds 各人不同) */
+  mixed?: boolean;
   /** recommended-default dot / double-tap target */
   defaultValue: number;
+  /** 色溫 / 色調: a coloured track (CSS .track-temperature / .track-tint) */
+  track?: 'temperature' | 'tint';
+  /** no recommended-default dot (調節: neutral is the default) */
+  hideDefault?: boolean;
   scale?: SliderScale;
 }
 ```
 
-(`SliderBinding`'s own `key`/`label`/`bidirectional`/`value`/`defaultValue` lines move into `SliderView`; `export interface SliderBinding extends SliderView { apply(…): … }` keeps step 1's `apply` signature.)
+(`SliderBinding`'s own `key`/`label`/`aria?`/`bidirectional`/`value`/`defaultValue`/`track?`/`hideDefault?` lines (`panelModel.ts:717-736`) move into `SliderView`, because `SliderRow` reads every one of them; `export interface SliderBinding extends SliderView { param: ParamId | null; mixed: boolean; apply(lens: Lens, v: number): EditState }` keeps step 1's `param`, its required `mixed` and `apply`.)
 
-In `src/ui/components/Slider.tsx` (CRLF): import `type SliderScale, type SliderView` (instead of `SliderBinding`); `Props.binding: SliderView | null`. Replace `displayOf`, `formatDisplay`, `dragValue`:
+In `src/ui/components/Slider.tsx` (CRLF): import `type SliderScale, type SliderView` (instead of `SliderBinding`, `Slider.tsx:6`); `Props.binding: SliderView | null` (`:42`). Replace `displayOf`, `formatDisplay`, `dragValue` (`:15-31`):
 
 ```ts
 const decimals = (step: number) => (step >= 1 ? 0 : Math.ceil(-Math.log10(step) - 1e-9));
@@ -4913,7 +4905,7 @@ export function dragValue(bidirectional: boolean, startV: number, dxPx: number, 
 }
 ```
 
-In `SliderRow`: `const sc = binding.scale;` and use `dragValue(bi, d.v0, dx, width, sc)`, `formatDisplay(bi, v, sc)`, `aria-valuemin={sc ? sc.min : bi ? -50 : 0}`, `aria-valuemax={sc ? sc.max : bi ? 50 : 100}`, `aria-valuenow={displayOf(bi, v, sc)}`. The keyboard handler (`Slider.tsx:154-161`) becomes:
+In `SliderRow` (`Slider.tsx:51-196`): `const sc = binding.scale;` (after `const bi = binding.bidirectional;`, `:80`) and use `dragValue(bi, d.v0, dx, width, sc)` (`:114`), `formatDisplay(bi, v, sc)` (`:154`), `aria-valuemin={sc ? sc.min : bi ? -50 : 0}`, `aria-valuemax={sc ? sc.max : bi ? 50 : 100}`, `aria-valuenow={displayOf(bi, v, sc)}` (`:166-168`). The keyboard handler (`Slider.tsx:175-182`) becomes:
 
 ```ts
         onKeyDown={(e) => {
@@ -4931,14 +4923,14 @@ In `SliderRow`: `const sc = binding.scale;` and use `dragValue(bi, d.v0, dx, wid
 
 - [ ] **Step 4: Panel model and `cropPanel.ts`**
 
-`src/ui/panelModel.ts`: `TabId` gains `| 'crop'`; `TABS` is unchanged and, after it,
+`src/ui/panelModel.ts`: `TabId` (`:8`) gains `| 'crop'`; `TABS` (`:13-21`) is unchanged and, after it,
 
 ```ts
 /** the photo editor's tabs: the shared 7 plus 裁切 (C §2.1; the camera has none, C §2.4) */
 export const EDITOR_TABS: readonly { id: TabId; label: string }[] = [...TABS, { id: 'crop', label: '裁切' }];
 ```
 
-`PanelSelection` gains `/** the 裁切 ratio lock (UI state: derived from the crop on entering the tab and after ↶ ↷, S §2.1) */ crop: CropLock;` and `INITIAL_SELECTION` gains `crop: 'free'`; `ItemVisual` gains `| { kind: 'ratio'; aspect: number | null }`; `ItemAction` gains `| { type: 'crop'; crop: CropAction }` (import `type CropAction` from `./cropPanel` and `type CropLock` from `../geometry/view`). In the step-1 switches over `sel.tab`: `itemsFor` → `case 'crop': return [];` (BeautyPanel draws `cropItems`), `sliderFor` → `case 'crop': return null;` (the Editor binds 拉直), `tabHasValue` → `case 'crop': return false;` (BeautyPanel dots the tab from the geometry); in `activate`'s switch over `item.action.type` → `case 'crop':` returns the same "nothing changed" result it returns for a re-tapped selected item (BeautyPanel never sends crop items there).
+`PanelSelection` (`:35-43`) gains `/** the 裁切 ratio lock (UI state: derived from the crop on entering the tab and after ↶ ↷, S §2.1) */ crop: CropLock;` and `INITIAL_SELECTION` (`:45-53`) gains `crop: 'free'`; `ItemVisual` (`:277-281`) gains `| { kind: 'ratio'; aspect: number | null }`; `ItemAction` (`:283-295`) gains `| { type: 'crop'; crop: CropAction }` (import `type CropAction` from `./cropPanel` and `type CropLock` from `../geometry/view`). In the step-1 switches over the tab: `itemsFor` (`:558`) → `case 'crop': return [];` (BeautyPanel draws `cropItems`), `sliderFor` (`:767`) → `case 'crop': return null;` (the Editor binds 拉直), `tabHasValue(lens, tab, body?)` (`:857`) → `case 'crop': return false;` (BeautyPanel dots the tab from the geometry); in `activate`'s switch over `item.action.type` (`:663`) → `case 'crop': return done();` (its "nothing changed" result; BeautyPanel never sends crop items there). 裁切 is photo-level (C §2.2, S §2.1 "Person strip: dimmed, with the caption 「整張照片」"), and step 1 keeps that rule in this file: `photoScoped` (`:203-209`) gains `if (sel.tab === 'crop') return true;` next to its 濾鏡 line (the Editor's `scope` dims the strip from it), and `personNote` (`:171-177`) returns null for `tab === 'crop'` as it does for 濾鏡 / 調節.
 
 Create `src/ui/cropPanel.ts` (LF):
 
@@ -5038,14 +5030,14 @@ export class StraightenGesture {
 
 - [ ] **Step 5: BeautyPanel and icons**
 
-`src/ui/components/BeautyPanel.tsx` (CRLF): import `cropItems, type CropAction` from `../cropPanel`, `isIdentity, type CropLock` from `../../geometry/view`, types `Geometry`, `Size`. Props gain:
+`src/ui/components/BeautyPanel.tsx` (CRLF): import `cropItems, type CropAction` from `../cropPanel`, `isIdentity, type CropLock` from `../../geometry/view`, types `Geometry`, `Size` (joining the `EditState, LookId` type import, `:6`). Props (`interface Props`, `:30-57`; destructured at `:62`) gain:
 
 ```ts
   /** the editor's 裁切 tab (absent in the camera: the tab is not listed) */
   crop?: { geometry: Geometry; lock: CropLock; oSize: Size; onAction(a: CropAction): void };
 ```
 
-Inside the component: `const tabs = crop ? EDITOR_TABS : TABS;` (import `EDITOR_TABS` next to `TABS`; render `tabs` instead of `TABS`); `const items = sel.tab === 'crop' && crop ? cropItems(crop.geometry, crop.lock, crop.oSize) : itemsFor(…step 1's arguments…);`; at the top of `tapItem`:
+Inside the component: `const tabs = crop ? EDITOR_TABS : TABS;` (import `EDITOR_TABS` next to `TABS`; render `tabs.map` instead of `TABS.map`, `:194`); `const items = sel.tab === 'crop' && crop ? cropItems(crop.geometry, crop.lock, crop.oSize) : itemsFor(lens, sel, body);` (`:80`); at the top of `tapItem` (`:93`, before step 1's `activate(item, lens, sel, { lookFailed })`):
 
 ```ts
     if (item.action.type === 'crop') {
@@ -5056,7 +5048,7 @@ Inside the component: `const tabs = crop ? EDITOR_TABS : TABS;` (import `EDITOR_
     }
 ```
 
-the tab dot for 裁切: `(t.id === 'crop' ? !!crop && !isIdentity(crop.geometry) : tabHasValue(…))`; `stripKey` for `crop` stays `'crop'`. `ItemVisual` gains the ratio case:
+the tab dot for 裁切 (`:210`): `(t.id === 'crop' ? !!crop && !isIdentity(crop.geometry) : tabHasValue(lens, t.id, body))`; `stripKey` for `crop` stays `'crop'`. `ItemVisual` (`:256-262`) gains the ratio case, before its last line (`return <Icon name={v.icon} />;`, which then reads only the icon kind):
 
 ```tsx
   if (v.kind === 'ratio') return <RatioIcon aspect={v.aspect} />;
@@ -5121,7 +5113,7 @@ EOF
 
 **Files:**
 - Create: `src/ui/components/CropOverlay.tsx`, `src/ui/components/CropOverlay.test.ts`
-- Modify: `src/ui/theme.css:257-267` and the editor block `1606-1621` (CRLF), `src/ui/screens/zoomPan.ts:33-41` (CRLF), `src/ui/components/CanvasHost.tsx:6-20`, `src/ui/components/HeightBandOverlay.tsx:213-238` (CRLF)
+- Modify: `src/ui/theme.css:257-267` and the editor block `1627-1642` (CRLF), `src/ui/screens/zoomPan.ts:33-46` (CRLF), `src/ui/components/CanvasHost.tsx:6-20`, `src/ui/components/HeightBandOverlay.tsx:210-247` (CRLF)
 - Test: `src/ui/components/CropOverlay.test.ts`
 
 **Interfaces:**
@@ -5192,7 +5184,7 @@ Expected: FAIL — `Failed to resolve import "./CropOverlay"`.
 ```tsx
 // 裁切 mode box (S §2.1): the scrim (a large box-shadow), a 1 pt border, corner L handles, edge bars (自由 only) and the
 // rule-of-thirds grid while a gesture or a 拉直 drag runs. Handles are <button>s with labels (zoomPan ignores buttons,
-// zoomPan.ts:82, and is off in this mode anyway); one finger inside the box moves it over the fixed photo (S D2). The
+// zoomPan.ts:96, and is off in this mode anyway); one finger inside the box moves it over the fixed photo (S D2). The
 // gesture maths is pure (cropModel.ts); CropDrag commits exactly once per gesture, like BandDrag (HeightBandOverlay.tsx).
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { dragCorner, dragEdge, dragMove, type Corner, type Edge } from '../../geometry/cropModel';
@@ -5462,24 +5454,26 @@ export function CropOverlay({ layout, geometry, lock, oSize, grid, onChange }: P
 
 (The `.crop-box` scrim is drawn by its own box-shadow, so the frame's dark corners outside the turned photo are covered as well.)
 
-`src/ui/screens/zoomPan.ts` (CRLF): the options parameter (step 1 adds `onTap`) gains `resetWhen?: boolean`, and after the main effect:
+`src/ui/screens/zoomPan.ts` (CRLF): step 1's `ZoomPanOptions` (`zoomPan.ts:33-39`, holding `onTap`) gains `/** 裁切 open: zoom and pan back to identity */ resetWhen?: boolean;`, and after the main effect of `useZoomPan` (whose `opts` parameter defaults to `{}`):
 
 ```ts
   // 裁切 mode shows the whole photo: zoom and pan return to identity when it opens (S §2.1)
   useEffect(() => {
-    if (!opts?.resetWhen) return;
+    if (!opts.resetWhen) return;
     view.current = { s: 1, x: 0, y: 0 };
     const layer = layerRef.current;
     if (layer) {
       layer.style.transition = 'none';
       layer.style.transform = '';
+      // step 1's face boxes keep 2 px strokes through --zs (zoomPan apply): back to zoom 1 as well
+      layer.style.setProperty('--zs', '1');
     }
-  }, [opts?.resetWhen]);
+  }, [opts.resetWhen]);
 ```
 
 `src/ui/components/CanvasHost.tsx` (LF): `export function CanvasHost({ fit, style }: { fit: 'cover' | 'contain'; style?: JSX.CSSProperties })` (import `type { JSX } from 'preact'`) and `return <div class="canvas-host" ref={ref} style={style} />;`.
 
-`src/ui/components/HeightBandOverlay.tsx` (CRLF): `Props` gains
+`src/ui/components/HeightBandOverlay.tsx` (CRLF): `Props` (`:210-217`, destructured as `{ band, onChange, stretch = defaultStretch }` at `:219`, where `yAt` joins) gains
 
 ```ts
   /** E-normalized row under a client point (client → V → E, C §3.5); default: this element's own rect */
@@ -5538,11 +5532,11 @@ EOF
 
 **Files:**
 - Create: `tests/e2e/crop.spec.ts` (first cases)
-- Modify: `src/ui/screens/Editor.tsx` (step-1 version; v0.3 anchors: imports `:14-56`, `lastSel` `:66`, `update` `:169-180`, undo/redo `:739-754`, `ratio` `:798`, stage JSX `:830-878`), `src/ui/screens/hooks.ts` (+ `useElementSize`)
+- Modify: `src/ui/screens/Editor.tsx` (step-1/2 version at `b975bcc`: imports `:20-101`, `lastSel` `:111`, `sel` `:145`, `stageRef` `:198`, `photo` `:227`, `session` `:231`, `update` `:303-321`, the debug `boxes` write `:807-810`, undo/redo `:960-987`, photo taps `:1044-1056`, chips / face boxes `:1074-1097`, `ratio` `:1108`, stage JSX `:1140-1176`, slider row and panel `:1179-1197`), `src/ui/screens/hooks.ts` (+ `useElementSize`), `src/ui/components/PersonStrip.tsx` (LF; a chip-thumbnail transform prop)
 - Test: `tests/e2e/crop.spec.ts`
 
 **Interfaces:**
-- Consumes: step 1 Editor names (S1 §3.3–3.4 U1–U5): `edit` / `editRef` (the current `EditState`), `update(next: EditState, commit: boolean)`, `sel` / `setSel`, `session`, `sessionRef`, `photo` (`{width, height}` of the working bitmap, `Editor.tsx:146`), `doUndo` / `doRedo` returning the restored state, `useZoomPan(stageRef, layerRef, enabled, { onTap })`, `FaceBoxes` / `PersonStrip` props, the debug `boxes` write, the tap → `hitPerson` call. Task 1 (`apply`, `chipTransform`, `cropModeLayout`, `cssTurn`, `eYAt`, `lockFor`, `ovalViewBox`, `vToO`), Task 3 (`editSetGeometry`), Task 11 (`setViewMode`, `viewSizeFor`, `DebugState.renderCount`), Task 12 (`cropActivate`, `straightenView`, `StraightenGesture`, `CropAction`, BeautyPanel `crop`), Task 13 (`CropOverlay`, `BandPlane`, `HeightBandOverlay.yAt`, `CanvasHost.style`, `useZoomPan` `resetWhen`).
+- Consumes: step 1 Editor names (S1 §3.3–3.4 U1–U5): `edit` / `editRef` (the current `EditState`), `update(e: EditState, commit: boolean, user = true)`, `sel` / `setSel`, `session`, `sessionRef`, `sessionFaces`, `photo` (`{width, height}` of the working bitmap, `Editor.tsx:227`), `doUndo` / `doRedo` (each applies the restored state `e` from `undo.undo()` / `undo.redo()`), `useZoomPan(stageRef, layerRef, enabled, { onTap })` whose `onTap(uv: [number, number], rect)` hands `hitPerson(uv, hitCtxOf(…))` a layer UV tuple, `FaceBoxes` (`items`, `dim`, `idle`, `mapY`) / `PersonStrip` (`persons`, `selection`, `photoScope`, `onSelect`) props, the debug `boxes` write (a layout effect), `scope = multi && photoScoped(sel, lens)`. Task 1 (`apply`, `chipTransform`, `cropModeLayout`, `cssTurn`, `eYAt`, `lockFor`, `ovalViewBox`, `vToO`), Task 3 (`editSetGeometry`), Task 11 (`setViewMode`, `viewSizeFor`, `DebugState.renderCount`), Task 12 (`cropActivate`, `straightenView`, `StraightenGesture`, `CropAction`, BeautyPanel `crop`), Task 13 (`CropOverlay`, `BandPlane`, `HeightBandOverlay.yAt`, `CanvasHost.style`, `useZoomPan` `resetWhen`).
 - Produces: `useElementSize(ref): Size` (`hooks.ts`); the Editor's 裁切 mode (S §2.1) and normal-mode overlay mapping (S §2.2).
 
 - [ ] **Step 1: Write the failing e2e test**
@@ -5551,7 +5545,8 @@ Create `tests/e2e/crop.spec.ts`:
 
 ```ts
 // 裁切／旋轉／翻轉 and full-resolution export in the app (S §8.2). Imports go through the file chooser like a user's.
-import { debugState, expect, SAMPLE_FACE, test, type Page } from './fixtures';
+import type { Page } from '@playwright/test';
+import { debugState, expect, SAMPLE_FACE, test } from './fixtures';
 
 async function importInto(page: Page, file: string | { name: string; mimeType: string; buffer: Buffer }) {
   await page.goto('/');
@@ -5698,18 +5693,18 @@ export function useElementSize(ref: { current: HTMLElement | null }): { width: n
 
 - [ ] **Step 4: 裁切 mode in the Editor**
 
-In `src/ui/screens/Editor.tsx` (LF) add the imports:
+In `src/ui/screens/Editor.tsx` (LF) add the imports (`editSetGeometry` joins the `editKey, P0` import from `../../edit/state`, `BandPlane` the `HeightBandOverlay` import, `useElementSize` the `./hooks` import and `Rect` the `../../types` type import; the rest are new lines):
 
 ```ts
 import { editSetGeometry } from '../../edit/state';
-import { apply, chipTransform, cropModeLayout, cssTurn, eYAt, lockFor, ovalViewBox, vToO } from '../../geometry/view';
+import { apply, chipTransform, cropModeLayout, cssTurn, eYAt, isIdentity, lockFor, ovalViewBox, vToO } from '../../geometry/view';
 import { BandPlane } from '../components/HeightBandOverlay';
 import { CropOverlay } from '../components/CropOverlay';
 import { cropActivate, StraightenGesture, straightenView, type CropAction } from '../cropPanel';
 import { useElementSize } from './hooks';
 ```
 
-After the step-1 `edit` state and `photo` (`Editor.tsx:146`):
+After `const session = …` (`Editor.tsx:231`; the block needs `sel` `:145`, `stageRef` `:198` and `photo` `:227`):
 
 ```ts
   // ── 裁切 (S §2.1): the engine draws the whole O image (identity geometry) and CSS turns the canvas ──
@@ -5727,7 +5722,7 @@ After the step-1 `edit` state and `photo` (`Editor.tsx:146`):
   const reduceMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 ```
 
-Entering and leaving the tab (after the session effects):
+Entering and leaving the tab (after the session effect, `Editor.tsx:392-463`):
 
 ```ts
   // the session draws identity geometry while 裁切 is open; the ratio lock is derived from the crop on entering
@@ -5769,18 +5764,18 @@ Entering and leaving the tab (after the session effects):
   };
 ```
 
-In `doUndo` / `doRedo` (`Editor.tsx:739-754`), after the restored state `p` is applied: `if (p && sel.tab === 'crop') setSel({ ...sel, crop: lockFor(p.photo.geometry, photo) });`.
+In `doUndo` / `doRedo` (`Editor.tsx:960-987`), inside their `if (e) { … }` after `setEditState(e)`: `if (sel.tab === 'crop') setSel({ ...sel, crop: lockFor(e.photo.geometry, photo) });`.
 
-`useZoomPan` (`Editor.tsx:679`, step 1 adds `onTap`): `useZoomPan(stageRef, layerRef, !!session && !cropMode, { onTap, resetWhen: cropMode })`.
+`useZoomPan` (`Editor.tsx:1046`): step 1's call becomes `useZoomPan(stageRef, layerRef, !!session && !cropMode, { onTap: tapsOn ? … : undefined, resetWhen: cropMode })` (its `onTap` as below).
 
-The frame aspect (`Editor.tsx:798`) becomes the V aspect:
+The frame aspect (`Editor.tsx:1108`) becomes the V aspect:
 
 ```ts
   const view = session ? session.viewSizeFor(g) : { width: source.bitmap.width, height: Math.max(1, source.bitmap.height) };
   const ratio = view.width / view.height || 0.75;
 ```
 
-The stage (`Editor.tsx:830-860`) becomes:
+The stage (`Editor.tsx:1140-1176`) becomes:
 
 ```tsx
       <div class="stage editor-stage" ref={stageRef}>
@@ -5807,9 +5802,9 @@ The stage (`Editor.tsx:830-860`) becomes:
             {session && !fatal && !hold.held && !cropMode && showsHeightBand(sel, bodyCtx) && (
               <BandPlane geometry={g}>
                 <HeightBandOverlay
-                  band={bandOrSuggested(/* step 1's arguments, unchanged */)}
+                  band={bandOrSuggested(edit, bodyCtx)}
                   stretch={heightBandStretch}
-                  onChange={/* step 1's handler, unchanged */}
+                  onChange={/* step 1's handler (bandTouchToast + update(l.setHeightBand(b), commit)), unchanged */}
                   yAt={(cx, cy) => {
                     const r = layerRef.current?.getBoundingClientRect();
                     return r && r.width > 0 ? eYAt(g, photo, [(cx - r.left) / r.width, (cy - r.top) / r.height]) : 0;
@@ -5817,7 +5812,8 @@ The stage (`Editor.tsx:830-860`) becomes:
                 />
               </BandPlane>
             )}
-            {/* step 1's FaceBoxes: also hidden while cropMode (C §2.2) */}
+            {/* step 1's `{showBoxes && <FaceBoxes … />}` stays where it is (right after CanvasHost): 裁切 is not in
+                PERSON_TABS, so its boxItems are already empty there (C §2.2) */}
           </div>
           {cropLayout && session && !fatal && (
             <CropOverlay layout={cropLayout} geometry={g} lock={sel.crop} oSize={photo} grid={straightening} onChange={(ng, commit) => update(editSetGeometry(editRef.current, ng), commit)} />
@@ -5829,13 +5825,14 @@ The stage (`Editor.tsx:830-860`) becomes:
       </div>
 ```
 
-The slider row and the panel (`Editor.tsx:863-876`):
+The slider row and the panel (`Editor.tsx:1179-1197`):
 
 ```tsx
         <SliderRow
           binding={session && !faceOff ? (cropMode ? straightenView(g) : binding) : null}
           onChange={(v) => (cropMode ? straightenTo(v, false) : binding && slide(binding, v, false))}
           onCommit={(v) => (cropMode ? straightenTo(v, true) : binding && slide(binding, v, true))}
+          emptyText={/* step 1's, unchanged (null on 裁切) */}
         />
         <BeautyPanel
           /* step 1's props, unchanged */
@@ -5844,10 +5841,11 @@ The slider row and the panel (`Editor.tsx:863-876`):
 ```
 
 Normal-mode overlays through the view (S §2.2), at step 1's call sites:
-- **Face boxes** (and the debug `boxes`): each drawn box is `ovalViewBox(sessionFace.face.oval, g, photo)` (V-normalized), instead of the O-space `box`; with identity geometry it is the oval's bbox, which is step 1's box (T3).
-- **Tap → person:** the `onTap(uv)` handler maps the layer UV (V) to O before step 1's hit test: `const o = apply(vToO(g, photo), [uv.x, uv.y]);` and passes `o` where it passed `uv`.
-- **Person chips:** each face thumbnail gets `style={{ transform: chipTransform(g) }}`.
-- **Person strip on 裁切:** 裁切 is a photo-level tab (C §2.2): add `'crop'` to step 1's list of photo-level tabs, so the strip stays mounted, dims its chips and shows 「整張照片」 while 裁切 is open.
+- **Face boxes** (`boxItems`, `Editor.tsx:1086-1097`) **and the debug `boxes`** (the layout effect at `:807-810`; `edit.photo.geometry` joins its dependencies): every box is V-normalized. With `const viewBoxOf = (pts: Float32Array, box: Rect): Rect => (isIdentity(g) ? box : ovalViewBox(pts, g, photo));` a face's box is `viewBoxOf(oval, f.box)`, `oval` being the session face's adapted O-space FACE_OVAL (`sessionFaces?.find((x) => x.id === f.id)?.face.oval`, or the box's four corners while none is at hand); with identity geometry it is step 1's box (the oval's bbox, T3). A body-only person's dashed `bodyBox(b)` maps its four corners: `viewBoxOf(new Float32Array([x, y, x + w, y, x, y + h, x + w, y + h]), box)`.
+- **The boxes' 增高 / 長腿 row shift** (step 1's `mapY`, `Editor.tsx:1084, 1144`): the bands are rows of the field's frame (E rows once Task 15 builds the field in U), so at θ = 0 the shift maps through the crop, `mapY={bands.length && g.straighten === 0 ? (y) => (forwardY(bands, g.crop.y + y * g.crop.h) - g.crop.y) / g.crop.h : undefined}` (exactly step 1's `forwardY(bands, y)` at identity); with θ ≠ 0 the rows tilt and no shift is drawn.
+- **Tap → person:** step 1's `onTap: (uv, rect) => …` (`Editor.tsx:1047-1055`) maps the layer UV (V) to O before the hit test: `hitPerson(apply(vToO(g, photo), uv), hitCtxOf(d, sel.tab === 'body', fieldMemo.field, rect))` (`uv` is a `[number, number]` tuple).
+- **Person chips:** `PersonStrip` (`src/ui/components/PersonStrip.tsx`) gains the prop `thumbTransform?: string`, applied as `style={thumbTransform ? { transform: thumbTransform } : undefined}` on each chip's `<img>`; the Editor passes `thumbTransform={isIdentity(g) ? undefined : chipTransform(g)}` (`Editor.tsx:1180`).
+- **Person strip on 裁切:** 裁切 is a photo-level tab (C §2.2): Task 12's `photoScoped` already returns true for it, so step 1's `scope` dims the strip with 「整張照片」 while 裁切 is open (the strip stays mounted: `session && multi`).
 
 - [ ] **Step 5: Run the e2e and the unit suite**
 
@@ -5859,7 +5857,7 @@ Expected: clean.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/ui/screens/Editor.tsx src/ui/screens/hooks.ts tests/e2e/crop.spec.ts
+git add src/ui/screens/Editor.tsx src/ui/screens/hooks.ts src/ui/components/PersonStrip.tsx tests/e2e/crop.spec.ts
 git commit -m "$(cat <<'EOF'
 v0.4 step 3: editor 裁切 mode, V frame aspect and overlays through the view
 
@@ -5874,14 +5872,14 @@ EOF
 
 **Files:**
 - Create: `src/geometry/upFrame.ts`, `src/geometry/upFrame.test.ts`
-- Modify: `src/ui/editorModel.ts` (+ `needsFaceScan`, `needsBodyScan`, `addFaceScan`, `addBodyScan`; `BodyFieldMemo` key `:235-271`), `src/detect/cache.ts` (step 1: `DetectionCache.bodyScans`, `normalizeDetect`), `src/types.ts` (`DetectionCache.bodyScans?` if step 1 left it out), `src/ui/screens/Editor.tsx` (session effect `:191-256`, body detection `:445-477`, measure / field `:479-553`, segmenter `:565-583`), `tests/e2e/crop.spec.ts`
+- Modify: `src/ui/editorModel.ts` (+ `needsFaceScan`, `needsBodyScan`, `addBodyScan`, the `addFaceScan` re-export; `BodyFieldMemo` `:266-286`), `src/detect/cache.ts` (step 1: `normalizeDetect` `:101-176`, `withFaces` `:291-310`, + `addFaceScan` next to `scanned0` `:184`), `src/edit/migrate.ts` (`AnswerInput` `:101-110`, `firstAnswer`'s scans `:145`), `src/types.ts` (`DetectionCache` `:229-247`: step 1 has no `bodyScans`, add it), `src/ui/screens/Editor.tsx` (measures `:237-240`, memo `:216`, session effect `:392-463`, body detection `:615-660`, field `:663-683`, segmenter `:745`), `tests/e2e/crop.spec.ts`
 - Test: `src/geometry/upFrame.test.ts`, `src/ui/editorModel.test.ts`, `src/detect/cache.test.ts`, `tests/e2e/crop.spec.ts`
 
 **Interfaces:**
-- Consumes: Task 1 (`quarterAffine`, `apply`, `applyVec`, `upQuarter`, `Quarter`), Task 14 (`cropMode`); step 1: `Tracker.detectImage(image, { maxFaces }): Landmarks478[]`, `BodyDetections { bodies: { pose, mask, score }[]; width; height }`, `DetectionCache.faceScans`, the Editor's definite-answer routine (S1 §3.3 item 4) that records `faceScans`, `detectBody(...)` returning `BodyDetections`, `measureBody(det, pairedFace)`, `buildBodyField(input, prev?, longEdge?)` with `BodyFieldInput` (S1 §4.6), `BodyFieldMemo.update(...)`.
+- Consumes: Task 1 (`quarterAffine`, `apply`, `applyVec`, `upQuarter`, `Quarter`), Task 14 (`cropMode`); step 1: `Tracker.detectImage(image, { maxFaces }): Landmarks478[]`, `BodyDetections { bodies: { pose, mask, score }[]; width; height }`, `DetectionCache.faceScans`, the definite-answer routine (S1 §3.3 item 4) — the pure `firstAnswer(a: AnswerInput)` in `src/edit/migrate.ts:144`, which sets `faceScans` to `[{ quarter: 0, flipH: false }]` and which the Editor's session effect calls through `applyAnswer` —, `sessionPlan(cache, hasTracker)` / `detectSession(...)` (the Editor's session effect), `detectBody(ensure, image, opts?)` returning `BodyDetections | null | undefined` and `bodyAnswer(cache, found, size)` (`startBodyDetection`), `measurePersons(cache, faceOf, measure, onError)` with `measureBody(det, pairedFace)`, `bodyPanelContext(...)` / `suggestedBand(det)`, `buildBodyField(input, prev?, longEdge?)` with `BodyFieldInput` (S1 §4.6), `BodyFieldMemo.update(input, draft = false)`; `normalizeDetect(raw)` returns `{ cache, stale, lost }`.
 - Produces (`upFrame.ts`): `inverseQuarter(q): Quarter`; `pointsOToU(src: Float32Array, stride: number, q): Float32Array`; `pointsUToO(src, stride, q)`; `landmarksUToO(points: Float32Array, q): Float32Array`; `poseOToU(p: Pose33, q): Pose33`; `poseUToO(p, q): Pose33`; `faceOToU(f: Face, q): Face`; `maskOToU(m: PersonMask, q): PersonMask`; `maskUToO(m, q): PersonMask`; `fieldUToO(f: BodyField, q): BodyField`; `bodiesUToO(d: BodyDetections, q): BodyDetections`; `upCanvas(src, q): HTMLCanvasElement`; `upImage(bitmap: ImageBitmap, q): Promise<{ image: ImageBitmap; close(): void }>`; `upTracker(t: Tracker, q): Tracker`.
-- Produces (`editorModel.ts`): `needsFaceScan(s: { cache: { faces: readonly unknown[]; faceScans: readonly { quarter: number; flipH: boolean }[] } | null; geometry: Geometry; mode: 'crop' | 'normal'; hasTracker: boolean }): boolean`; `needsBodyScan(cache: { bodies: readonly unknown[] | null; bodyScans?: readonly number[] } | null, geometry: Geometry): boolean`; `addFaceScan(scans, q)`; `addBodyScan(scans: readonly Quarter[] | undefined, q): Quarter[]`; `BodyFieldMemo.update(…, up: Quarter)` (last parameter, part of the key).
-- Produces (`DetectionCache`): `bodyScans?: (0 | 1 | 2 | 3)[]` (absent = `[0]`, S D5), validated by `normalizeDetect`.
+- Produces (`editorModel.ts`): `needsFaceScan(s: { cache: { faces: readonly unknown[]; faceScans: readonly { quarter: number; flipH: boolean }[] } | null; geometry: Geometry; mode: 'crop' | 'normal'; hasTracker: boolean }): boolean`; `needsBodyScan(cache: { bodies: readonly unknown[] | null; bodyScans?: readonly number[] } | null, geometry: Geometry): boolean`; `addFaceScan(scans, q)` (defined in `src/detect/cache.ts`, so the pure `firstAnswer` can use it without importing the UI layer; `editorModel.ts` re-exports it); `addBodyScan(scans: readonly Quarter[] | undefined, q): Quarter[]`; `BodyFieldMemo.update(input, draft = false, up: Quarter = 0)` (last parameter, part of the key).
+- Produces (`DetectionCache`): `bodyScans?: (0 | 1 | 2 | 3)[]` (absent = `[0]`, S D5), validated by `normalizeDetect`. (`AnswerInput`): `quarter?: Quarter` (the up-frame the face detection ran in; default 0).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5967,7 +5965,7 @@ import { addBodyScan, addFaceScan, needsBodyScan, needsFaceScan } from './editor
 
 describe('scans in the up frame (S §3.6, D5, D12)', () => {
   const turned = rotateLeft(IDENTITY_GEOMETRY); // upQuarter 3
-  const empty = { faces: [], faceScans: [{ quarter: 0, flipH: false }] };
+  const empty = { faces: [], faceScans: [{ quarter: 0 as const, flipH: false }] }; // DetectionCache['faceScans'] quarters
   it('a face scan only in normal mode, with a tracker, an empty face cache and an unscanned up-frame', () => {
     expect(needsFaceScan({ cache: empty, geometry: turned, mode: 'normal', hasTracker: true })).toBe(true);
     expect(needsFaceScan({ cache: empty, geometry: turned, mode: 'crop', hasTracker: true })).toBe(false);
@@ -5999,11 +5997,12 @@ Add to `src/detect/cache.test.ts` (step-1 file):
 
 ```ts
 it('bodyScans is kept only as distinct quarters 0–3', () => {
-  // `validCache()` = the valid cache builder the step-1 normalizeDetect tests use
-  expect(normalizeDetect({ ...validCache(), bodyScans: [0, 3] })?.bodyScans).toEqual([0, 3]);
-  expect(normalizeDetect({ ...validCache(), bodyScans: [0, 0] })?.bodyScans).toBeUndefined();
-  expect(normalizeDetect({ ...validCache(), bodyScans: [5] })?.bodyScans).toBeUndefined();
-  expect(normalizeDetect({ ...validCache(), bodyScans: 'x' })?.bodyScans).toBeUndefined();
+  // makeCache() (./testCaches, imported already) = the valid cache the step-1 normalizeDetect tests use;
+  // normalizeDetect answers { cache, stale, lost }
+  expect(normalizeDetect({ ...makeCache(), bodyScans: [0, 3] }).cache?.bodyScans).toEqual([0, 3]);
+  expect(normalizeDetect({ ...makeCache(), bodyScans: [0, 0] }).cache?.bodyScans).toBeUndefined();
+  expect(normalizeDetect({ ...makeCache(), bodyScans: [5] }).cache?.bodyScans).toBeUndefined();
+  expect(normalizeDetect({ ...makeCache(), bodyScans: 'x' }).cache?.bodyScans).toBeUndefined();
 });
 ```
 
@@ -6182,7 +6181,10 @@ export function upTracker(t: Tracker, q: Quarter): Tracker {
 
 ```ts
 import { upQuarter, type Quarter } from '../geometry/view';
-import type { Geometry } from '../types';
+import type { Geometry } from '../types'; // joins the file's existing `../types` type import
+
+/** the up-frame scan record lives with the cache (src/detect/cache.ts), so firstAnswer can write it too */
+export { addFaceScan } from '../detect/cache';
 
 type FaceScan = { quarter: number; flipH: boolean };
 
@@ -6198,11 +6200,6 @@ export function needsFaceScan(s: {
   return !s.cache.faceScans.some((x) => x.quarter === q);
 }
 
-/** a scan counts for both flip states (a mirror does not change detectability), so it is recorded with flipH false */
-export function addFaceScan(scans: readonly FaceScan[], q: Quarter): FaceScan[] {
-  return scans.some((x) => x.quarter === q) ? [...scans] : [...scans, { quarter: q, flipH: false }];
-}
-
 /** nobody was found, and this up-frame was not tried yet (absent bodyScans = [0], S D5) */
 export function needsBodyScan(cache: { bodies: readonly unknown[] | null; bodyScans?: readonly number[] } | null, geometry: Geometry): boolean {
   if (!cache || !cache.bodies || cache.bodies.length > 0) return false;
@@ -6215,39 +6212,48 @@ export function addBodyScan(scans: readonly Quarter[] | undefined, q: Quarter): 
 }
 ```
 
-`BodyFieldMemo.update` (step-1 signature) gains the last parameter `up: Quarter = 0`, appended to the key (`` `${…step 1's key…}|${up}` ``), and the builder is called with `prev` only when `up === 0` (an odd U grid has swapped sides); add a test in `editorModel.test.ts`:
+`BodyFieldMemo.update(input, draft = false)` (step 1, `editorModel.ts:274`) gains the last parameter `up: Quarter = 0`, appended to the key (`` `${bodyInputKey(input)}|${up}` ``), and the builder is called with `prev` only when `up === 0` (an odd U grid has swapped sides); add a test in `editorModel.test.ts`:
 
 ```ts
 it('BodyFieldMemo rebuilds on a 旋轉 (new up-frame) and not on a 翻轉', () => {
-  const build = vi.fn(() => ({ width: 2, height: 2, data: new Float32Array(8), version: 1 }));
+  const build = vi.fn((_i: BodyFieldInput, _p?: BodyField | null, _e?: number) => makeBodyField());
   const memo = new BodyFieldMemo(build);
-  // every argument before `up`, `draft` included (v0.3's update(measure, params, aspect, draft)); with step 1's
-  // update signature, put the arguments this file's existing BodyFieldMemo tests pass here, ending with draft = false
-  const args = [null, defaultParams(), 1, false] as const;
-  memo.update(...args, 0);
-  memo.update(...args, upQuarter(flipView(IDENTITY_GEOMETRY)));
+  // the input shape of this file's existing BodyFieldMemo tests; draft = false, then `up`
+  const input: BodyFieldInput = { edited: [{ id: 'f0', measure: {} as BodyMeasure, values: { 'body.slim': 0.6 } as never }], masks: [], heightBand: null, legs: { value: 0, measure: null }, bodyProtect: true, aspect: 0.75 };
+  memo.update(input, false, 0);
+  memo.update(input, false, upQuarter(flipView(IDENTITY_GEOMETRY)));
   expect(build).toHaveBeenCalledTimes(1);
-  memo.update(...args, upQuarter(rotateLeft(IDENTITY_GEOMETRY)));
+  memo.update(input, false, upQuarter(rotateLeft(IDENTITY_GEOMETRY)));
   expect(build).toHaveBeenCalledTimes(2);
 });
 ```
 
-(Imports: `upQuarter` joins the `../geometry/view` import of this file's scan tests; `defaultParams` from `../engine/params`, merged into an existing import if the file has one.)
+(Imports: `upQuarter` joins the `../geometry/view` import of this file's scan tests; `BodyFieldInput`, `BodyMeasure`, `BodyField` and `makeBodyField` are imported already.)
 
-`src/detect/cache.ts`: `normalizeDetect` keeps `bodyScans` only when it is an array of distinct integers 0–3:
+`src/detect/cache.ts`: in `normalizeDetect` (`:101-176`), step 1's raw record is `raw` and the fields both returns spread are `base` (`:130-139`). Keep `bodyScans` only when it is an array of distinct integers 0–3:
 
 ```ts
-  const bs = r.bodyScans;
-  if (Array.isArray(bs) && bs.every((x) => x === 0 || x === 1 || x === 2 || x === 3) && new Set(bs).size === bs.length) {
-    out.bodyScans = [...bs] as (0 | 1 | 2 | 3)[];
-  }
+  const bs = raw.bodyScans;
+  const bodyScans =
+    Array.isArray(bs) && bs.every((x) => x === 0 || x === 1 || x === 2 || x === 3) && new Set(bs).size === bs.length ? ([...bs] as (0 | 1 | 2 | 3)[]) : undefined;
 ```
 
-(`r` = the raw record, `out` = the normalized cache, as named in step 1's function.) Add `bodyScans?: (0 | 1 | 2 | 3)[];` to `DetectionCache` in `src/types.ts` if step 1 did not.
+and `base` gains `...(bodyScans ? { bodyScans } : {}),`. `withFaces` (`:291-310`) rebuilds a cache without bodies through `buildCache`, which drops unknown fields: carry `bodyScans` over there (`{ ...buildCache(…), ...(cache.bodyScans ? { bodyScans: cache.bodyScans } : {}) }`; its other branch spreads `cache` already). Next to `scanned0` (`:184`) add the pure helper the Editor model and `firstAnswer` share:
+
+```ts
+/** a scan counts for both flip states (a mirror does not change detectability), so it is recorded with flipH false */
+export function addFaceScan(scans: DetectionCache['faceScans'], q: 0 | 1 | 2 | 3): DetectionCache['faceScans'] {
+  return scans.some((x) => x.quarter === q) ? [...scans] : [...scans, { quarter: q, flipH: false }];
+}
+```
+
+(`editorModel.ts` re-exports it, as in the snippet above, so the scan tests import it from `./editorModel`.) Add `/** quarters the 美體 detection ran in (S D5); absent = [0] */ bodyScans?: (0 | 1 | 2 | 3)[];` to `DetectionCache` in `src/types.ts` (`:229-247`; step 1 has none).
+
+`src/edit/migrate.ts`: `AnswerInput` (`:101-110`) gains `/** the up-frame the face detection ran in (S §3.6); default 0 */ quarter?: 0 | 1 | 2 | 3;`, and `firstAnswer`'s first line (`:145`) becomes `const scans: DetectionCache['faceScans'] = a.prepared ? addFaceScan(a.detect?.faceScans ?? [], a.quarter ?? 0) : [];` (import `addFaceScan` from `../detect/cache`). At quarter 0 this is step 1's `[{ quarter: 0, flipH: false }]` for every cache step 1 can pass here (none, or one with `[]`: `sessionPlan` reuses a scanned-upright cache instead of detecting).
 
 - [ ] **Step 5: Wire U into the Editor**
 
-In `src/ui/screens/Editor.tsx`, import `bodiesUToO, faceOToU, fieldUToO, maskOToU, maskUToO, poseOToU, upImage, upTracker` from `../../geometry/upFrame`, `upQuarter, type Quarter` from `../../geometry/view`, and `addBodyScan, addFaceScan, needsBodyScan, needsFaceScan` from `../editorModel`; then:
+In `src/ui/screens/Editor.tsx`, import `bodiesUToO, faceOToU, fieldUToO, maskOToU, maskUToO, poseOToU, upImage, upTracker` from `../../geometry/upFrame`, `upQuarter, type Quarter` (joining Task 14's `../../geometry/view` import), `addBodyScan, needsBodyScan, needsFaceScan` (joining the `../editorModel` import; `addFaceScan` is `firstAnswer`'s now) and `type BodyFieldInput` (joining the `../../body/field` import); then:
 
 1. **Face scan on leaving 裁切 / after ↶ ↷** (S §3.6): a ref `scanQuarter = useRef<Quarter>(0)`; an effect on `[cropMode, edit.photo.geometry, detect, session]`:
 
@@ -6261,11 +6267,11 @@ In `src/ui/screens/Editor.tsx`, import `bodiesUToO, faceOToU, fieldUToO, maskOTo
   }, [cropMode, edit.photo.geometry, detect, session]);
 ```
 
-In the session effect (`Editor.tsx:191-256`), when `forceDetect.current` is set: create the session with `upTracker(tracker, scanQuarter.current)` and **without** cached faces (so it detects), then clear `forceDetect`; the overlay shows `<Status spinner title="正在重新偵測臉部…" />` while `scanning`; `setScanning(false)` once the session is bound. Where step 1's definite-answer routine records `{quarter: 0, flipH: false}` in `faceScans`, record `addFaceScan(cache.faceScans, scanQuarter.current)` instead (it is 0 for the first detection). New persons enter through step 1's `rebase`, so ↶ of the rotation keeps them (C §7). (`detectRef` = step 1's ref to the current `DetectionCache | null`; `forceDetect` = `useRef(false)`; `scanning` = `useState(false)`.)
+In the session effect (`Editor.tsx:392-463`; it re-runs on `[currentEngine, detectGen]`), when `forceDetect.current` is set: the plan is `{ useCache: false, asks: !!tracker }` instead of step 1's `sessionPlan(cache, !!tracker)` (whose `useCache` is true for a scanned-upright cache, so it would not detect), and `deps.createStillSession` gets `upTracker(tracker, scanQuarter.current)` as its tracker (and so no cached `faces` / `obstacles`, as `useCache` is false); the `firstAnswer({ … })` that step 1 hands to `applyAnswer` gains `quarter: scanQuarter.current` (it is 0 for the first detection, so step 1's `{quarter: 0, flipH: false}` is unchanged); then clear `forceDetect`. The overlay chain (`Editor.tsx:1110-1125`) shows `<Status spinner title="正在重新偵測臉部…" />` while `scanning`, before its `!session` case; `setScanning(false)` once the session is bound (`setBound`). New persons enter through step 1's `rebase` (`applyAnswer` → `rebaseOnDetect`), so ↶ of the rotation keeps them (C §7). (`detectRef` = step 1's ref to the current `DetectionCache | null`; `forceDetect` = `useRef(false)`; `scanning` = `useState(false)`; `bundle.tracker` is the tracker step 1's effect reads.)
 
-2. **Body detection in U** (`startBodyDetection`, `Editor.tsx:445-465`): before `detectBody`, `const q = upQuarter(editRef.current.photo.geometry); const up = await upImage(source.bitmap, q);`, pass `up.image` as the image, and map the result with `bodiesUToO(det, q)`; `up.close()` in a `finally`. Record `bodyScans: addBodyScan(detectRef.current?.bodyScans, q)` in the cache patch step 1 writes after a body detection. The trigger (`shouldDetectBody`, `Editor.tsx:473-477`) also starts a detection when `needsBodyScan(detectRef.current, editRef.current.photo.geometry)` and the 美體 tab is entered.
+2. **Body detection in U** (`startBodyDetection`, `Editor.tsx:615-652`): step 1 calls `detectBody(() => ensureBodyTracker(), source.bitmap, { pause, cancelled })` and answers with `bodyAnswer(cache, dets?.bodies ?? [], photo)`. Make the image the U image: `const q = upQuarter(editRef.current.photo.geometry);`, `upImage(source.bitmap, q)` awaited before `detectBody` and its `image` passed in place of `source.bitmap`, `close()` once `detectBody` settles (either way); the answer reads `bodyAnswer(cache, dets ? bodiesUToO(dets, q).bodies : [], photo)` and step 1's `rebaseOnDetect(a.rebase, a.detect)` gets `{ ...a.detect, bodyScans: addBodyScan(cache.bodyScans, q) }`. The trigger effect (`Editor.tsx:654-660`) also starts a detection when the 美體 tab is `entered` and `needsBodyScan(detectRef.current, editRef.current.photo.geometry)` (step 1's `shouldDetectBody` answers false once the phase is `done`), never while `bodyDet.phase === 'working'`.
 
-3. **Selfie segmenter in U** (`Editor.tsx:571`): the deps' `segmenter` becomes
+3. **Selfie segmenter in U** (`Editor.tsx:745`, the `FaceProtectSource` deps): the deps' `segmenter` becomes
 
 ```ts
           segmenter: () =>
@@ -6286,7 +6292,7 @@ In the session effect (`Editor.tsx:191-256`), when `forceDetect.current` is set:
             }),
 ```
 
-4. **Measure and field in U** (S §3.4): with `const up = upQuarter(edit.photo.geometry);`, each body person's measure is `measureBody({ ...det, pose: poseOToU(det.pose, up), mask: det.mask && maskOToU(det.mask, up), width: up % 2 ? det.height : det.width, height: up % 2 ? det.width : det.height }, pairedFace && faceOToU(pairedFace, up))`; the field builder handed to `BodyFieldMemo` is wrapped:
+4. **Measure and field in U** (S §3.4): with `const up = upQuarter(edit.photo.geometry);` and `const detU = (det: BodyDetection): BodyDetection => (up === 0 ? det : { ...det, pose: poseOToU(det.pose, up), mask: det.mask && maskOToU(det.mask, up), width: up % 2 ? det.height : det.width, height: up % 2 ? det.width : det.height });`, step 1's `measurePersons(detect, faceOf, measureBody, onError)` memo (`Editor.tsx:237-240`) passes the measure `(det, face) => measureBody(detU(det), face && faceOToU(face, up))` and lists `up` in its dependencies, and the 美體 note's detection (`bodyDetectionOf(detect, ownerBody)` handed to `bodyPanelContext`, `Editor.tsx:1031`) goes through `detU` as well, so a new 增高 band is suggested on the legs' E rows (`BodyDetection` joins the `../../types` type import); the field builder handed to `BodyFieldMemo` is wrapped:
 
 ```ts
   const buildInU = (input: BodyFieldInput, prev?: BodyField | null, edge?: number) => {
@@ -6297,7 +6303,7 @@ In the session effect (`Editor.tsx:191-256`), when `forceDetect.current` is set:
   };
 ```
 
-and the memo (`Editor.tsx:135`, `useState(() => new BodyFieldMemo(buildBodyField))`) is built as `new BodyFieldMemo((input, prev, edge) => buildInU(input, prev, edge))`: the arrow reads `buildInU` only when the memo builds, so `buildInU` may be declared further down the component (a direct reference in the `useState` initializer would hit its temporal dead zone on the first render). Every `fieldMemo.update(…)` call passes `upQuarter(editRef.current.photo.geometry)` as its new last argument. `heightBand` stays as stored: E rows = U rows.
+and the memo (`Editor.tsx:216`, `useState(() => new BodyFieldMemo(buildBodyField))`) is built as `new BodyFieldMemo((input, prev, edge) => buildInU(input, prev, edge))`: the arrow reads `buildInU` only when the memo builds, so `buildInU` may be declared further down the component (a direct reference in the `useState` initializer would hit its temporal dead zone on the first render). The one `fieldMemo.update(…)` call, step 1's `applyField` (`fieldMemo.update(fieldInputOf(…), draft)`, `Editor.tsx:666`), passes `upQuarter(editRef.current.photo.geometry)` as its new last argument. `heightBand` stays as stored: E rows = U rows.
 
 - [ ] **Step 6: A sideways photo is scanned once, after 裁切**
 
@@ -6338,7 +6344,7 @@ test('a sideways photo: 旋轉 and 翻轉 run no detector; leaving 裁切 scans 
 
 - [ ] **Step 7: Run everything touched**
 
-Run: `npx vitest run src/geometry/ src/ui/editorModel.test.ts src/detect/`
+Run: `npx vitest run src/geometry/ src/ui/editorModel.test.ts src/detect/ src/edit/migrate.test.ts`
 Expected: PASS.
 Run: `npm run build && npx playwright test tests/e2e/crop.spec.ts tests/e2e/body.spec.ts tests/e2e/faceProtect.spec.ts`
 Expected: all passed (identity geometry: `upQuarter` 0 everywhere, so body and 瘦臉-limit paths are today's).
@@ -6346,7 +6352,7 @@ Expected: all passed (identity geometry: `upQuarter` 0 everywhere, so body and �
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/geometry/upFrame.ts src/geometry/upFrame.test.ts src/ui/editorModel.ts src/ui/editorModel.test.ts src/detect/ src/types.ts src/ui/screens/Editor.tsx tests/e2e/crop.spec.ts
+git add src/geometry/upFrame.ts src/geometry/upFrame.test.ts src/ui/editorModel.ts src/ui/editorModel.test.ts src/detect/ src/edit/migrate.ts src/types.ts src/ui/screens/Editor.tsx tests/e2e/crop.spec.ts
 git commit -m "$(cat <<'EOF'
 v0.4 step 3: detection and body field in the up frame U (one sideways re-scan)
 
@@ -6360,12 +6366,12 @@ EOF
 ### Task 16: Source plumbing — keep the picked file, carry it on reopen
 
 **Files:**
-- Modify: `src/ui/state.ts:27-40` (`EditorSource`, CRLF), `src/ui/flows.ts:16-45` (CRLF), `src/ui/screens/Home.tsx:80-104` (CRLF), `src/ui/deps.ts` (CRLF), `src/ui/screens/Editor.tsx` (`writeHistory` `:299-318`), `tests/e2e/fixtures.ts` (helpers)
+- Modify: `src/ui/state.ts:32-54` (`EditorSource`, CRLF), `src/ui/flows.ts:21-40` (`openInEditor`, CRLF), `src/ui/screens/Home.tsx:82` (CRLF; the import only: `openEntry` `:85-101` already hands `openInEditor` the entry), `src/ui/deps.ts` (CRLF), `src/ui/screens/Editor.tsx` (next to `photo` `:227`; `writeHistory` `:512-532`), `tests/e2e/fixtures.ts` (helpers)
 - Test: `src/ui/flows.test.ts`, `tests/e2e/crop.spec.ts`
 
 **Interfaces:**
-- Consumes: Task 5 (`importPhotoInfo`), Task 6 (`HistoryEntry.source/sourceWidth/sourceHeight`), Task 9 (`SourceInfo`, `NO_SOURCE`, `shouldKeepSource`, `sourceSizeRecord`); step 1's `openInEditor` options and `addEntry` call in `writeHistory`.
-- Produces: `EditorSource.source?: SourceInfo` (absent = none: camera shots, `Review.tsx:91` unchanged), `EditorSource.picked?: File` (a new import's file, kept only if `shouldKeepSource` accepts it); `openInEditor(blob, { …, source?: SourceInfo, picked?: boolean })`; in the Editor: `sourceRef: { current: SourceInfo }` (what an export reads, resolved once the keep decision settles), `keepSource: Promise<boolean>`; `deps.shouldKeepSource`; e2e helpers `makeJpeg(page, w, h): Promise<Buffer>`, `withExifOrientation(jpeg: Buffer, orientation: number): Buffer`, `exportFile(page): Promise<{ width; height; type; name }>`, `closeFallback(page)`, `readHistory(page): Promise<{ sourceSize: number; sourceWidth?: number; sourceHeight?: number }[]>`.
+- Consumes: Task 5 (`importPhotoInfo`), Task 6 (`HistoryEntry.source/sourceWidth/sourceHeight`), Task 9 (`SourceInfo`, `NO_SOURCE`, `shouldKeepSource`, `sourceSizeRecord`); step 1's `openInEditor(blob, { entry?: HistoryEntry | null; returnTo })` (a reopen passes the entry and `openState` runs inside it) and the `addEntry` call in `writeHistory`.
+- Produces: `EditorSource.source?: SourceInfo` (absent = none: camera shots through `freshSource`, `Review.tsx` unchanged), `EditorSource.picked?: File` (a new import's file, kept only if `shouldKeepSource` accepts it); `openInEditor(blob, { entry?, returnTo, picked?: boolean })`, which derives `source` from the entry on a reopen; in the Editor: `sourceRef: { current: SourceInfo }` (what an export reads, resolved once the keep decision settles), `keepSource: Promise<boolean>`; `deps.shouldKeepSource`; e2e helpers `makeJpeg(page, w, h): Promise<Buffer>`, `withExifOrientation(jpeg: Buffer, orientation: number): Buffer`, `exportFile(page): Promise<{ width; height; type; name }>`, `closeFallback(page)`, `readHistory(page): Promise<{ sourceSize: number; sourceWidth?: number; sourceHeight?: number }[]>`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -6395,7 +6401,12 @@ describe('openInEditor source (step 3)', () => {
   it('a reopened entry carries its stored source through', async () => {
     const { flows, app } = await load('auto', 'H');
     const blob = new Blob(['s']);
-    await flows.openInEditor(new Blob([]), { historyId: 'e3', returnTo: 'home', source: { blob, width: 4032, height: 3024 } });
+    // step 1's reopen: openInEditor gets the entry itself (Home.tsx openEntry) and runs openState inside
+    const entry: HistoryEntry = {
+      id: 'e3', createdAt: 1, updatedAt: 1, original: new Blob([]), thumb: new Blob([]), params: defaultParams(), width: 4, height: 3,
+      source: blob, sourceWidth: 4032, sourceHeight: 3024,
+    };
+    await flows.openInEditor(new Blob([]), { entry, returnTo: 'home' });
     const screen = app.get().screen;
     if (screen.name !== 'editor') throw new Error('not the editor');
     expect(screen.source.source).toEqual({ blob, width: 4032, height: 3024 });
@@ -6403,6 +6414,8 @@ describe('openInEditor source (step 3)', () => {
   });
 });
 ```
+
+(`HistoryEntry` and `defaultParams` are imported in the file already.)
 
 Add to `tests/e2e/fixtures.ts`:
 
@@ -6534,7 +6547,7 @@ Expected: FAIL — `info` not called (`openInEditor` ignores `picked`).
 
 (`import type { SourceInfo } from '../media/exportPlan';`.)
 
-`src/ui/flows.ts` (CRLF): the options gain `source?: SourceInfo; picked?: boolean;` and the decode becomes
+`src/ui/flows.ts` (CRLF): `openInEditor`'s options (`flows.ts:22`, step 1's `{ entry?: HistoryEntry | null; returnTo }`) gain `picked?: boolean;` and the decode (`flows.ts:25`) becomes
 
 ```ts
     let bitmap: ImageBitmap;
@@ -6546,13 +6559,13 @@ Expected: FAIL — `info` not called (`openInEditor` ignores `picked`).
     } else bitmap = await deps.importPhoto(blob, maxImportEdge());
 ```
 
-and after building `source`: `if (opts.picked && oriented) { source.picked = blob as File; source.source = { blob: null, width: oriented.width, height: oriented.height }; } else if (opts.source) source.source = opts.source;`.
+and after building `source` (both branches, before `go(…)`): `if (entry) source.source = { blob: entry.source ?? null, width: entry.sourceWidth ?? null, height: entry.sourceHeight ?? null }; else if (opts.picked && oriented) { source.picked = blob as File; source.source = { blob: null, width: oriented.width, height: oriented.height }; }` (`import type { SourceInfo }` is not needed here: the fields are typed by `EditorSource`).
 
-`src/ui/screens/Home.tsx` (CRLF): the import (`Home.tsx:82`) becomes `pickPhoto((f) => void openInEditor(f, { returnTo: 'home', picked: true }));` and `openEntry` (`Home.tsx:94-101`) adds `source: { blob: entry.source ?? null, width: entry.sourceWidth ?? null, height: entry.sourceHeight ?? null },`.
+`src/ui/screens/Home.tsx` (CRLF): the import (`Home.tsx:82`) becomes `pickPhoto((f) => void openInEditor(f, { returnTo: 'home', picked: true }));`. `openEntry` (`Home.tsx:85-101`) is unchanged: it already passes `{ entry, returnTo: 'home' }`, and `openInEditor` reads the source from the entry.
 
 `src/ui/deps.ts`: import `shouldKeepSource` from `../media/exportPlan` and add it to `deps`.
 
-`src/ui/screens/Editor.tsx`: import `NO_SOURCE, sourceSizeRecord, type SourceInfo` from `../../media/exportPlan` (Task 17 extends this import); next to `photo`:
+`src/ui/screens/Editor.tsx`: import `NO_SOURCE, sourceSizeRecord, type SourceInfo` from `../../media/exportPlan` (Task 17 extends this import); next to `photo` (`Editor.tsx:227`):
 
 ```ts
   // ── the full-resolution source (S §3.7): decided once per import, before the add that creates the entry ──
@@ -6571,7 +6584,7 @@ and after building `source`: `if (opts.picked && oriented) { source.picked = blo
   }, []);
 ```
 
-In `writeHistory`, the `deps.addEntry({...})` that creates the entry (`Editor.tsx:308-315`) gains:
+In `writeHistory`, the `deps.addEntry({...})` that creates the entry (`Editor.tsx:522-529`) gains:
 
 ```ts
       ...((await keepSource) && source.picked ? { source: source.picked } : {}),
@@ -6580,7 +6593,7 @@ In `writeHistory`, the `deps.addEntry({...})` that creates the entry (`Editor.ts
 
 (`addEntry` retries without the file on a quota error; this session keeps `sourceRef` and exports from the in-memory file, S §3.7.)
 
-In the same function, the `original` fallback `deps.toJpegBlob(img, ORIGINAL_EDGE, 0.9)` (`Editor.tsx:306`) becomes `deps.toJpegBlob(source.bitmap, ORIGINAL_EDGE, 0.9)`: `img` is now the V image (cropped, turned), and `original` must stay the uncropped O working copy so 還原 works after a reopen (S §5). `width` / `height` stay the session's working size (`still.ts` keeps `session.width/height` = O).
+In the same function, the `original` fallback `deps.toJpegBlob(img, ORIGINAL_EDGE, 0.9)` (`Editor.tsx:519`; the setup normally made `originalBlob` from `source.bitmap` already, `:408`) becomes `deps.toJpegBlob(source.bitmap, ORIGINAL_EDGE, 0.9)`: `img` is now the V image (cropped, turned), and `original` must stay the uncropped O working copy so 還原 works after a reopen (S §5). `width` / `height` stay the session's working size (`still.ts` keeps `session.width/height` = O).
 
 - [ ] **Step 4: Run the tests**
 
@@ -6607,11 +6620,11 @@ EOF
 
 **Files:**
 - Create: `src/ui/exportFlow.ts`, `src/ui/exportFlow.test.ts`
-- Modify: `src/ui/screens/Editor.tsx` (state `:95-99`, `encode` `:615-620`, debounce effect `:626-669`, `save` `:700-737`, visibility `:386-393`, `close` `:780-783`, `update` `:169-180`, topbar `:819-828`, overlay `:800-815`), `src/ui/deps.ts` (CRLF, `runTiledExport`)
+- Modify: `src/ui/screens/Editor.tsx` (state `:184-188`, `update` `:303-321`, visibility `:578-585`, unmount cleanup `:587-610`, `encode` `:814-820`, debounce effect `:827-881`, `share` / `save` `:890-947`, `close` `:1014-1017`, overlay `:1110-1125`, topbar `:1128-1138`, tools and panel `:1157-1197`), `src/ui/deps.ts` (CRLF, `runTiledExport`)
 - Test: `src/ui/exportFlow.test.ts`, `tests/e2e/crop.spec.ts`
 
 **Interfaces:**
-- Consumes: Task 4 (`EXPORT_COPY`, `ExportEnv`, `readExportDebug`, `exportCapped`), Task 5 (`encodeOutput`), Task 9 (`planExport`, `ExportPlan`, `SourceInfo`, `NO_SOURCE`), Task 10 (`runTiledExport`), Task 11 (`pauseDisplay`, `tileInput`, `bounds`, `DebugState.export`), Task 16 (`sourceRef`); `stampIs` (`editorModel.ts:331`); step 1's `editKey`, `frameRef` (the frame `session.render` gets; add `const frameRef = useRef(frame); frameRef.current = frame;` next to the render effect if step 1 has none), `exportOnLatest` (`editorModel.ts:55`).
+- Consumes: Task 4 (`EXPORT_COPY`, `ExportEnv`, `readExportDebug`, `exportCapped`), Task 5 (`encodeOutput`), Task 9 (`planExport`, `ExportPlan`, `SourceInfo`, `NO_SOURCE`), Task 10 (`runTiledExport`), Task 11 (`pauseDisplay`, `tileInput`, `bounds`, `DebugState.export`), Task 16 (`sourceRef`); `stampIs` (`editorModel.ts:344`); step 1's `editKey`, `frameOf(e, s)` (`Editor.tsx:256-259`: the frame session `s` renders and exports for edit `e`; step 1 keeps no frame ref, and an export builds its frame from the edit captured at the tap, so the replacement session of `exportOnLatest` gets its own faces), `exportOnLatest` (`editorModel.ts:92`), `settleField` / `snapshotField` / `fieldGen` / `sessionEngine` / `share`, the existing `encode(s, e, field)` and the `useStore` / `toast` / `debug` imports.
 - Produces (`exportFlow.ts`): `type Pill = 'save' | 'preparing' | 'share'`; `pillLabel(p): string`; `planSig(p: Pick<ExportPlan, 'mode' | 'format' | 'quality' | 'width' | 'height'>): string`; `interface ShareCache { key: string; field: number; sig: string; file: File }`; `shareReady(c, key, field, sig): boolean`; `preEncodes(p: Pick<ExportPlan, 'mode' | 'format'>): boolean`; `shareNow(startedAt: number, now: number): boolean`; `tapAction(pill: Pill, hasPending: boolean): 'ignore' | 'sharePending' | 'export'`; `exportOutcome(e: unknown): 'abort' | 'fallback'`; `noSourceNote(plan, source, working): boolean`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -6832,7 +6845,7 @@ export function noSourceNote(plan: ExportPlan, source: SourceInfo, working: Size
 
 `src/ui/deps.ts`: import `runTiledExport` from `../media/exportFull` and add it to `deps`.
 
-`src/ui/screens/Editor.tsx`: imports `EXPORT_COPY, planExport, type ExportPlan` added to Task 16's `../../media/exportPlan` import (`NO_SOURCE`, `SourceInfo` are there already), `exportOutcome, noSourceNote, pillLabel, planSig, preEncodes, shareNow, shareReady, tapAction, type Pill, type ShareCache` (`../exportFlow`), `app` (`../state`) and `debug` (`../debug`, next to `reportError`). State (replacing `preparing`, `Editor.tsx:95`, and typing `fresh` as `ShareCache`, `Editor.tsx:99`):
+`src/ui/screens/Editor.tsx`: imports `EXPORT_COPY, planExport, type ExportPlan` added to Task 16's `../../media/exportPlan` import (`NO_SOURCE`, `SourceInfo` are there already), `exportOutcome, noSourceNote, pillLabel, planSig, preEncodes, shareNow, shareReady, tapAction, type Pill, type ShareCache` (`../exportFlow`) and `app` (joining the `go, setPendingHistory, showSaveFallback, toast, type EditorSource` import from `../state`); `debug`, `useStore`, `exportOnLatest` and `stampIs` are imported already. State (replacing `preparing`, `Editor.tsx:184`, and typing `fresh` as `ShareCache`, `Editor.tsx:188`):
 
 ```ts
   const prefs = useStore(app, (s) => s.prefs);
@@ -6846,7 +6859,11 @@ export function noSourceNote(plan: ExportPlan, source: SourceInfo, working: Size
   const fresh = useRef<ShareCache | null>(null);
   /** the file a slow export delivered: the 「分享」 tap shares it (tapAction) */
   const delivered = useRef<File | null>(null);
+```
 
+and, after step 1's `frameOf` (`Editor.tsx:256-259`; it needs `photo` and `frameOf`):
+
+```ts
   const planFor = (s: StillSession, e: EditState, src: SourceInfo, field: BodyField | null): ExportPlan =>
     planExport(
       e,
@@ -6854,27 +6871,27 @@ export function noSourceNote(plan: ExportPlan, source: SourceInfo, working: Size
       src,
       photo,
       { prefTier: prefsRef.current.tier, autoTier: deps.autoTierSession(), screen: { width: window.screen.width, height: window.screen.height }, capped: deps.exportCapped() },
-      s.bounds(frameRef.current, field),
+      s.bounds(frameOf(e, s), field),
       deps.readExportDebug(),
     );
 ```
 
-`update(next, commit)` (`Editor.tsx:169-180`) additionally drops a finished file: `fresh.current = null; delivered.current = null; setPill((p) => (p === 'share' ? 'save' : p));` (a 25 MB file is not kept past the next edit, S §2.3; the functional update avoids a stale `pill` in a drag's closure).
+`update(e, commit, user = true)` (`Editor.tsx:303-321`) additionally drops a finished file: `fresh.current = null; delivered.current = null; setPill((p) => (p === 'share' ? 'save' : p));` (a 25 MB file is not kept past the next edit, S §2.3; the functional update avoids a stale `pill` in a drag's closure).
 
-`encode` (`Editor.tsx:615-620`) takes the plan:
+`encode` (`Editor.tsx:814-820`; step 1's `encode(s, e, field)` builds the frame from the edit for the session it runs on) takes the plan:
 
 ```ts
-  const encode = async (s: StillSession, f: StillFrame, field: BodyField | null, plan: ExportPlan) => {
-    await s.prepareExport(f);
+  const encode = async (s: StillSession, e: EditState, field: BodyField | null, plan: ExportPlan) => {
+    await s.prepareExport(frameOf(e, s));
     if (unmounted.current) throw new Error('editor closed');
-    const img = s.exportImageData(f, field);
+    const img = s.exportImageData(frameOf(e, s), field);
     return { img, file: await deps.encodeOutput(img, plan.format, plan.quality) };
   };
 ```
 
-The debounce effect (`Editor.tsx:626-669`): returns at once while `exporting` (it re-arms when the export ends), lists `exporting` and `prefs` in its dependencies, computes `const plan = planFor(s, editRef.current, sourceRef.current, fieldMemo.field); const sig = planSig(plan);`, uses `shareReady(fresh.current, key, gen, sig)` where it used `stampIs(fresh.current, …)`, and encodes a share file only when `preEncodes(plan)` (otherwise it exports the image for the thumbnail and the autosave only, as its `!img` branch does today); a new share file is stored as `{ key, field: gen, sig, file }`.
+The debounce effect (`Editor.tsx:827-881`): returns at once while `exporting` (it re-arms when the export ends), lists `exporting` and `prefs` in its dependencies, computes `const plan = planFor(s, editRef.current, sourceRef.current, fieldMemo.field); const sig = planSig(plan);`, uses `shareReady(fresh.current, key, gen, sig)` where it used `stampIs(fresh.current, …)` (`:831`, `:841`), calls `encode(s, edit, field, plan)` and encodes a share file only when `preEncodes(plan)` (otherwise it exports the image for the thumbnail and the autosave only, as its `!img` branch does today); a new share file is stored as `{ key, field: gen, sig, file }`.
 
-`save` (`Editor.tsx:700-737`) becomes:
+`save` (`Editor.tsx:908-947`) becomes:
 
 ```ts
   const save = () => {
@@ -6889,10 +6906,12 @@ The debounce effect (`Editor.tsx:626-669`): returns at once while `exporting` (i
       return;
     }
     const s = session;
-    const key = editKey(editRef.current);
+    // the user's state at the tap is what is exported (step 1: these params and this 美體 field, snapshotField)
+    const e = editRef.current;
+    const key = editKey(e);
     const gen = settleField();
     const field = snapshotField();
-    const plan = planFor(s, editRef.current, sourceRef.current, field);
+    const plan = planFor(s, e, sourceRef.current, field);
     const sig = planSig(plan);
     if (shareReady(fresh.current, key, gen, sig)) {
       setPill('save');
@@ -6903,10 +6922,9 @@ The debounce effect (`Editor.tsx:626-669`): returns at once while `exporting` (i
       noSourceToastDone.current = true;
       toast(EXPORT_COPY.noSource);
     }
-    const frame = frameRef.current;
     const t0 = performance.now();
-    if (plan.mode === 'tiled' && sourceRef.current.blob && sessionEngine.current) runTiled(s, frame, field, plan, key, gen, t0);
-    else runWorking(s, frame, field, plan, key, gen, t0);
+    if (plan.mode === 'tiled' && sourceRef.current.blob && sessionEngine.current) runTiled(s, e, field, plan, key, gen, t0);
+    else runWorking(s, e, field, plan, key, gen, t0);
   };
 
   /** finished: share inside the 4 s window, else the pill asks for a second tap (S §2.3) */
@@ -6921,29 +6939,29 @@ The debounce effect (`Editor.tsx:626-669`): returns at once while `exporting` (i
     }
   };
 
-  /** today's path (Editor.tsx:700-737): the working size, encoded in the plan's format */
-  const runWorking = (s: StillSession, frame: StillFrame, field: BodyField | null, plan: ExportPlan, key: string, gen: number, t0: number) => {
+  /** today's path (step 1's save): the working size, encoded in the plan's format */
+  const runWorking = (s: StillSession, e: EditState, field: BodyField | null, plan: ExportPlan, key: string, gen: number, t0: number) => {
     setPill('preparing');
     const replacement = (failed: StillSession) => {
       const cur = sessionRef.current;
       return !unmounted.current && cur && cur !== failed && !sessionEngine.current?.lost ? cur : null;
     };
-    exportOnLatest(s, (x) => encode(x, frame, field, plan), replacement).then(
+    exportOnLatest(s, (x) => encode(x, e, field, plan), replacement).then(
       ({ s: done, result: r }) => {
         debug({ export: { mode: 'working', width: r.img.width, height: r.img.height, tiles: 0, ms: Math.round(performance.now() - t0) } });
         if (sessionRef.current === done && editKey(editRef.current) === key && fieldGen.current === gen) fresh.current = { key, field: gen, sig: planSig(plan), file: r.file };
         deliver(r.file, t0);
       },
-      (e: unknown) => {
+      (err: unknown) => {
         if (unmounted.current) return;
         setPill('save');
-        toast(`無法輸出照片：${reportError(e, 'encode')}`, 4000);
+        toast(`無法輸出照片：${reportError(err, 'encode')}`, 4000);
       },
     );
   };
 
   /** the source decoded at up to 4096 and rendered in tiles; one fallback to the working size on failure (C §4.6) */
-  const runTiled = (s: StillSession, frame: StillFrame, field: BodyField | null, plan: ExportPlan, key: string, gen: number, t0: number) => {
+  const runTiled = (s: StillSession, e: EditState, field: BodyField | null, plan: ExportPlan, key: string, gen: number, t0: number) => {
     const engine = sessionEngine.current!;
     const ac = new AbortController();
     exportAbort.current = ac;
@@ -6952,7 +6970,7 @@ The debounce effect (`Editor.tsx:626-669`): returns at once while `exporting` (i
     debug({ export: null });
     s.pauseDisplay(true);
     deps
-      .runTiledExport(engine, sourceRef.current.blob!, plan, s.tileInput(frame, field), {
+      .runTiledExport(engine, sourceRef.current.blob!, plan, s.tileInput(frameOf(e, s), field), {
         signal: ac.signal,
         working: photo,
         knob: deps.readExportDebug(),
@@ -6965,15 +6983,17 @@ The debounce effect (`Editor.tsx:626-669`): returns at once while `exporting` (i
           if (editKey(editRef.current) === key && fieldGen.current === gen) fresh.current = { key, field: gen, sig: planSig(plan), file };
           deliver(file, t0);
         },
-        (e: unknown) => {
-          if (unmounted.current || exportOutcome(e) === 'abort') {
+        (err: unknown) => {
+          if (unmounted.current || exportOutcome(err) === 'abort') {
             setPill('save');
             return;
           }
-          reportError(e, 'tiled export');
+          // a handled fallback, told by its toast: a warning, not reportError (console.error fails every e2e test,
+          // tests/e2e/fixtures.ts guard, and the knob-injected failures of crop.spec.ts take this path)
+          console.warn('[meiyan] tiled export failed; standard fallback', err);
           toast(EXPORT_COPY.fallback, 4000);
-          const working = planFor(s, editRef.current, NO_SOURCE, field);
-          runWorking(sessionRef.current ?? s, frame, field, working, key, gen, t0);
+          const working = planFor(s, e, NO_SOURCE, field);
+          runWorking(sessionRef.current ?? s, e, field, working, key, gen, t0);
         },
       )
       .finally(() => {
@@ -6981,14 +7001,14 @@ The debounce effect (`Editor.tsx:626-669`): returns at once while `exporting` (i
         setExporting(null);
         try {
           s.pauseDisplay(false);
-        } catch (e) {
-          reportError(e, 'pauseDisplay');
+        } catch (err) {
+          reportError(err, 'pauseDisplay');
         }
       });
   };
 ```
 
-The visibility handler (`Editor.tsx:386-393`):
+The visibility handler (`Editor.tsx:578-585`):
 
 ```ts
     const onVis = () => {
@@ -7006,9 +7026,9 @@ The visibility handler (`Editor.tsx:386-393`):
     };
 ```
 
-`close` (`Editor.tsx:780-783`) starts with `exportAbort.current?.abort();` (✕ cancels, then closes); the unmount cleanup drops `fresh.current = null; delivered.current = null;`.
+`close` (`Editor.tsx:1014-1017`) starts with `exportAbort.current?.abort();` (✕ cancels, then closes); the unmount cleanup (`Editor.tsx:587-610`) drops `fresh.current = null; delivered.current = null;`.
 
-The topbar pill (`Editor.tsx:825-827`):
+The topbar pill (`Editor.tsx:1135-1137`):
 
 ```tsx
         <button type="button" class="pill" onClick={save} disabled={!session || pill === 'preparing' || lost} aria-busy={pill === 'preparing'}>
@@ -7016,7 +7036,7 @@ The topbar pill (`Editor.tsx:825-827`):
         </button>
 ```
 
-and `inert={!!exporting}` on `.title-center` (↶ ↷), `.editor-tools` and `.editor-panel`. In the overlay chain (`Editor.tsx:800-815`), before the `lost` case:
+and `inert={!!exporting}` on `.title-center` (↶ ↷, `:1131`), `.editor-tools` (`:1160`) and `.editor-panel` (`:1179`). In the overlay chain (`Editor.tsx:1110-1125`), before the `lost` case:
 
 ```tsx
   } else if (exporting) {
@@ -7034,7 +7054,7 @@ and `inert={!!exporting}` on `.title-center` (↶ ↷), `.editor-tools` and `.ed
 Run: `npx vitest run src/ui/`
 Expected: PASS.
 Run: `npm run build && npx playwright test tests/e2e/crop.spec.ts tests/e2e/editor.spec.ts`
-Expected: all passed (`editor.spec.ts:105-107` still exports 1000 × 1500: `sample_face.png` is not larger than the working copy, so the plan is `working`).
+Expected: all passed (`editor.spec.ts:108-109` still exports 1000 × 1500: `sample_face.png` is not larger than the working copy, so the plan is `working`).
 
 - [ ] **Step 6: Commit**
 
@@ -7053,7 +7073,7 @@ EOF
 ### Task 18: App e2e — dimensions, exact copies, 拉直, faces under geometry, reopen, PNG, breadcrumb, EXIF, 裁切 frames
 
 **Files:**
-- Modify: `tests/e2e/crop.spec.ts` (cases 1–4, 6–8, 10, 11 of S §8.2), `LICENSES/NOTICE.txt:56-59` (one line for the derived test images, S §8.3)
+- Modify: `tests/e2e/crop.spec.ts` (cases 1–4, 6–8, 10, 11 of S §8.2), `LICENSES/NOTICE.txt:61` (one entry for the derived test images, S §8.3)
 - Test: `tests/e2e/crop.spec.ts`
 
 **Interfaces:**
@@ -7396,7 +7416,7 @@ test('裁切 mode draws no engine frame while handles move, 拉直 drags and 旋
 
 - [ ] **Step 2: Add the NOTICE line**
 
-In `LICENSES/NOTICE.txt` (LF), after the `tests/fixtures/sample_face.pose.json …` line (`NOTICE.txt:59`):
+In `LICENSES/NOTICE.txt` (LF), after the `tests/fixtures/sample_face.pose.json …` line (`NOTICE.txt:61`; step 1 added the `group_faces` / `group_people` entries below it):
 
 ```
   - Test images generated in code from sample_face.png and a gradient (not committed): the large JPEGs, the EXIF-
@@ -7699,11 +7719,11 @@ export async function runExportBench(engine: Engine, onRow: (r: ExportBenchRow) 
 }
 ```
 
-`src/bench/main.ts` (CRLF): import `runExportBench` and `formatExportRows, type ExportBenchRow`; keep `let exportRows: ExportBenchRow[] = [];`; add a button next to the body-bench controls in the panel, and a hidden file input like the body bench's (`bodyInput`, `main.ts:487-493`) whose `change` runs the bench with the picked photo (a HEIC original from 照片 on the iPhone):
+`src/bench/main.ts` (CRLF): import `runExportBench` and `formatExportRows, type ExportBenchRow`; keep `let exportRows: ExportBenchRow[] = [];`; add a button next to the body-bench controls in the panel, and a hidden file input like the body bench's (`bodyInput`, `main.ts:498-512`) whose `change` runs the bench with the picked photo (a HEIC original from 照片 on the iPhone):
 
 ```ts
 const exportBtn = button('輸出測試', () => void runExport());
-// in the document and not display:none / hidden, like bodyInput (main.ts:477-491): iOS then opens the picker reliably
+// in the document and not display:none / hidden, like bodyInput (main.ts:498-512): iOS then opens the picker reliably
 const exportInput = el('input', { type: 'file', accept: 'image/*', tabIndex: -1 });
 exportInput.setAttribute('aria-hidden', 'true');
 exportInput.style.cssText = 'position:fixed;left:-100px;top:0;width:1px;height:1px;opacity:0';
@@ -7741,7 +7761,7 @@ async function runExport(picked?: File): Promise<void> {
 }
 ```
 
-and `copyResults` (`main.ts:684`) appends `\n\n${formatExportRows(exportRows)}` when `exportRows.length > 0`. Append `exportBtn` and `exportPhotoBtn` where the panel's other buttons (`bodyBtn`) are appended; `exportInput` is already in `root`. Declare these after `root` and `bodyOut` (`main.ts:155, 203`) so the module-level code finds them.
+and `copyResults` (`main.ts:725`) appends `\n\n${formatExportRows(exportRows)}` when `exportRows.length > 0`. Append `exportBtn` and `exportPhotoBtn` where the panel's other buttons (`bodyBtn`) are appended; `exportInput` is already in `root`. Declare these after `root` and `bodyOut` (`main.ts:166, 221`) so the module-level code finds them.
 
 - [ ] **Step 4: Verify**
 
@@ -7770,7 +7790,7 @@ EOF
 - Modify: none (fixes go to the task that owns the failing code, with their own commit)
 
 **Interfaces:**
-- Consumes: everything above; `STEP3_BASE` = the commit hash recorded before Task 1 (substitute it in every command below).
+- Consumes: everything above; `STEP3_BASE` = `b975bcc`, the step base commit (substitute it in every command below; the plan-reconcile commit right after it touches only this plan).
 - Produces: a green step 3 on local `feat/meiyan-pwa`, version still `0.3.0`.
 
 - [ ] **Step 1: Typecheck, unit tests, build**
@@ -7796,7 +7816,7 @@ Expected: PASS (identity geometry and no window keep P2 skipped).
 Run: `git diff --exit-code STEP3_BASE -- src/engine/shaders/composite.ts src/engine/compositeCpu.test.ts`
 Expected: exit 0 (step 3 changes no composite text; both step-2 hash pins unchanged, C §8.2).
 Run: `git diff STEP3_BASE -- tests/e2e/editor.spec.ts tests/e2e/camera.spec.ts tests/e2e/engine.spec.ts tests/e2e/body.spec.ts tests/e2e/faceProtect.spec.ts tests/e2e/home.spec.ts tests/e2e/update.spec.ts tests/e2e/parity.spec.ts`
-Expected: no output (existing app specs untouched; `editor.spec.ts:105-107` still exports 1000 × 1500).
+Expected: no output (existing app specs untouched; `editor.spec.ts:108-109` still exports 1000 × 1500).
 Run: `git diff STEP3_BASE -- tests/e2e/settings.spec.ts tests/e2e/reshape.spec.ts | grep -E '^-[^-]'`
 Expected: no output (only added tests).
 Run: `git diff STEP3_BASE -- 'src/**/*.test.ts' 'src/**/*.test.tsx' | grep -E '^-[^-]'`
@@ -7817,7 +7837,7 @@ git ls-files --eol | awk '$2 == "w/mixed" && $NF != "tests/harness/t1/harness.ts
 
 Expected: no output from either (`tests/harness/t1/harness.ts` was already mixed at `1f0273d`; this plan does not touch it).
 Run: `git status --short && git log --oneline STEP3_BASE..HEAD`
-Expected: a clean tree and one local commit per task (Tasks 1–19); `git status -sb` shows the branch ahead of its upstream — nothing was pushed.
+Expected: a clean tree, the plan-reconcile commit and one local commit per task (Tasks 1–19, plus any `task <N> fix` commits); `git status -sb` shows the branch ahead of its upstream — nothing was pushed.
 
 - [ ] **Step 5: Record the gate**
 

@@ -25,6 +25,7 @@ import { measureBody, paramAvailability } from '../../body/measure';
 import { bodyBox, personInfos } from '../../detect/cache';
 import { hitPerson } from '../../detect/persons';
 import { sanitizeParams } from '../../engine/params';
+import { NO_SOURCE, sourceSizeRecord, type SourceInfo } from '../../media/exportPlan';
 import { takePersonsHint } from '../../store/settings';
 import { stableKey } from '../../store/undo';
 import { buildFaceProtect } from '../../tracking/faceProtect';
@@ -244,6 +245,21 @@ export function Editor({ source }: { source: EditorSource }) {
   /** pixel size / aspect of the photo, read once (the bitmap is closed on unmount) */
   const [photo] = useState(() => ({ width: source.bitmap.width, height: source.bitmap.height }));
   const bodyAspect = photo.width / Math.max(1, photo.height) || 1;
+
+  // ── the full-resolution source (S §3.7): decided once per import, before the add that creates the entry ──
+  const workingLong = Math.max(photo.width, photo.height);
+  const probed = source.source?.width && source.source.height ? { width: source.source.width, height: source.source.height } : null;
+  const [keepSource] = useState<Promise<boolean>>(() =>
+    source.picked ? deps.shouldKeepSource(source.picked, probed, workingLong).catch(() => false) : Promise.resolve(false),
+  );
+  /** what an export reads (the first session exports like every later reopen: only a kept file counts) */
+  const sourceRef = useRef<SourceInfo>(source.picked ? { blob: null, width: probed?.width ?? null, height: probed?.height ?? null } : (source.source ?? NO_SOURCE));
+  useEffect(() => {
+    if (!source.picked) return;
+    void keepSource.then((keep) => {
+      if (keep && source.picked) sourceRef.current = { blob: source.picked, width: probed?.width ?? null, height: probed?.height ?? null };
+    });
+  }, []);
 
   // only a session bound to the current engine counts; while recoverEngine rebuilds there is none
   const session = bound && bundle && bound.engine === bundle.engine ? bound.s : null;
@@ -653,13 +669,18 @@ export function Editor({ source }: { source: EditorSource }) {
       await writeParams(historyId.current, e, limit, thumb);
       return;
     }
-    const original = await (originalBlob.current ?? deps.toJpegBlob(img, ORIGINAL_EDGE, 0.9));
+    // `img` is the V image (cropped, turned): `original` stays the uncropped O working copy, so 還原 works after a reopen (S §5)
+    const original = await (originalBlob.current ?? deps.toJpegBlob(source.bitmap, ORIGINAL_EDGE, 0.9));
     // the cache as it is when the entry is created (a detection-driven write before it had nothing to update)
     const detectNow = detectRef.current;
     historyId.current = await deps.addEntry({
       original,
       width,
       height,
+      // the picked file, once the keep decision accepted it (addEntry retries without it on a quota error; this session
+      // keeps exporting from the in-memory file, S §3.7), and its size whenever it exceeded the working edge
+      ...((await keepSource) && source.picked ? { source: source.picked } : {}),
+      ...(sourceSizeRecord(probed, workingLong) ?? {}),
       ...(detectNow ? { detect: detectNow } : {}),
       ...paramsPatch(e, detectNow?.primary ?? P0, limit, faceMaskStored.current),
       thumb,

@@ -3,6 +3,7 @@ import { defaultParams } from '../engine/params';
 import { splitLegacy } from '../edit/legacy';
 import { DEFAULT_PREFS } from '../store/settings';
 import type { V1Bodies } from '../edit/migrate';
+import type { SourceInfo } from '../media/exportPlan';
 import type { CameraLook, DetectionCache, EditState, FaceSeed, PersonId, PersonMask, Prefs, Rect } from '../types';
 import { deps } from './deps';
 import { debug, reportError } from './debug';
@@ -50,6 +51,11 @@ export interface EditorSource {
   faceProtect?: boolean;
   /** the entry's cached segmenter mask for that limit (HistoryEntry.faceMask) */
   faceMask?: PersonMask;
+  /** the source to export at full resolution (S §3.7): the entry's kept file on reopen; for a new import blob stays null
+   * until the Editor's keep decision; absent = none (camera shots) */
+  source?: SourceInfo;
+  /** a new import's picked file: kept as HistoryEntry.source only when shouldKeepSource accepts it */
+  picked?: File;
   returnTo: 'home' | 'camera';
 }
 

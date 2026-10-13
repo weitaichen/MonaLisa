@@ -18,11 +18,21 @@ export function freshSource(bitmap: ImageBitmap, edit: EditState, returnTo: Edit
   return { bitmap, edit, historyId: null, detect: null, rematch: null, v1Body: null, cacheDropped: false, faceSeed, returnTo };
 }
 
-/** Decode a photo (file or history original) and open it in the editor; an entry goes through openState (S §5.3). */
-export async function openInEditor(blob: Blob, opts: { entry?: HistoryEntry | null; returnTo: EditorSource['returnTo'] }): Promise<void> {
+/**
+ * Decode a photo (file or history original) and open it in the editor; an entry goes through openState (S §5.3).
+ * `picked`: a file the user just picked, decoded with its oriented size so the Editor can decide to keep it (S §3.7);
+ * a reopen carries the entry's kept source.
+ */
+export async function openInEditor(blob: Blob, opts: { entry?: HistoryEntry | null; returnTo: EditorSource['returnTo']; picked?: boolean }): Promise<void> {
   app.set({ busy: '正在開啟照片…' });
   try {
-    const bitmap = await deps.importPhoto(blob, maxImportEdge());
+    let bitmap: ImageBitmap;
+    let oriented: { width: number; height: number } | null = null;
+    if (opts.picked) {
+      const info = await deps.importPhotoInfo(blob, maxImportEdge());
+      bitmap = info.bitmap;
+      oriented = info.oriented;
+    } else bitmap = await deps.importPhoto(blob, maxImportEdge());
     const entry = opts.entry ?? null;
     let source: EditorSource;
     if (entry) {
@@ -31,6 +41,11 @@ export async function openInEditor(blob: Blob, opts: { entry?: HistoryEntry | nu
       if (entry.faceProtect === true) source.faceProtect = true;
       if (entry.faceMask) source.faceMask = entry.faceMask;
     } else source = freshSource(bitmap, importEdit(app.get().look), opts.returnTo);
+    if (entry) source.source = { blob: entry.source ?? null, width: entry.sourceWidth ?? null, height: entry.sourceHeight ?? null };
+    else if (opts.picked && oriented) {
+      source.picked = blob as File;
+      source.source = { blob: null, width: oriented.width, height: oriented.height };
+    }
     go({ name: 'editor', source });
   } catch (e) {
     toast(`無法開啟照片：${reportError(e, 'importPhoto')}`, 4000);

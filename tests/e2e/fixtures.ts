@@ -290,3 +290,94 @@ export function regionDiff(a: Pixels, b: Pixels, r: Rect): { inside: number; out
     }
   return { inside: mad(a, b, R), outsideMax };
 }
+
+/** A synthetic JPEG made in the page (canvas toBlob, S §8.3): a gradient, sample_face.png centred, a red block at the stored top-left. */
+export async function makeJpeg(page: Page, width: number, height: number): Promise<Buffer> {
+  const face = readFileSync(SAMPLE_FACE).toString('base64');
+  const b64 = await page.evaluate(
+    async ([w, h, faceB64]) => {
+      const bytes = Uint8Array.from(atob(faceB64), (c) => c.charCodeAt(0));
+      const faceBmp = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+      const c = new OffscreenCanvas(w, h);
+      const ctx = c.getContext('2d')!;
+      const g = ctx.createLinearGradient(0, 0, w, h);
+      g.addColorStop(0, '#d8b49a');
+      g.addColorStop(1, '#4a6680');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, w, h);
+      const s = Math.min(w / faceBmp.width, h / faceBmp.height) * 0.8;
+      ctx.drawImage(faceBmp, (w - faceBmp.width * s) / 2, (h - faceBmp.height * s) / 2, faceBmp.width * s, faceBmp.height * s);
+      ctx.fillStyle = '#ff0000';
+      ctx.fillRect(0, 0, Math.round(w * 0.08), Math.round(h * 0.08));
+      const out = new Uint8Array(await (await c.convertToBlob({ type: 'image/jpeg', quality: 0.92 })).arrayBuffer());
+      let bin = '';
+      for (let i = 0; i < out.length; i += 0x8000) bin += String.fromCharCode(...out.subarray(i, i + 0x8000));
+      return btoa(bin);
+    },
+    [width, height, face] as const,
+  );
+  return Buffer.from(b64, 'base64');
+}
+
+/** Splice an EXIF APP1 with only an Orientation tag after the JFIF APP0 (or the SOI). */
+export function withExifOrientation(jpeg: Buffer, orientation: number): Buffer {
+  const tiff = Buffer.from([
+    0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00, // "II*\0", IFD0 at 8
+    0x01, 0x00, // one entry
+    0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, // 0x0112 Orientation, SHORT, count 1
+    orientation, 0x00, 0x00, 0x00, // the value
+    0x00, 0x00, 0x00, 0x00, // no next IFD
+  ]);
+  const body = Buffer.concat([Buffer.from('Exif\0\0', 'binary'), tiff]);
+  const len = body.length + 2;
+  const app1 = Buffer.concat([Buffer.from([0xff, 0xe1, len >> 8, len & 0xff]), body]);
+  const at = jpeg[2] === 0xff && jpeg[3] === 0xe0 ? 4 + jpeg.readUInt16BE(4) : 2;
+  return Buffer.concat([jpeg.subarray(0, at), app1, jpeg.subarray(at)]);
+}
+
+/** 儲存 → (a second tap when the pill turned 分享) → the long-press fallback's image: size, blob type and file name. */
+export async function exportFile(page: Page): Promise<{ width: number; height: number; type: string; name: string | null }> {
+  const pill = page.locator('.topbar .pill');
+  await pill.click();
+  const fallback = page.getByRole('dialog', { name: '儲存照片' });
+  const shareAgain = page.locator('.topbar .pill', { hasText: '分享' });
+  await expect(fallback.or(shareAgain)).toBeVisible({ timeout: 300_000 });
+  if (!(await fallback.isVisible())) await shareAgain.click();
+  await expect(fallback).toBeVisible({ timeout: 30_000 });
+  const img = fallback.getByRole('img', { name: '編輯結果' });
+  await expect.poll(() => img.evaluate((i: HTMLImageElement) => i.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
+  return img.evaluate(async (i: HTMLImageElement) => ({
+    width: i.naturalWidth,
+    height: i.naturalHeight,
+    type: (await (await fetch(i.src)).blob()).type,
+    name: i.dataset.name ?? null,
+  }));
+}
+
+export async function closeFallback(page: Page): Promise<void> {
+  await page.getByRole('dialog', { name: '儲存照片' }).getByRole('button', { name: '關閉' }).click();
+}
+
+/** the raw 最近編輯 records (IndexedDB meiyan / edits): what the source fields hold */
+export async function readHistory(page: Page): Promise<{ sourceSize: number; sourceWidth?: number; sourceHeight?: number }[]> {
+  return page.evaluate(
+    () =>
+      new Promise((resolve, reject) => {
+        const open = indexedDB.open('meiyan', 1);
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const req = open.result.transaction('edits', 'readonly').objectStore('edits').getAll();
+          req.onsuccess = () => {
+            resolve(
+              (req.result as { source?: Blob; sourceWidth?: number; sourceHeight?: number }[]).map((r) => ({
+                sourceSize: r.source?.size ?? 0,
+                sourceWidth: r.sourceWidth,
+                sourceHeight: r.sourceHeight,
+              })),
+            );
+            open.result.close();
+          };
+        };
+      }),
+  );
+}

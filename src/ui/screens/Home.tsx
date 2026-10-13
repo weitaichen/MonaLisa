@@ -79,7 +79,7 @@ export function Home() {
 
   const importPhoto = () => {
     haptic();
-    pickPhoto((f) => void openInEditor(f, { returnTo: 'home' }));
+    pickPhoto((f) => void openInEditor(f, { returnTo: 'home', picked: true }));
   };
 
   const openEntry = async (id: string) => {

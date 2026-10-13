@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { PNG } from 'pngjs';
-import { debugState, expect, SAMPLE_FACE, test } from './fixtures';
+import { debugState, expect, makeJpeg, readHistory, SAMPLE_FACE, test } from './fixtures';
 
 async function importInto(page: Page, file: string | { name: string; mimeType: string; buffer: Buffer }) {
   await page.goto('/');
@@ -236,4 +236,16 @@ test('nobody found upright: each new up-frame is scanned once on leaving 裁切;
   await page.waitForTimeout(1000);
   expect(await calls()).toBe(before.detectCalls + 2);
   expect((await debugState(page)).lastError).toBeNull();
+});
+
+test('a larger picked photo is kept in 最近編輯 with its size; a reopen still has it', async ({ page }) => {
+  await page.goto('/');
+  const jpeg = await makeJpeg(page, 3000, 4000);
+  await importInto(page, { name: 'big.jpg', mimeType: 'image/jpeg', buffer: jpeg });
+  await page.getByRole('button', { name: '關閉' }).click();
+  await expect(page.getByRole('button', { name: '開啟編輯' })).toHaveCount(1, { timeout: 15_000 });
+  const rows = await readHistory(page);
+  expect(rows).toHaveLength(1);
+  expect(rows[0].sourceSize).toBe(jpeg.length);
+  expect([rows[0].sourceWidth, rows[0].sourceHeight]).toEqual([3000, 4000]);
 });

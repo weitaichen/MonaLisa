@@ -6373,7 +6373,7 @@ EOF
 - Consumes: Task 5 (`importPhotoInfo`), Task 6 (`HistoryEntry.source/sourceWidth/sourceHeight`), Task 9 (`SourceInfo`, `NO_SOURCE`, `shouldKeepSource`, `sourceSizeRecord`); step 1's `openInEditor(blob, { entry?: HistoryEntry | null; returnTo })` (a reopen passes the entry and `openState` runs inside it) and the `addEntry` call in `writeHistory`.
 - Produces: `EditorSource.source?: SourceInfo` (absent = none: camera shots through `freshSource`, `Review.tsx` unchanged), `EditorSource.picked?: File` (a new import's file, kept only if `shouldKeepSource` accepts it); `openInEditor(blob, { entry?, returnTo, picked?: boolean })`, which derives `source` from the entry on a reopen; in the Editor: `sourceRef: { current: SourceInfo }` (what an export reads, resolved once the keep decision settles), `keepSource: Promise<boolean>`; `deps.shouldKeepSource`; e2e helpers `makeJpeg(page, w, h): Promise<Buffer>`, `withExifOrientation(jpeg: Buffer, orientation: number): Buffer`, `exportFile(page): Promise<{ width; height; type; name }>`, `closeFallback(page)`, `readHistory(page): Promise<{ sourceSize: number; sourceWidth?: number; sourceHeight?: number }[]>`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `src/ui/flows.test.ts`:
 
@@ -6528,12 +6528,12 @@ test('a larger picked photo is kept in 最近編輯 with its size; a reopen stil
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `npx vitest run src/ui/flows.test.ts`
 Expected: FAIL — `info` not called (`openInEditor` ignores `picked`).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/ui/state.ts` (CRLF), `EditorSource` gains:
 
@@ -6595,14 +6595,14 @@ In `writeHistory`, the `deps.addEntry({...})` that creates the entry (`Editor.ts
 
 In the same function, the `original` fallback `deps.toJpegBlob(img, ORIGINAL_EDGE, 0.9)` (`Editor.tsx:519`; the setup normally made `originalBlob` from `source.bitmap` already, `:408`) becomes `deps.toJpegBlob(source.bitmap, ORIGINAL_EDGE, 0.9)`: `img` is now the V image (cropped, turned), and `original` must stay the uncropped O working copy so 還原 works after a reopen (S §5). `width` / `height` stay the session's working size (`still.ts` keeps `session.width/height` = O).
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/ui/flows.test.ts`
 Expected: PASS (existing cases unchanged: they pass no `picked`).
 Run: `npm run build && npx playwright test tests/e2e/crop.spec.ts tests/e2e/home.spec.ts tests/e2e/editor.spec.ts`
 Expected: all passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/ui/state.ts src/ui/flows.ts src/ui/flows.test.ts src/ui/screens/Home.tsx src/ui/deps.ts src/ui/screens/Editor.tsx tests/e2e/fixtures.ts tests/e2e/crop.spec.ts

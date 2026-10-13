@@ -70,3 +70,39 @@ describe('openInEditor of a history entry', () => {
     expect('faceMask' in screen.source).toBe(false);
   });
 });
+
+describe('openInEditor source (step 3)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('a picked file is decoded with its oriented size and handed over for the keep decision', async () => {
+    const { flows, app } = await load('auto', 'H');
+    const { deps } = await import('./deps');
+    const info = vi.fn(async () => ({ bitmap: { width: 1536, height: 2048, close: vi.fn() } as unknown as ImageBitmap, oriented: { width: 3000, height: 4000 } }));
+    deps.importPhotoInfo = info as unknown as typeof deps.importPhotoInfo;
+    const file = new File([new Uint8Array(8)], 'p.jpg', { type: 'image/jpeg' });
+    await flows.openInEditor(file, { returnTo: 'home', picked: true });
+    expect(info).toHaveBeenCalledWith(file, 2048);
+    const screen = app.get().screen;
+    if (screen.name !== 'editor') throw new Error('not the editor');
+    expect(screen.source.picked).toBe(file);
+    expect(screen.source.source).toEqual({ blob: null, width: 3000, height: 4000 });
+  });
+
+  it('a reopened entry carries its stored source through', async () => {
+    const { flows, app } = await load('auto', 'H');
+    const blob = new Blob(['s']);
+    // step 1's reopen: openInEditor gets the entry itself (Home.tsx openEntry) and runs openState inside
+    const entry: HistoryEntry = {
+      id: 'e3', createdAt: 1, updatedAt: 1, original: new Blob([]), thumb: new Blob([]), params: defaultParams(), width: 4, height: 3,
+      source: blob, sourceWidth: 4032, sourceHeight: 3024,
+    };
+    await flows.openInEditor(new Blob([]), { entry, returnTo: 'home' });
+    const screen = app.get().screen;
+    if (screen.name !== 'editor') throw new Error('not the editor');
+    expect(screen.source.source).toEqual({ blob, width: 4032, height: 3024 });
+    expect(screen.source.picked).toBeUndefined();
+  });
+});

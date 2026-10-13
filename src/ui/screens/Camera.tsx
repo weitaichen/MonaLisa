@@ -31,7 +31,7 @@ let lastSel: PanelSelection = INITIAL_SELECTION;
 /** 美體 is photo-only: its note offers the import right where the user looked for it */
 const cameraBody: BodyContext = {
   ...CAMERA_BODY,
-  action: { label: '匯入照片', run: () => pickPhoto((f) => void openInEditor(f, { returnTo: 'camera' })) },
+  action: { label: '匯入照片', run: () => pickPhoto((f) => void openInEditor(f, { returnTo: 'camera', picked: true })) },
 };
 /** basic-mode notes are announced once per engine bundle, not on every visit */
 let notedBundle: unknown = null;
@@ -474,7 +474,7 @@ export function Camera() {
           class="side-btn"
           onClick={() => {
             haptic();
-            pickPhoto((f) => void openInEditor(f, { returnTo: 'camera' }));
+            pickPhoto((f) => void openInEditor(f, { returnTo: 'camera', picked: true }));
           }}
         >
           <span class="side-icon">
@@ -509,7 +509,7 @@ function ImportButton() {
       class="btn"
       onClick={() => {
         haptic();
-        pickPhoto((f) => void openInEditor(f, { returnTo: 'camera' }));
+        pickPhoto((f) => void openInEditor(f, { returnTo: 'camera', picked: true }));
       }}
     >
       <Icon name="image" size={20} />

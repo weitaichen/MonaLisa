@@ -13,6 +13,7 @@ import {
   personNote,
   tabHasValue,
   TABS,
+  tapToast,
   type BodyContext,
   type BodyNote,
   type PanelItem,
@@ -39,13 +40,18 @@ interface Props {
    * Omitted → 'idle' (sliders wait, 增高 / 背景保護 work).
    */
   body?: BodyContext;
+  /**
+   * the photo-level items already touched in this editor (shared with its slider toasts): the first tap of a 濾鏡 tile or
+   * 背景保護 adds 「{label}套用於整張照片」 (S §2.4). Omitted (the camera) → no first-touch toast
+   */
+  photoTouched?: Set<string>;
   id?: string;
 }
 
 /** tabs whose effects need a detected face */
 export const FACE_TABS: readonly TabId[] = ['shape', 'makeup'];
 
-export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, body, id }: Props) {
+export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, body, photoTouched, id }: Props) {
   const stripRef = useRef<HTMLDivElement>(null);
   const stripKey = sel.tab === 'makeup' ? `makeup.${sel.makeupPart}` : sel.tab;
 
@@ -73,7 +79,9 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
 
   const tapItem = (item: PanelItem) => {
     const r = activate(item, lens, sel);
-    if (r.notice) toast(r.notice, item.disabled ? 2600 : 3200);
+    const text = tapToast(item, lens, r, photoTouched);
+    // a notice keeps its longer stay; the first-touch line alone stays as long as the slider's (toast's default)
+    if (text) toast(text, r.notice ? (item.disabled ? 2600 : 3200) : undefined);
     if (!r.changed) return;
     const a = item.action.type;
     if (a === 'preset' || a === 'reset' || a === 'protect') haptic();

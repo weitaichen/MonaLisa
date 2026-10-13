@@ -1990,6 +1990,8 @@ button.row:active {
   font-size: 14px;
   font-weight: 600;
   text-align: center;
+  /* a tile's first-touch line and its own notice (panelModel tapToast) */
+  white-space: pre-line;
   pointer-events: none;
   animation: toast-in 260ms var(--ease-out);
 }

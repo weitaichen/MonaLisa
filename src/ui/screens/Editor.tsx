@@ -79,6 +79,7 @@ import { FaceProtectSource, isContourEdit, maskCoversFace, paramsPatch, type Fac
 import { Icon } from '../icons';
 import {
   bandOrSuggested,
+  bandTouchToast,
   INITIAL_SELECTION,
   personNumber,
   photoScoped,
@@ -1114,7 +1115,12 @@ export function Editor({ source }: { source: EditorSource }) {
               <HeightBandOverlay
                 band={bandOrSuggested(edit, bodyCtx)}
                 stretch={heightBandStretch}
-                onChange={(b, commit) => update(lensOf(editRef.current).setHeightBand(b), commit)}
+                onChange={(b, commit) => {
+                  const l = lensOf(editRef.current);
+                  const t = bandTouchToast(l, touchedPhoto.current);
+                  if (t) toast(t);
+                  update(l.setHeightBand(b), commit);
+                }}
               />
             )}
           </div>
@@ -1154,6 +1160,7 @@ export function Editor({ source }: { source: EditorSource }) {
           onEdit={(e) => update(e, true)}
           faceNote={faceNote}
           body={bodyCtx}
+          photoTouched={touchedPhoto.current}
         />
       </div>
       <div class="editor-bottom-pad" />

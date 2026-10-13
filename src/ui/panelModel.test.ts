@@ -19,6 +19,7 @@ import { hasIcon } from './icons';
 import {
   activate,
   bandOrSuggested,
+  bandTouchToast,
   BANDS_NOTE,
   BODY_ERROR_NOTE,
   BODY_NO_MASK_REASON,
@@ -40,6 +41,7 @@ import {
   sliderFor,
   tabHasValue,
   TABS,
+  tapToast,
   type BodyContext,
   type PanelSelection,
 } from './panelModel';
@@ -624,6 +626,47 @@ describe('persons in the panel (S §2.4, A9, A11)', () => {
     expect(photoTouchToast(h, one('f0'), seen)).toBe('增高套用於整張照片');
     const solo = lensFor(editFromLegacy(defaultParams()), { kind: 'person', id: 'p0' }, P0_INFO, 'p0');
     expect(photoTouchToast(sliderFor(solo, sel({ tab: 'skin', skin: 'skin.whiten' }))!, solo, new Set())).toBeNull();
+  });
+  it('the first tap of a photo-level tile (a 濾鏡 tile, 背景保護) says so once, before its own notice (S §2.4)', () => {
+    const seen = new Set<string>();
+    const tap = (l: ReturnType<typeof at>, s: PanelSelection, key: string, ctx?: BodyContext) => {
+      const item = byKey(itemsFor(l, s, ctx), key);
+      return tapToast(item, l, activate(item, l, s), seen);
+    };
+    const f = sel({ tab: 'filter' });
+    // a no-op tap (the current filter, 無) touches nothing
+    expect(tap(one('f1'), f, 'none')).toBeNull();
+    expect(tap(one('f1'), f, 'warm')).toBe('濾鏡套用於整張照片');
+    // every 濾鏡 tile is the one item 濾鏡; its strength slider is an item of its own
+    expect(tap(at(ALL), f, 'cool')).toBeNull();
+    const warm = { ...base, photo: { ...base.photo, filterId: 'warm' } };
+    const w = at({ kind: 'person', id: 'f1' }, warm);
+    expect(photoTouchToast(sliderFor(w, f)!, w, seen)).toBe('濾鏡強度套用於整張照片');
+    // 背景保護: the toggle's own notice follows on a second line, then the notice alone
+    const b = bodySel('body.waist');
+    expect(tap(one('f0'), b, 'protect', ready({ people: 2 }))).toBe('背景保護套用於整張照片\n背景保護已關閉：背景變形範圍較大但較平緩');
+    expect(tap(one('f0'), b, 'protect', ready({ people: 2 }))).toBe('背景保護已關閉：背景變形範圍較大但較平緩');
+    // a disabled tile only gives its reason; a person tile (磨皮 selects its slider) and one person never say it
+    const fresh = new Set<string>();
+    const off = byKey(itemsFor(one('f0'), b, ready({ people: 2, hasMask: false })), 'protect');
+    expect(tapToast(off, one('f0'), activate(off, one('f0'), b), fresh)).toBe(BODY_NO_MASK_REASON);
+    const smooth = byKey(itemsFor(one('f0'), sel({ tab: 'skin' })), 'skin.smooth');
+    expect(tapToast(smooth, one('f0'), activate(smooth, one('f0'), sel({ tab: 'skin', skin: 'skin.whiten' })), fresh)).toBeNull();
+    const solo = lensFor(editFromLegacy(defaultParams()), { kind: 'person', id: 'p0' }, P0_INFO, 'p0');
+    const warmTile = byKey(itemsFor(solo, f), 'warm');
+    expect(tapToast(warmTile, solo, activate(warmTile, solo, f), fresh)).toBeNull();
+    expect(fresh.size).toBe(0);
+    // the camera passes no set: the tile's own notice only
+    const p = byKey(itemsFor(one('f0'), b, ready({ people: 2 })), 'protect');
+    expect(tapToast(p, one('f0'), activate(p, one('f0'), b))).toBe('背景保護已關閉：背景變形範圍較大但較平緩');
+  });
+  it('dragging the 增高 band is a first touch of 增高 too, shared with its slider (S §2.4)', () => {
+    const seen = new Set<string>();
+    expect(bandTouchToast(one('f0'), seen)).toBe('增高套用於整張照片');
+    expect(bandTouchToast(one('f0'), seen)).toBeNull();
+    expect(photoTouchToast(sliderFor(one('f0'), bodySel('height'), ready({ people: 2 }))!, one('f0'), seen)).toBeNull();
+    const solo = lensFor(editFromLegacy(defaultParams()), { kind: 'person', id: 'p0' }, P0_INFO, 'p0');
+    expect(bandTouchToast(solo, new Set())).toBeNull();
   });
   it('item dots (S §2.4 Dots): the selected person\'s value; under 全部 any applicable person\'s, not only the shown one', () => {
     const setV = (e: EditState, id: 'f0' | 'f1' | 'b1', k: 'shape.eyeEnlarge' | 'makeup.lip' | 'body.waist', v: number) =>

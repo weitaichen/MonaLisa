@@ -125,6 +125,12 @@ test.describe('group photo editing (S §8.4)', () => {
     await expect(page.getByRole('radio', { name: '人物 1' })).toHaveAttribute('aria-disabled', 'true');
   });
 
+  test('the first tap of a 濾鏡 tile says it applies to the whole photo (S §2.4)', async ({ page }) => {
+    await tab(page, '濾鏡');
+    await option(page, '暖調');
+    await expect(page.locator('.toast')).toHaveText('濾鏡套用於整張照片');
+  });
+
   test('⊘ in 美膚 with person 2 keeps 美白; ↶ restores B’s 大眼, keeps the selection and flags B; an undo of B from person 1 toasts', async ({ page }) => {
     await tab(page, '美膚');
     await option(page, '美白');

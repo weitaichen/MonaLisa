@@ -628,14 +628,41 @@ export function sliderEmptyText(lens: Lens, sel: PanelSelection): string | null 
   return sel.tab === 'preset' && lens.sel.kind === 'all' && lens.preset().mixed ? MIXED : null;
 }
 
-/** 「{label}套用於整張照片」 on the first touch of each photo-level slider in this editor (≥ 2 persons, S §2.4) */
-export function photoTouchToast(b: SliderBinding, lens: Lens, seen: Set<string>): string | null {
-  if (!multiPerson(lens)) return null;
-  const id = b.param ?? (b.key.endsWith('body.height') ? 'height' : null);
-  if (id === null || (id !== 'height' && !photoLike(lens, id)) || seen.has(id)) return null;
+/**
+ * 「{label}套用於整張照片」 on the first touch of each photo-level item in this editor (≥ 2 persons, S §2.4), whatever
+ * input touched it; `id` keys `seen` (a ParamId, or 'height' / 'filter' / 'protect')
+ */
+function firstPhotoTouch(lens: Lens, seen: Set<string>, id: string, label: string): string | null {
+  if (!multiPerson(lens) || seen.has(id)) return null;
   seen.add(id);
-  const label = id === 'height' ? '增高' : paramDef(id).label;
   return `${label}套用於整張照片`;
+}
+
+/** the first touch through a slider: a photo-level param, or 增高 */
+export function photoTouchToast(b: SliderBinding, lens: Lens, seen: Set<string>): string | null {
+  const id = b.param ?? (b.key.endsWith('body.height') ? 'height' : null);
+  if (id === null || (id !== 'height' && !photoLike(lens, id))) return null;
+  return firstPhotoTouch(lens, seen, id, id === 'height' ? '增高' : paramDef(id).label);
+}
+
+/** the first touch through the 增高 band overlay (its lines): the same item as the 增高 slider */
+export function bandTouchToast(lens: Lens, seen: Set<string>): string | null {
+  return firstPhotoTouch(lens, seen, 'height', '增高');
+}
+
+/** tiles whose tap writes a photo-level item (S §1.1 item 5): every 濾鏡 tile is the one item 濾鏡 */
+const TILE_ITEMS: Partial<Record<ItemAction['type'], string>> = { filter: '濾鏡', protect: '背景保護' };
+
+/**
+ * The toast of a tile tap: the first touch of a photo-level item, when the tap changed it (a 濾鏡 tile, 背景保護), then
+ * the tile's own notice (a disabled tile's reason, what 背景保護 now does) on a second line. No `seen` (the camera):
+ * the notice only.
+ */
+export function tapToast(item: PanelItem, lens: Lens, r: ActivateResult, seen?: Set<string>): string | null {
+  const label = TILE_ITEMS[item.action.type];
+  const first = seen && label && r.edit !== lens.edit ? firstPhotoTouch(lens, seen, item.action.type, label) : null;
+  if (first && r.notice) return `${first}\n${r.notice}`;
+  return first ?? r.notice ?? null;
 }
 
 /** Accent dot on a tab when anything in its group differs from neutral (美體: a slider or the 增高 band). */

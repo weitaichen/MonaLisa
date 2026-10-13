@@ -1,6 +1,7 @@
 // Crop box gestures in 裁切 mode (S §2.1, §3.3): pure reducers from the geometry at gesture start and the finger delta in
 // the plane (normalized to the E frame). Every result is valid: the limits are found by bisection, so the box stops
-// (or slides, for a move) where it would leave the straightened photo or the E frame, and never gets below minCrop.
+// (or slides, for a move and for a 自由 corner) where it would leave the straightened photo or the E frame, and never gets
+// below minCrop. A gesture that the limits block returns `start` itself, so callers can compare by reference.
 import type { Geometry, Rect, Size } from '../types';
 import { cropFits, eSize, lockAspect, minCrop, type CropLock, type Vec2 } from './view';
 
@@ -10,6 +11,10 @@ export type Corner = 'tl' | 'tr' | 'bl' | 'br';
 export type Edge = 'top' | 'bottom' | 'left' | 'right';
 
 const STEPS = 24;
+/** float rounding allowed past the E frame in the bisection (cropFits's own 1e-9 is kept only for the turned photo) */
+const SLACK = 1e-12;
+/** a result this close to the start on every crop field is the start (a blocked gesture; bisection noise) */
+const SAME = 1e-7;
 const withCrop = (g: Geometry, crop: Rect): Geometry => ({ ...g, crop });
 
 /** the largest t in [0, 1] with ok(t), given ok(0) */
@@ -23,6 +28,27 @@ function bisect(ok: (t: number) => boolean): number {
     else hi = m;
   }
   return lo;
+}
+
+/**
+ * The bisection predicate: cropFits, but exact (up to SLACK) on the E frame, so a box pushed against the frame stops on
+ * it instead of up to 1e-9 past it. An edge the start already has past the frame (−4e-17 from flipView's 1 − x − w, up
+ * to 1e-9 from cropConstrain, both within cropFits's eps) may stay where it is, so ok(0) holds for every start that fits.
+ */
+function fitsFrom(start: Geometry, oSize: Size): (r: Rect) => boolean {
+  const c = start.crop;
+  const x0 = Math.min(0, c.x) - SLACK;
+  const y0 = Math.min(0, c.y) - SLACK;
+  const x1 = Math.max(1, c.x + c.w) + SLACK;
+  const y1 = Math.max(1, c.y + c.h) + SLACK;
+  return (r) => r.x >= x0 && r.y >= y0 && r.x + r.w <= x1 && r.y + r.h <= y1 && cropFits(withCrop(start, r), oSize);
+}
+
+function settle(start: Geometry, out: Geometry): Geometry {
+  const a = start.crop;
+  const b = out.crop;
+  const same = Math.abs(a.x - b.x) < SAME && Math.abs(a.y - b.y) < SAME && Math.abs(a.w - b.w) < SAME && Math.abs(a.h - b.h) < SAME;
+  return same ? start : out;
 }
 
 export function dragCorner(start: Geometry, corner: Corner, d: Vec2, lock: CropLock, oSize: Size): Geometry {
@@ -48,13 +74,22 @@ export function dragCorner(start: Geometry, corner: Corner, d: Vec2, lock: CropL
     w = Math.max(w, m.w);
     h = Math.max(h, m.h);
   }
-  const rect = (t: number): Rect => {
-    const wt = c.w + t * (w - c.w);
-    const ht = c.h + t * (h - c.h);
-    return { x: right ? ax : ax - wt, y: bottom ? ay : ay - ht, w: wt, h: ht };
-  };
-  const t = bisect((s) => cropFits(withCrop(start, rect(s)), oSize));
-  return t === 0 ? start : withCrop(start, rect(t));
+  const ok = fitsFrom(start, oSize);
+  const box = (wt: number, ht: number): Rect => ({ x: right ? ax : ax - wt, y: bottom ? ay : ay - ht, w: wt, h: ht });
+  const fits = (wt: number, ht: number) => ok(box(wt, ht));
+  // the size moves from the start toward the target from the anchor and stops at the first limit
+  const t = bisect((s) => fits(c.w + s * (w - c.w), c.h + s * (h - c.h)));
+  let wt = c.w + t * (w - c.w);
+  let ht = c.h + t * (h - c.h);
+  if (a === null) {
+    // 自由: a limit on one axis does not stop the other, which keeps following the finger (as a move slides). Each size
+    // stays between the start and the target size, so the minimum size still holds.
+    const w0 = wt;
+    wt = w0 + bisect((s) => fits(w0 + s * (w - w0), ht)) * (w - w0);
+    const h0 = ht;
+    ht = h0 + bisect((s) => fits(wt, h0 + s * (h - h0))) * (h - h0);
+  }
+  return settle(start, withCrop(start, box(wt, ht)));
 }
 
 /** 自由 only (the strip shows edge handles only then) */
@@ -93,21 +128,23 @@ export function dragEdge(start: Geometry, edge: Edge, d: Vec2, oSize: Size): Geo
       break;
     }
   }
-  const t = bisect((s) => cropFits(withCrop(start, rect(s)), oSize));
-  return t === 0 ? start : withCrop(start, rect(t));
+  const ok = fitsFrom(start, oSize);
+  const t = bisect((s) => ok(rect(s)));
+  return settle(start, withCrop(start, rect(t)));
 }
 
 /** one finger inside the box: the box moves over the fixed photo and slides along a limit (S D2) */
 export function dragMove(start: Geometry, d: Vec2, oSize: Size): Geometry {
   if (!cropFits(start, oSize)) return start;
   const c = start.crop;
-  const at = (dx: number, dy: number) => withCrop(start, { ...c, x: c.x + dx, y: c.y + dy });
-  const t = bisect((s) => cropFits(at(s * d[0], s * d[1]), oSize));
+  const ok = fitsFrom(start, oSize);
+  const at = (dx: number, dy: number): Rect => ({ ...c, x: c.x + dx, y: c.y + dy });
+  const t = bisect((s) => ok(at(s * d[0], s * d[1])));
   let dx = t * d[0];
   let dy = t * d[1];
   const rx = d[0] - dx;
   const ry = d[1] - dy;
-  dx += bisect((s) => cropFits(at(dx + s * rx, dy), oSize)) * rx;
-  dy += bisect((s) => cropFits(at(dx, dy + s * ry), oSize)) * ry;
-  return dx === 0 && dy === 0 ? start : at(dx, dy);
+  dx += bisect((s) => ok(at(dx + s * rx, dy))) * rx;
+  dy += bisect((s) => ok(at(dx, dy + s * ry))) * ry;
+  return settle(start, withCrop(start, at(dx, dy)));
 }

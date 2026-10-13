@@ -85,4 +85,42 @@ describe('crop gestures (fuzzed)', () => {
     expect(out.crop.w).toBeCloseTo(minCrop(g, O).w, 6);
     expect(out.crop.x).toBe(0.2);
   });
+
+  it('自由: a limit on one axis does not stop the other axis following the finger', () => {
+    const g: Geometry = { ...IDENTITY_GEOMETRY, crop: { x: 0.2, y: 0.2, w: 0.5, h: 0.5 } };
+    for (const dx of [0.3, 0.6, 1.2]) {
+      const out = dragCorner(g, 'br', [dx, 0.2], 'free', O);
+      expect(out.crop.w).toBeCloseTo(0.8, 6);
+      expect(out.crop.h).toBeCloseTo(0.7, 6);
+    }
+    // from the full frame, a sideways drag that drifts outward still narrows the box, and the blocked axis stays full
+    const f = dragCorner(IDENTITY_GEOMETRY, 'br', [-0.1, 0.0005], 'free', O);
+    expect(f.crop.w).toBeCloseTo(0.9, 6);
+    expect(f.crop.h).toBeCloseTo(1, 9);
+  });
+
+  it('a gesture the limits block returns the start itself', () => {
+    expect(dragMove(IDENTITY_GEOMETRY, [0.002, 0.001], O)).toBe(IDENTITY_GEOMETRY);
+    expect(dragEdge(IDENTITY_GEOMETRY, 'right', [0.001, 0], O)).toBe(IDENTITY_GEOMETRY);
+    expect(dragCorner(IDENTITY_GEOMETRY, 'br', [0.001, 0.0005], 'free', O)).toBe(IDENTITY_GEOMETRY);
+    for (const c of CORNERS) expect(dragCorner(IDENTITY_GEOMETRY, c, [c.endsWith('l') ? -0.01 : 0.01, c.startsWith('t') ? -0.01 : 0.01], 'free', O)).toBe(IDENTITY_GEOMETRY);
+  });
+
+  it('a start just past the frame (within cropFits eps) still follows the finger on its other edges', () => {
+    // flipView's 1 − x − w of a box on the right edge, and a cropConstrain result, can sit a hair outside [0,1]
+    for (const crop of [
+      { x: -4e-17, y: 0.2, w: 0.5, h: 0.5 },
+      { x: 0.2, y: 0.2, w: 0.8 + 5e-10, h: 0.5 },
+    ]) {
+      const g: Geometry = { ...IDENTITY_GEOMETRY, crop };
+      expect(dragEdge(g, 'bottom', [0, 0.1], O).crop.h).toBeCloseTo(0.6, 6);
+      expect(dragEdge(g, 'top', [0, -0.1], O).crop.y).toBeCloseTo(0.1, 6);
+      expect(dragMove(g, [0, 0.1], O).crop.y).toBeCloseTo(0.3, 6);
+      for (const c of CORNERS) {
+        const out = dragCorner(g, c, [0, c.startsWith('t') ? -0.1 : 0.1], 'free', O);
+        expect(out.crop.h).toBeCloseTo(0.6, 6);
+        expect(cropValid(out, O)).toBe(true);
+      }
+    }
+  });
 });

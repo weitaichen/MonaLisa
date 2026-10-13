@@ -55,6 +55,37 @@ test('裁切 is the 8th tab: 1:1 crops the frame, ↶ ↷ step it, 還原 restor
   expect((await debugState(page)).lastError).toBeNull();
 });
 
+// S §2.1: the inset keeps a handle on the photo's edge reachable, and 重置 / 按住對比 stay in this mode, so the
+// pills must not sit over a corner's 44 × 44 hit target (portrait photos fill the stage height)
+for (const [name, file] of [
+  ['sample_face', SAMPLE_FACE],
+  ['fullbody', 'tests/fixtures/fullbody.jpg'],
+] as const) {
+  test(`裁切 on ${name}: every corner handle's whole hit target is the handle, not a tool pill`, async ({ page }) => {
+    await importInto(page, file);
+    await tab(page, '裁切').click();
+    await expect(page.getByRole('group', { name: '裁切框' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '按住對比' })).toBeVisible(); // the tools stay (S §2.1)
+    for (const label of ['左上角', '右上角', '左下角', '右下角']) {
+      const hits = await page.getByRole('button', { name: label, exact: true }).evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const pts: [number, number][] = [
+          [r.left + r.width / 2, r.top + r.height / 2],
+          [r.left + 2, r.top + 2],
+          [r.right - 2, r.top + 2],
+          [r.left + 2, r.bottom - 2],
+          [r.right - 2, r.bottom - 2],
+        ];
+        return pts.map(([x, y]) => {
+          const hit = document.elementFromPoint(x, y);
+          return hit === el ? 'self' : (hit?.closest('button')?.textContent?.trim() || hit?.className || String(hit));
+        });
+      });
+      expect(hits, label).toEqual(['self', 'self', 'self', 'self', 'self']);
+    }
+  });
+}
+
 test('增高 lines stay on their rows after 翻轉 and are removed by 旋轉 with a toast', async ({ page }) => {
   await importInto(page, 'tests/fixtures/fullbody.jpg');
   await tab(page, '美體').click();

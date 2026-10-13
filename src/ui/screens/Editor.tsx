@@ -108,6 +108,8 @@ const ORIGINAL_EDGE = 2048;
 const FLUSH_LUT_WAIT_MS = 3000;
 /** let the 正在偵測人物 note paint before the synchronous pose detection */
 const BODY_PAINT_MS = 60;
+/** the stage's bottom band under the editor tools (theme.css `.editor-tools`: bottom 2px + 48px tall) */
+const TOOLS_BAND = 50;
 
 let lastSel: PanelSelection = INITIAL_SELECTION;
 
@@ -245,7 +247,10 @@ export function Editor({ source }: { source: EditorSource }) {
   useEffect(() => () => clearTimeout(turnTimer.current), []);
   const stageSize = useElementSize(stageRef);
   const turnAngle = useRef<number | undefined>(undefined);
-  const cropLayout = cropMode && stageSize.width > 0 ? cropModeLayout(stageSize, photo, g, 24, turnAngle.current) : null;
+  // 重置 / 按住對比 stay in this mode and sit over the overlay: the layout keeps out of their band, so the 24 pt inset
+  // still leaves the bottom handles' 44 pt targets clear of the pills. Same stage px from the top-left (CropOverlay, CanvasHost)
+  const cropStage = { width: stageSize.width, height: Math.max(1, stageSize.height - TOOLS_BAND) };
+  const cropLayout = cropMode && stageSize.width > 0 ? cropModeLayout(cropStage, photo, g, 24, turnAngle.current) : null;
   turnAngle.current = cropLayout ? cropLayout.angle : undefined;
   /** read at the tap (not at render), so a reduced-motion change applies to the very next 旋轉 / 翻轉 */
   const reduceMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;

@@ -1,8 +1,12 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Face, ParamId } from '../../types';
-import { applyPreset, defaultParams } from '../params';
+import { applyPreset, defaultParams, PARAM_DEFS, paramDef } from '../params';
+import { adapt } from '../../tracking/adapter111';
 import { FACE_TEMPLATE } from './faceMesh';
+import { reshapeMapCpu } from './reshapeCpu';
 import {
+  displacementBound,
   EYE_RADIUS_K,
   RESHAPE_SCALE,
   reshapeActive,
@@ -171,5 +175,44 @@ describe('reshapeGeometry', () => {
     expect(g.box[2]).toBeGreaterThan(T(77)[0] + g.eyeR[1]);
     const idle = reshapeGeometry(f, 1, reshapeUniforms(neutral(), 1));
     expect(idle.box[0]).toBeGreaterThan(idle.box[2]);
+  });
+});
+
+describe('displacementBound (step 3, S §4.4 D7)', () => {
+  const lm = JSON.parse(readFileSync(new URL('../../../tests/fixtures/landmarks_sample_face.json', import.meta.url), 'utf8')) as {
+    width: number;
+    height: number;
+    points: number[];
+  };
+  const aspect = lm.width / lm.height;
+  const mirrored = lm.points.map((v, i) => (i % 3 === 0 ? 1 - v : v));
+  const faces = [adapt({ points: new Float32Array(lm.points) }, lm.width, lm.height), adapt({ points: new Float32Array(mirrored) }, lm.width, lm.height)];
+  const SHAPE = PARAM_DEFS.filter((d) => d.group === 'shape').map((d) => d.id);
+  const neutral = () => Object.fromEntries(PARAM_DEFS.map((d) => [d.id, d.bidirectional ? 0.5 : 0])) as Record<ParamId, number>;
+  let seed = 7;
+  const rnd = () => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0), seed / 4294967296);
+
+  it("bounds the CPU port's largest move on a 257 × 257 grid, fuzzed over faces and slider values", () => {
+    for (let i = 0; i < 24; i++) {
+      const face = faces[i % 2];
+      const values = neutral();
+      for (const id of SHAPE) if (rnd() < 0.7) values[id] = rnd();
+      const u = reshapeUniforms(values, 1);
+      const bound = displacementBound(face, aspect, u);
+      const map = reshapeMapCpu(face, u, aspect);
+      let max = 0;
+      for (let y = 0; y <= 256; y++)
+        for (let x = 0; x <= 256; x++) {
+          const t = map(x / 256, y / 256);
+          max = Math.max(max, Math.hypot(t[0] - x / 256, (t[1] - y / 256) / aspect));
+        }
+      expect(max).toBeLessThanOrEqual(bound + 1e-9);
+      if (reshapeActive(u)) expect(bound).toBeGreaterThan(0);
+    }
+  });
+
+  it('is 0 with every face slider neutral', () => {
+    expect(displacementBound(faces[0], aspect, reshapeUniforms(neutral(), 1))).toBe(0);
+    expect(paramDef('shape.chin').bidirectional).toBe(true);
   });
 });

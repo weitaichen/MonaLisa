@@ -5,8 +5,9 @@ import { MAX_RENDER_FACES } from '../../config/limits';
 import { prepareFaces } from '../../detect/faces';
 import { applyPreset, setParam } from '../params';
 import { adapt } from '../../tracking/adapter111';
-import { RESHAPE_FS, reshapeFs, reshapeGeometry, reshapeUniforms } from './reshape';
-import { reshapeMapCpu, reshapeMapMulti } from './reshapeCpu';
+import { apply, glMat3, IDENTITY_GEOMETRY, rotateLeft, vToO } from '../../geometry/view';
+import { IDENTITY_VIEW, RESHAPE_FS, reshapeFs, reshapeGeometry, reshapeUniforms } from './reshape';
+import { reshapeMapCpu, reshapeMapMulti, withView } from './reshapeCpu';
 import { reshapeMapCpuV03 } from './reshapeCpuV03';
 import { attenuate, boxCentre, capsFor, influenceBox, ovalBox, WHOLE, type TableFace } from './faceCap';
 import type { ReshapeUniforms as RU } from './reshape';
@@ -15,7 +16,7 @@ import { syntheticPortrait } from '../../body/synthetic';
 import { buildFaceProtect } from '../../tracking/faceProtect';
 import { shaderHash } from '../shaderHash';
 
-const PINNED = 'b7f7bcdc';
+const PINNED = 'e65a71b2';
 
 const lm = JSON.parse(readFileSync(new URL('../../../tests/fixtures/landmarks_sample_face.json', import.meta.url), 'utf8')) as {
   width: number;
@@ -32,6 +33,9 @@ describe('reshapeMapCpu (CPU port of RESHAPE_FS)', () => {
     // The e2e reshape.spec.ts compares the port with the real shader pixel by pixel; this is the cheap tripwire.
     expect(RESHAPE_FS).toContain('uniform highp sampler2D uFaces');
     expect(reshapeFs('ubo')).toContain('#define FACE_TABLE_UBO');
+    // step 3: P2's view uniforms (geometry, tile, window)
+    expect(RESHAPE_FS).toContain('uniform mat3 uGeo');
+    expect(reshapeFs('ubo')).toContain('uniform vec4 uWin');
     expect(shaderHash(RESHAPE_FS)).toBe(PINNED);
   });
 
@@ -149,6 +153,30 @@ function lmAt(cx: number, cy: number, w: number): Landmarks478 {
   }
   return { points: out };
 }
+
+describe('withView (P2 under geometry and windows, step 3)', () => {
+  const u = reshapeUniforms(params(['shape.faceSlim', 'shape.eyeEnlarge']), 1);
+  const map = reshapeMapCpu(face, u, aspect);
+
+  it('the identity view is the map itself, exactly', () => {
+    const m = withView(map, IDENTITY_VIEW);
+    for (const [x, y] of [[0.3, 0.4], [0.51, 0.62], [0.9, 0.1]]) expect(m(x, y)).toEqual(map(x, y));
+  });
+
+  it('a geometry view samples the map at Geo⁻¹(v); a window rescales the result', () => {
+    const g = rotateLeft(IDENTITY_GEOMETRY);
+    const oSize = { width: lm.width, height: lm.height };
+    const geo = glMat3(vToO(g, oSize));
+    const view = { geo, tile: [0.25, 0.2, 0.5, 0.5] as const, win: [0.1, 0.2, 0.6, 0.5] as const };
+    const m = withView(map, view);
+    const v: [number, number] = [0.25 + 0.4 * 0.5, 0.2 + 0.7 * 0.5];
+    const o = apply(vToO(g, oSize), v);
+    const t = map(o[0], o[1]);
+    const got = m(0.4, 0.7);
+    expect(got[0]).toBeCloseTo((t[0] - 0.1) / 0.6, 6);
+    expect(got[1]).toBeCloseTo((t[1] - 0.2) / 0.5, 6);
+  });
+});
 
 describe('N-face port (S §4.4)', () => {
   it('one face is bit-exact with the frozen v0.3 port, with and without the limit and the body field', () => {

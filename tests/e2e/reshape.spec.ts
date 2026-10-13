@@ -31,3 +31,16 @@ test('reshape CPU port == RESHAPE_FS with N faces and caps, both face-table carr
     }
   }
 });
+
+test('reshape CPU port == RESHAPE_FS under geometry and windows (uGeo, uTile, uWin)', async ({ page }) => {
+  await page.goto(`${DEV_URL}/tests/e2e/pages/reshape.html`);
+  await page.waitForFunction(() => typeof window.runReshapePinView === 'function');
+  const cases = await page.evaluate(() => window.runReshapePinView!());
+  expect(cases.map((c) => c.name)).toEqual(['quarter 1 + flip', 'θ 12° + crop', 'tile in a window']);
+  for (const c of cases) {
+    console.log(`${c.name}: ${c.n} px compared, ${c.moved} moved > 1 px, max |GPU − CPU| = ${c.maxErrPx.toFixed(4)} px`);
+    expect(c.n, c.name).toBeGreaterThan(5_000);
+    expect(c.moved, c.name).toBeGreaterThan(1_000);
+    expect(c.maxErrPx, `${c.name}: ${JSON.stringify(c.samples.slice(0, 4))}`).toBeLessThan(0.05);
+  }
+});

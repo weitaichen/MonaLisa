@@ -11,8 +11,10 @@
 // attenuation; uniform early-outs (zero deltas, face bounding box); 美體 backward displacement texture as
 // the outermost map (body research report §管線); a person-distance budget on the contour warps (瘦臉 background
 // limit, reports/美體修圖 背景扭曲 抑制技術.md stage 1 ②); v0.4: up to MAX_RENDER_FACES faces read from one face table
-// (texture or UBO), their displacements capped and summed, one 瘦臉 limit layer per face in an R16F array.
+// (texture or UBO), their displacements capped and summed, one 瘦臉 limit layer per face in an R16F array; step 3: the
+// V → O geometry, buffer tile and source window uniforms (uGeo, uTile, uWin) around the chain.
 import { MAX_RENDER_FACES } from '../../config/limits';
+import { IDENTITY_MAT3 } from '../../geometry/view';
 import type { Face, FaceProtect, ParamId } from '../../types';
 import { signed } from '../params';
 import {
@@ -195,6 +197,30 @@ export function reshapeGeometry(face: Face, aspect: number, u: ReshapeUniforms):
   return { vTargets, narrowTargets, chinTarget, mouthR, eyeR, eyeDisp, box };
 }
 
+/**
+ * Upper bound of how far the face chain moves any coordinate, in iso units (fractions of the image width): the sum of
+ * each active warp's largest move (S §4.4 D7): curveWarp |t − o|·|d|, enlargeEye / scaleAround R·|d|, shiftAround |disp|
+ * (two eyes). The yaw attenuation, the 瘦臉 limit and the influence cap only scale moves down, so they are ignored.
+ * The tile planner grows each tile's source window by it; step 5 adds its warps here.
+ */
+export function displacementBound(face: Face, aspect: number, u: ReshapeUniforms): number {
+  const g = reshapeGeometry(face, aspect, u);
+  const p = (i: number) => pt(face.pts111, i);
+  const isoLen = (dx: number, dy: number) => Math.hypot(dx, dy / aspect);
+  const curve = (o: V2, t: V2, d: number) => isoLen(t[0] - o[0], t[1] - o[1]) * Math.abs(d);
+  let b = 0;
+  if (u.faceSlim) for (const [o, t] of SLIM) b += curve(p(o), p(t), u.faceSlim);
+  if (u.faceV) V_JAW.forEach((i, k) => (b += curve(p(i), [g.vTargets[k * 2], g.vTargets[k * 2 + 1]], u.faceV)));
+  if (u.faceNarrow) NARROW.forEach((i, k) => (b += curve(p(i), [g.narrowTargets[k * 2], g.narrowTargets[k * 2 + 1]], u.faceNarrow)));
+  if (u.chin) b += curve(p(16), g.chinTarget, u.chin);
+  if (u.forehead) b += curve(pt(face.ext, 0), pt(face.ext, 3), u.forehead);
+  if (u.noseSlim) for (const [o, t] of NOSE) b += curve(p(o), p(t), u.noseSlim);
+  if (u.mouthSize) b += g.mouthR * Math.abs(u.mouthSize);
+  if (g.eyeDisp[0] !== 0 || g.eyeDisp[1] !== 0) b += 2 * isoLen(g.eyeDisp[0], g.eyeDisp[1]);
+  if (u.eyeEnlarge) b += (g.eyeR[0] + g.eyeR[1]) * Math.abs(u.eyeEnlarge);
+  return b;
+}
+
 /** texture units of P2 (S §4.8): src 0, body 1, protect array 2, face table 3 (texture carrier) */
 export const BODY_UNIT = 1;
 export const PROTECT_UNIT = 2;
@@ -252,6 +278,9 @@ uniform float uBodyOn;
 uniform mediump sampler2DArray uProtArr; // R16F signed distance (iso units) per face layer, row 0 = window top
 uniform int uCount;
 uniform float uAspect;  // W/H
+uniform mat3 uGeo;   // V → O, normalized (step 3); the exact identity mat3 when the geometry is identity
+uniform vec4 uTile;  // buffer uv → V: V = uTile.xy + vUv · uTile.zw; (0, 0, 1, 1) outside a tile
+uniform vec4 uWin;   // O → src uv: (o − uWin.xy) / uWin.zw; (0, 0, 1, 1) when src is the whole O
 out vec4 outColor;
 
 const int MAX_RENDER_FACES = ${MAX_RENDER_FACES};
@@ -361,9 +390,12 @@ vec2 faceChain(int f, vec2 tc) {
 }
 
 void main() {
-  vec2 tcB = vUv;
-  // Body first as a backward map = face first in forward terms: the face chains still see detected-landmark coordinates.
-  if (uBodyOn != 0.0) tcB += uBodyOn * texture(uBodyDisp, vUv).xy;
+  vec2 v = uTile.xy + vUv * uTile.zw;
+  vec2 o = (uGeo * vec3(v, 1.0)).xy;
+  // Body first as a backward map (C §4.2 D_body), sampled at O = face first in forward terms: the face chains still see
+  // detected-landmark coordinates (O-space).
+  vec2 tcB = o;
+  if (uBodyOn != 0.0) tcB += uBodyOn * texture(uBodyDisp, o).xy;
   vec2 acc = vec2(0.0);
   vec2 only = tcB;
   int hits = 0;
@@ -386,7 +418,7 @@ void main() {
   }
   // one face without a cap: its chain output itself, so the single-face map is bit-identical to v0.3
   vec2 tc = (hits == 1 && !anyCap) ? only : tcB + acc;
-  outColor = texture(uSrc, tc);
+  outColor = texture(uSrc, (tc - uWin.xy) / uWin.zw);   // ONE resample of the source window
 }`;
 }
 
@@ -395,6 +427,18 @@ export const RESHAPE_FS = reshapeFs('texture');
 
 /** uBox that no coordinate falls in: the face chain is skipped entirely (no face / all face deltas 0). */
 export const EMPTY_BOX = [1e9, 1e9, -1e9, -1e9] as const;
+
+/** where P2 reads and writes (step 3): V → O, buffer uv → V, O → src uv */
+export interface ReshapeView {
+  /** column-major mat3 of vToO (glMat3); IDENTITY_MAT3 at identity geometry */
+  geo: Float32Array;
+  /** (x, y, w, h): the V rectangle the destination buffer covers */
+  tile: readonly [number, number, number, number];
+  /** (x, y, w, h): the O rectangle the source texture covers */
+  win: readonly [number, number, number, number];
+}
+
+export const IDENTITY_VIEW: ReshapeView = { geo: IDENTITY_MAT3, tile: [0, 0, 1, 1], win: [0, 0, 1, 1] };
 
 /** a protect layer's edge bound (pipeline.ts MAX_BODY_FIELD_EDGE): keeps texImage3D within every device's limits */
 const MAX_PROTECT_EDGE = 2048;
@@ -420,14 +464,30 @@ export interface ReshapePass {
    * × weight; faceCap.ts TableFace), at most MAX_RENDER_FACES; `protects[layer]` are their 瘦臉 limits (all the same
    * size: the photo grid for one face, PROTECT_WINDOW² windows for ≥ 2; a malformed or mismatched layer is ignored and
    * its face drawn unlimited); `aspect` defaults to dst's (pass the image's for the ¼-res mask); `body` = RG16F
-   * backward displacement texture (UV units), applied before the face chains; null = none.
+   * backward displacement texture (UV units), applied before the face chains; null = none. `view` = geometry / tile /
+   * window (step 3, ReshapeView); omitted = identity.
    */
-  drawFaces(src: Texture, dst: Framebuffer, faces: readonly TableFace[], opts?: { aspect?: number; body?: Texture | null; protects?: readonly FaceProtect[] }): void;
+  drawFaces(
+    src: Texture,
+    dst: Framebuffer,
+    faces: readonly TableFace[],
+    opts?: { aspect?: number; body?: Texture | null; protects?: readonly FaceProtect[]; view?: ReshapeView },
+  ): void;
   /**
    * One face with v0.3's signature (harnesses, pins, the pipeline until RenderInput v0.4): yaw attenuation applied
-   * here, no cap; `face` / `u` null = no face warp (body only); `protect` = the 瘦臉 limit's data (uploaded by the pass).
+   * here, no cap; `face` / `u` null = no face warp (body only); `protect` = the 瘦臉 limit's data (uploaded by the pass);
+   * `view` is drawFaces' view (step 3), omitted = identity.
    */
-  draw(src: Texture, dst: Framebuffer, face: Face | null, u: ReshapeUniforms | null, aspect?: number, body?: Texture | null, protect?: FaceProtect | null): void;
+  draw(
+    src: Texture,
+    dst: Framebuffer,
+    face: Face | null,
+    u: ReshapeUniforms | null,
+    aspect?: number,
+    body?: Texture | null,
+    protect?: FaceProtect | null,
+    view?: ReshapeView,
+  ): void;
   dispose(): void;
 }
 
@@ -525,6 +585,10 @@ export function createReshapePass(gl: GL, opts: { carrier?: 'texture' | 'ubo' } 
     bindTarget(gl, dst);
     gl.disable(gl.BLEND);
     prog.use();
+    const vw = o.view ?? IDENTITY_VIEW;
+    gl.uniformMatrix3fv(prog.u('uGeo'), false, vw.geo);
+    gl.uniform4f(prog.u('uTile'), vw.tile[0], vw.tile[1], vw.tile[2], vw.tile[3]);
+    gl.uniform4f(prog.u('uWin'), vw.win[0], vw.win[1], vw.win[2], vw.win[3]);
     bindTexture(gl, 0, src);
     bindTexture(gl, BODY_UNIT, o.body ?? zero);
     gl.uniform1f(prog.u('uBodyOn'), o.body ? 1 : 0);
@@ -543,9 +607,9 @@ export function createReshapePass(gl: GL, opts: { carrier?: 'texture' | 'ubo' } 
 
   return {
     drawFaces,
-    draw(src, dst, face, u, aspectIn, body, protect) {
+    draw(src, dst, face, u, aspectIn, body, protect, view) {
       const faces: TableFace[] = face && u ? [{ face, u: attenuate(u, face.yaw), layer: protect ? 0 : -1, window: protect?.window ?? WHOLE, centre: boxCentre(ovalBox(face)), cap: -1 }] : [];
-      drawFaces(src, dst, faces, { aspect: aspectIn, body, protects: protect ? [protect] : [] });
+      drawFaces(src, dst, faces, { aspect: aspectIn, body, protects: protect ? [protect] : [], view });
     },
     dispose() {
       prog.dispose();

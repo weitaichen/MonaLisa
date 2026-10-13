@@ -8,7 +8,7 @@
 import type { BodyField, Face, FaceProtect, Rect } from '../../types';
 import { fieldAt } from '../../body/cpuWarp';
 import { attenuate, boxCentre, faceDrawn, influenceBox, ovalBox, WHOLE, type TableFace } from './faceCap';
-import { faceWidthIso, NARROW, NOSE, PROTECT_RAMP, PROTECT_REACH, PROTECT_SLOPE, PROTECT_SMOOTH, reshapeGeometry, SLIM, V_JAW, type ReshapeUniforms } from './reshape';
+import { faceWidthIso, NARROW, NOSE, PROTECT_RAMP, PROTECT_REACH, PROTECT_SLOPE, PROTECT_SMOOTH, reshapeGeometry, SLIM, V_JAW, type ReshapeUniforms, type ReshapeView } from './reshape';
 
 /** output UV → source UV (backward) */
 export type UvMap = (u: number, v: number) => [number, number];
@@ -161,6 +161,22 @@ export function reshapeMapCpu(face: Face | null, uIn: ReshapeUniforms | null, as
   if (!face || !uIn) return reshapeMapMulti([], aspect, { body });
   const t: TableFace = { face, u: attenuate(uIn, face.yaw), layer: protect ? 0 : -1, window: protect?.window ?? WHOLE, centre: boxCentre(ovalBox(face)), cap: -1 };
   return reshapeMapMulti([t], aspect, { body, protects: protect ? [protect] : [] });
+}
+
+/**
+ * The map P2 draws with a view (step 3): buffer uv → V (uTile) → O (uGeo, the float32 mat3 the shader gets) → `map`
+ * (the O-space chain: body, faces) → src uv (uWin). With IDENTITY_VIEW it returns `map`'s result unchanged.
+ */
+export function withView(map: UvMap, view: ReshapeView): UvMap {
+  const m = view.geo;
+  const [tx, ty, tw, th] = view.tile;
+  const [wx, wy, ww, wh] = view.win;
+  return (x, y) => {
+    const vx = tx + x * tw;
+    const vy = ty + y * th;
+    const t = map(m[0] * vx + m[3] * vy + m[6], m[1] * vx + m[4] * vy + m[7]);
+    return [(t[0] - wx) / ww, (t[1] - wy) / wh];
+  };
 }
 
 /** smallest forward-difference Jacobian determinant of `map` on an n × n grid over `box` (UV); −∞ on a non-finite value */

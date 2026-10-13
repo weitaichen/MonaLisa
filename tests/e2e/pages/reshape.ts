@@ -3,11 +3,12 @@
 // shader sampled there, and the port's map at the same pixel centre must agree. Run by tests/e2e/reshape.spec.ts on
 // the dev server (this page imports src/ directly).
 import landmarks from '../../fixtures/landmarks_sample_face.json';
-import { createReshapePass, reshapeUniforms } from '../../../src/engine/passes/reshape';
-import { reshapeMapCpu, reshapeMapMulti, type UvMap } from '../../../src/engine/passes/reshapeCpu';
+import { createReshapePass, reshapeUniforms, type ReshapeView } from '../../../src/engine/passes/reshape';
+import { reshapeMapCpu, reshapeMapMulti, withView, type UvMap } from '../../../src/engine/passes/reshapeCpu';
 import { attenuate, boxCentre, ovalBox, WHOLE, type TableFace } from '../../../src/engine/passes/faceCap';
 import { applyPreset, setParam } from '../../../src/engine/params';
 import { adapt } from '../../../src/tracking/adapter111';
+import { glMat3, IDENTITY_GEOMETRY, setStraighten, vToO } from '../../../src/geometry/view';
 import { buildFaceProtect, protectWindow } from '../../../src/tracking/faceProtect';
 import type { BodyField, Face, FaceProtect, ParamId } from '../../../src/types';
 import type { Framebuffer, GL, Texture } from '../../../src/engine/gl/gl';
@@ -27,6 +28,7 @@ export interface PinCase {
 declare global {
   interface Window {
     runReshapePin?: () => PinCase[];
+    runReshapePinView?: () => PinCase[];
     runReshapePinMulti?: (carrier: 'texture' | 'ubo') => PinCase[];
     runProtectPinMulti?: (carrier: 'texture' | 'ubo') => PinCase[];
   }
@@ -143,6 +145,51 @@ window.runReshapePin = () => {
     const u = reshapeUniforms(at(c.ids), 1);
     pass.draw(r.src, r.dst, face, u, aspect, c.body ? bodyTex : null);
     res.push(r.compare(c.name, reshapeMapCpu(face, u, aspect, c.body ? bodyField : null)));
+  }
+  pass.dispose();
+  gl.deleteTexture(bodyTex.tex);
+  r.dispose();
+  return res;
+};
+
+/**
+ * step 3: the face warps drawn through a view (uGeo, uTile, uWin), against withView of the same CPU map; the body field
+ * and face of runReshapePin, every contour / chin / nose / eye warp
+ */
+window.runReshapePinView = () => {
+  const gl = context();
+  const r = rig(gl);
+  const { width: W, height: H } = landmarks;
+  const aspect = W / H;
+  // runReshapePin's smooth body field (RG16F from FLOAT data, like the engine)
+  const bw = 24;
+  const bh = 36;
+  const bd = new Float32Array(bw * bh * 2);
+  for (let y = 0; y < bh; y++)
+    for (let x = 0; x < bw; x++) {
+      bd[(y * bw + x) * 2] = 0.012 * Math.sin((x / bw) * 6) * Math.cos((y / bh) * 4);
+      bd[(y * bw + x) * 2 + 1] = 0.008 * Math.cos((x / bw) * 5);
+    }
+  const bodyTex = floatTex(gl, bw, bh, gl.RG16F, gl.RG, bd);
+  const bodyField: BodyField = { width: bw, height: bh, data: bd, version: 1 };
+  const face = adapt({ points: new Float32Array(landmarks.points) }, W, H);
+  const at = (ids: ParamId[]) => ids.reduce((p, k) => setParam(p, k, 1), applyPreset('original', 1)).values;
+  const oSize = { width: W, height: H };
+  const flip = { ...IDENTITY_GEOMETRY, flipH: true, quarter: 1 as const };
+  const tilted = setStraighten(IDENTITY_GEOMETRY, 12, oSize);
+  const views: { name: string; view: ReshapeView }[] = [
+    { name: 'quarter 1 + flip', view: { geo: glMat3(vToO(flip, oSize)), tile: [0, 0, 1, 1], win: [0, 0, 1, 1] } },
+    { name: 'θ 12° + crop', view: { geo: glMat3(vToO(tilted, oSize)), tile: [0, 0, 1, 1], win: [0, 0, 1, 1] } },
+    { name: 'tile in a window', view: { geo: glMat3(vToO(IDENTITY_GEOMETRY, oSize)), tile: [0.25, 0.2, 0.5, 0.5], win: [0.15, 0.1, 0.7, 0.7] } },
+  ];
+  const ids: ParamId[] = ['shape.faceSlim', 'shape.faceV', 'shape.faceNarrow', 'shape.chin', 'shape.noseSlim', 'shape.eyeEnlarge'];
+  const u = reshapeUniforms(at(ids), 1);
+  const pass = createReshapePass(gl);
+  const res: PinCase[] = [];
+  for (const { name, view } of views) {
+    // runReshapePin's draw (step 1's one-face signature); the view is the new last argument
+    pass.draw(r.src, r.dst, face, u, aspect, bodyTex, null, view);
+    res.push(r.compare(name, withView(reshapeMapCpu(face, u, aspect, bodyField), view)));
   }
   pass.dispose();
   gl.deleteTexture(bodyTex.tex);

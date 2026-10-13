@@ -2473,7 +2473,7 @@ EOF
 - Produces (`reshape.ts`): `interface ReshapeView { geo: Float32Array; tile: readonly [number, number, number, number]; win: readonly [number, number, number, number] }`; `IDENTITY_VIEW: ReshapeView`; `drawFaces` options gain `view?: ReshapeView`; `ReshapePass.draw(…, protect?, view?: ReshapeView)` (new last parameter, forwarded to `drawFaces`); `displacementBound(face: Face, aspect: number, u: ReshapeUniforms): number` (iso units: fractions of the O width; S §4.4 writes `displacementBound(face, u)`; the aspect is needed for `reshapeGeometry`).
 - Produces (`reshapeCpu.ts`): `withView(map: UvMap, view: ReshapeView): UvMap` (buffer uv → V → O → `map` → src uv).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `src/engine/passes/reshape.test.ts` (CRLF). The file already imports `type { Face, ParamId }` from `../../types`, `{ applyPreset, defaultParams }` from `../params` and `reshapeActive`, `reshapeUniforms` (among others) from `./reshape`: add `PARAM_DEFS, paramDef` to the `../params` import and `displacementBound` to the `./reshape` import, and add only these new import lines:
 
@@ -2575,12 +2575,12 @@ test('reshape CPU port == RESHAPE_FS under geometry and windows (uGeo, uTile, uW
 });
 ```
 
-- [ ] **Step 2: Run the unit tests to see them fail**
+- [x] **Step 2: Run the unit tests to see them fail**
 
 Run: `npx vitest run src/engine/passes/reshape.test.ts src/engine/passes/reshapeCpu.test.ts`
 Expected: FAIL — `displacementBound is not exported`, `withView is not exported`, the hash pin mismatch.
 
-- [ ] **Step 3: Implement the shader change, `draw`'s view and `displacementBound`**
+- [x] **Step 3: Implement the shader change, `draw`'s view and `displacementBound`**
 
 In `RESHAPE_FS` (as step 1 left it), add after the `uAspect` uniform:
 
@@ -2686,7 +2686,7 @@ export function withView(map: UvMap, view: ReshapeView): UvMap {
 }
 ```
 
-- [ ] **Step 4: Re-pin the shader hash and run the unit tests**
+- [x] **Step 4: Re-pin the shader hash and run the unit tests**
 
 Run: `npx vitest run src/engine/passes/reshapeCpu.test.ts`
 Expected: FAIL only on the hash, `expected '<new hash>' to be '<step 1's PINNED>'` (the structural lines pass now). Set `PINNED` to `<new hash>` (C §8.2: the CPU port changes in this same commit), then:
@@ -2694,7 +2694,7 @@ Expected: FAIL only on the hash, `expected '<new hash>' to be '<step 1's PINNED>
 Run: `npx vitest run src/engine/passes/reshape.test.ts src/engine/passes/reshapeCpu.test.ts src/engine/passes/faceProtect.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Add the GPU = CPU view cases to the reshape harness**
+- [x] **Step 5: Add the GPU = CPU view cases to the reshape harness**
 
 In `tests/e2e/pages/reshape.ts`, add to the `declare global` block `runReshapePinView?: () => PinCase[];` and, after `window.runReshapePin` (`reshape.ts:105-151` of the page), a second entry built on step 1's page helpers — `context()`, `floatTex(…)` and `rig(gl)` (the identity coordinate texture, the RGBA32F 200 × 300 target and its `compare(name, map)`), plus `runReshapePin`'s RG16F body field and face — that draws the face warps through a view. Add `withView` to the page's `../../../src/engine/passes/reshapeCpu` import and `type ReshapeView` to its `../../../src/engine/passes/reshape` import; the one new import line is:
 
@@ -2745,12 +2745,12 @@ window.runReshapePinView = () => {
 
 (`rig`'s `compare` skips pixels whose CPU source UV falls outside the identity texture's exact range and counts the pixels the warp moved by more than 1 px, as for the other cases. The CPU map uses `reshapeMapCpu(…, bodyField)`, as `runReshapePin`'s "body field + contour" case does.)
 
-- [ ] **Step 6: Run the harness spec**
+- [x] **Step 6: Run the harness spec**
 
 Run: `npx playwright test tests/e2e/reshape.spec.ts`
 Expected: every test passes (the existing case unchanged, plus the view case: three lines with `max |GPU − CPU|` < 0.05 px).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/engine/passes/reshape.ts src/engine/passes/reshapeCpu.ts src/engine/passes/reshape.test.ts src/engine/passes/reshapeCpu.test.ts tests/e2e/pages/reshape.ts tests/e2e/reshape.spec.ts

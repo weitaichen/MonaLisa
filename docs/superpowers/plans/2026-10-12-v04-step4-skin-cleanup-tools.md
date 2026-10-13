@@ -2482,7 +2482,7 @@ git commit -m "v0.4 step 4 (7/20): synthetic 膚質 defect fixture, generated in
   ```
   Kernel note: the Gaussian passes take direct texel taps with these weights (one `texelFetch` per tap, radius ≤ 31) instead of S §4.3's linear-sampled tap pairs; the buffers are ⅛ size or smaller, so the cost is the same order, and the CPU port then matches the GPU tap for tap.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/engine/toneCpu.test.ts`:
 ```ts
@@ -2650,12 +2650,12 @@ describe('toneCpu (skin-cleanup spec §4.3–4.4)', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `npx vitest run src/engine/toneCpu.test.ts`
 Expected: FAIL — `Failed to resolve import "./shaders/tone"`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/engine/shaders/tone.ts`:
 ```ts
@@ -3033,12 +3033,12 @@ export function retouchCpu(base0: Img, field: ToneFieldCpu | null, r: Img, field
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/engine/toneCpu.test.ts && npm run typecheck`
 Expected: PASS (10 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/engine/shaders/tone.ts src/engine/toneCpu.ts src/engine/toneCpu.test.ts

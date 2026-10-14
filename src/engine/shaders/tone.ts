@@ -6,8 +6,9 @@ import { TONE_ZERO } from '../passes/toneGeometry';
 /**
  * Every tunable constant of the tone field and the retouch. The gains are calibrated on sample_face_tone.png by
  * toneCalibration.test.ts (plan Task 9): from the spec's starting values, 勻膚 even.chroma ×1.2, 膚色 warm and cool ×1.2,
- * 亮眼 eye.detint ×2 and eye.clarity ×1.1. 白牙's tooth gate and lip guard are plan Task 11's decision (b). Every other
- * entry is the spec's (S §4.3–4.4).
+ * 亮眼 eye.detint ×2 and eye.clarity ×1.1; the two gains above 1 act through an effective factor capped at 1, so they
+ * steepen the region ramp but never push past neutral (step 4 follow-up). 白牙's tooth gate and lip guard are plan
+ * Task 11's decision (b). Every other entry is the spec's (S §4.3–4.4).
  */
 export const TONE = {
   /** conf = smoothstep(conf0, conf1, L.a): how much skin the low-pass reference saw */
@@ -16,6 +17,7 @@ export const TONE = {
   evenGuard: [0.06, 0.14],
   /** 黑眼圈 / 法令紋 leave darkness beyond these alone (lashes, frames) */
   darkGuard: [0.2, 0.3],
+  /** chroma: the effective factor min(1, chroma · weight) never inverts bC (a gain above 1 only steepens the ramp) */
   even: { chroma: 1.08, lift: 0.45 },
   darkCircle: { lift: 0.85, chroma: 0.7 },
   nasolabial: { lift: 0.8, chroma: 0.3 },
@@ -37,6 +39,7 @@ export const TONE = {
   eye: {
     scY: [0.32, 0.5],
     scCh: [0.1, 0.2],
+    /** the effective factor min(1, detint · R.A · sc) never pushes the tint past neutral */
     detint: 1.2,
     scLift: 0.05,
     irCh: [0.05, 0.12],
@@ -192,7 +195,8 @@ void main() {
   float gD = 1.0 - smoothstep(${g(T.darkGuard[0])}, ${g(T.darkGuard[1])}, -bY);
   vec4 q = texture(uQ, uv);
   vec4 r = texture(uR, uv);
-  vec3 d = q.r * conf * gE * (-${g(T.even.chroma)} * bC + ${g(T.even.lift)} * lift)
+  float wE = q.r * conf * gE;
+  vec3 d = -min(1.0, ${g(T.even.chroma)} * wE) * bC + ${g(T.even.lift)} * wE * lift
          + r.r * conf * gD * (${g(T.darkCircle.lift)} * lift - ${g(T.darkCircle.chroma)} * bC)
          + r.g * conf * gD * (${g(T.nasolabial.lift)} * lift - ${g(T.nasolabial.chroma)} * bC);
   float s = clamp(2.0 * (q.b - ZERO), -1.0, 1.0);
@@ -269,7 +273,7 @@ void main() {
     vec3 y = toYcc(c);
     float ch = 2.0 * length(y.yz - 0.5);
     float sc = smoothstep(${g(E.scY[0])}, ${g(E.scY[1])}, y.x) * (1.0 - smoothstep(${g(E.scCh[0])}, ${g(E.scCh[1])}, ch));
-    y.yz += (0.5 - y.yz) * ${g(E.detint)} * r.a * sc;
+    y.yz += (0.5 - y.yz) * min(1.0, ${g(E.detint)} * r.a * sc);
     y.x += ${g(E.scLift)} * r.a * sc * (1.0 - y.x);
     float ir = smoothstep(${g(E.irCh[0])}, ${g(E.irCh[1])}, ch) * smoothstep(${g(E.irY0[0])}, ${g(E.irY0[1])}, y.x) * (1.0 - smoothstep(${g(E.irY1[0])}, ${g(E.irY1[1])}, y.x));
     y.x += ${g(E.irLift)} * r.a * ir;

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { IDENTITY_WIN, TONE_ZERO } from './passes/toneGeometry';
 import { shaderHash } from './shaderHash';
 import { gaussWeights, lFactor, RETOUCH_FS, sigmaLow, sigmaMid, TONE, TONE_BLUR_FS, TONE_DOWN8_FS, TONE_FIELD_FS, TONE_LBOX_FS } from './shaders/tone';
-import { bandOf, fromYcc, LUMA709, makeImg, q8, retouchCpu, retouchPixel, sample, toneFieldCpu, toYcc, type Img } from './toneCpu';
+import { bandOf, deltaTexel, fromYcc, LUMA709, makeImg, q8, retouchCpu, retouchPixel, sample, toneFieldCpu, toYcc, type Img } from './toneCpu';
 
 const SKIN = [0.8, 0.62, 0.52] as const;
 const lum = (c: ArrayLike<number>) => LUMA709[0] * c[0] + LUMA709[1] * c[1] + LUMA709[2] * c[2];
@@ -69,6 +69,20 @@ describe('toneCpu (skin-cleanup spec §4.3–4.4)', () => {
         n += 3;
       }
     expect((hf / n) * 255).toBeLessThanOrEqual(1);
+  });
+
+  it('勻膚 at full weight cancels the mid-band chroma bC and never inverts it (a gain above 1 is capped at 1)', () => {
+    // bY = 0 (no lift), conf 1, gE 1, Q.R 1: Δ is exactly −bC, not −even.chroma·bC
+    const L = [0.7, 0.55, 0.45, 1];
+    const bC = [0.02, -0.02 * (LUMA709[0] / LUMA709[1]), 0];
+    const m = [L[0] + bC[0], L[1] + bC[1], L[2] + bC[2], 1];
+    expect(bandOf(m, L).bY).toBeCloseTo(0, 12);
+    const d = deltaTexel(m, L, [1, 1, TONE_ZERO, 0], [0, 0, 0, 0], [0, 0, 0]);
+    const c = bandOf(m, L).bC;
+    for (let k = 0; k < 3; k++) expect(d[k]).toBeCloseTo(-c[k], 12);
+    // at half weight the calibrated gain still acts: −min(1, 0.5·even.chroma)·bC
+    const h = deltaTexel(m, L, [0.5, 1, TONE_ZERO, 0], [0, 0, 0, 0], [0, 0, 0]);
+    for (let k = 0; k < 3; k++) expect(h[k]).toBeCloseTo(-Math.min(1, 0.5 * TONE.even.chroma) * c[k], 12);
   });
 
   it('a mole (mid-band luma −0.2) is left alone by 勻膚', () => {
@@ -190,6 +204,13 @@ describe('toneCpu (skin-cleanup spec §4.3–4.4)', () => {
     expect(Array.from(retouchCpu(base, null, rB, false).d)).toEqual(Array.from(base.d));
   });
 
+  it('亮眼 moves a fully weighted sclera to neutral and never past it (a gain above 1 is capped at 1)', () => {
+    const sclera = fromYcc(0.75, 0.49, 0.53);
+    const o = toYcc(...(retouchPixel([...sclera], sclera, sclera, 0, 1) as [number, number, number]));
+    expect(o[1]).toBeCloseTo(0.5, 9);
+    expect(o[2]).toBeCloseTo(0.5, 9);
+  });
+
   it('亮眼 detints the sclera, and its clarity term respects the ±0.12 clamp', () => {
     const sclera = [0.86, 0.78, 0.77];
     const o = retouchPixel([...sclera], sclera, sclera, 0, 1);
@@ -232,6 +253,6 @@ describe('toneCpu (skin-cleanup spec §4.3–4.4)', () => {
 
 describe('tone shaders pin', () => {
   it('is pinned to the shader text and the TONE table: a change must be mirrored in toneCpu.ts (then update this hash)', () => {
-    expect(shaderHash([TONE_DOWN8_FS, TONE_BLUR_FS, TONE_LBOX_FS, TONE_FIELD_FS, RETOUCH_FS].join('\n'))).toBe('d0f4c8c3');
+    expect(shaderHash([TONE_DOWN8_FS, TONE_BLUR_FS, TONE_LBOX_FS, TONE_FIELD_FS, RETOUCH_FS].join('\n'))).toBe('c12fa8a0');
   });
 });

@@ -171,9 +171,12 @@ export function deltaTexel(m: ArrayLike<number>, L: ArrayLike<number>, q: ArrayL
   const kE = q[0] * conf * gE;
   const kD = r[0] * conf * gD;
   const kN = r[1] * conf * gD;
+  // 勻膚's chroma factor is capped at 1: at full weight it cancels bC, never inverts it
+  const cE = Math.min(1, TONE.even.chroma * kE);
   for (let c = 0; c < 3; c++) {
     out[c] =
-      kE * (-TONE.even.chroma * bC[c] + TONE.even.lift * lift) +
+      -cE * bC[c] +
+      TONE.even.lift * kE * lift +
       kD * (TONE.darkCircle.lift * lift - TONE.darkCircle.chroma * bC[c]) +
       kN * (TONE.nasolabial.lift * lift - TONE.nasolabial.chroma * bC[c]);
   }
@@ -249,8 +252,10 @@ export function retouchPixel(c: number[], b0: ArrayLike<number>, mn: ArrayLike<n
     let [y, cb, cr] = toYcc(c[0], c[1], c[2]);
     const ch = 2 * Math.hypot(cb - 0.5, cr - 0.5);
     const sc = smoothstep(E.scY[0], E.scY[1], y) * (1 - smoothstep(E.scCh[0], E.scCh[1], ch));
-    cb += (0.5 - cb) * E.detint * rA * sc;
-    cr += (0.5 - cr) * E.detint * rA * sc;
+    // capped at 1: a fully weighted sclera lands on neutral, never past it
+    const kd = Math.min(1, E.detint * rA * sc);
+    cb += (0.5 - cb) * kd;
+    cr += (0.5 - cr) * kd;
     y += E.scLift * rA * sc * (1 - y);
     const ir = smoothstep(E.irCh[0], E.irCh[1], ch) * smoothstep(E.irY0[0], E.irY0[1], y) * (1 - smoothstep(E.irY1[0], E.irY1[1], y));
     y += E.irLift * rA * ir;

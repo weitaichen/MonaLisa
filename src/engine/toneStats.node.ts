@@ -45,11 +45,13 @@ export const TOOL_VALUES: Record<ToolName, ToneValues> = {
  * Calibrated (plan Task 9): where the spec's target cannot be met without breaking a keep, the entry is the best value
  * reached, rounded down to 0.05 (S §9) — 黑眼圈 0.6 → 0.45 (darkR; one more lift step breaks the left lash line),
  * 法令紋 0.5 → 0 (the 6 px fold is finer than σ_mid and sits on a highlight, so the field lifts nothing there),
- * 亮眼 0.45 → 0.25 (the eye region's inset ramps leave the sclera near the lids and corners at R.A < 1).
+ * 亮眼 0.45 → 0.25 (the eye region's inset ramps leave the sclera near the lids and corners at R.A < 1),
+ * 勻膚 0.5 → 0.45 (step 4 follow-up: its chroma factor is capped at 1 so it never inverts bC; blotch2 then reaches
+ * 0.4956, and no even.chroma up to 2× gets it past 0.4959, since about half of a σ 0.04 fw blotch lies in L's band).
  * 白牙 is back at the spec's 0.45 (plan Task 11 decision b): the tooth gate passes shadowed teeth and the lip guard keeps
  * the lips still (TONE.teeth).
  */
-export const TARGETS = { even: 0.5, darkCircle: 0.45, nasolabial: 0, teeth: 0.45, eyeBright: 0.25 };
+export const TARGETS = { even: 0.45, darkCircle: 0.45, nasolabial: 0, teeth: 0.45, eyeBright: 0.25 };
 
 export interface Check {
   name: string;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { TONE_ZERO } from './passes/toneGeometry';
+import { IDENTITY_WIN, TONE_ZERO } from './passes/toneGeometry';
 import { shaderHash } from './shaderHash';
-import { gaussWeights, lFactor, RETOUCH_FS, sigmaLow, sigmaMid, TONE_BLUR_FS, TONE_DOWN8_FS, TONE_FIELD_FS, TONE_LBOX_FS } from './shaders/tone';
+import { gaussWeights, lFactor, RETOUCH_FS, sigmaLow, sigmaMid, TONE, TONE_BLUR_FS, TONE_DOWN8_FS, TONE_FIELD_FS, TONE_LBOX_FS } from './shaders/tone';
 import { bandOf, fromYcc, LUMA709, makeImg, q8, retouchCpu, retouchPixel, sample, toneFieldCpu, toYcc, type Img } from './toneCpu';
 
 const SKIN = [0.8, 0.62, 0.52] as const;
@@ -122,6 +122,74 @@ describe('toneCpu (skin-cleanup spec §4.3–4.4)', () => {
     }
   });
 
+  it('白牙 whitens shadowed teeth (Y 0.15–0.25, as in sample_face.png) and leaves the dark gap between them alone', () => {
+    const tooth = fromYcc(0.2, 0.43, 0.535);
+    const out = retouchPixel([...tooth], tooth, tooth, 1, 0) as [number, number, number];
+    expect(Math.abs(toYcc(...out)[1] - 0.5)).toBeLessThanOrEqual(0.5 * 0.07);
+    expect(toYcc(...out)[0]).toBeGreaterThan(0.2 + 0.03);
+    const gap = fromYcc(0.08, 0.47, 0.53);
+    const g = retouchPixel([...gap], gap, gap, 1, 0);
+    for (let c = 0; c < 3; c++) expect(Math.abs(g[c] - gap[c]) * 255).toBeLessThan(0.5);
+  });
+
+  it("白牙's lip guard: nothing outside the inner-lip polygon moves, by true distance at full resolution; inside it ramps in over TONE.teeth.inset·mouthW", () => {
+    // R.B = 1 over the whole ¼ target, as the ¼-res fan reads past the lip line; a shadowed-tooth colour everywhere
+    const w = 400;
+    const h = 200;
+    const aspect = w / h;
+    const uv: [number, number][] = [[0.2, 0.5], [0.35, 0.4], [0.5, 0.38], [0.65, 0.4], [0.8, 0.5], [0.65, 0.6], [0.5, 0.62], [0.35, 0.6]];
+    const mouthW = 0.6;
+    const guards = { aspect, mouths: [{ ring: uv.map(([x, y]): [number, number] => [x, y / aspect]), mouthW }] };
+    const tooth = fromYcc(0.2, 0.43, 0.535);
+    const base = image(w, h, () => tooth);
+    const rB = R(w, h, [0, 0, 1, 0]);
+    const out = retouchCpu(base, null, rB, false, IDENTITY_WIN, guards);
+    const full = retouchPixel([...tooth], tooth, tooth, 1, 0).map(q8);
+    // the test's own polygon maths, in px
+    const poly = uv.map(([x, y]) => [x * w, y * h]);
+    const inside = (px: number, py: number) => {
+      let r = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++)
+        if (poly[i][1] > py !== poly[j][1] > py && px < ((poly[j][0] - poly[i][0]) * (py - poly[i][1])) / (poly[j][1] - poly[i][1]) + poly[i][0]) r = !r;
+      return r;
+    };
+    const edge = (px: number, py: number) =>
+      Math.min(
+        ...poly.map((a, i) => {
+          const b = poly[(i + 1) % poly.length];
+          const t = Math.min(1, Math.max(0, ((px - a[0]) * (b[0] - a[0]) + (py - a[1]) * (b[1] - a[1])) / ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)));
+          return Math.hypot(px - a[0] - t * (b[0] - a[0]), py - a[1] - t * (b[1] - a[1]));
+        }),
+      );
+    const insetPx = TONE.teeth.inset * mouthW * w;
+    let outsideN = 0;
+    let deepN = 0;
+    let rampN = 0;
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const o = px(out, x, y);
+        const b = px(base, x, y);
+        if (!inside(x + 0.5, y + 0.5)) {
+          outsideN++;
+          expect(o, `${x},${y}`).toEqual(b);
+          continue;
+        }
+        const d = edge(x + 0.5, y + 0.5);
+        if (d >= insetPx + 0.01) {
+          deepN++;
+          for (let c = 0; c < 3; c++) expect(Math.round(Math.abs(o[c] - full[c]) * 255), `${x},${y}`).toBeLessThanOrEqual(1);
+        } else if (d > 0.2 * insetPx && d < 0.8 * insetPx) {
+          rampN++;
+          const db = (toYcc(...(o as [number, number, number]))[1] - toYcc(...(b as [number, number, number]))[1]) / (toYcc(...(full as [number, number, number]))[1] - toYcc(...(b as [number, number, number]))[1]);
+          expect(db, `${x},${y}`).toBeGreaterThan(0);
+          expect(db, `${x},${y}`).toBeLessThan(1);
+        }
+      }
+    expect(Math.min(outsideN, deepN, rampN)).toBeGreaterThan(50);
+    // no mouth listed: 白牙 has nowhere to act, whatever R.B says
+    expect(Array.from(retouchCpu(base, null, rB, false).d)).toEqual(Array.from(base.d));
+  });
+
   it('亮眼 detints the sclera, and its clarity term respects the ±0.12 clamp', () => {
     const sclera = [0.86, 0.78, 0.77];
     const o = retouchPixel([...sclera], sclera, sclera, 0, 1);
@@ -164,6 +232,6 @@ describe('toneCpu (skin-cleanup spec §4.3–4.4)', () => {
 
 describe('tone shaders pin', () => {
   it('is pinned to the shader text and the TONE table: a change must be mirrored in toneCpu.ts (then update this hash)', () => {
-    expect(shaderHash([TONE_DOWN8_FS, TONE_BLUR_FS, TONE_LBOX_FS, TONE_FIELD_FS, RETOUCH_FS].join('\n'))).toBe('e1415f8e');
+    expect(shaderHash([TONE_DOWN8_FS, TONE_BLUR_FS, TONE_LBOX_FS, TONE_FIELD_FS, RETOUCH_FS].join('\n'))).toBe('d0f4c8c3');
   });
 });

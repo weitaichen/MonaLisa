@@ -541,7 +541,7 @@ export function createPipeline(gl: GL): Pipeline {
         }
         retouch ??= createRetouchPass(gl);
         const b = full('B', baseFb, job.srcSize);
-        retouch.draw(base, b, field?.delta8 ?? null, field?.mn8 ?? null, r.tex, job.win, tj.fieldOn && !!field?.delta8);
+        retouch.draw(base, b, field?.delta8 ?? null, field?.mn8 ?? null, r.tex, job.win, tj.fieldOn && !!field?.delta8, tj.mouths);
         base = b.tex;
         baseFb = b;
         passes.push('retouch');

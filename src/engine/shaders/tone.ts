@@ -1,11 +1,13 @@
 // 膚質 shaders and their shared constants (skin-cleanup spec §4.3–4.4). The TONE table is baked into the GLSL text, so the
 // hash pin in toneCpu.test.ts covers it; src/engine/toneCpu.ts mirrors every stage. Original work.
+import { MAX_RENDER_FACES } from '../../config/limits';
 import { TONE_ZERO } from '../passes/toneGeometry';
 
 /**
  * Every tunable constant of the tone field and the retouch. The gains are calibrated on sample_face_tone.png by
  * toneCalibration.test.ts (plan Task 9): from the spec's starting values, 勻膚 even.chroma ×1.2, 膚色 warm and cool ×1.2,
- * 亮眼 eye.detint ×2 and eye.clarity ×1.1; every other entry is the spec's (S §4.3–4.4).
+ * 亮眼 eye.detint ×2 and eye.clarity ×1.1. 白牙's tooth gate and lip guard are plan Task 11's decision (b). Every other
+ * entry is the spec's (S §4.3–4.4).
  */
 export const TONE = {
   /** conf = smoothstep(conf0, conf1, L.a): how much skin the low-pass reference saw */
@@ -26,7 +28,12 @@ export const TONE = {
   skinSoft: 0.03,
   /** Δ is clamped to ±deltaMax before the 8-bit encoding TONE_ZERO + 2Δ */
   deltaMax: 0.25,
-  teeth: { y: [0.28, 0.42], cr: [0.555, 0.6], cb: 0.75, crPull: 0.35, lift: 0.08 },
+  /**
+   * 白牙: the luma gate passes shadowed teeth (sample_face.png's are at Y 0.15–0.25, the gap between them ≤ 0.13; the
+   * spec's first gate [0.28, 0.42] passed none of them); `inset` (× mouthW, iso) is the lip guard's ramp inside the
+   * inner-lip line, which keeps the lips still where the colour gates cannot tell them from teeth (Task 11 decision b)
+   */
+  teeth: { y: [0.12, 0.18], cr: [0.555, 0.6], cb: 0.75, crPull: 0.35, lift: 0.08, inset: 0.01 },
   eye: {
     scY: [0.32, 0.5],
     scCh: [0.1, 0.2],
@@ -199,10 +206,14 @@ void main() {
   outColor = vec4(ZERO + 2.0 * clamp(d, -${g(T.deltaMax)}, ${g(T.deltaMax)}), 1.0);
 }`;
 
+/** the lip guard's uniform arrays hold this many faces (the engine renders at most MAX_RENDER_FACES) */
+export const MAX_MOUTHS = MAX_RENDER_FACES;
+
 /**
  * P0d: c = base0 + Δ8, then 白牙 (R.B) and 亮眼 (R.A); base0 and R cover the buffer, Δ8 and Mn8 the whole O (S §4.4).
  * Without Mn8 (uMnOn 0: a tile whose field was not prepared) 亮眼's clarity reads base0 itself, so it adds nothing, as
- * retouchCpu does with no field.
+ * retouchCpu does with no field. 白牙 acts only inside an inner-lip polygon (uMouth, iso, 8 points per face), ramping in
+ * over TONE.teeth.inset·mouthW of true distance from the lip line: the lip guard (lipGuard in toneCpu.ts).
  */
 export const RETOUCH_FS = /* glsl */ `#version 300 es
 precision highp float;
@@ -215,16 +226,40 @@ uniform sampler2D uR;
 uniform vec4 uWin;
 uniform float uFieldOn;
 uniform float uMnOn;
+uniform int uMouths;
+uniform vec2 uMouth[${MAX_MOUTHS * 8}];
+uniform float uMouthW[${MAX_MOUTHS}];
+uniform float uAspect;
 out vec4 outColor;
+float lipGuard(vec2 o) {
+  vec2 p = vec2(o.x, o.y / uAspect);
+  float gd = 0.0;
+  for (int f = 0; f < ${MAX_MOUTHS}; f++) {
+    if (f >= uMouths) break;
+    bool inside = false;
+    float d = 1e9;
+    for (int i = 0; i < 8; i++) {
+      vec2 a = uMouth[f * 8 + i];
+      vec2 b = uMouth[f * 8 + (i + 1) % 8];
+      if ((a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+      vec2 ab = b - a;
+      float t = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-12), 0.0, 1.0);
+      d = min(d, length(p - a - t * ab));
+    }
+    if (inside) gd = max(gd, smoothstep(0.0, ${g(T.teeth.inset)} * uMouthW[f], d));
+  }
+  return gd;
+}
 void main() {
   vec2 o = uWin.xy + vUv * uWin.zw;
   vec3 b0 = texture(uBase, vUv).rgb;
   vec3 c = b0;
   if (uFieldOn > 0.5) c += (texture(uDelta, o).rgb - ZERO) * 0.5;
   vec4 r = texture(uR, vUv);
-  if (r.b > 0.0) {
+  float kB = r.b > 0.0 ? r.b * lipGuard(o) : 0.0;
+  if (kB > 0.0) {
     vec3 y = toYcc(c);
-    float k = r.b * smoothstep(${g(T.teeth.y[0])}, ${g(T.teeth.y[1])}, y.x) * (1.0 - smoothstep(${g(T.teeth.cr[0])}, ${g(T.teeth.cr[1])}, y.z));
+    float k = kB * (smoothstep(${g(T.teeth.y[0])}, ${g(T.teeth.y[1])}, y.x) * (1.0 - smoothstep(${g(T.teeth.cr[0])}, ${g(T.teeth.cr[1])}, y.z)));
     y.y += max(0.0, 0.5 - y.y) * ${g(T.teeth.cb)} * k;
     y.z += (0.5 - y.z) * ${g(T.teeth.crPull)} * k;
     y.x += ${g(T.teeth.lift)} * k * (1.0 - y.x);

@@ -13,6 +13,7 @@ import {
   farSide,
   isoPt,
   mouthGeometry,
+  mouthGuards,
   mouthOpen,
   nasolabialGeometry,
   NEUTRAL_TONE,
@@ -429,6 +430,21 @@ describe('R and Q draw lists', () => {
     const closed = toneDrawsR(one(v, squint(0.1, 0.005)), ASPECT);
     expect(closed.some((d) => d.str[2] > 0)).toBe(false); // 白牙 off on a closed mouth
     expect(closed.filter((d) => d.str[3] > 0)).toHaveLength(1); // 亮眼 only on the open image-right eye
+  });
+
+  it("白牙's lip guard lists exactly the faces whose 白牙 region R draws: the inner-lip ring 96–103 (iso) and mouthW", () => {
+    const v = { ...NEUTRAL_TONE, teeth: 0.6 };
+    const g = mouthGuards(one(v), ASPECT);
+    expect(g.aspect).toBe(ASPECT);
+    expect(g.mouths).toHaveLength(1);
+    expect(g.mouths[0].ring).toEqual([96, 97, 98, 99, 100, 101, 102, 103].map((i) => isoPt(FACE, i, ASPECT)));
+    expect(g.mouths[0].mouthW).toBe(faceFrame(FACE, ASPECT).mouthW);
+    // 白牙 0, a closed mouth (teethGate 0) or a weightless face: no R.B region, so no guard either
+    expect(mouthGuards(one({ ...NEUTRAL_TONE, even: 1, eyeBright: 1 }), ASPECT).mouths).toEqual([]);
+    expect(mouthGuards(one(v, squint(0.1, 0.005)), ASPECT).mouths).toEqual([]);
+    expect(mouthGuards([{ face: FACE, values: v, weight: 0, cap: null }], ASPECT).mouths).toEqual([]);
+    const two = [...one(v), { face: shiftedFace(FACE, 0.3), values: v, weight: 1, cap: null }];
+    expect(mouthGuards(two, ASPECT).mouths).toHaveLength(toneDrawsR(two, ASPECT).filter((d) => d.str[2] > 0).length);
   });
 
   it('膚色: a warm face draws MAX, then MIN holes into B around TONE_ZERO; a cool face the opposite', () => {

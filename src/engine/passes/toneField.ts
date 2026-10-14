@@ -3,9 +3,9 @@
 // retouch writes base0 + Δ8, then 白牙 and 亮眼, at full resolution (one tile through uWin). Shaders: ../shaders/tone.ts.
 // Original work.
 import { bindTarget, bindTexture, createProgram, createTexture, deleteTexture, drawFullscreen, FULLSCREEN_VS, type Framebuffer, type GL, type Texture } from '../gl/gl';
-import { fieldSizes, gaussWeights, MAX_BLUR_RADIUS, RETOUCH_FS, sigmaMid, TONE_BLUR_FS, TONE_DOWN8_FS, TONE_FIELD_FS, TONE_LBOX_FS } from '../shaders/tone';
+import { fieldSizes, gaussWeights, MAX_BLUR_RADIUS, MAX_MOUTHS, RETOUCH_FS, sigmaMid, TONE_BLUR_FS, TONE_DOWN8_FS, TONE_FIELD_FS, TONE_LBOX_FS } from '../shaders/tone';
 import type { Size } from '../uniforms';
-import type { Win } from './toneGeometry';
+import type { MouthGuards, Win } from './toneGeometry';
 
 export type FieldFbName = 'D8' | 'T8' | 'L' | 'Lt' | 'Delta8';
 export interface ToneFieldTextures {
@@ -20,7 +20,8 @@ export interface ToneFieldPass {
   dispose(): void;
 }
 export interface RetouchPass {
-  draw(base0: Texture, dst: Framebuffer, delta8: Texture | null, mn8: Texture | null, r: Texture, win: Win, fieldOn: boolean): void;
+  /** `mouths`: 白牙's lip guard (none listed: 白牙 does nothing) */
+  draw(base0: Texture, dst: Framebuffer, delta8: Texture | null, mn8: Texture | null, r: Texture, win: Win, fieldOn: boolean, mouths: MouthGuards): void;
   dispose(): void;
 }
 
@@ -120,8 +121,10 @@ export function createRetouchPass(gl: GL): RetouchPass {
   gl.bindTexture(gl.TEXTURE_2D, zero.tex);
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 128, 255]));
   gl.bindTexture(gl.TEXTURE_2D, null);
+  const ring = new Float32Array(MAX_MOUTHS * 16);
+  const mouthW = new Float32Array(MAX_MOUTHS);
   return {
-    draw(base0, dst, delta8, mn8, r, win, fieldOn) {
+    draw(base0, dst, delta8, mn8, r, win, fieldOn, mouths) {
       gl.disable(gl.BLEND);
       prog.use();
       bindTexture(gl, 0, base0);
@@ -131,6 +134,18 @@ export function createRetouchPass(gl: GL): RetouchPass {
       gl.uniform4f(prog.u('uWin'), win[0], win[1], win[2], win[3]);
       gl.uniform1f(prog.u('uFieldOn'), fieldOn && delta8 ? 1 : 0);
       gl.uniform1f(prog.u('uMnOn'), mn8 ? 1 : 0);
+      const n = Math.min(MAX_MOUTHS, mouths.mouths.length);
+      ring.fill(0);
+      mouthW.fill(0);
+      for (let f = 0; f < n; f++) {
+        const m = mouths.mouths[f];
+        for (let i = 0; i < 8; i++) ring.set(m.ring[i], (f * 8 + i) * 2);
+        mouthW[f] = m.mouthW;
+      }
+      gl.uniform1i(prog.u('uMouths'), n);
+      gl.uniform2fv(prog.u('uMouth'), ring);
+      gl.uniform1fv(prog.u('uMouthW'), mouthW);
+      gl.uniform1f(prog.u('uAspect'), mouths.aspect);
       bindTarget(gl, dst);
       drawFullscreen(gl);
       for (let u = 0; u < 4; u++) bindTexture(gl, u, null);

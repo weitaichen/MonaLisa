@@ -79,11 +79,10 @@ test('each 膚質 slider changes its own face area and leaves the background alo
     白牙: boxOf(fx, ['teeth']),
     亮眼: boxOf(fx, ['sclera']),
   };
-  // The open decision of Task 11 (from the Task 9 review, not yet made): on this fixture 法令紋 recovers only 0.003 /
-  // 0.006 (the 6 px fold is finer than σ_mid) and 白牙 nothing (the teeth sit below the 0.28 tooth gate), so the plan's
-  // "inside > 0.5" cannot hold for them. Until the fixture or the spec changes, 法令紋 only has to reach the frame at all
-  // (CPU mean abs diff 0.025 in its box) and 白牙 is held to the background bound alone.
-  const minInside: Record<string, number | null> = { 勻膚: 0.5, 膚色: 0.5, 黑眼圈: 0.5, 法令紋: 0.01, 白牙: null, 亮眼: 0.5 };
+  // S §8.4: inside > 0.5 for every slider. 白牙 meets it since Task 11's decision (b) (a tooth gate that passes shadowed
+  // teeth, and the lip guard). 法令紋 still recovers only 0.003 / 0.006 on this fixture (the fold sits on a highlight the
+  // field does not lift), so it only has to reach the frame at all (CPU mean abs diff 0.025 in its box).
+  const minInside: Record<string, number | null> = { 勻膚: 0.5, 膚色: 0.5, 黑眼圈: 0.5, 法令紋: 0.01, 白牙: 0.5, 亮眼: 0.5 };
   for (const [label, rect] of Object.entries(areas)) {
     await pick(page, '美膚', label);
     await dragSlider(page, 400);

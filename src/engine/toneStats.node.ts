@@ -2,7 +2,7 @@
 // recovers and the "keeps" bounds, shared by the CPU calibration (toneCalibration.test.ts, scale 1) and the GPU harness
 // (tests/e2e/tone-engine.spec.ts, scale ⅔). Images are RGBA8; YCbCr is JPEG full range.
 import type { Face } from '../types';
-import { faceFrame, fieldActive, IDENTITY_WIN, NEUTRAL_TONE, Q_CLEAR, R_CLEAR, toneDrawsQ, toneDrawsR, warmRingWidth, type ToneValues, type V2 } from './passes/toneGeometry';
+import { faceFrame, fieldActive, IDENTITY_WIN, mouthGuards, NEUTRAL_TONE, Q_CLEAR, R_CLEAR, toneDrawsQ, toneDrawsR, warmRingWidth, type ToneValues, type V2 } from './passes/toneGeometry';
 import { sigmaLow } from './shaders/tone';
 import { fromRgba8, makeImg, retouchCpu, toneFieldCpu, toRgba8, type Img } from './toneCpu';
 import { rasterizeTone } from './toneRaster.node';
@@ -45,10 +45,11 @@ export const TOOL_VALUES: Record<ToolName, ToneValues> = {
  * Calibrated (plan Task 9): where the spec's target cannot be met without breaking a keep, the entry is the best value
  * reached, rounded down to 0.05 (S §9) — 黑眼圈 0.6 → 0.45 (darkR; one more lift step breaks the left lash line),
  * 法令紋 0.5 → 0 (the 6 px fold is finer than σ_mid and sits on a highlight, so the field lifts nothing there),
- * 白牙 0.45 → 0 (the fixture's teeth, Y 0.15–0.25, are below the tooth gate; a lower gate whitens the shadowed lips),
  * 亮眼 0.45 → 0.25 (the eye region's inset ramps leave the sclera near the lids and corners at R.A < 1).
+ * 白牙 is back at the spec's 0.45 (plan Task 11 decision b): the tooth gate passes shadowed teeth and the lip guard keeps
+ * the lips still (TONE.teeth).
  */
-export const TARGETS = { even: 0.5, darkCircle: 0.45, nasolabial: 0, teeth: 0, eyeBright: 0.25 };
+export const TARGETS = { even: 0.5, darkCircle: 0.45, nasolabial: 0, teeth: 0.45, eyeBright: 0.25 };
 
 export interface Check {
   name: string;
@@ -340,5 +341,5 @@ export function renderToneCpu(img: Rgba8, face: Face, v: ToneValues): Rgba8 {
   const base = fromRgba8(W, H, img.data);
   const sl = sigmaLow(faceFrame(face, aspect).fw * W, Math.min(W, H));
   const field = fieldOn || v.eyeBright > 0 ? toneFieldCpu(base, q, r, sl, fieldOn) : null;
-  return { width: W, height: H, data: toRgba8(retouchCpu(base, field, r, fieldOn)) };
+  return { width: W, height: H, data: toRgba8(retouchCpu(base, field, r, fieldOn, IDENTITY_WIN, mouthGuards(faces, aspect))) };
 }

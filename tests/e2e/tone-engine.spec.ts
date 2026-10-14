@@ -95,7 +95,7 @@ test('tone field + retouch: the GPU equals toneCpu (max 2/255, mean 0.25/255) on
   for (const lv of r.levels) {
     const R = imgOf(r.qw, r.qh, lv.R);
     const Q = imgOf(r.qw, r.qh, lv.Q);
-    const cpu = toRgba8(retouchCpu(base, toneFieldCpu(base, Q, R, r.sigmaLowPx, true), R, true));
+    const cpu = toRgba8(retouchCpu(base, toneFieldCpu(base, Q, R, r.sigmaLowPx, true), R, true, IDENTITY_WIN, lv.mouths));
     const gpu = bytes(lv.out);
     for (const [name, [cx, cy]] of crops) {
       let max = 0;
@@ -152,8 +152,8 @@ test('retouch colour gates: the GPU equals retouchCpu on a sweep through the 白
   const field = toneFieldCpu(base, makeImg(r.qw, r.qh), R, 0, false);
   const src = bytes(r.base);
   const cases: [string, string, Uint8ClampedArray][] = [
-    ['with Mn8', r.out, toRgba8(retouchCpu(base, field, R, false))],
-    ['without Mn8', r.outNoMn, toRgba8(retouchCpu(base, null, R, false))],
+    ['with Mn8', r.out, toRgba8(retouchCpu(base, field, R, false, IDENTITY_WIN, r.mouths))],
+    ['without Mn8', r.outNoMn, toRgba8(retouchCpu(base, null, R, false, IDENTITY_WIN, r.mouths))],
   ];
   for (const [name, out, cpu] of cases) {
     const gpu = bytes(out);

@@ -73,13 +73,10 @@ describe('toolChecks: a zero target on the GPU', () => {
   it('asks only that the tool does not regress the defect, tolerating a 0.5/255 bias in the mean (never a bare ⅔·0 = "≥ 0")', () => {
     const folds = recoveryChecks('nasolabial', fix, 2 / 3);
     expect(folds.map((c) => c.name)).toEqual(['foldL Y recovery (core) (no regression)', 'foldR Y recovery (core) (no regression)']);
-    // 0.5/255 over the defect's own shift: foldL 19.5/255, foldR and the teeth 12.8/255
+    // 0.5/255 over the defect's own shift: foldL 19.5/255, foldR 12.8/255
     expect(bound(folds[0].bound)).toBeCloseTo(-0.026, 2);
     expect(bound(folds[1].bound)).toBeCloseTo(-0.039, 2);
     expect(folds.every((c) => c.ok && c.value === 0)).toBe(true);
-    const teeth = recoveryChecks('teeth', fix, 2 / 3);
-    expect(teeth.map((c) => c.name)).toEqual(['teeth Cb recovery (no regression)']);
-    expect(bound(teeth[0].bound)).toBeCloseTo(-0.039, 2);
   });
 
   it('fails a tool that deepens the defect by 2/255', () => {
@@ -97,5 +94,8 @@ describe('toolChecks: a zero target on the GPU', () => {
     ]);
     const dark = toolChecks('darkCircle', fix, fix, orig, fx, face, 2 / 3).filter((c) => c.name.includes('recovery'));
     expect(dark.map((c) => c.bound)).toEqual(['≥ 0.300', '≥ 0.300']);
+    // 白牙 has its spec target again (Task 11 decision b): ⅔ · 0.45 on the GPU, a real bound an untouched mouth fails
+    expect(recoveryChecks('teeth', fix, 2 / 3).map((c) => [c.name, c.bound, c.ok])).toEqual([['teeth Cb recovery', '≥ 0.300', false]]);
+    expect(recoveryChecks('teeth', fix, 1).map((c) => c.bound)).toEqual(['≥ 0.450']);
   });
 });

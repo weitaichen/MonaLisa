@@ -299,7 +299,11 @@ function ladder(t: Tris, p: readonly V2[], v: number): void {
   t.tri(p[3], v, p[4], v, p[5], v);
 }
 
-/** 白牙 (R.B): 1 on the inner-lip polygon, falling to 0 over an outward ring of 0.04·mouthW */
+/**
+ * 白牙 (R.B): 1 on the inner-lip polygon, falling to 0 over an outward ring of 0.04·mouthW. R.B carries the strength; the
+ * retouch's lip guard (MouthGuards, S §4.4) decides the lip line at full resolution, since the ¼-res fan, read bilinearly,
+ * reaches a few pixels past it onto the lip.
+ */
 export function mouthGeometry(face: Face, aspect: number): Float32Array {
   const f = faceFrame(face, aspect);
   const poly = INNER_LIP.map((i) => isoPt(face, i, aspect));
@@ -373,6 +377,32 @@ export function toneDrawsR(faces: readonly ToneFaceInput[], aspect: number): Ton
     put([0, 0, w * v.teeth * teethGate(face, aspect), 0], () => mouthGeometry(face, aspect));
   }
   return out;
+}
+
+/** one face whose 白牙 draws: its inner-lip ring 96–103 and mouthW, both iso */
+export interface MouthGuard {
+  ring: readonly V2[];
+  mouthW: number;
+}
+/**
+ * 白牙's lip guard (S §4.4): the retouch whitens a pixel only inside an inner-lip polygon, ramping in over
+ * TONE.teeth.inset·mouthW of true distance from the lip line, so the lips never move however much the ¼-res R.B spreads.
+ */
+export interface MouthGuards {
+  /** O's aspect: the iso point of an O uv (x, y) is (x, y / aspect) */
+  aspect: number;
+  mouths: readonly MouthGuard[];
+}
+export const NO_MOUTHS: MouthGuards = { aspect: 1, mouths: [] };
+
+/** the faces toneDrawsR gives a 白牙 region (a strength above 0), in list order */
+export function mouthGuards(faces: readonly ToneFaceInput[], aspect: number): MouthGuards {
+  const mouths: MouthGuard[] = [];
+  for (const { face, values: v, weight } of faces) {
+    const w = weight > 0 ? Math.min(1, weight) : 0;
+    if (w * v.teeth * teethGate(face, aspect) > 0) mouths.push({ ring: INNER_LIP.map((i) => isoPt(face, i, aspect)), mouthW: faceFrame(face, aspect).mouthW });
+  }
+  return { aspect, mouths };
 }
 
 /**

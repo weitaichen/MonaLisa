@@ -2,8 +2,8 @@
 // ./shaders/tone.ts, with the 8-bit rounding every RGBA8 target applies after each stage. Pure, no GL. toneCpu.test.ts pins
 // the shader text by hash; tests/e2e/tone-engine.spec.ts compares the GPU with this port.
 // Y in the field is Rec. 709 luma; the retouch (白牙, 亮眼) works in JPEG full-range YCbCr (S §4.4).
-import { IDENTITY_WIN, smoothstep, TONE_ZERO, type Win } from './passes/toneGeometry';
-import { gaussWeights, lFactor, sigmaMid, TONE } from './shaders/tone';
+import { IDENTITY_WIN, NO_MOUTHS, smoothstep, TONE_ZERO, type MouthGuards, type Win } from './passes/toneGeometry';
+import { gaussWeights, lFactor, MAX_MOUTHS, sigmaMid, TONE } from './shaders/tone';
 
 /** RGBA, 0..1, row 0 = image top */
 export interface Img {
@@ -261,8 +261,37 @@ export function retouchPixel(c: number[], b0: ArrayLike<number>, mn: ArrayLike<n
   return c;
 }
 
-/** P0d at full resolution; `base0` covers the O rectangle `win` (a tile), Δ8 and Mn8 cover the whole O */
-export function retouchCpu(base0: Img, field: ToneFieldCpu | null, r: Img, fieldOn: boolean, win: Win = IDENTITY_WIN): Img {
+/**
+ * 白牙's lip guard at the O uv (ou, ov) (S §4.4): 0 outside every inner-lip polygon; inside one, smoothstep(0,
+ * TONE.teeth.inset·mouthW, d) with d the true iso distance to its edge; the largest over the faces (at most MAX_MOUTHS)
+ */
+export function lipGuard(ou: number, ov: number, g: MouthGuards): number {
+  const px = ou;
+  const py = ov / g.aspect;
+  let best = 0;
+  for (const m of g.mouths.slice(0, MAX_MOUTHS)) {
+    const ring = m.ring;
+    let inside = false;
+    let d = Infinity;
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i];
+      const b = ring[(i + 1) % ring.length];
+      if (a[1] > py !== b[1] > py && px < ((b[0] - a[0]) * (py - a[1])) / (b[1] - a[1]) + a[0]) inside = !inside;
+      const abx = b[0] - a[0];
+      const aby = b[1] - a[1];
+      const t = Math.min(1, Math.max(0, ((px - a[0]) * abx + (py - a[1]) * aby) / Math.max(abx * abx + aby * aby, 1e-12)));
+      d = Math.min(d, Math.hypot(px - a[0] - t * abx, py - a[1] - t * aby));
+    }
+    if (inside) best = Math.max(best, smoothstep(0, TONE.teeth.inset * m.mouthW, d));
+  }
+  return best;
+}
+
+/**
+ * P0d at full resolution; `base0` covers the O rectangle `win` (a tile), Δ8 and Mn8 cover the whole O. 白牙 acts only
+ * where `mouths` lets it (lipGuard); with none listed it does nothing.
+ */
+export function retouchCpu(base0: Img, field: ToneFieldCpu | null, r: Img, fieldOn: boolean, win: Win = IDENTITY_WIN, mouths: MouthGuards = NO_MOUTHS): Img {
   const out = makeImg(base0.w, base0.h);
   const b0 = [0, 0, 0, 0];
   const dl = [0, 0, 0, 0];
@@ -282,7 +311,8 @@ export function retouchCpu(base0: Img, field: ToneFieldCpu | null, r: Img, field
       }
       sample(r, u, v, rv);
       if (rv[3] > 0 && field) sample(field.mn8, ou, ov, mn);
-      retouchPixel(c, b0, rv[3] > 0 && field ? mn : b0, rv[2], rv[3]);
+      const kB = rv[2] > 0 ? rv[2] * lipGuard(ou, ov, mouths) : 0;
+      retouchPixel(c, b0, rv[3] > 0 && field ? mn : b0, kB, rv[3]);
       out.d.set([c[0], c[1], c[2], 1], (y * base0.w + x) * 4);
     }
   return quantize(out);

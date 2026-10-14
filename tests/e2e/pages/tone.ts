@@ -12,7 +12,7 @@ import { neutralValue, paramDef } from '../../../src/engine/params';
 import { createHealPass } from '../../../src/engine/passes/heal';
 import { createRetouchPass, createToneFieldPass } from '../../../src/engine/passes/toneField';
 import { createToneMaskPass } from '../../../src/engine/passes/toneMask';
-import { faceFrame, IDENTITY_WIN, NEUTRAL_TONE, Q_CLEAR, R_CLEAR, toneDrawsQ, toneDrawsR, type ToneDraw, type ToneFaceInput, type ToneValues } from '../../../src/engine/passes/toneGeometry';
+import { faceFrame, IDENTITY_WIN, mouthGuards, NEUTRAL_TONE, Q_CLEAR, R_CLEAR, toneDrawsQ, toneDrawsR, type MouthGuards, type ToneDraw, type ToneFaceInput, type ToneValues } from '../../../src/engine/passes/toneGeometry';
 import { sigmaLow } from '../../../src/engine/shaders/tone';
 import { spotWindowGrowth } from '../../../src/media/exportPlan';
 import { adapt } from '../../../src/tracking/adapter111';
@@ -104,14 +104,15 @@ export interface ToneFieldRun {
   qh: number;
   sigmaLowPx: number;
   err: number;
-  levels: { level: number; R: string; Q: string; out: string }[];
+  /** each level's 白牙 lip guard as the retouch got it (retouchCpu takes the same) */
+  levels: { level: number; R: string; Q: string; out: string; mouths: MouthGuards }[];
 }
 
 declare global {
   interface Window {
     runToneMasks?: () => { w: number; h: number; err: number; R: string; Qwarm: string; Qcool: string };
     runToneField?: () => Promise<ToneFieldRun>;
-    runToneRetouch?: () => { w: number; h: number; qw: number; qh: number; err: number; base: string; R: string; out: string; outNoMn: string };
+    runToneRetouch?: () => { w: number; h: number; qw: number; qh: number; err: number; base: string; R: string; out: string; outNoMn: string; mouths: MouthGuards };
     runToneEngine?: () => Promise<{
       png: Record<string, string>;
       passes: Record<string, string[]>;
@@ -170,8 +171,9 @@ window.runToneField = async () => {
     masks.draw(r, toneDrawsR(oneFace(v), ASPECT), IDENTITY_WIN, R_CLEAR);
     masks.draw(q, toneDrawsQ(oneFace(v), ASPECT), IDENTITY_WIN, Q_CLEAR);
     const t = field.build(src, { width: W, height: H }, q.tex, r.tex, sl, true, fbFor);
-    retouch.draw(src, out, t.delta8, t.mn8, r.tex, IDENTITY_WIN, true);
-    levels.push({ level, R: b64(readFb(gl, r)), Q: b64(readFb(gl, q)), out: b64(readFb(gl, out)) });
+    const mouths = mouthGuards(oneFace(v), ASPECT);
+    retouch.draw(src, out, t.delta8, t.mn8, r.tex, IDENTITY_WIN, true, mouths);
+    levels.push({ level, R: b64(readFb(gl, r)), Q: b64(readFb(gl, q)), out: b64(readFb(gl, out)), mouths });
   }
   const err = gl.getError();
   masks.dispose();
@@ -251,9 +253,17 @@ function gateSweep(w: number, h: number): ImageData {
 }
 
 /**
- * RETOUCH_FS's 白牙 and 亮眼 branches on every colour of the sweep (the fixture's teeth lie below the 白牙 gate, so its
- * mouth crop never enters that branch): R.B 0.7 and R.A 0.9 over the whole target, Mn8 built from the sweep, and once
- * more without Mn8 (a tile whose field was not prepared), read back for retouchCpu
+ * a lip guard far around the whole sweep: its inner-lip ring sits 0.5 outside the image, so the guard is 1 on every
+ * pixel and only the colour gates decide (the fixture's mouth crop in runToneField covers the guard's ramp)
+ */
+const SWEEP_MOUTHS: MouthGuards = {
+  aspect: 1,
+  mouths: [{ ring: [[-0.5, 0.5], [-0.5, -0.5], [0.5, -0.5], [1.5, -0.5], [1.5, 0.5], [1.5, 1.5], [0.5, 1.5], [-0.5, 1.5]], mouthW: 1 }],
+};
+
+/**
+ * RETOUCH_FS's 白牙 and 亮眼 branches on every colour of the sweep: R.B 0.7 and R.A 0.9 over the whole target, Mn8 built
+ * from the sweep, and once more without Mn8 (a tile whose field was not prepared), read back for retouchCpu
  */
 window.runToneRetouch = () => {
   const gl = glOf();
@@ -288,16 +298,16 @@ window.runToneRetouch = () => {
   masks.draw(r, [whole], IDENTITY_WIN, R_CLEAR);
   masks.draw(q, [], IDENTITY_WIN, Q_CLEAR);
   const t = field.build(src, { width: w, height: h }, q.tex, r.tex, 0, false, fbFor);
-  retouch.draw(src, out, t.delta8, t.mn8, r.tex, IDENTITY_WIN, false);
+  retouch.draw(src, out, t.delta8, t.mn8, r.tex, IDENTITY_WIN, false, SWEEP_MOUTHS);
   const withMn = b64(readFb(gl, out));
-  retouch.draw(src, out, null, null, r.tex, IDENTITY_WIN, false);
+  retouch.draw(src, out, null, null, r.tex, IDENTITY_WIN, false, SWEEP_MOUTHS);
   const outNoMn = b64(readFb(gl, out));
   const R = b64(readFb(gl, r));
   const err = gl.getError();
   masks.dispose();
   field.dispose();
   retouch.dispose();
-  return { w, h, qw, qh, err, base: b64(new Uint8Array(img.data.buffer)), R, out: withMn, outNoMn };
+  return { w, h, qw, qh, err, base: b64(new Uint8Array(img.data.buffer)), R, out: withMn, outNoMn, mouths: SWEEP_MOUTHS };
 };
 
 /** the three fixture blemishes planned as the editor plans a tap (中), plus a border spot in fill mode */

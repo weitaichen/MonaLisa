@@ -824,6 +824,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
 
+**Landed:** the code is `6502bf2`. Its subject wrongly reads "v0.4 step 4 task 2: spot list edits and sanitizing" (a leftover message file again, as in `db1f468`). It is not amended; the next commit records it. Deviations: `src/app/testFakes.ts` spells out `blankEyes()` as zero-filled `iris` / `lids`, because `live.test.ts` and `still.test.ts` mock the whole adapter module and call `makeFace` from their `adapt`. The typecheck also listed `src/edit/warpGuard.test.ts:25`, `src/engine/passes/reshapeCpu.test.ts:95` and `src/engine/passes/toneGeometry.test.ts:80, 333`. They map `iris` / `lids` like their other arrays, and `toneGeometry.test.ts`'s `mirrorFace` swaps the two eyes. `upFrame.test.ts` checks the `faceOToU` mapping of both.
+
 ### Task 3: 左右分開 storage, presets and sanitize
 
 The pure side helpers (S5 §3.4) and the edit-state rules for the new fields: presets reset them (RM §11 Q7 default), a preset id stands only with `right = null`, and sanitize fills or drops what older builds wrote (S5 §3.5).

@@ -1668,6 +1668,60 @@ button:focus-visible {
   transform-origin: 50% 50%;
   will-change: transform;
 }
+/* 祛痘 (skin-cleanup spec §2.3): the tap ring in .zoom-layer, the hint caption, the size control and the 清除 button */
+.spot-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.spot-ring {
+  position: absolute;
+  aspect-ratio: 1;
+  border: calc(1.5px / var(--zs, 1)) solid var(--accent);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  animation: spot-ring 350ms ease-out forwards;
+}
+@keyframes spot-ring {
+  from {
+    transform: translate(-50%, -50%) scale(1.15);
+    opacity: 1;
+  }
+  to {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spot-ring {
+    animation: none;
+  }
+}
+.corner-label.spot-hint {
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.spot-controls .segmented button {
+  min-width: 44px;
+}
+.spot-clear {
+  margin-left: auto;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 16px;
+  font-size: 13px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+.spot-clear.confirm {
+  background: var(--danger);
+  color: #fff;
+}
+.spot-clear:disabled {
+  opacity: 0.4;
+}
 /* 裁切 mode (S §2.1): the frame fills the stage, so a 拉直 corner stays visible under the scrim */
 .editor-stage .frame.crop-mode {
   width: 100cqw;

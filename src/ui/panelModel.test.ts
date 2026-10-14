@@ -29,6 +29,10 @@ import {
   bodyNote,
   bodyNoteFor,
   CAMERA_BODY,
+  clearArmKey,
+  clearLabel,
+  clearTap,
+  CLEAR_CONFIRM_MS,
   DEFAULT_BAND,
   EDITOR_TABS,
   faceAnswer,
@@ -39,11 +43,16 @@ import {
   personNote,
   photoScoped,
   photoTouchToast,
+  rememberable,
   showsHeightBand,
+  showsSpotMode,
   skinNote,
   skinToolGate,
   sliderEmptyText,
   sliderFor,
+  spotItem,
+  spotsOnTab,
+  spotTapInside,
   tabHasValue,
   TABS,
   tapToast,
@@ -734,7 +743,13 @@ describe('step 4: 膚質 items (skin-cleanup spec §2.1, §2.2, §3.6)', () => {
     primaryInit: null,
   });
   const lens = (values: Record<string, number> = {}, who = 'f0') => lensFor(edit(values), { kind: 'person', id: who }, persons, 'f0');
-  const skin = (answer: SkinPanelContext['answer'] = 'faces', extra: Partial<SkinPanelContext> = {}): SkinPanelContext => ({ answer, mouthClosed: false, eyesClosed: false, ...extra });
+  const skin = (answer: SkinPanelContext['answer'] = 'faces', extra: Partial<SkinPanelContext> = {}): SkinPanelContext => ({
+    answer,
+    mouthClosed: false,
+    eyesClosed: false,
+    spots: { inScope: 0, total: 0, onePerson: false },
+    ...extra,
+  });
   const sel = (s: string) => ({ ...INITIAL_SELECTION, tab: 'skin' as const, skin: s as never });
 
   it('six tone items in strip order, 勻膚 opening the divider, each with its own icon', () => {
@@ -787,9 +802,9 @@ describe('step 4: 膚質 items (skin-cleanup spec §2.1, §2.2, §3.6)', () => {
     expect(a(false, false, true, 'ok')).toBe('failed');
   });
 
-  it('the editor strip (with a skin context) appends the six after the 美膚 group; the camera (none) gets neither them nor the divider', () => {
+  it('the editor strip (with a skin context) appends the six and 祛痘 after the 美膚 group; the camera (none) gets neither them nor the divider', () => {
     const editor = itemsFor(lens(), sel('skin.smooth'), undefined, skin());
-    expect(editor.map((i) => i.key)).toEqual(['reset', ...paramsInGroup('skin').map((d) => d.id), ...paramsInGroup('tone').map((d) => d.id)]);
+    expect(editor.map((i) => i.key)).toEqual(['reset', ...paramsInGroup('skin').map((d) => d.id), ...paramsInGroup('tone').map((d) => d.id), 'spot']);
     const camera = itemsFor(lens(), sel('skin.smooth'));
     expect(camera.map((i) => i.key)).toEqual(['reset', ...paramsInGroup('skin').map((d) => d.id)]);
     expect(camera.some((i) => i.divider)).toBe(false);
@@ -804,5 +819,100 @@ describe('step 4: 膚質 items (skin-cleanup spec §2.1, §2.2, §3.6)', () => {
     expect(sliderFor(lens({}, 'b0'), sel('tone.even'), undefined, skin())).toBeNull();
     // the 美膚 group itself is not gated by the skin context
     expect(sliderFor(lens(), sel('skin.smooth'), undefined, skin('noFace'))).not.toBeNull();
+  });
+});
+
+describe('step 4: 祛痘 (skin-cleanup spec §2.3)', () => {
+  const skin = (inScope = 0, total = 0, onePerson = false, answer: SkinPanelContext['answer'] = 'faces'): SkinPanelContext => ({
+    answer,
+    mouthClosed: false,
+    eyesClosed: false,
+    spots: { inScope, total, onePerson },
+  });
+  const sel = (s: string) => ({ ...INITIAL_SELECTION, tab: 'skin' as const, skin: s as never });
+
+  it('祛痘 closes the strip, selects the mode, shows its dot only when the 清除 scope holds spots', () => {
+    const it0 = spotItem(sel('skin.smooth'), skin());
+    expect([it0.key, it0.label, it0.action, it0.selected, it0.hasValue]).toEqual(['spot', '祛痘', { type: 'spot' }, false, false]);
+    expect(it0.visual.kind === 'icon' && hasIcon(it0.visual.icon)).toBe(true);
+    expect(spotItem(sel('spot'), skin(2, 5)).hasValue).toBe(true);
+    expect(spotItem(sel('spot'), skin(0, 5, true)).hasValue).toBe(false);
+    expect(spotItem(sel('spot'), skin(0, 0, false, 'noFace')).disabled).toBe(false);
+    expect(spotItem(sel('spot'), skin(0, 0, false, 'recovering')).reason).toBe(TONE_COPY.recovering);
+    expect(showsSpotMode(sel('spot'))).toBe(true);
+    expect(showsSpotMode({ ...sel('spot'), tab: 'shape' })).toBe(false);
+  });
+
+  it('lastSel never keeps the 祛痘 mode', () => {
+    expect(rememberable(sel('spot')).skin).toBe('skin.smooth');
+    expect(rememberable(sel('tone.even')).skin).toBe('tone.even');
+  });
+
+  it('the 清除 label follows the scope; a second tap within 3 s clears, one tap left for 3 s does not', () => {
+    expect(clearLabel(3, false, false)).toBe('全部清除（3）');
+    expect(clearLabel(0, true, false)).toBe('清除此人（0）');
+    expect(clearLabel(3, true, true)).toBe('確定清除？');
+    const t1 = clearTap(0, 1000, 3);
+    expect(t1).toEqual({ confirmUntil: 1000 + CLEAR_CONFIRM_MS, clear: false });
+    expect(clearTap(t1.confirmUntil, 1000 + CLEAR_CONFIRM_MS - 1, 3)).toEqual({ confirmUntil: 0, clear: true });
+    expect(clearTap(t1.confirmUntil, 1000 + CLEAR_CONFIRM_MS + 1, 3)).toEqual({ confirmUntil: 1000 + 2 * CLEAR_CONFIRM_MS + 1, clear: false });
+    expect(clearTap(0, 1000, 0)).toEqual({ confirmUntil: 0, clear: false });
+  });
+
+  it('the armed clear disarms when the scope or the counts change (Review Focus 3)', () => {
+    const k = clearArmKey('all', 3, 3);
+    expect(clearArmKey('all', 2, 2)).not.toBe(k); // ↶ removed a spot
+    expect(clearArmKey('f1', 3, 3)).not.toBe(k); // another chip
+    expect(clearArmKey('all', 3, 4)).not.toBe(k); // a new spot elsewhere
+    expect(clearArmKey('all', 3, 3)).toBe(k);
+  });
+
+  it('the 美膚 tab dot lights for spots alone', () => {
+    expect(spotsOnTab(skin(0, 3))).toBe(true);
+    expect(spotsOnTab(skin(0, 0))).toBe(false);
+    expect(spotsOnTab(undefined)).toBe(false);
+  });
+
+  /** one face person, every value neutral (no 美白 / 銳化 either), plus `values` */
+  const lensOf = (values: Record<string, number> = {}) =>
+    lensFor(
+      {
+        v: 2 as const,
+        photo: { ...defaultPhoto(), values: { ...defaultPhoto().values, 'skin.whiten': 0, 'skin.sharpen': 0 }, spots: [] },
+        persons: { f0: { ...neutralPerson(), values: { ...neutralPerson().values, ...values } } },
+        template: neutralPerson(),
+        primaryInit: null,
+      },
+      { kind: 'person', id: 'f0' },
+      [{ id: 'f0', face: true, body: false }],
+      'f0',
+    );
+
+  it('activating 祛痘 only selects the mode, like 增高: no edit, no undo step (S §3.6)', () => {
+    const lens = lensOf();
+    const r = activate(spotItem(sel('skin.smooth'), skin()), lens, sel('skin.smooth'));
+    expect(r.sel.skin).toBe('spot');
+    expect(r.edit).toBe(lens.edit);
+    expect(activate(spotItem(sel('spot'), skin()), lens, sel('spot')).changed).toBe(false);
+  });
+
+  it('a param tile leaves the 祛痘 mode; in it the slider row is SpotControls (no binding) and the chips stay live', () => {
+    const lens = lensOf();
+    const items = itemsFor(lens, sel('spot'), undefined, skin());
+    expect(activate(byKey(items, 'tone.even'), lens, sel('spot')).sel.skin).toBe('tone.even');
+    expect(sliderFor(lens, sel('spot'), undefined, skin())).toBeNull();
+    expect(photoScoped(sel('spot'), lens)).toBe(false);
+  });
+
+  it('tabHasValue(美膚): spots alone, or a tone value alone, light the tab; a neutral photo does not (S §2.1)', () => {
+    expect(tabHasValue(lensOf(), 'skin', undefined, skin(0, 0))).toBe(false);
+    expect(tabHasValue(lensOf(), 'skin', undefined, skin(0, 2))).toBe(true);
+    expect(tabHasValue(lensOf({ 'tone.nasolabial': 0.4 }), 'skin', undefined, skin(0, 0))).toBe(true);
+  });
+
+  it('a tap outside the photo (letterbox) is ignored', () => {
+    expect(spotTapInside([0.5, 0.5])).toBe(true);
+    expect(spotTapInside([-0.01, 0.5])).toBe(false);
+    expect(spotTapInside([0.5, 1.02])).toBe(false);
   });
 });

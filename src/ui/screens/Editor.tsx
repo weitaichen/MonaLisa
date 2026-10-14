@@ -22,8 +22,11 @@ import type { SessionFace, StillSession } from '../../app/still';
 import { forwardY, heightBandStretch } from '../../body/bands';
 import { bodyFieldCacheStats, buildBodyField, fieldBands, type BodyFieldInput } from '../../body/field';
 import { measureBody, paramAvailability } from '../../body/measure';
+import { SPOT_CAP } from '../../config/limits';
 import { bodyBox, personInfos } from '../../detect/cache';
 import { hitPerson } from '../../detect/persons';
+import { backMapCpu } from '../../engine/backMapCpu';
+import { backMapFrameOf } from '../../engine/backMapFrame';
 import { sanitizeParams } from '../../engine/params';
 import { earOf, mouthOpen } from '../../engine/passes/toneGeometry';
 import { abortable } from '../../media/exportFull';
@@ -31,15 +34,18 @@ import { EXPORT_COPY, NO_SOURCE, planExport, sourceSizeRecord, type ExportPlan, 
 import { takePersonsHint } from '../../store/settings';
 import { stableKey } from '../../store/undo';
 import { buildFaceProtect } from '../../tracking/faceProtect';
-import type { BodyDetection, BodyField, DetectionCache, EditState, Engine, FaceProtect, LookId, PersonId, PersonMask, Rect, Selection } from '../../types';
+import type { BodyDetection, BodyField, DetectionCache, EditState, Engine, FaceProtect, LookId, PersonId, PersonMask, Rect, Selection, SpotSize } from '../../types';
 import { buildFrame } from '../../edit/frame';
 import { lensFor } from '../../edit/lens';
 import { legacyProjection } from '../../edit/legacy';
 import { bodyAnswer, firstAnswer } from '../../edit/migrate';
+import { patchPlan, readPatch } from '../../edit/patch';
+import { addSpot, clearScope, clearSpots, ownerAt, ownerCtxOf, planSpot, regionAt, spotRadius, spotsInScope, type PlanResult } from '../../edit/spots';
 import { editKey, editSetGeometry, P0 } from '../../edit/state';
+import { TONE_COPY } from '../../edit/toneCopy';
 import { createWarpGuard } from '../../edit/warpGuard';
 import { bodiesUToO, faceOToU, fieldUToO, maskOToU, maskUToO, poseOToU, upCanvas, upImage, upTracker } from '../../geometry/upFrame';
-import { apply, chipTransform, cropModeLayout, cssTurn, eYAt, isIdentity, lockFor, ovalViewBox, upQuarter, vToO, type Quarter } from '../../geometry/view';
+import { apply, chipTransform, cropModeLayout, cssTurn, eYAt, isIdentity, lockFor, ovalViewBox, snapCrop, upQuarter, viewSize, vToO, type Quarter } from '../../geometry/view';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
 import { FaceBoxes, type FaceBoxItem } from '../components/FaceBoxes';
 import { BandPlane, HeightBandOverlay } from '../components/HeightBandOverlay';
@@ -49,6 +55,8 @@ import { IconButton } from '../components/Controls';
 import { EngineStatus } from '../components/EngineStatus';
 import { drawThumb, PersonStrip, type StripPerson } from '../components/PersonStrip';
 import { SliderRow } from '../components/Slider';
+import { SpotControls } from '../components/SpotControls';
+import { SpotOverlay, type SpotRing } from '../components/SpotOverlay';
 import { Status } from '../components/Status';
 import { debug, reportError } from '../debug';
 import { cropActivate, StraightenGesture, straightenView, type CropAction } from '../cropPanel';
@@ -91,15 +99,22 @@ import { Icon } from '../icons';
 import {
   bandOrSuggested,
   bandTouchToast,
+  clearArmKey,
+  clearLabel,
+  clearTap,
   faceAnswer,
   INITIAL_SELECTION,
   personNumber,
   photoScoped,
   photoTabLabel,
   photoTouchToast,
+  rememberable,
   showsHeightBand,
+  showsSpotMode,
+  skinToolGate,
   sliderEmptyText,
   sliderFor,
+  spotTapInside,
   type PanelSelection,
   type SkinPanelContext,
   type SliderBinding,
@@ -121,7 +136,10 @@ const BODY_PAINT_MS = 60;
 /** the stage's bottom band under the editor tools (theme.css `.editor-tools`: bottom 2px + 48px tall) */
 const TOOLS_BAND = 50;
 
+/** the strip selection the next photo opens on (never the 祛痘 mode: rememberable) */
 let lastSel: PanelSelection = INITIAL_SELECTION;
+/** 祛痘 大小, remembered for the app session only (skin-cleanup spec §2.3) */
+let lastSpotSize: SpotSize = 'M';
 
 export function Editor({ source }: { source: EditorSource }) {
   const engine = useStore(svc, (s) => s.engine);
@@ -420,7 +438,8 @@ export function Editor({ source }: { source: EditorSource }) {
   }, [source]);
 
   const setSel = (s: PanelSelection) => {
-    lastSel = s;
+    // a first touch on the next photo can never add a spot (S §2.3)
+    lastSel = rememberable(s);
     setSelState(s);
     // another item's slider: a drag of the old one can no longer commit (its row was replaced)
     setDragging(false);
@@ -1408,6 +1427,21 @@ export function Editor({ source }: { source: EditorSource }) {
     legsAnchor: detect ? legsAnchorOf(edit, detect, measures) : null,
   };
   const lens = lensOf(edit);
+  // ── 祛痘 (skin-cleanup spec §2.3): the size, the two-tap clear and its scope, the tap rings ──
+  const [spotSize, setSpotSizeState] = useState<SpotSize>(lastSpotSize);
+  const setSpotSize = (s: SpotSize) => {
+    lastSpotSize = s;
+    setSpotSizeState(s);
+  };
+  /** the 清除 button is armed (「確定清除？」) until this performance.now(); 0 = not armed */
+  const [confirmUntil, setConfirmUntil] = useState(0);
+  const [rings, setRings] = useState<SpotRing[]>([]);
+  const ringSeq = useRef(0);
+  /** 「放大畫面可以點得更準」 once per editor session */
+  const zoomHintDone = useRef(false);
+  /** 清除此人 with one person of a group photo selected, else 全部清除 */
+  const clearSc = clearScope(selected, detect?.persons.length ?? 0);
+  const inScope = spotsInScope(edit, clearSc);
   // 膚質 (skin-cleanup spec §1.2, §2.2): the photo's face answer; the closed-mouth / closed-eye notes of the target faces
   const personOfFace = new Map((detect?.persons ?? []).filter((p) => p.face).map((p) => [p.face as string, p.id]));
   const toneTargets = (session?.faces ?? []).filter((f) => selected.kind === 'all' || personOfFace.get(f.id) === selected.id).map((f) => f.face);
@@ -1417,25 +1451,104 @@ export function Editor({ source }: { source: EditorSource }) {
     answer: session ? faceAnswer({ hasFaces: session.faces.length > 0, basic: !!bundle?.basic, unsure: !!bound?.unsure, tracker: trackerHealth }) : 'faces',
     mouthClosed: toneTargets.length > 0 && toneTargets.every((f) => mouthOpen(f, bodyAspect) < 0.01),
     eyesClosed: toneTargets.length > 0 && toneTargets.every((f) => earOf(f, 'L', bodyAspect) < 0.12 && earOf(f, 'R', bodyAspect) < 0.12),
+    spots: { inScope, total: edit.photo.spots.length, onePerson: clearSc !== 'all' },
   };
   const binding = sliderFor(lens, sel, bodyCtx, skinCtx);
+  // the mode is up only while 祛痘 can act: a face answer that turned unsure (S §7) gates the tile and the taps alike
+  const spotMode = !!session && showsSpotMode(sel) && skinToolGate('spot', skinCtx).ok;
+  // Review Focus 3: ↶ ↷, a new spot, a chip change (or leaving the mode) disarms a pending 「確定清除？」
+  const armKey = clearArmKey(String(clearSc), inScope, edit.photo.spots.length);
+  useEffect(() => setConfirmUntil(0), [armKey, spotMode]);
+  useEffect(() => {
+    if (!confirmUntil) return;
+    const t = window.setTimeout(() => setConfirmUntil(0), Math.max(0, confirmUntil - performance.now()));
+    return () => clearTimeout(t);
+  }, [confirmUntil]);
+  useEffect(() => debug({ spots: edit.photo.spots.length }), [edit.photo.spots]);
+
+  /** 祛痘: a tap (V uv) → O through the CPU back-map → refusals, radius, patch, snap and donor, owner → one undo step (S §3.4) */
+  const tapSpot = (v: [number, number]) => {
+    const s = sessionRef.current;
+    if (!s || hold.held || !spotTapInside(v)) return;
+    const cur = editRef.current;
+    if (cur.photo.spots.length >= SPOT_CAP) {
+      toast(TONE_COPY.spotCap, 2600);
+      return;
+    }
+    // the geometry the session draws (its crop snapped to whole working px, as the layer shows it)
+    const shown = snapCrop(cur.photo.geometry, photo);
+    let o: [number, number];
+    try {
+      // the frame the session shows for `cur`: every face with its person's params, limit and λ_f (frameOf)
+      const f = frameOf(cur, s);
+      o = backMapCpu(v, backMapFrameOf({ faces: f.faces, obstacles: f.obstacles, body: s.body, geometry: shown }, photo));
+    } catch (e) {
+      reportError(e, 'backMapCpu');
+      return;
+    }
+    const aspect = photo.width / photo.height;
+    const faces = s.faces.map((f) => ({ id: f.id, face: f.face }));
+    const region = regionAt(o, faces, aspect);
+    if (region.kind === 'eye' || region.kind === 'mouth') {
+      toast(TONE_COPY.spotRefused, 2600);
+      return;
+    }
+    const r = spotRadius(o, spotSize, faces, photo);
+    let res: PlanResult;
+    try {
+      res = planSpot(readPatch(source.bitmap, patchPlan(o, r, photo)), o, r, { faces, aspect, existing: cur.photo.spots });
+    } catch (e) {
+      // S §7: the spot is still added at the tap, in fill mode
+      reportError(e, 'readPatch');
+      res = { x: o[0], y: o[1], r, dx: 0, dy: 0, owner: null };
+    }
+    if ('refused' in res) {
+      toast(res.refused === 'cap' ? TONE_COPY.spotCap : TONE_COPY.spotRefused, 2600);
+      return;
+    }
+    const spot = { ...res, owner: ownerAt([res.x, res.y], ownerCtxOf(detectRef.current, faces, aspect)) };
+    haptic();
+    const short = Math.min(photo.width, photo.height);
+    const vWidth = viewSize(shown, photo).width;
+    const id = ++ringSeq.current;
+    setRings((rs) => [...rs, { id, x: v[0], y: v[1], r: (r * short) / vWidth }]);
+    window.setTimeout(() => setRings((rs) => rs.filter((g) => g.id !== id)), 350);
+    // the spot's on-screen diameter (the layer's rect carries the zoom) below 12 pt
+    const layerW = layerRef.current?.getBoundingClientRect().width ?? 0;
+    if (!zoomHintDone.current && 2 * r * short * (layerW / vWidth) < 12) {
+      zoomHintDone.current = true;
+      toast(TONE_COPY.zoomHint, 2600);
+    }
+    debug({ lastSpot: spot });
+    update(addSpot(cur, spot), true);
+  };
+  /** 清除: the first tap arms 「確定清除？」 for 3 s, a second one clears the scope as one ↶ step */
+  const onClear = () => {
+    const r = clearTap(confirmUntil, performance.now(), inScope);
+    setConfirmUntil(r.confirmUntil);
+    haptic();
+    if (r.clear) update(clearSpots(editRef.current, clearSc), true);
+  };
 
   // ── persons UI (S §2): photo taps, the strip, the face boxes ──
   /** 調節 and 一鍵 › 質感 act on the whole photo, like 濾鏡: no face boxes, no photo taps (step-2 spec §2.1–2.2) */
   const personTab = PERSON_TABS.has(sel.tab) && photoTabLabel(sel) === null;
   const tapsOn = !!session && multi && personTab && !showsHeightBand(sel, bodyCtx);
+  /** a photo tap selects the person under it (S §2.3); not in 祛痘 mode, where only the chips change the selection */
+  const onPersonTap = tapsOn
+    ? (uv: [number, number], rect: DOMRect) => {
+        wakeBoxes();
+        const d = detectRef.current;
+        if (!d || dragging) return;
+        // the layer shows V: the hit test runs in O (S §2.2)
+        const hit = hitPerson(apply(vToO(g, photo), uv), hitCtxOf(d, sel.tab === 'body', fieldMemo.field, rect));
+        if (hit) choose({ kind: 'person', id: hit });
+      }
+    : undefined;
   // off in 裁切 mode, and its view is reset to identity when the tab opens (S §2.1)
   useZoomPan(stageRef, layerRef, !!session && !cropMode, {
-    onTap: tapsOn
-      ? (uv, rect) => {
-          wakeBoxes();
-          const d = detectRef.current;
-          if (!d || dragging) return;
-          // the layer shows V: the hit test runs in O (S §2.2)
-          const hit = hitPerson(apply(vToO(g, photo), uv), hitCtxOf(d, sel.tab === 'body', fieldMemo.field, rect));
-          if (hit) choose({ kind: 'person', id: hit });
-        }
-      : undefined,
+    onTap: spotMode ? undefined : onPersonTap,
+    spotTap: spotMode ? tapSpot : undefined,
     resetWhen: cropMode,
   });
   /** chip thumbnails, drawn once per person from the working bitmap */
@@ -1479,7 +1592,8 @@ export function Editor({ source }: { source: EditorSource }) {
           return [{ person: p.id, n: i + 1, box, selected: selected.kind === 'all' || selected.id === p.id, changed: changedIds.includes(p.id), dashed: !f, narrow: box.w * layerW < 24 }];
         })
       : [];
-  const showBoxes = !!session && !fatal && !dragging && !hold.held && !showsHeightBand(sel, bodyCtx);
+  // 祛痘 hides the boxes (C §2.2): the chips stay and pick the 清除 scope
+  const showBoxes = !!session && !fatal && !dragging && !hold.held && !showsHeightBand(sel, bodyCtx) && !spotMode;
   // face effects cannot apply: 基本模式, or no face in this photo (null while analysing, so no flash)
   // (a tracker that could not answer gets a neutral note until the re-detect gives a real answer)
   let faceNote: string | null = null;
@@ -1585,6 +1699,7 @@ export function Editor({ source }: { source: EditorSource }) {
                 />
               </BandPlane>
             )}
+            {spotMode && !hold.held && <SpotOverlay rings={rings} />}
           </div>
           {cropLayout && session && !fatal && (
             <CropOverlay
@@ -1597,6 +1712,7 @@ export function Editor({ source }: { source: EditorSource }) {
             />
           )}
           {hold.held && <span class="corner-label">原圖</span>}
+          {spotMode && !hold.held && <span class="corner-label spot-hint">{TONE_COPY.spotHint}</span>}
           {session && !fatal && (
             <div class="editor-tools" inert={exportBusy}>
               <button type="button" class={`float-btn${confirmReset ? ' confirm' : ''}`} onClick={reset}>
@@ -1621,12 +1737,23 @@ export function Editor({ source }: { source: EditorSource }) {
         {session && multi && (
           <PersonStrip persons={stripPersons} selection={selected} photoScope={scope} onSelect={choose} thumbTransform={isIdentity(g) ? undefined : chipTransform(g)} />
         )}
-        <SliderRow
-          binding={session && !faceOff ? (cropMode ? straightenView(g) : binding) : null}
-          onChange={(v) => (cropMode ? straightenTo(v, false) : binding && slide(binding, v, false))}
-          onCommit={(v) => (cropMode ? straightenTo(v, true) : binding && slide(binding, v, true))}
-          emptyText={session && !faceOff ? sliderEmptyText(lens, sel) : null}
-        />
+        {spotMode ? (
+          <SpotControls
+            size={spotSize}
+            onSize={setSpotSize}
+            label={clearLabel(inScope, clearSc !== 'all', confirmUntil > 0)}
+            disabled={inScope === 0}
+            confirming={confirmUntil > 0}
+            onClear={onClear}
+          />
+        ) : (
+          <SliderRow
+            binding={session && !faceOff ? (cropMode ? straightenView(g) : binding) : null}
+            onChange={(v) => (cropMode ? straightenTo(v, false) : binding && slide(binding, v, false))}
+            onCommit={(v) => (cropMode ? straightenTo(v, true) : binding && slide(binding, v, true))}
+            emptyText={session && !faceOff ? sliderEmptyText(lens, sel) : null}
+          />
+        )}
         <BeautyPanel
           lens={lens}
           sel={sel}

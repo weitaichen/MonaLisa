@@ -140,6 +140,13 @@ const P: Record<string, JSX.Element> = {
       <path d="M18.8 3.4v3M17.3 4.9h3" />
     </>
   ),
+  spot: (
+    <>
+      <circle cx="12" cy="12" r="6.4" />
+      <circle cx="12" cy="12" r="1.5" />
+      <path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6" />
+    </>
+  ),
   filter: (
     <>
       <circle cx="9" cy="9.4" r="5.4" />

@@ -6469,7 +6469,7 @@ git commit -m "v0.4 step 4 (16/20): six 膚質 sliders in the 美膚 strip" -m "
   export function backMapFrameOf(input: BackMapInput, oSize: Size): BackMapFrame;   // the oMap the engine's face table and 美體 field make
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/engine/backMapFrame.test.ts`:
 ```ts
@@ -6803,12 +6803,12 @@ test('a photo without a face: 祛痘 still heals', async ({ page }) => {
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `npx vitest run src/ui/panelModel.test.ts src/engine/backMapFrame.test.ts`
 Expected: FAIL — `spotItem is not a function` (and the other new names); `Failed to resolve import "./backMapFrame"`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/engine/backMapFrame.ts`:
 ```ts
@@ -7170,14 +7170,14 @@ export function SpotOverlay({ rings }: { rings: readonly SpotRing[] }) {
         )}
    ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/ui src/engine/backMapFrame.test.ts && npm run typecheck`
 Expected: PASS.
 Run: `npm run build && npx playwright test tests/e2e/tone.spec.ts tests/e2e/editor.spec.ts tests/e2e/persons.spec.ts`
 Expected: all pass; the log prints `dot1 sd … → …`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/engine/backMapFrame.ts src/engine/backMapFrame.test.ts src/ui/panelModel.ts src/ui/panelModel.test.ts src/ui/components/SpotControls.tsx src/ui/components/SpotOverlay.tsx src/ui/screens/Editor.tsx src/ui/icons.tsx src/ui/theme.css tests/e2e/tone.spec.ts

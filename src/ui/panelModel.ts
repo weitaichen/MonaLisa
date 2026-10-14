@@ -12,6 +12,8 @@ export type TabId = 'preset' | 'skin' | 'shape' | 'body' | 'filter' | 'makeup' |
 export type MakeupPart = 'lip' | 'blush';
 /** what the 美體 strip has selected: one of the 10 body sliders, or the manual 增高 tool */
 export type BodySel = ParamId | 'height';
+/** what the 美膚 strip has selected: a slider, or the 祛痘 tap mode (skin-cleanup spec §2.3, the BodySel pattern) */
+export type SkinSel = ParamId | 'spot';
 
 export const TABS: readonly { id: TabId; label: string }[] = [
   { id: 'preset', label: '一鍵' },
@@ -40,7 +42,7 @@ export const PRESET_PARTS: readonly { id: PresetPart; label: string; icon: strin
 
 export interface PanelSelection {
   tab: TabId;
-  skin: ParamId;
+  skin: SkinSel;
   shape: ParamId;
   body: BodySel;
   makeupPart: MakeupPart;
@@ -214,7 +216,8 @@ export function photoScoped(sel: PanelSelection, lens: Lens): boolean {
   if (sel.tab === 'filter') return true;
   // 裁切 turns, flips and crops the whole photo (S §2.1 "Person strip: dimmed, with the caption 「整張照片」")
   if (sel.tab === 'crop') return true;
-  if (sel.tab === 'skin') return photoLike(lens, sel.skin);
+  // 祛痘: the chips stay live, because the selection picks 清除此人's person (S §2.3)
+  if (sel.tab === 'skin') return sel.skin !== 'spot' && photoLike(lens, sel.skin);
   if (sel.tab === 'body') return sel.body === 'height' || sel.body === 'body.legs';
   return false;
 }
@@ -302,6 +305,8 @@ export type ItemAction =
   | { type: 'shade'; part: MakeupPart; shade: string | null }
   /** 美體: select the manual 增高 tool (the screen shows HeightBandOverlay) */
   | { type: 'height' }
+  /** 美膚: select the 祛痘 tap mode (the screen shows SpotControls) */
+  | { type: 'spot' }
   /** 美體: toggle 背景保護 */
   | { type: 'protect' }
   /** 一鍵 › 質感: pick a look, or 無 (null) */
@@ -432,6 +437,8 @@ export interface SkinPanelContext {
   mouthClosed: boolean;
   /** 亮眼: every target face has both eyes closed (EAR < 0.12) */
   eyesClosed: boolean;
+  /** the 清除 scope's spots, every spot of the photo, and whether 清除 means 清除此人 */
+  spots: { inScope: number; total: number; onePerson: boolean };
 }
 /** 膚色's end captions under the track */
 export const WARM_ENDS: readonly [string, string] = TONE_COPY.warmEnds;
@@ -509,6 +516,64 @@ export function skinNote(lens: Lens, sel: PanelSelection, skin: SkinPanelContext
   if (sel.skin === 'tone.teeth' && skin.mouthClosed) return { text: TONE_COPY.mouthClosed, tone: 'info' };
   if (sel.skin === 'tone.eyeBright' && skin.eyesClosed) return { text: TONE_COPY.eyesClosed, tone: 'info' };
   return null;
+}
+
+// ───────────── 祛痘 (skin-cleanup spec §2.3, §3.6) ─────────────
+
+/** the 祛痘 tap mode is up: SpotControls replace the slider row, a photo tap adds a spot (mirrors showsHeightBand) */
+export function showsSpotMode(sel: PanelSelection): boolean {
+  return sel.tab === 'skin' && sel.skin === 'spot';
+}
+
+/** what the module-level lastSel may keep: never the 祛痘 mode, so a first touch on the next photo cannot add a spot */
+export function rememberable(sel: PanelSelection): PanelSelection {
+  return sel.skin === 'spot' ? { ...sel, skin: 'skin.smooth' } : sel;
+}
+
+/** the 祛痘 tile, last in the 美膚 strip: never through the lens (spots are photo-level), never 「整張」 */
+export function spotItem(sel: PanelSelection, skin: SkinPanelContext): PanelItem {
+  return gated(
+    {
+      key: 'spot',
+      label: '祛痘',
+      visual: { kind: 'icon', icon: 'spot' },
+      selected: sel.skin === 'spot',
+      hasValue: skin.spots.inScope > 0,
+      action: { type: 'spot' },
+      ...ENABLED,
+    },
+    skinToolGate('spot', skin),
+  );
+}
+
+/** how long the first 清除 tap stays armed as 「確定清除？」 */
+export const CLEAR_CONFIRM_MS = 3000;
+
+export function clearLabel(count: number, onePerson: boolean, confirming: boolean): string {
+  if (confirming) return TONE_COPY.clearConfirm;
+  return onePerson ? TONE_COPY.clearPerson(count) : TONE_COPY.clearAll(count);
+}
+
+/** the two-tap clear: the first tap arms it for 3 s, a second tap within that time clears; nothing to clear → nothing */
+export function clearTap(confirmUntil: number, now: number, count: number): { confirmUntil: number; clear: boolean } {
+  if (count <= 0) return { confirmUntil: 0, clear: false };
+  if (now < confirmUntil) return { confirmUntil: 0, clear: true };
+  return { confirmUntil: now + CLEAR_CONFIRM_MS, clear: false };
+}
+
+/** an armed clear is disarmed whenever this changes: the scope, its count or the photo's count (↶ ↷, a new spot, a chip) */
+export function clearArmKey(scope: string, inScope: number, total: number): string {
+  return `${scope}|${inScope}|${total}`;
+}
+
+/** a tap outside the photo (the letterbox around it) adds nothing */
+export function spotTapInside(uv: readonly [number, number]): boolean {
+  return uv[0] >= 0 && uv[0] <= 1 && uv[1] >= 0 && uv[1] <= 1;
+}
+
+/** the 美膚 tab dot also lights while the photo has spots (S §2.1) */
+export function spotsOnTab(skin: SkinPanelContext | undefined): boolean {
+  return (skin?.spots.total ?? 0) > 0;
 }
 
 // ───────────── 調節 and 質感 (v0.4 step 2) ─────────────
@@ -697,7 +762,7 @@ export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext, sk
           // personNote, as v0.3 did for a photo without a face
           return multiPerson(lens) && sel.tab === 'skin' ? gated(it, lens.applies(d.id)) : it;
         }),
-        ...(sel.tab === 'skin' && skin ? toneItems(lens, sel, skin) : []),
+        ...(sel.tab === 'skin' && skin ? [...toneItems(lens, sel, skin), spotItem(sel, skin)] : []),
       ];
     case 'body':
       return bodyItems(lens, sel, body);
@@ -808,6 +873,9 @@ export function activate(item: PanelItem, lens: Lens, sel: PanelSelection, ctx: 
       return done(edit, sel.tab === 'shape' ? { ...sel, shape: a.id } : { ...sel, skin: a.id });
     case 'height':
       return done(edit, sel.body === 'height' ? sel : { ...sel, body: 'height' });
+    case 'spot':
+      // select only, like 增高 (S §3.6): a param tile (case 'param') leaves the mode again
+      return done(edit, sel.skin === 'spot' ? sel : { ...sel, skin: 'spot' });
     case 'protect': {
       const on = !edit.photo.bodyProtect;
       // the measured trade (src/body/straightness.test.ts BODY, slim+waist vs slim+waist_noprotect): on keeps the
@@ -914,6 +982,7 @@ export function sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext, s
     case 'skin':
     case 'shape': {
       const id = sel[sel.tab];
+      if (id === 'spot') return null; // 祛痘: SpotControls take the slider row
       if (sel.tab === 'skin' && isToneId(id) && !(skin && toneGate(lens, id, skin).ok)) return null;
       if (!usable(lens, id)) return null;
       const b = decorate(paramBinding(lens, id), lens, photoLike(lens, id));
@@ -990,8 +1059,11 @@ export function tapToast(item: PanelItem, lens: Lens, r: ActivateResult, seen?: 
   return first ?? r.notice ?? null;
 }
 
-/** Accent dot on a tab when anything in its group differs from neutral (美體: a slider or the 增高 band). */
-export function tabHasValue(lens: Lens, tab: TabId, body?: BodyContext): boolean {
+/**
+ * Accent dot on a tab when anything in its group differs from neutral (美體: a slider or the 增高 band; 美膚: also a tone
+ * value or a spot, `skin` being the editor's 膚質 context).
+ */
+export function tabHasValue(lens: Lens, tab: TabId, body?: BodyContext, skin?: SkinPanelContext): boolean {
   switch (tab) {
     case 'preset':
       return lens.look() !== null;
@@ -1005,6 +1077,7 @@ export function tabHasValue(lens: Lens, tab: TabId, body?: BodyContext): boolean
     case 'skin':
     case 'shape':
     case 'makeup':
+      if (tab === 'skin' && spotsOnTab(skin)) return true;
       return lens.groupHasValue(tab);
     case 'crop':
       // BeautyPanel dots 裁切 from the geometry (not in the lens)

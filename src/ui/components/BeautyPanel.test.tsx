@@ -402,7 +402,13 @@ describe('裁切 (v0.4 step 3, S §2.1)', () => {
 });
 
 describe('美膚 tone notes (skin-cleanup spec §2.2): above the strip, outside the scroller', () => {
-  const skin = (extra: Partial<SkinPanelContext> = {}): SkinPanelContext => ({ answer: 'faces', mouthClosed: false, eyesClosed: false, ...extra });
+  const skin = (extra: Partial<SkinPanelContext> = {}): SkinPanelContext => ({
+    answer: 'faces',
+    mouthClosed: false,
+    eyesClosed: false,
+    spots: { inScope: 0, total: 0, onePerson: false },
+    ...extra,
+  });
   const toneSel = (id: string) => sel({ tab: 'skin', skin: id as PanelSelection['skin'] });
   /** the .panel-inner children, in order: ¶ for the tone note, ▤ for the strip, ▭ for the tab row */
   const layout = (root: FakeElement): string[] =>
@@ -440,5 +446,18 @@ describe('美膚 tone notes (skin-cleanup spec §2.2): above the strip, outside 
     expect(layout(m.root)).toEqual(['▤', '▭']);
     expect(sequence(m.strip)[0]).toBe('¶');
     expect(m.strip.find('body-note')).toBeDefined();
+  });
+
+  it('the 美膚 tab dot lights for the photo’s spots alone (S §2.1)', () => {
+    const neutral: EditState = { ...editOf({ values: { ...defaultPhoto().values, 'skin.whiten': 0, 'skin.sharpen': 0 } }), persons: { p0: neutralPerson() } };
+    const dot = (total: number) => {
+      const tab = mount(lensOf(neutral), sel({}), { skin: skin({ spots: { inScope: 0, total, onePerson: false } }) })
+        .root.all()
+        .filter((e) => e.attrs.role === 'tab')
+        .find((e) => e.find('tab-label')!.text.startsWith('美膚'))!;
+      return !!tab.find('tab-dot');
+    };
+    expect(dot(0)).toBe(false);
+    expect(dot(2)).toBe(true);
   });
 });

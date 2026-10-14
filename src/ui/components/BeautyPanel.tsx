@@ -234,7 +234,7 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
               >
                 <span class="tab-label">
                   {t.label}
-                  {!unavailable && (t.id === 'crop' ? !!crop && !isIdentity(crop.geometry) : tabHasValue(lens, t.id, body)) && (
+                  {!unavailable && (t.id === 'crop' ? !!crop && !isIdentity(crop.geometry) : tabHasValue(lens, t.id, body, skin)) && (
                     <i class="tab-dot" aria-hidden="true" />
                   )}
                 </span>

@@ -253,7 +253,10 @@ export function faceBoundsFor(faces: readonly RenderFace[], oAspect: number): Fa
 
 /**
  * Grow a tile's O-normalized source window so every spot whose quad (1.1 r) meets it also brings in its ring and donor
- * boxes, bbox(c ± 1.4 r) ∪ bbox(c + d ± 1.4 r) (skin-cleanup spec §4.6, A5); repeated until no further spot is met.
+ * boxes, bbox(c ± 1.4 r) ∪ bbox(c + d ± 1.4 r) (skin-cleanup spec §4.6, A5). One pass against the tile's own window,
+ * no chaining: a spot met only by another spot's boxes heals pixels outside that window, which the tile never reads
+ * (every quad reads the unhealed src, and P0d, P1 and P2 read only the window), so each met spot grows the window by
+ * at most (1.1 + 3.2 + 1.4)·r ≤ 0.23 SE (the spec's 0.18 SE from a centre on the edge), toward that spot only.
  * The heal then runs per tile on the tile's own pixels. `oSize` is any size with the O aspect: r and d are fractions of
  * its short side, and one of its pixels is the margin for the bilinear ring taps (the working size: ≥ 1 decode px).
  * Clipped to the photo; step 3's planner snaps the result outward to the decode grid.
@@ -262,37 +265,31 @@ export function spotWindowGrowth(winO: Rect, spots: readonly Spot[], oSize: Size
   const W = oSize.width;
   const H = oSize.height;
   const short = Math.min(W, H);
-  let x0 = winO.x * W;
-  let y0 = winO.y * H;
-  let x1 = (winO.x + winO.w) * W;
-  let y1 = (winO.y + winO.h) * H;
-  const used = new Set<number>();
-  let grew = true;
-  while (grew) {
-    grew = false;
-    spots.forEach((s, i) => {
-      if (used.has(i)) return;
-      const cx = s.x * W;
-      const cy = s.y * H;
-      const r = s.r * short;
-      const q = 1.1 * r;
-      if (cx + q <= x0 || cx - q >= x1 || cy + q <= y0 || cy - q >= y1) return;
-      used.add(i);
-      const e = 1.4 * r + 1; // + 1 px for the bilinear ring taps
-      const dx = s.dx * short;
-      const dy = s.dy * short;
-      const nx0 = Math.min(x0, cx - e, cx + dx - e);
-      const ny0 = Math.min(y0, cy - e, cy + dy - e);
-      const nx1 = Math.max(x1, cx + e, cx + dx + e);
-      const ny1 = Math.max(y1, cy + e, cy + dy + e);
-      if (nx0 < x0 || ny0 < y0 || nx1 > x1 || ny1 > y1) grew = true;
-      x0 = nx0;
-      y0 = ny0;
-      x1 = nx1;
-      y1 = ny1;
-    });
+  const wx0 = winO.x * W;
+  const wy0 = winO.y * H;
+  const wx1 = (winO.x + winO.w) * W;
+  const wy1 = (winO.y + winO.h) * H;
+  let x0 = wx0;
+  let y0 = wy0;
+  let x1 = wx1;
+  let y1 = wy1;
+  let met = false;
+  for (const s of spots) {
+    const cx = s.x * W;
+    const cy = s.y * H;
+    const r = s.r * short;
+    const q = 1.1 * r;
+    if (cx + q <= wx0 || cx - q >= wx1 || cy + q <= wy0 || cy - q >= wy1) continue;
+    met = true;
+    const e = 1.4 * r + 1; // + 1 px for the bilinear ring taps
+    const dx = s.dx * short;
+    const dy = s.dy * short;
+    x0 = Math.min(x0, cx - e, cx + dx - e);
+    y0 = Math.min(y0, cy - e, cy + dy - e);
+    x1 = Math.max(x1, cx + e, cx + dx + e);
+    y1 = Math.max(y1, cy + e, cy + dy + e);
   }
-  if (used.size === 0) return winO;
+  if (!met) return winO;
   const cx0 = Math.max(0, x0);
   const cy0 = Math.max(0, y0);
   const cx1 = Math.min(W, x1);

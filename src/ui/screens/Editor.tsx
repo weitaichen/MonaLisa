@@ -1469,7 +1469,9 @@ export function Editor({ source }: { source: EditorSource }) {
   /** 祛痘: a tap (V uv) → O through the CPU back-map → refusals, radius, patch, snap and donor, owner → one undo step (S §3.4) */
   const tapSpot = (v: [number, number]) => {
     const s = sessionRef.current;
-    if (!s || hold.held || !spotTapInside(v)) return;
+    // no spot while an export runs: its overlay stops taps that start on it (zoomPan skips .status), and this guard the
+    // press that began before the export and ends during it (the display is paused, so the spot would not show)
+    if (!s || hold.held || exportBusy || !spotTapInside(v)) return;
     const cur = editRef.current;
     if (cur.photo.spots.length >= SPOT_CAP) {
       toast(TONE_COPY.spotCap, 2600);

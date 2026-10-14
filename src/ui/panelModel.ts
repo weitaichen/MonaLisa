@@ -504,10 +504,6 @@ export function toneItems(lens: Lens, sel: PanelSelection, skin: SkinPanelContex
   );
 }
 
-export function toneHasValue(lens: Lens): boolean {
-  return paramsInGroup('tone').some((d) => hasValue(d, lens.get(d.id).value));
-}
-
 /** the 美膚 strip note while a tone item is selected: why it is off, or the closed-mouth / closed-eye hint */
 export function skinNote(lens: Lens, sel: PanelSelection, skin: SkinPanelContext | undefined): BodyNote | null {
   if (sel.tab !== 'skin' || !skin || !isToneId(sel.skin)) return null;
@@ -528,6 +524,11 @@ export function showsSpotMode(sel: PanelSelection): boolean {
 /** what the module-level lastSel may keep: never the 祛痘 mode, so a first touch on the next photo cannot add a spot */
 export function rememberable(sel: PanelSelection): PanelSelection {
   return sel.skin === 'spot' ? { ...sel, skin: 'skin.smooth' } : sel;
+}
+
+/** a tab tap: the new tab; leaving a tab leaves 祛痘 too (S §2.3), so coming back to 美膚 opens 磨皮, not the tap mode */
+export function selectTab(sel: PanelSelection, tab: TabId): PanelSelection {
+  return tab === sel.tab ? sel : rememberable({ ...sel, tab });
 }
 
 /** the 祛痘 tile, last in the 美膚 strip: never through the lens (spots are photo-level), never 「整張」 */

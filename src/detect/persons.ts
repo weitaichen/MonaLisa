@@ -4,6 +4,7 @@ import { fieldAt } from '../body/cpuWarp';
 import { SEED_BOX_PAD } from '../config/limits';
 import { maskCoversFace } from '../ui/faceProtectModel';
 import type { BodyField, Face, PersonId, PersonInfoCached, PersonMask, Pose33, Rect } from '../types';
+import { maskHit } from './bodyHit';
 import { boxScore, poseBox } from './cache';
 
 export interface PairFace {
@@ -135,12 +136,6 @@ export interface HitCtx {
   minH: number;
 }
 
-/** bilinear-free nearest sample of a mask at UV (0..255), 0 outside */
-function maskAtUv(m: PersonMask, u: number, v: number): number {
-  if (u < 0 || v < 0 || u >= 1 || v >= 1) return 0;
-  return m.data[Math.min(m.height - 1, Math.floor(v * m.height)) * m.width + Math.min(m.width - 1, Math.floor(u * m.width))];
-}
-
 export function hitPerson(uv: readonly [number, number], ctx: HitCtx): PersonId | null {
   // 1. display → source through the backward map without the face chains (the body field: reshape.ts:290)
   const d = ctx.field ? fieldAt(ctx.field, uv[0], uv[1]) : [0, 0];
@@ -161,25 +156,19 @@ export function hitPerson(uv: readonly [number, number], ctx: HitCtx): PersonId 
     }
   }
   if (face !== null || !ctx.bodies?.length) return face;
-  // 3. bodies: the highest mask value ≥ 128 wins, equal values → the smaller mask; without masks the pose boxes
+  // 3. bodies: the highest mask value ≥ 128 wins, equal values → the smaller mask (bodyHit.ts, which 祛痘's owner shares)
+  const masked = ctx.bodies.flatMap((b) => (b.mask ? [{ person: b.person, mask: b.mask }] : []));
+  const hit = maskHit(src, masked);
+  if (hit !== null) return hit;
+  // 4. bodies without a mask: the smallest pose box, padded 5 %, that holds the point
   let body: PersonId | null = null;
-  let bestV = 127;
   let bestArea = Infinity;
   for (const b of ctx.bodies) {
-    if (b.mask) {
-      const v = maskAtUv(b.mask, src[0], src[1]);
-      const area = b.mask.data.reduce((n, x) => n + (x >= 128 ? 1 : 0), 0) / (b.mask.width * b.mask.height);
-      if (v > bestV || (v === bestV && v >= 128 && area < bestArea)) {
-        bestV = v;
-        bestArea = area;
-        body = b.person;
-      }
-    } else if (inside(pad(b.box, 0.05), src)) {
-      const area = b.box.w * b.box.h;
-      if (bestV < 128 && area < bestArea) {
-        bestArea = area;
-        body = b.person;
-      }
+    if (b.mask || !inside(pad(b.box, 0.05), src)) continue;
+    const area = b.box.w * b.box.h;
+    if (area < bestArea) {
+      bestArea = area;
+      body = b.person;
     }
   }
   return body;

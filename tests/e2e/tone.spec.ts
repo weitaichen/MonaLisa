@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Locator, Page } from '@playwright/test';
 import { PNG } from 'pngjs';
-import { debugState, dragSlider, expect, mad, pinch, selectPerson, settled, shot, test, type Pixels, type Rect } from './fixtures';
+import { debugState, dragSlider, expect, mad, makeJpeg, pinch, selectPerson, settled, shot, test, type Pixels, type Rect } from './fixtures';
 
 const TONE_PNG = resolve(import.meta.dirname, '../fixtures/sample_face_tone.png');
 const GROUP_PNG = resolve(import.meta.dirname, '../fixtures/group_faces.png');
@@ -266,6 +266,50 @@ test('祛痘: a tap heals a blemish; ↶ brings it back, ↷ heals again; a pan 
   await page.mouse.up();
   await page.waitForTimeout(300);
   expect((await debugState(page)).spots).toBe(1);
+});
+
+test('祛痘: leaving it by another tab sticks; back on 美膚 the strip is on 磨皮 and a photo tap adds nothing (S §2.3)', async ({ page }) => {
+  const fx = fixture();
+  const dot = defect(fx, 'dot1');
+  await importPhoto(page, TONE_PNG);
+  await pick(page, '美膚', '祛痘');
+  await expect(page.getByText('點一下痘痘或瑕疵即可去除')).toBeVisible();
+  await page.getByRole('tab', { name: '美型' }).click();
+  await page.getByRole('tab', { name: '美膚' }).click();
+  await expect(option(page, '磨皮')).toHaveAttribute('aria-selected', 'true');
+  await expect(option(page, '祛痘')).toHaveAttribute('aria-selected', 'false');
+  await expect(page.getByText('點一下痘痘或瑕疵即可去除')).toHaveCount(0);
+  const p = await pagePoint(page, dot.center[0], dot.center[1], fx.width, fx.height);
+  await page.mouse.click(p.x, p.y);
+  await page.waitForTimeout(400);
+  expect((await debugState(page)).spots).toBe(0);
+});
+
+test('祛痘: a tap while an export runs adds nothing; once it ends, a tap heals again', async ({ page }) => {
+  test.setTimeout(600_000);
+  await page.goto('/');
+  const big = await makeJpeg(page, 2400, 3200); // a tiled 原始解析度 export: the overlay, inert controls, a paused display
+  await importPhoto(page, { name: 'big.jpg', mimeType: 'image/jpeg', buffer: big });
+  await pick(page, '美膚', '祛痘');
+  // the step-3 test knob: the export holds 4.5 s after its decode, with the overlay up
+  await page.evaluate((v) => localStorage.setItem('meiyan.debug.export.v1', JSON.stringify(v)), { slowMs: 4500, tile: 2048 });
+  const p = await pagePoint(page, 0.2, 0.8, 1, 1); // the gradient beside the face, clear of the overlay's 取消
+  // a press on the photo that began before the export (the pill started from the keyboard) and ends during it
+  await page.mouse.move(p.x, p.y);
+  await page.mouse.down();
+  await page.locator('.topbar .pill').focus();
+  await page.keyboard.press('Enter');
+  const overlay = page.locator('.status.scrim', { hasText: '正在輸出原始解析度…' });
+  await expect(overlay).toBeVisible();
+  await page.mouse.up();
+  // a tap on the overlay itself
+  await page.mouse.click(p.x, p.y);
+  await page.waitForTimeout(400);
+  expect((await debugState(page)).spots).toBe(0);
+  await overlay.getByRole('button', { name: '取消' }).click();
+  await expect(overlay).toHaveCount(0);
+  await page.mouse.click(p.x, p.y);
+  await expect.poll(async () => (await debugState(page)).spots).toBe(1);
 });
 
 test('祛痘 snaps a tap made 0.5 r off a blemish onto it', async ({ page }) => {

@@ -289,13 +289,25 @@ describe('step 4: spot windows and the GL budget (skin-cleanup spec §4.6)', () 
     expect(contains(g, 2010 + 60 - 1.4 * r, 1500 - 1.4 * r, 2010 + 60 + 1.4 * r, 1500 + 1.4 * r)).toBe(true);
   });
 
-  it('a spot far away leaves the window alone; growth chains to spots the grown window now meets', () => {
+  it('a spot far away leaves the window alone; a spot met only by another spot’s boxes adds nothing (no chaining)', () => {
     const win = toO({ x: 1000, y: 1000, w: 1000, h: 1000 });
     expect(spotWindowGrowth(win, [spot(0.9, 0.9)], decode)).toEqual(win);
-    const a = spot(2010 / 4000, 0.5, 0.03); // its donor reaches x = 2010 + 90 + 42
-    const b = spot(2160 / 4000, 0.5, 0); // quad from 2127: met only by the grown window
-    const g = spotWindowGrowth(win, [b, a], decode);
-    expect(contains(g, 2160 - 42, 1500 - 42, 2160 + 42, 1500 + 42)).toBe(true);
+    const a = spot(2010 / 4000, 0.5, 0.03); // its donor box reaches x = 2010 + 90 + 43
+    const b = spot(2160 / 4000, 0.5, 0); // quad from 2127: inside a's donor box, outside the tile's own window
+    const alone = spotWindowGrowth(win, [a], decode);
+    expect(toPx(alone).x + toPx(alone).w).toBeCloseTo(2010 + 90 + 43, 6);
+    expect(spotWindowGrowth(win, [b, a], decode)).toEqual(alone);
+    expect(spotWindowGrowth(win, [a, b], decode)).toEqual(alone);
+  });
+
+  it('grows at most (1.1 + 3.2 + 1.4)·r (+ 1 px) past the window, toward each met spot only, however many spots follow', () => {
+    const win = toO({ x: 1000, y: 1000, w: 1000, h: 1000 });
+    // a row of 大 spots (r = 0.04 SE = 120 px, donors 3.2 r to the right) 0.08 SE apart, the first 1.1 r right of the window
+    const row = Array.from({ length: 10 }, (_, i): Spot => ({ x: (2000 + 1.1 * 120 - 1e-6 + 240 * i) / 4000, y: 0.5, r: 0.04, dx: 3.2 * 0.04, dy: 0, owner: null }));
+    const g = toPx(spotWindowGrowth(win, row, decode));
+    expect(g.x + g.w - 2000).toBeLessThanOrEqual((1.1 + 3.2 + 1.4) * 120 + 1 + 1e-6);
+    expect(g.x + g.w - 2000).toBeGreaterThan((1.1 + 3.2 + 1.4) * 120); // the first spot is met: its donor box is in
+    expect(g.x).toBeCloseTo(1000, 6); // nothing to the left
   });
 
   it('clips to the photo', () => {

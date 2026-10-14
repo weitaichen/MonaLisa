@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { SPOT_CAP } from '../config/limits';
+import { hitPerson } from '../detect/persons';
 import { adapt } from '../tracking/adapter111';
 import type { EditState, Face, Spot } from '../types';
 import { defaultPhoto, neutralPerson } from './state';
@@ -155,6 +156,17 @@ const closedEyes = (f: Face): Face => {
   return { ...f, pts111: pts };
 };
 const CLOSED: SpotFace[] = [{ id: 'f0', face: closedEyes(FACE) }];
+/** `f` with both eyes narrowed to `open` × their height: each lid pair moved toward its midpoint (a squint at 0.3) */
+const narrowedEyes = (f: Face, open: number): Face => {
+  const pts = f.pts111.slice();
+  for (const [u, l] of [[53, 57], [72, 73], [54, 56], [59, 63], [75, 76], [60, 62]])
+    for (const c of [0, 1]) {
+      const m = (f.pts111[u * 2 + c] + f.pts111[l * 2 + c]) / 2;
+      pts[u * 2 + c] = m + (f.pts111[u * 2 + c] - m) * open;
+      pts[l * 2 + c] = m + (f.pts111[l * 2 + c] - m) * open;
+    }
+  return { ...f, pts111: pts };
+};
 /** the image-left eye's width |P(52) − P(55)| in short-edge units (the regionAt pad is 0.15 of it) */
 const EYE_W = isoDist(P(52), P(55));
 /** the O point `k` eye widths straight below `p` (above it for k < 0) */
@@ -176,6 +188,18 @@ describe('regionAt / spotRadius / ownerAt (skin-cleanup spec §2.3, §3.3)', () 
     expect(regionAt(downBy(P(73), 0.14), FACES, ASPECT)).toEqual(eye);
     expect(regionAt(downBy(P(72), -0.2), FACES, ASPECT)).toEqual(skin);
     expect(regionAt(downBy(P(73), 0.2), FACES, ASPECT)).toEqual(skin);
+  });
+
+  it('pads a narrowed eye the same: 0.14 eye width off its lids is the eye at openness 0.3 and 0.15, 0.2 is skin', () => {
+    for (const open of [0.3, 0.15]) {
+      const f = narrowedEyes(FACE, open);
+      const faces: SpotFace[] = [{ id: 'f0', face: f }];
+      const lid = (i: number): V2 => [f.pts111[i * 2], f.pts111[i * 2 + 1]];
+      expect(regionAt(downBy(lid(72), -0.14), faces, ASPECT), `open ${open}, above`).toEqual({ kind: 'eye', face: 'f0' });
+      expect(regionAt(downBy(lid(73), 0.14), faces, ASPECT), `open ${open}, below`).toEqual({ kind: 'eye', face: 'f0' });
+      expect(regionAt(downBy(lid(72), -0.2), faces, ASPECT), `open ${open}, far above`).toEqual({ kind: 'skin', face: 'f0' });
+      expect(regionAt(downBy(lid(73), 0.2), faces, ASPECT), `open ${open}, far below`).toEqual({ kind: 'skin', face: 'f0' });
+    }
   });
 
   it('pads a closed eye the same: the lid line and 0.1 eye width either side of it are the eye (§2.3, §3.3)', () => {
@@ -213,6 +237,11 @@ describe('regionAt / spotRadius / ownerAt (skin-cleanup spec §2.3, §3.3)', () 
     expect(spotRadius([0.7, 0.72], 'L', [...faces].reverse(), WORK)).toBeCloseTo(SPOT_K.L * 0.3 * fwShort, 3);
     // outside every grown box: the median of the two widths
     expect(spotRadius([0.02, 0.98], 'L', faces, WORK)).toBeCloseTo((SPOT_K.L * (fwShort + 0.3 * fwShort)) / 2, 3);
+    // three faces (1, 0.3 and 0.4 × the width; the third in the upper right): the middle width, not the mean (0.567)
+    const m4 = (a: Float32Array) => a.map((v, i) => (i % 2 ? v * 0.4 + 0.05 : v * 0.4 + 0.55));
+    const third: Face = { ...FACE, pts111: m4(FACE.pts111), ext: m4(FACE.ext), oval: m4(FACE.oval) };
+    for (const order of [[...faces, { id: 'f2', face: third }], [{ id: 'f2', face: third }, ...faces]])
+      expect(spotRadius([0.02, 0.98], 'L', order, WORK)).toBeCloseTo(SPOT_K.L * 0.4 * fwShort, 3);
   });
 
   it('owner: the face region first, else the highest body mask ≥ 0.5 (the smaller mask on a tie), else null', () => {
@@ -239,6 +268,36 @@ describe('regionAt / spotRadius / ownerAt (skin-cleanup spec §2.3, §3.3)', () 
     const tie = (bodies: { person: string; mask: typeof big }[]) => ownerAt([0.1, 0.9], { faces: [], bodies, aspect: ASPECT });
     expect(tie([{ person: 'b0', mask: big }, { person: 'b1', mask: small }])).toBe('b1');
     expect(tie([{ person: 'b1', mask: small }, { person: 'b0', mask: big }])).toBe('b1');
+    // the 0.5 threshold: a mask of 100 or 127 at the point owns nothing, 128 does
+    const flat = (v: number) => ownerAt([0.5, 0.5], { faces: [], bodies: [{ person: 'b0', mask: mask(() => v) }], aspect: ASPECT });
+    expect(flat(100)).toBeNull();
+    expect(flat(127)).toBeNull();
+    expect(flat(128)).toBe('b0');
+  });
+
+  it('owner = the person a tap at the same point selects (hitPerson) where body masks overlap (§3.3, C §2.2)', () => {
+    const mask = (w: number, h: number, fill: (x: number, y: number) => number) => {
+      const data = new Uint8Array(w * h);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) data[y * w + x] = fill(x, y);
+      return { width: w, height: h, data };
+    };
+    const box = { x: 0, y: 0, w: 1, h: 1 };
+    const both = (o: V2, bodies: { person: string; mask: ReturnType<typeof mask> }[]) => [
+      ownerAt(o, { faces: [], bodies, aspect: ASPECT }),
+      hitPerson(o, { faces: [], bodies: bodies.map((b) => ({ ...b, box })), minW: 0, minH: 0 }),
+    ];
+    // the sampling: at u = 31.9 / 64 the nearest sample of a is its last 255 column; a bilinear one would blend it with
+    // the 0 beyond (≈ 153) and lose to b's 200
+    const a = mask(64, 96, (x) => (x < 32 ? 255 : 0));
+    const b = mask(64, 96, () => 200);
+    expect(both([31.9 / 64, 0.5], [{ person: 'b0', mask: a }, { person: 'b1', mask: b }])).toEqual(['b0', 'b0']);
+    expect(both([31.9 / 64, 0.5], [{ person: 'b1', mask: b }, { person: 'b0', mask: a }])).toEqual(['b0', 'b0']);
+    // the tie: both 255 at the point; c covers 25 % of its 64 × 96 samples (1536), d 50 % of its 16 × 24 (192): the
+    // smaller normalized area is c, though d has fewer raw samples
+    const c = mask(64, 96, (x) => (x < 16 ? 255 : 0));
+    const d = mask(16, 24, (x) => (x < 8 ? 255 : 0));
+    expect(both([0.1, 0.5], [{ person: 'b0', mask: c }, { person: 'b1', mask: d }])).toEqual(['b0', 'b0']);
+    expect(both([0.1, 0.5], [{ person: 'b1', mask: d }, { person: 'b0', mask: c }])).toEqual(['b0', 'b0']);
   });
 
   it('ownerCtxOf links cached faces and body masks to their persons; unlinked ones and null masks are left out', () => {
@@ -287,6 +346,62 @@ describe('planSpot (§3.5)', () => {
     expect([Math.round(s.dx * 200), Math.round(s.dy * 200)]).toEqual([32, 0]);
   });
 
+  // The cost-term tests below put two candidate donors at 3.2 r: the first in the scan order at 0° (+32 px), the second at
+  // 180° (−32 px), on noise that rules out the rest. Each is built so that only the term under test makes the 180° donor win.
+  const offPx = (s: Spot) => [Math.round(s.dx * 200), Math.round(s.dy * 200)];
+  const plan200 = (img: (x: number, y: number) => number, existing: Spot[] = []) => planSpot(patch(200, img), [0.5, 0.5], r, { faces: [], aspect: 1, existing }) as Spot;
+  const tex = (a: number) => (x: number, y: number) => a * hash(Math.floor(x), Math.floor(y));
+  const noise = (x: number, y: number) => 0.6 + 0.1 * hash(x * 0.37, y * 5.3);
+  const d = (x: number, y: number, cx: number) => Math.hypot(x - cx, y - 100);
+
+  it('of two donors with the spot’s texture, the closer tone wins (0.25·‖Δ̄‖₁), even with a little extra grain', () => {
+    const T = tex(0.02);
+    const img = (x: number, y: number) => {
+      if (d(x, y, 100) <= 16) return 0.6 + T(x - 100, y - 100);
+      if (d(x, y, 132) <= 16) return 0.635 + T(x - 132, y - 100); // 0.035 brighter, the same grain
+      if (d(x, y, 68) <= 16) return 0.615 + T(x - 68, y - 100) + 0.01 * hash(x * 1.7, y * 2.3); // 0.015 brighter, a little more grain
+      return noise(x, y);
+    };
+    const s = plan200(img);
+    expect([s.x, s.y]).toEqual([0.5, 0.5]);
+    expect(offPx(s)).toEqual([-32, 0]);
+  });
+
+  it('a donor holding its own blemish loses to a clean one of a slightly different tone (2·max(0, sd_disc − 1.5·sd_ring))', () => {
+    const T = tex(0.02);
+    const img = (x: number, y: number) => {
+      if (d(x, y, 100) <= 16) return 0.6 + T(x - 100, y - 100);
+      if (d(x, y, 132) <= 16) return 0.6 + T(x - 132, y - 100) - 0.25 * Math.exp(-(d(x, y, 132) ** 2) / (2 * 3.5 ** 2)); // a dark dot in its disc
+      if (d(x, y, 68) <= 16) return 0.62 + T(x - 68, y - 100); // clean, 0.02 brighter
+      return noise(x, y);
+    };
+    expect(offPx(plan200(img))).toEqual([-32, 0]);
+  });
+
+  it('matches the texture of the spot’s ring, not of its disc: a flat blemish in grainy skin takes a grainy donor', () => {
+    const T = tex(0.04);
+    const img = (x: number, y: number) => {
+      if (d(x, y, 100) <= 11) return 0.6; // the spot's disc: flat
+      if (d(x, y, 100) <= 17) return 0.6 + T(x - 100, y - 100); // its ring: grainy
+      if (d(x, y, 132) <= 17) return 0.6 + (d(x, y, 132) <= 11 ? 0 : T(x - 132, y - 100)); // the spot's twin: a flat disc in the same ring
+      if (d(x, y, 68) <= 17) return 0.6 + T(x - 68, y - 100); // grainy throughout
+      return noise(x, y);
+    };
+    const s = plan200(img);
+    expect([s.x, s.y]).toEqual([0.5, 0.5]);
+    expect(offPx(s)).toEqual([-32, 0]);
+  });
+
+  it('keeps the donor disc 1.1·(r + r_s) from an existing spot: a large spot’s own radius counts', () => {
+    // calm around the spot and the 0° donor (+32 px), noise elsewhere: that donor is the cheapest by far
+    const img = (x: number, y: number) => (d(x, y, 100) <= 17 || d(x, y, 132) <= 17 ? 0.6 + 0.004 * hash(x, y) : noise(x, y));
+    expect(offPx(plan200(img))).toEqual([32, 0]);
+    // a spot of r_s = 2 r centred 27 px (2.7 r) below that donor: beyond 1.1 r and 1.1·2 r, within 1.1·(r + 2 r) = 3.3 r
+    const big: Spot = { x: 132 / 200, y: 127 / 200, r: 2 * r, dx: 0, dy: 0, owner: null };
+    expect(offPx(plan200(img, [big]))).not.toEqual([32, 0]);
+    expect(offPx(plan200(img, [{ ...big, r: 0.1 * r }]))).toEqual([32, 0]); // the same place, r_s = 0.1 r: 27 px ≥ 1.1·1.1 r
+  });
+
   // The region tests below lure the planner: the image is flat around the spot and around one forbidden donor, and noise
   // elsewhere, so the forbidden donor is the cheapest by far and only the region rules keep it out.
   const lure = (calm: (q: V2) => boolean) => (q: V2, x: number, y: number) => (calm(q) ? 0.6 : 0.6 + 0.1 * hash(x, y));
@@ -302,6 +417,21 @@ describe('planSpot (§3.5)', () => {
     expect(regionAt([s.x, s.y], FACES, ASPECT)).toEqual({ kind: 'lip', face: 'f0' });
     expect([s.dx, s.dy]).not.toEqual([0, 0]);
     expect(regionAt(donorOf(s), FACES, ASPECT)).toEqual({ kind: 'lip', face: 'f0' });
+  });
+
+  it('never snaps into an eye: a dark dot in the eye’s padding, within 0.8 r of a skin tap, leaves the centre on the tap', () => {
+    const rr = 0.02; // 10 patch px
+    const e = downBy(P(73), 0.08); // 0.08 eye width under the lower lid: inside the 0.15 band, so 'eye'
+    const o = downBy(P(73), 0.08 + (0.6 * rr) / EYE_W); // 0.6 r farther down: skin
+    expect(regionAt(e, FACES, ASPECT).kind).toBe('eye');
+    expect(regionAt(o, FACES, ASPECT)).toEqual({ kind: 'skin', face: 'f0' });
+    const img = (q: V2, x: number, y: number) => 0.62 + 0.01 * hash(x, y) - 0.25 * Math.exp(-(isoDist(q, e) ** 2) / (2 * (0.35 * rr) ** 2));
+    const s = planSpot(patchAround(o, rr, img), o, rr, { faces: FACES, aspect: ASPECT, existing: [] }) as Spot;
+    expect([s.x, s.y]).toEqual(o);
+    expect(regionAt([s.x, s.y], FACES, ASPECT)).toEqual({ kind: 'skin', face: 'f0' });
+    // without the face the same tap snaps onto the dot: the region rule, not the image, keeps the centre
+    const free = planSpot(patchAround(o, rr, img), o, rr, { faces: [], aspect: ASPECT, existing: [] }) as Spot;
+    expect(isoDist([free.x, free.y], e)).toBeLessThan(0.15 * rr);
   });
 
   it('respects the image edge and existing spots; fill mode when nothing fits; deterministic', () => {

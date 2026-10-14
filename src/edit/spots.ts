@@ -2,6 +2,7 @@
 // tap planning (radius, regions, owner, snap, donor) on a patch of the working bitmap. Pure.
 import { segDist } from '../body/geom';
 import { SPOT_CAP } from '../config/limits';
+import { maskHit } from '../detect/bodyHit';
 import type { DetectionCache, EditState, Face, PersonId, PersonMask, Rect, Selection, Spot, SpotSize } from '../types';
 
 /** what 清除 removes: one person's spots (清除此人) or every spot (全部清除) */
@@ -38,8 +39,11 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
 
 /**
  * One stored spot, validated (§5): non-finite → dropped; centre outside [−0.01, 1.01] → dropped, else clamped to [0, 1];
- * r clamped to [0.0005, 0.04]; a donor farther than 0.2 → fill mode; an owner not in `personIds` → null
- * (`personIds` null = the detection cache was dropped: owners are kept for the rematch).
+ * r clamped to [0.0005, 0.04]; a donor farther than 0.2 → fill mode; an owner not in `personIds` → null.
+ * `personIds` null means the persons are unknown, so every owner string is kept, as sanitizePhoto's `persons = null`
+ * keeps legsAnchor. No caller reaches it today: sanitizeEditState always passes its persons' ids (with the detection
+ * cache dropped, those of the stored persons, which the rematch then renames), and the one sanitizePhoto call with the
+ * default (settings.ts, the camera look) has no O size, so sanitizeSpots returns [] first. It stays for that contract.
  */
 export function sanitizeSpot(raw: unknown, personIds: ReadonlySet<PersonId> | null): Spot | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -114,6 +118,74 @@ function inPadded(p: V2, poly: readonly V2[], d: number): boolean {
   return inPolygon(p, poly) || poly.some((a, i) => segDist(p, a, poly[(i + 1) % poly.length]) <= d);
 }
 
+/** an iso polygon with its bounding box grown by `pad` (+ a hair, so the box test never rejects a point the exact test takes) */
+interface IsoPoly {
+  pts: V2[];
+  pad: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+function isoShape(pts: V2[], pad = 0): IsoPoly {
+  const e = pad + 1e-9;
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const [x, y] of pts) {
+    x0 = Math.min(x0, x);
+    y0 = Math.min(y0, y);
+    x1 = Math.max(x1, x);
+    y1 = Math.max(y1, y);
+  }
+  return { pts, pad, x0: x0 - e, y0: y0 - e, x1: x1 + e, y1: y1 + e };
+}
+const inBox = (q: V2, s: IsoPoly) => q[0] >= s.x0 && q[0] <= s.x1 && q[1] >= s.y0 && q[1] <= s.y1;
+/** one face's regionAt polygons in iso coordinates: the padded eye rings, the inner and outer lips, the oval */
+interface FaceRegions {
+  id: string;
+  eyes: IsoPoly[];
+  inner: IsoPoly;
+  outer: IsoPoly;
+  oval: IsoPoly;
+}
+interface RegionIndex {
+  aspect: number;
+  faces: FaceRegions[];
+}
+
+/** every face's iso polygons, built once per planSpot or ownerAt call instead of once per point (the §3.4 CPU budget) */
+function regionIndex(faces: readonly SpotFace[], aspect: number): RegionIndex {
+  return {
+    aspect,
+    faces: faces.map(({ id, face }) => ({
+      id,
+      eyes: (['L', 'R'] as const).map((side) => {
+        const ring = isoPoly(face, EYE[side], aspect);
+        return isoShape(ring, 0.15 * dist(ring[0], ring[4]));
+      }),
+      inner: isoShape(isoPoly(face, INNER_LIP, aspect)),
+      outer: isoShape(isoPoly(face, OUTER_LIP, aspect)),
+      oval: isoShape(ovalIso(face, aspect)),
+    })),
+  };
+}
+
+/** regionAt on a prebuilt index; the boxes only skip polygons that cannot hold the point */
+function regionIn(ix: RegionIndex, o: V2): Region {
+  const q: V2 = [o[0], o[1] / ix.aspect];
+  for (const f of ix.faces) {
+    for (const e of f.eyes) if (inBox(q, e) && inPadded(q, e.pts, e.pad)) return { kind: 'eye', face: f.id };
+    if (inBox(q, f.inner) && inPolygon(q, f.inner.pts)) return { kind: 'mouth', face: f.id };
+  }
+  for (const f of ix.faces) {
+    if (inBox(q, f.outer) && inPolygon(q, f.outer.pts)) return { kind: 'lip', face: f.id };
+    if (inBox(q, f.oval) && inPolygon(q, f.oval.pts)) return { kind: 'skin', face: f.id };
+  }
+  return { kind: 'other' };
+}
+
 /**
  * Where an O point lies (S §3.3): an eye ring padded by 0.15 eye width → eye; the inner lips → mouth; the outer lips
  * minus the inner → lip; the oval → skin of that face; anything else → other. Eyes and mouths of every face win first.
@@ -121,19 +193,7 @@ function inPadded(p: V2, poly: readonly V2[], d: number): boolean {
  * keeps its lash line in the eye (the §2.3 refusal and the §3.5 donor rim rule).
  */
 export function regionAt(o: V2, faces: readonly SpotFace[], aspect: number): Region {
-  const q: V2 = [o[0], o[1] / aspect];
-  for (const { id, face } of faces) {
-    for (const side of ['L', 'R'] as const) {
-      const ring = isoPoly(face, EYE[side], aspect);
-      if (inPadded(q, ring, 0.15 * dist(ring[0], ring[4]))) return { kind: 'eye', face: id };
-    }
-    if (inPolygon(q, isoPoly(face, INNER_LIP, aspect))) return { kind: 'mouth', face: id };
-  }
-  for (const { id, face } of faces) {
-    if (inPolygon(q, isoPoly(face, OUTER_LIP, aspect))) return { kind: 'lip', face: id };
-    if (inPolygon(q, ovalIso(face, aspect))) return { kind: 'skin', face: id };
-  }
-  return { kind: 'other' };
+  return regionIn(regionIndex(faces, aspect), o);
 }
 
 /**
@@ -201,33 +261,15 @@ export function ownerCtxOf(detect: Pick<DetectionCache, 'persons' | 'bodies'> | 
   };
 }
 
-/** bilinear mask value (0..1) at an O point, pixel centres at i + 0.5, clamped to the edge */
-function maskAt(m: PersonMask, o: V2): number {
-  const x = Math.min(m.width - 1, Math.max(0, o[0] * m.width - 0.5));
-  const y = Math.min(m.height - 1, Math.max(0, o[1] * m.height - 0.5));
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const x1 = Math.min(m.width - 1, x0 + 1);
-  const y1 = Math.min(m.height - 1, y0 + 1);
-  const fx = x - x0;
-  const fy = y - y0;
-  const v = (xx: number, yy: number) => m.data[yy * m.width + xx] / 255;
-  return (v(x0, y0) * (1 - fx) + v(x1, y0) * fx) * (1 - fy) + (v(x0, y1) * (1 - fx) + v(x1, y1) * fx) * fy;
-}
-const maskArea = (m: PersonMask) => m.data.reduce((s, v) => s + (v >= 128 ? 1 : 0), 0);
-
-/** the person a spot belongs to (S §3.3): the face region first, else the highest body mask ≥ 0.5, else null */
+/**
+ * The person a spot belongs to (S §3.3): the face region first, else the body mask rule of the photo hit test (C §2.2,
+ * bodyHit.ts maskHit: the nearest sample, the highest value ≥ 128 (0.5), equal values → the smaller normalized area),
+ * so a spot's owner is the person a tap at the same point selects; else null.
+ */
 export function ownerAt(o: V2, ctx: OwnerCtx): PersonId | null {
   const reg = regionAt(o, ctx.faces.map((f) => ({ id: f.person, face: f.face })), ctx.aspect);
   if (reg.kind !== 'other' && reg.face) return reg.face;
-  let best: { person: PersonId; v: number; area: number } | null = null;
-  for (const b of ctx.bodies) {
-    const v = maskAt(b.mask, o);
-    if (v < 0.5) continue;
-    const area = maskArea(b.mask);
-    if (!best || v > best.v || (v === best.v && area < best.area)) best = { person: b.person, v, area };
-  }
-  return best?.person ?? null;
+  return maskHit(o, ctx.bodies);
 }
 
 /** RGBA8 pixels of the working bitmap around a tap (patch.ts); `rect` is the O rectangle they cover */
@@ -290,6 +332,19 @@ class PatchView {
     for (const [dx, dy] of offs) s += plane[this.idx(cx + dx, cy + dy)];
     return s / offs.length;
   }
+  /** mean(Y) and mean(Cr) over the offsets in one pass (the snap's hot loop); each sum runs in mean()'s order */
+  meanYCr(cx: number, cy: number, offs: readonly [number, number][], out: [number, number]): [number, number] {
+    let y = 0;
+    let c = 0;
+    for (const [dx, dy] of offs) {
+      const i = this.idx(cx + dx, cy + dy);
+      y += this.Y[i];
+      c += this.Cr[i];
+    }
+    out[0] = y / offs.length;
+    out[1] = c / offs.length;
+    return out;
+  }
   sd(cx: number, cy: number, offs: readonly [number, number][]): number {
     const m = this.mean(this.Y, cx, cy, offs);
     let s = 0;
@@ -334,7 +389,9 @@ const l1 = (a: ArrayLike<number>) => (Math.abs(a[0]) + Math.abs(a[1]) + Math.abs
  */
 export function planSpot(patch: Patch, tap: V2, r: number, ctx: PlanCtx): PlanResult {
   if (ctx.existing.length >= SPOT_CAP) return { refused: 'cap' };
-  const at = regionAt(tap, ctx.faces, ctx.aspect);
+  // ~146 region queries per tap (the tap, the centre, 16 donors × 9 points): the polygons are built once
+  const ix = regionIndex(ctx.faces, ctx.aspect);
+  const at = regionIn(ix, tap);
   if (at.kind === 'eye' || at.kind === 'mouth') return { refused: at.kind };
   const P = new PatchView(patch);
   const rp = r * patch.pxPerShort;
@@ -348,11 +405,15 @@ export function planSpot(patch: Patch, tap: V2, r: number, ctx: PlanCtx): PlanRe
   let bestD = Infinity;
   let snapped: V2 = t;
   const reach = 0.8 * rp;
+  const mc: [number, number] = [0, 0];
+  const mr: [number, number] = [0, 0];
   for (let y = Math.floor(t[1] - reach); y <= Math.ceil(t[1] + reach); y++)
     for (let x = Math.floor(t[0] - reach); x <= Math.ceil(t[0] + reach); x++) {
       const d = Math.hypot(x + 0.5 - t[0], y + 0.5 - t[1]);
       if (d > reach || x < 0 || y < 0 || x >= patch.w || y >= patch.h) continue;
-      const s = Math.max(0, P.mean(P.Y, x, y, ann) - P.mean(P.Y, x, y, core)) + 0.6 * Math.max(0, P.mean(P.Cr, x, y, core) - P.mean(P.Cr, x, y, ann));
+      const [yCore, crCore] = P.meanYCr(x, y, core, mc);
+      const [yRing, crRing] = P.meanYCr(x, y, ann, mr);
+      const s = Math.max(0, yRing - yCore) + 0.6 * Math.max(0, crCore - crRing);
       if (s > best + 1e-12 || (Math.abs(s - best) <= 1e-12 && d < bestD)) {
         best = s;
         bestD = d;
@@ -362,7 +423,7 @@ export function planSpot(patch: Patch, tap: V2, r: number, ctx: PlanCtx): PlanRe
   const moved = best >= 0.015;
   let c: V2 = moved ? snapped : t;
   let cO: V2 = moved ? P.toO(snapped) : tap;
-  let reg = regionAt(cO, ctx.faces, ctx.aspect);
+  let reg = regionIn(ix, cO);
   if (reg.kind === 'eye' || reg.kind === 'mouth') {
     // never snap into an eye or the mouth: keep the tap
     c = t;
@@ -390,12 +451,12 @@ export function planSpot(patch: Patch, tap: V2, r: number, ctx: PlanCtx): PlanRe
       const off: V2 = [k * rp * Math.cos(a), k * rp * Math.sin(a)];
       const dc: V2 = [c[0] + off[0], c[1] + off[1]];
       if (dc[0] - 1.4 * rp < 0 || dc[1] - 1.4 * rp < 0 || dc[0] + 1.4 * rp > patch.w || dc[1] + 1.4 * rp > patch.h) continue;
-      const dreg = regionAt(P.toO(dc), ctx.faces, ctx.aspect);
+      const dreg = regionIn(ix, P.toO(dc));
       if (dreg.kind !== reg.kind || dreg.face !== reg.face) continue;
       let rimOk = true;
       for (let m = 0; m < 8 && rimOk; m++) {
         const b = (m * Math.PI) / 4;
-        const kind = regionAt(P.toO([dc[0] + 1.1 * rp * Math.cos(b), dc[1] + 1.1 * rp * Math.sin(b)]), ctx.faces, ctx.aspect).kind;
+        const kind = regionIn(ix, P.toO([dc[0] + 1.1 * rp * Math.cos(b), dc[1] + 1.1 * rp * Math.sin(b)])).kind;
         rimOk = kind !== 'eye' && kind !== 'mouth';
       }
       if (!rimOk) continue;

@@ -44,6 +44,7 @@ import {
   photoScoped,
   photoTouchToast,
   rememberable,
+  selectTab,
   showsHeightBand,
   showsSpotMode,
   skinNote,
@@ -56,7 +57,6 @@ import {
   tabHasValue,
   TABS,
   tapToast,
-  toneHasValue,
   toneItems,
   WARM_ENDS,
   type BodyContext,
@@ -760,10 +760,9 @@ describe('step 4: 膚質 items (skin-cleanup spec §2.1, §2.2, §3.6)', () => {
     expect(items.every((i) => !i.disabled)).toBe(true);
   });
 
-  it('the dot follows the selected person’s value; the tab dot lights for a tone value alone', () => {
+  it('the item dot follows the selected person’s value (the 美膚 tab dot: tabHasValue, under 祛痘 below)', () => {
     expect(toneItems(lens({ 'tone.warmth': 0.62 }), sel('skin.smooth'), skin()).find((i) => i.label === '膚色')!.hasValue).toBe(true);
-    expect(toneHasValue(lens({ 'tone.teeth': 0.3 }))).toBe(true);
-    expect(toneHasValue(lens())).toBe(false);
+    expect(toneItems(lens(), sel('skin.smooth'), skin()).some((i) => i.hasValue)).toBe(false);
   });
 
   it('disables the six with the photo-level reasons; a face-less person gets the lens reason', () => {
@@ -846,6 +845,19 @@ describe('step 4: 祛痘 (skin-cleanup spec §2.3)', () => {
   it('lastSel never keeps the 祛痘 mode', () => {
     expect(rememberable(sel('spot')).skin).toBe('skin.smooth');
     expect(rememberable(sel('tone.even')).skin).toBe('tone.even');
+  });
+
+  it('another tab leaves 祛痘 for good: back on 美膚 the strip is on 磨皮, not in the tap mode (S §2.3)', () => {
+    const away = selectTab(sel('spot'), 'shape');
+    expect(away.tab).toBe('shape');
+    expect(showsSpotMode(away)).toBe(false);
+    const back = selectTab(away, 'skin');
+    expect(back).toMatchObject({ tab: 'skin', skin: 'skin.smooth' });
+    expect(showsSpotMode(back)).toBe(false);
+    // a tone choice survives the round trip; the same tab is no change
+    expect(selectTab(selectTab(sel('tone.even'), 'body'), 'skin').skin).toBe('tone.even');
+    const s = sel('spot');
+    expect(selectTab(s, 'skin')).toBe(s);
   });
 
   it('the 清除 label follows the scope; a second tap within 3 s clears, one tap left for 3 s does not', () => {

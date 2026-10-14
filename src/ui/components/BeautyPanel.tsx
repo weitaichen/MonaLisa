@@ -19,6 +19,7 @@ import {
   personNote,
   photoTabLabel,
   selectPart,
+  selectTab,
   skinNote,
   tabHasValue,
   TABS,
@@ -128,7 +129,7 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
   const tapTab = (tab: TabId) => {
     if (tab === sel.tab) return;
     haptic();
-    onSel({ ...sel, tab });
+    onSel(selectTab(sel, tab));
   };
 
   return (

@@ -166,6 +166,7 @@ export function fakeEngine(clock?: { work(ms: number): void }, tier: Tier = 'M')
     /** bumped on webglcontextrestored: loads begun before it settle without leaving a texture, as in the engine */
     lutGen: 0,
     adjustUnavailable: false,
+    procMakeupFailed: false,
     loadLut: vi.fn((kind: LutKind, id: string): Promise<void> => {
       if (kind === 'filter' && id === 'none') return Promise.resolve();
       const key = `${kind}:${id}`;

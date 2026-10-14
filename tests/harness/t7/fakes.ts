@@ -115,6 +115,7 @@ class FakeEngine implements Engine {
   /** 濾鏡 + 質感 LUT states, like the engine's cache (the fake draws no LUT; it only settles them after a delay) */
   private luts = new Map<string, LutState>();
   readonly adjustUnavailable = false;
+  readonly procMakeupFailed = false;
   loadLut(kind: LutKind, id: string): Promise<void> {
     if (kind === 'filter' && id === 'none') return Promise.resolve();
     const key = `${kind}:${id}`;

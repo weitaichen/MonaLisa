@@ -1,14 +1,16 @@
 // createEngine context-loss bookkeeping of filter LUT loads, with the GL layer and the pipeline faked.
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { legacyFrame } from '../edit/frame';
-import { defaultPhoto } from '../edit/state';
+import { defaultPhoto, neutralPerson } from '../edit/state';
 import { glMat3, IDENTITY_GEOMETRY, IDENTITY_MAT3, rotateLeft, vToO } from '../geometry/view';
 import { seedMix } from './adjustMath';
 import { loadImageTexture } from './gl/gl';
 import { createEngine, MAX_RESIDENT_LUTS } from './index';
 import { defaultParams } from './params';
 import { createPipeline, type FrameJob } from './pipeline';
-import type { BodyField, PhotoParams, RenderInput } from '../types';
+import { adapt } from '../tracking/adapter111';
+import type { BodyField, PersonParamId, PhotoParams, RenderInput } from '../types';
 
 vi.mock('./gl/gl', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./gl/gl')>()),
@@ -25,6 +27,7 @@ vi.mock('./pipeline', () => ({
     preloadMakeup: async () => undefined,
     run: vi.fn(() => ({ passes: [], output: null })),
     drawOverlay: vi.fn(),
+    procMakeupFailed: vi.fn(() => false),
     drawSource: vi.fn(),
     releaseBuffers: vi.fn(),
     dispose: vi.fn(),
@@ -400,5 +403,55 @@ describe('createEngine: geometry, windows and tiles (step 3)', () => {
     engine.renderOriginal({ source: {} as TexImageSource, width: 640, height: 480, geometry: g }, { still: true });
     expect(canvas.width).toBe(480);
     expect(Array.from(pipe().drawSource.mock.calls.at(-1)![2] as Float32Array)).toEqual(Array.from(glMat3(vToO(g, { width: 640, height: 480 }))));
+  });
+});
+
+describe('createEngine: procedural makeup in the frame job (face-detail spec §4.6)', () => {
+  const lm = JSON.parse(readFileSync(new URL('../../tests/fixtures/landmarks_sample_face.json', import.meta.url), 'utf8')) as {
+    width: number;
+    height: number;
+    points: number[];
+  };
+  const face = adapt({ points: new Float32Array(lm.points) }, lm.width, lm.height);
+  const input = (values: Partial<Record<PersonParamId, number>> = {}, weight = 1): RenderInput => {
+    const p = neutralPerson();
+    return {
+      source: {} as TexImageSource,
+      width: lm.width,
+      height: lm.height,
+      faces: [{ face, weight, person: { ...p, values: { ...p.values, ...values } }, protect: null }],
+      globalSkin: null,
+      photo: defaultPhoto(),
+    };
+  };
+
+  it('every procedural item neutral, or the face at weight 0: no geometry, so the frame is step 4’s', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    engine.render(input({ 'makeup.lip': 0.8 }), { still: true });
+    expect(latestJob().procMakeup).toBeNull();
+    engine.render(input({ 'makeup.brow': 0.6 }, 0), { still: true });
+    expect(latestJob().procMakeup).toBeNull();
+  });
+
+  it('a procedural item builds the geometry of the listed faces, only for its own layer', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    engine.render(input({ 'makeup.brow': 0.6 }), { still: true });
+    const g = latestJob().procMakeup;
+    expect(g).not.toBeNull();
+    expect(g!.ranges.brow[1]).toBeGreaterThan(0);
+    expect(g!.ranges.lens[1]).toBe(0);
+  });
+
+  it('procMakeupFailed mirrors the pipeline', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    expect(engine.procMakeupFailed).toBe(false);
+    (vi.mocked(createPipeline).mock.results.at(-1)!.value as { procMakeupFailed: () => boolean }).procMakeupFailed = () => true;
+    expect(engine.procMakeupFailed).toBe(true);
   });
 });

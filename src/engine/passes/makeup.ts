@@ -9,7 +9,8 @@
 // lipstick and blusher merged into one mesh draw (multiply commutes, so the result equals the two
 // sequential GPUPixel filters); base sampled by gl_FragCoord from the source texture; optional
 // shade tint through single-channel masks (RB §2.5); v0.4: one mesh per face, each reading the source, fragments
-// without makeup discarded so a later face never erases an earlier face's lip or blush (S §4.3).
+// without makeup discarded so a later face never erases an earlier face's lip or blush (S §4.3). Step 5: the procedural
+// layers of makeupProc.ts (original work, not GPUPixel) are drawn after every face's mesh.
 import type { Face, PersonParams } from '../../types';
 import { shadeColor } from '../params';
 import {
@@ -25,6 +26,7 @@ import {
 } from '../gl/gl';
 import type { Framebuffer, GL, Program, Texture } from '../gl/gl';
 import { BLUSH_BOUNDS, FACE_INDICES, LIP_BOUNDS, templateUvs } from './faceMesh';
+import { createProcMakeupPass, type MakeupGeometry, type MakeupLayer, type ProcMakeupPass } from './makeupProc';
 
 export interface MakeupUniforms {
   /** 0..1 intensity × faceWeight */
@@ -117,20 +119,28 @@ export function blushFade(): Float32Array {
 }
 
 export interface MakeupPass {
-  /** resolves when lip/blush textures + masks are uploaded */
+  /** settles once the GPUPixel textures and lashes.png have each loaded or failed (S5 §4.10); never rejects */
   readonly ready: Promise<void>;
+  /** the GPUPixel lip / blush textures are uploaded (口紅, 腮紅) */
+  readonly meshReady: boolean;
   /** Copy `src` (any size, by UV) into `dst`, then draw makeup on top. `src` must not alias `dst`. */
   draw(src: Texture, dst: Framebuffer, face: Face, u: MakeupUniforms): void;
   /**
-   * one copy of src, then one mesh per face whose makeup is active, each reading src (S §4.3); `win` (step 3) = the O
-   * rect src and dst cover (a tile's window), default the whole image
+   * Copy src into dst, draw every face's GPUPixel mesh (step 1), then the procedural layers of proc over every face at
+   * once (S5 §4.6). src must not alias dst. Returns the procedural layers drawn. One mesh per face whose makeup is
+   * active, each reading src (S §4.3); `win` (step 3) = the O rect src and dst cover (a tile's window), default the
+   * whole image.
    */
   drawFaces(
     src: Texture,
     dst: Framebuffer,
     faces: readonly { face: Face; u: MakeupUniforms }[],
+    proc: MakeupGeometry | null,
     win?: readonly [number, number, number, number],
-  ): void;
+  ): MakeupLayer[];
+  /** compile PMAKEUP on first use (lazy: the first frame with a procedural item); false once it failed */
+  ensureProc(): boolean;
+  procStatus(): 'unknown' | 'ok' | 'failed';
   dispose(): void;
 }
 
@@ -141,8 +151,8 @@ interface MakeupTextures {
   blushMask: Texture;
 }
 
-/** `assetBase` must end with '/'; it holds lip.png, lip_mask.png, blush.png, blush_mask.png. */
-export function createMakeupPass(gl: GL, assetBase = '/makeup/gp/'): MakeupPass {
+/** `assetBase` must end with '/'; it holds lip.png, lip_mask.png, blush.png, blush_mask.png. `lashesUrl`: 睫毛 (S5 §4.10). */
+export function createMakeupPass(gl: GL, assetBase = '/makeup/gp/', lashesUrl = '/makeup/own/lashes.png'): MakeupPass {
   const copy: Program = createProgram(gl, FULLSCREEN_VS, COPY_FS, 'makeup-copy');
   copy.use();
   gl.uniform1i(copy.u('uSrc'), 0);
@@ -192,27 +202,56 @@ export function createMakeupPass(gl: GL, assetBase = '/makeup/gp/'): MakeupPass 
   gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
   let tex: MakeupTextures | null = null;
+  let lashesTex: Texture | null = null;
+  let meshReady = false;
   let disposed = false;
-  const ready = Promise.all(
+  const meshLoad = Promise.all(
     ['lip.png', 'lip_mask.png', 'blush.png', 'blush_mask.png'].map((f) => loadImageTexture(gl, assetBase + f)),
-  ).then(([lip, lipMask, blush, blushMask]) => {
-    if (disposed) {
-      for (const t of [lip, lipMask, blush, blushMask]) deleteTexture(gl, t);
-      return;
+  ).then(
+    ([lip, lipMask, blush, blushMask]) => {
+      if (disposed) {
+        for (const t of [lip, lipMask, blush, blushMask]) deleteTexture(gl, t);
+        return;
+      }
+      tex = { lip, lipMask, blush, blushMask };
+      meshReady = true;
+    },
+    (err: unknown) => console.error('[engine] makeup textures failed to load; 口紅 and 腮紅 disabled', err),
+  );
+  // a lashes failure disables only 睫毛, as a GPUPixel failure disables only 口紅 / 腮紅 (S5 §4.10)
+  const lashLoad = loadImageTexture(gl, lashesUrl, { r8: true, mipmap: true }).then(
+    (t) => {
+      if (disposed) deleteTexture(gl, t);
+      else lashesTex = t;
+    },
+    (err: unknown) => console.error('[engine] lashes.png failed to load; 睫毛 disabled', err),
+  );
+  const ready = Promise.all([meshLoad, lashLoad]).then(() => undefined);
+  let proc: ProcMakeupPass | null = null;
+  let procState: 'unknown' | 'ok' | 'failed' = 'unknown';
+  const ensureProc = (): boolean => {
+    if (procState === 'unknown') {
+      try {
+        proc = createProcMakeupPass(gl);
+        procState = 'ok';
+      } catch (err) {
+        procState = 'failed';
+        console.error('[engine] PMAKEUP failed to compile; the procedural makeup is disabled', err);
+      }
     }
-    tex = { lip, lipMask, blush, blushMask };
-  });
+    return procState === 'ok';
+  };
 
-  const drawFaces: MakeupPass['drawFaces'] = (src, dst, faces, win = [0, 0, 1, 1]) => {
+  const drawFaces: MakeupPass['drawFaces'] = (src, dst, faces, geom, win = [0, 0, 1, 1]) => {
     bindTarget(gl, dst);
     gl.disable(gl.BLEND);
     copy.use();
     bindTexture(gl, 0, src);
     drawFullscreen(gl);
-    if (!tex) return;
     let drew = false;
     for (const { face, u } of faces) {
-      if (!makeupActive(u)) continue;
+      // no GPUPixel textures (still loading, or failed): no mesh, but the procedural layers below still draw (S5 §4.10)
+      if (!tex || !makeupActive(u)) continue;
       drew = true;
       const p = face.pts111;
       // the landmark mapped into the target window on the CPU (S §4.2 P1): at the whole image (p − 0) / 1 = p exactly,
@@ -245,14 +284,21 @@ export function createMakeupPass(gl: GL, assetBase = '/makeup/gp/'): MakeupPass 
       gl.bindVertexArray(null);
     }
     if (drew) gl.activeTexture(gl.TEXTURE0);
+    if (!proc || !geom || procState !== 'ok') return [];
+    return proc.draw(dst, geom, src, lashesTex, win);
   };
 
   return {
     ready,
+    get meshReady() {
+      return meshReady;
+    },
     draw(src, dst, face, u) {
-      drawFaces(src, dst, [{ face, u }]);
+      drawFaces(src, dst, [{ face, u }], null);
     },
     drawFaces,
+    ensureProc,
+    procStatus: () => procState,
     dispose() {
       disposed = true;
       copy.dispose();
@@ -263,6 +309,11 @@ export function createMakeupPass(gl: GL, assetBase = '/makeup/gp/'): MakeupPass 
       gl.deleteBuffer(ibo);
       if (tex) for (const t of Object.values(tex)) deleteTexture(gl, t);
       tex = null;
+      // every procedural object belongs to this pass: a restored context gets a new pass, never these (S5 §7)
+      proc?.dispose();
+      deleteTexture(gl, lashesTex);
+      lashesTex = null;
+      proc = null;
     },
   };
 }

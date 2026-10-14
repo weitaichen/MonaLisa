@@ -31,6 +31,8 @@ const base: PassPlanInput = {
   reshapeActive: true,
   bodyOn: false,
   adjustOn: false,
+  procActive: false,
+  procReady: false,
 };
 /** no face: the global skin at weight 1 (clear 1) */
 const noFace = { anyFace: false, maskClear: [1, 1] } satisfies Partial<PassPlanInput>;
@@ -110,6 +112,13 @@ describe('planFrame (run()’s plan of a job)', () => {
   it('the 調節 program follows the job’s adjust.on (step-2 spec §4.1)', () => {
     expect(planFrame({ ...job([1, 0], [0, 0]), adjust: { on: true } }, true, false)).toEqual({ mask: true, makeup: true, reshape: true, mean: true, adjust: true });
     expect(planFrame({ ...job([], [1, 1]), adjust: { on: true } }, true, false).adjust).toBe(true);
+  });
+
+  it('step 5: the procedural inputs plan P1 for a face without lip or blush; omitted, they plan as before', () => {
+    const plain = { ...job([1], [0, 0]), faces: [{ weight: 1, reshape, makeup: { ...makeup, lip: 0 } }] };
+    expect(planFrame(plain, true, false).makeup).toBe(false);
+    expect(planFrame(plain, false, false, { active: true, ready: true }).makeup).toBe(true);
+    expect(planFrame(plain, true, false, { active: true, ready: false }).makeup).toBe(false);
   });
 });
 
@@ -263,5 +272,18 @@ describe('pickFull (skin-cleanup spec §4.1 ping-pong)', () => {
     expect(pickFull('A', null)).toBe('A');
     expect(pickFull('B', 'A')).toBe('B');
     expect(pickFull('B', null)).toBe('B');
+  });
+});
+
+describe('planPasses with procedural makeup (face-detail spec §3.6)', () => {
+  it('runs P1 for a procedural part alone, also while the GPUPixel textures are missing', () => {
+    expect(planPasses({ ...base, makeupActive: false, makeupReady: false, procActive: true, procReady: true }).makeup).toBe(true);
+  });
+  it('a PMAKEUP compile failure disables only the procedural parts', () => {
+    expect(planPasses({ ...base, makeupActive: false, procActive: true, procReady: false }).makeup).toBe(false);
+    expect(planPasses({ ...base, makeupActive: true, makeupReady: true, procActive: true, procReady: false }).makeup).toBe(true);
+  });
+  it('needs a face', () => {
+    expect(planPasses({ ...base, anyFace: false, procActive: true, procReady: true }).makeup).toBe(false);
   });
 });

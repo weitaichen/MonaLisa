@@ -19,6 +19,7 @@ import { probeFaceTable, probeR16FArray, readGlLimits } from './glProbe';
 import { lookDef } from './looks';
 import { boxCentre, capsFor, ovalBox } from './passes/faceCap';
 import { makeupUniformsFor } from './passes/makeup';
+import { buildMakeupGeometry, geometryVertexCount, oAspectOf, procMakeupWanted } from './passes/makeupProc';
 import { reshapeUniforms, type ReshapeUniforms } from './passes/reshape';
 import type { ToneCap } from './passes/toneGeometry';
 import { createPipeline, type FrameFace, type FrameJob, type Pipeline, type StaticLuts } from './pipeline';
@@ -89,6 +90,8 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
   /** keys the latest frame drew with: the LRU never evicts these */
   let frameLuts = new Set<string>();
   let adjustMemo: { key: string; u: AdjustUniforms } | null = null;
+  /** the procedural makeup vertex data of the last frame, reused by the next one (no GL object: survives a context loss) */
+  let procScratch: Float32Array | undefined;
 
   /** makeup textures of the current pipeline (see Pipeline.preloadMakeup) */
   let makeupLoad: Promise<void> = Promise.resolve();
@@ -336,6 +339,9 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
     const toneCaps = capsFor(faces.map((f) => f.centre), input.obstacles ?? [], view.oAspect, faces.map((f) => f.presence));
     // the tone field is built from the working image: the preview's source, or a tile's toneSource (S §4.6)
     const work = input.toneSource ?? input;
+    // procedural makeup (S5 §4.6): rebuilt every frame from the listed faces (≤ MAX_RENDER_FACES), in O-space
+    const proc = procMakeupWanted(listed) ? buildMakeupGeometry(listed, oAspectOf(input), procScratch) : null;
+    if (proc) procScratch = proc.data;
     return {
       src,
       size,
@@ -364,6 +370,7 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
         work: { width: work.width, height: work.height },
         sourceId: objectId(work.source as object),
       }),
+      procMakeup: proc && geometryVertexCount(proc) > 0 ? proc : null,
     };
   }
 
@@ -398,6 +405,9 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
     get adjustUnavailable() {
       return pipeline?.adjustFailed ?? false;
     },
+    get procMakeupFailed() {
+      return pipeline?.procMakeupFailed() ?? false;
+    },
 
     render(input, opts) {
       const t0 = performance.now();
@@ -408,7 +418,7 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       sizeCanvas(size);
       const res = pipeline.run(job(input, srcTex, size, !still && tier === 'L', 'canvas', options.mirror));
       if (options.showLandmarks && input.faces.length) {
-        for (const f of input.faces) pipeline.drawOverlay(f.face, options.mirror);
+        for (const f of input.faces) pipeline.drawOverlay(f.face, options.mirror, input.width / input.height);
         res.passes.push('overlay');
       }
       return { cpuMs: performance.now() - t0, width: size.width, height: size.height, passes: res.passes, toneBuilt: res.toneBuilt };

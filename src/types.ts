@@ -601,6 +601,8 @@ export interface Engine {
   lutState(kind: LutKind, id: string): LutState;
   /** the 調節 program failed to compile on this context: 調節 and 質感 are not drawn until the context is rebuilt */
   readonly adjustUnavailable: boolean;
+  /** true once the procedural makeup program failed to compile on this context (S5 §7): its eight parts are off */
+  readonly procMakeupFailed: boolean;
   /**
    * Render to the display canvas at processing resolution.
    * Live: processing short edge = tier (H 1080 / M 720 / L 540, never above source).

@@ -4859,7 +4859,7 @@ Wires Tasks 8–10 into P1 (S5 §4.6, §4.10, §3.6): the GL pass that draws the
   - `Engine.procMakeupFailed: boolean` (read-only; true once PMAKEUP failed to compile on this context)
   - `overlay.ts`: `eyeDebugPoints(face: Face, aspect: number): Float32Array`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `src/engine/pipeline.test.ts`: add `procActive: false, procReady: false` to `base`, then append:
 
@@ -4909,12 +4909,12 @@ describe('eyeDebugPoints (face-detail spec §3.6 overlay)', () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run src/engine/pipeline.test.ts src/engine/passes/overlay.test.ts`
 Expected: FAIL — the procedural cases plan no makeup pass; `eyeDebugPoints` is not exported.
 
-- [ ] **Step 3: The GL pass**
+- [x] **Step 3: The GL pass**
 
 Append to `src/engine/passes/makeupProc.ts` (add `import { bindTarget, bindTexture, createProgram, createTexture, deleteTexture, type Framebuffer, type GL, type Texture } from '../gl/gl';` and `import { MAX_RENDER_FACES } from '../../config/limits';`):
 
@@ -5010,7 +5010,7 @@ export function createProcMakeupPass(gl: GL): ProcMakeupPass {
 }
 ```
 
-- [ ] **Step 4: The makeup pass**
+- [x] **Step 4: The makeup pass**
 
 `src/engine/passes/makeup.ts` (CRLF). In the `MakeupPass` interface:
 - `ready`'s comment becomes `/** settles once the GPUPixel textures and lashes.png have each loaded or failed (S5 §4.10); never rejects */`;
@@ -5079,7 +5079,7 @@ In the returned object: add `get meshReady() { return meshReady; }`, `ensureProc
 
 (`geom` is the new `MakeupGeometry | null` parameter of `drawFaces`, named so it neither shadows the pass `proc` nor clashes with a local `p` of the mesh code; `win` is step 3's window value, passed as the same `[x0, y0, w, h]` the mesh draw uses, `[0, 0, 1, 1]` untiled.) Step 1's early `return` after the copy (no GPUPixel textures, or no face with lip / blush) must now fall through to the procedural layers instead of returning. In `dispose()` add `proc?.dispose(); deleteTexture(gl, lashesTex); lashesTex = null; proc = null;`. Every one of these objects belongs to the pass, and the pipeline recreates the pass on a restored context, so nothing of an old context is reused (Task 12 pins it).
 
-- [ ] **Step 5: The pipeline and the engine**
+- [x] **Step 5: The pipeline and the engine**
 
 `src/engine/pipeline.ts` (CRLF):
 
@@ -5163,7 +5163,7 @@ and pass `input.width / input.height` as the overlay's aspect where step 1 calls
 
 `src/app/testFakes.ts` (CRLF): add `procMakeupFailed: false,` to the object `fakeEngine` builds (`:148-170`; `FakeEngine extends Engine` inherits the field). `tests/harness/t7/fakes.ts` (LF) has its own `class FakeEngine implements Engine`: add `readonly procMakeupFailed = false;` next to its `readonly adjustUnavailable = false;` (`:116`).
 
-- [ ] **Step 6: The debug overlay**
+- [x] **Step 6: The debug overlay**
 
 `src/engine/passes/overlay.ts`:
 
@@ -5209,12 +5209,12 @@ export function eyeDebugPoints(face: Face, aspect: number): Float32Array {
       gl.drawArrays(gl.POINTS, 0, eyes.length / 2);
 ```
 
-- [ ] **Step 7: Run the tests, typecheck and the engine e2e**
+- [x] **Step 7: Run the tests, typecheck and the engine e2e**
 
 Run: `npx vitest run src/engine && npm run typecheck && npm run build && npx playwright test tests/e2e/engine.spec.ts tests/e2e/parity.spec.ts`
 Expected: PASS. With every procedural item neutral, `procMakeupWanted` is false, `procMakeup` is null and no frame changes: the parity goldens and the lip/blush rows of `engine.spec.ts` hold unchanged.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 file src/engine/passes/makeup.ts src/engine/pipeline.ts src/engine/index.ts src/types.ts src/app/testFakes.ts src/engine/passes/overlay.ts

@@ -34,6 +34,7 @@ import {
 import { attenuate, capsFor, faceDrawn, WHOLE, type TableFace } from './passes/faceCap';
 import { createHealPass, type HealPass } from './passes/heal';
 import { createMakeupPass, makeupActive, type MakeupPass, type MakeupUniforms } from './passes/makeup';
+import type { MakeupGeometry } from './passes/makeupProc';
 import { createMaskPass, type MaskPass } from './passes/mask';
 import { createLandmarkOverlay, type LandmarkOverlay } from './passes/overlay';
 import { createReshapePass, reshapeActive, type ReshapePass, type ReshapeUniforms, type ReshapeView } from './passes/reshape';
@@ -126,6 +127,8 @@ export interface FrameJob {
   fullShortEdge: number;
   /** step 4: the 膚質 passes of this frame, null = none (toneJob.ts) */
   tone: ToneJob | null;
+  /** step 5: procedural makeup geometry of every listed face (O-space), null when no procedural item is drawable */
+  procMakeup: MakeupGeometry | null;
 }
 
 export interface FrameResult {
@@ -154,6 +157,10 @@ export interface PassPlanInput {
   geoIdentity?: boolean;
   /** step 3: true → P2 runs (default false) */
   windowed?: boolean;
+  /** step 5: a procedural makeup item has geometry this frame */
+  procActive: boolean;
+  /** step 5: PMAKEUP is compiled (lazily, on the first procedural frame) */
+  procReady: boolean;
 }
 
 export interface PassPlan {
@@ -178,7 +185,8 @@ export function planPasses(i: PassPlanInput): PassPlan {
   const clearBelowWhite = (i.skin.smooth > 0 && i.maskClear[0] < 1) || (i.skin.rosy > 0 && i.maskClear[1] < 1);
   return {
     mask: (faceOn || clearBelowWhite) && !i.matchGpupixel && mean,
-    makeup: faceOn && i.makeupActive && i.makeupReady,
+    // step 5 (S5 §3.6): 口紅 / 腮紅 need the GPUPixel textures, the procedural parts the PMAKEUP program; either runs P1
+    makeup: faceOn && ((i.makeupActive && i.makeupReady) || (i.procActive && i.procReady)),
     // step 3 (S §4.3): a geometry or a window always runs P2, the V ← O resample
     reshape: (faceOn && i.reshapeActive) || i.bodyOn || i.geoIdentity === false || i.windowed === true,
     mean,
@@ -186,13 +194,17 @@ export function planPasses(i: PassPlanInput): PassPlan {
   };
 }
 
-/** run()'s plan of a frame job (pure): the faces with weight > 0 drive the face passes, the clear keeps the mask on */
+/**
+ * run()'s plan of a frame job (pure): the faces with weight > 0 drive the face passes, the clear keeps the mask on;
+ * `proc` (step 5): the frame has procedural makeup geometry, and PMAKEUP compiled
+ */
 export function planFrame(
   job: { faces: readonly Pick<FrameFace, 'weight' | 'makeup' | 'reshape'>[] } & Pick<FrameJob, 'maskClear' | 'matchGpupixel' | 'skin'> & {
     adjust: { on: boolean };
   } & Partial<Pick<FrameJob, 'geoIdentity' | 'windowed'>>,
   makeupReady: boolean,
   bodyOn: boolean,
+  proc: { active: boolean; ready: boolean } = { active: false, ready: false },
 ): PassPlan {
   const live = job.faces.filter((f) => f.weight > 0);
   return planPasses({
@@ -207,6 +219,8 @@ export function planFrame(
     adjustOn: job.adjust.on,
     geoIdentity: job.geoIdentity,
     windowed: job.windowed,
+    procActive: proc.active,
+    procReady: proc.ready,
   });
 }
 
@@ -236,14 +250,16 @@ export interface Pipeline {
    * IDENTITY_MAT3). Canvas must already be sized.
    */
   drawSource(src: Texture, mirror: boolean, geo?: Float32Array): void;
-  /** Debug overlay on the canvas (after present). */
-  drawOverlay(face: Face, mirror: boolean): void;
+  /** Debug overlay on the canvas (after present); `aspect` = the image's W/H, for the eye frames (step 5) */
+  drawOverlay(face: Face, mirror: boolean, aspect: number): void;
   /**
-   * Create the makeup pass now and settle when its textures are uploaded (never rejects: a failed
-   * load is logged and makeup stays disabled). Lets still renders wait for makeup instead of
+   * Create the makeup pass now and settle when its textures (GPUPixel and lashes.png) are uploaded (never rejects: a
+   * failed load is logged and only its own parts stay disabled). Lets still renders wait for makeup instead of
    * silently drawing without it on the first frame.
    */
   preloadMakeup(): Promise<void>;
+  /** step 5: PMAKEUP failed to compile on this context (its eight parts are off) */
+  procMakeupFailed(): boolean;
   /** the 調節 program failed to compile on this context */
   readonly adjustFailed: boolean;
   /** every FBO to 1 × 1 (after a tiled export, S §4.4); the next frame re-allocates at its own size */
@@ -444,12 +460,10 @@ export function createPipeline(gl: GL): Pipeline {
     if (!makeup) {
       const m = createMakeupPass(gl);
       makeup = m;
-      m.ready.then(
-        () => {
-          if (makeup === m) makeupReady = true;
-        },
-        (err: unknown) => console.error('[engine] makeup textures failed to load; makeup disabled', err),
-      );
+      // never rejects: each texture set logs its own failure and only disables its own parts
+      void m.ready.then(() => {
+        if (makeup === m) makeupReady = m.meshReady;
+      });
     }
     return makeup;
   }
@@ -486,9 +500,12 @@ export function createPipeline(gl: GL): Pipeline {
       resetState();
       const live = job.faces.filter((f) => f.weight > 0);
       const meshes = live.filter((f) => makeupActive(f.makeup)).map((f) => ({ face: f.face, u: f.makeup }));
-      if (meshes.length) getMakeup();
+      const proc = job.procMakeup;
+      if (meshes.length || proc) getMakeup();
+      // PMAKEUP compiles on the first frame with a procedural item; a failure leaves 口紅 / 腮紅 and the warps alone
+      const procReady = proc !== null && makeup !== null && makeup.ensureProc();
       const body = bodyTexture(job.body);
-      const plan = planFrame(job, makeupReady, body !== null);
+      const plan = planFrame(job, makeupReady, body !== null, { active: proc !== null, ready: procReady });
 
       let maskTex: Texture | null = null;
       if (plan.mask) {
@@ -550,10 +567,11 @@ export function createPipeline(gl: GL): Pipeline {
       if (plan.makeup && makeup) {
         // in O (step 3): the window's size
         const a = full('A', baseFb, job.srcSize);
-        makeup.drawFaces(base, a, meshes, job.win);
+        // step 5 (S5 §4.6): every face's GPUPixel mesh, then ≤ 9 procedural strips over every face at once
+        const layers = makeup.drawFaces(base, a, meshes, procReady ? proc : null, job.win);
         base = a.tex;
         baseFb = a;
-        passes.push('makeup');
+        passes.push('makeup', ...layers.map((l) => `mk.${l}`));
       }
       if (plan.reshape) {
         reshape ??= createReshapePass(gl, { carrier: FACE_TABLE_CARRIER });
@@ -646,9 +664,11 @@ export function createPipeline(gl: GL): Pipeline {
     },
 
     preloadMakeup() {
-      return getMakeup().ready.catch(() => {
-        // already logged by getMakeup's handler; makeup stays disabled
-      });
+      return getMakeup().ready;
+    },
+
+    procMakeupFailed() {
+      return makeup?.procStatus() === 'failed';
     },
 
     releaseBuffers() {
@@ -682,10 +702,10 @@ export function createPipeline(gl: GL): Pipeline {
       resetState();
     },
 
-    drawOverlay(face, mirror) {
+    drawOverlay(face, mirror, aspect) {
       overlay ??= createLandmarkOverlay(gl);
       bindTarget(gl, null);
-      overlay.draw(face, mirror);
+      overlay.draw(face, mirror, aspect);
     },
 
     dispose(lost = false) {

@@ -2,8 +2,9 @@
 // face's GPUPixel lip/blush mesh. The geometry is built here on the CPU, in landmark space: every layer is ONE
 // TRIANGLE_STRIP over every face (pieces joined by degenerate vertices), so a frame draws at most 9 strips for any number
 // of faces. Original work (LICENSES/NOTICE.txt); no third-party makeup asset.
+import { MAX_RENDER_FACES } from '../../config/limits';
 import type { Face, Rect, RenderFace } from '../../types';
-import { hexToRgb } from '../gl/gl';
+import { bindTarget, bindTexture, createProgram, createTexture, deleteTexture, type Framebuffer, type GL, hexToRgb, type Texture } from '../gl/gl';
 import { MAKEUP_FIXED, ORIG_TINT, shadeColor } from '../params';
 import {
   browGapAt,
@@ -601,3 +602,93 @@ void main() {
   else if (uLayerMode == 1) outColor = vec4(rgb * a, 1.0);
   else outColor = vec4(rgb, a);
 }`;
+
+export const LASHES_UNIT = 1;
+
+export interface ProcMakeupPass {
+  /**
+   * Draw every non-empty layer of `geom` into `target` (its copy and the GPUPixel meshes are already there), reading
+   * `src` (unit 0, never the target: no feedback loop) and `lashes` (unit 1; null skips the 睫毛 layer).
+   * At most one drawArrays per layer. Returns the layers drawn.
+   */
+  draw(target: Framebuffer, geom: MakeupGeometry, src: Texture, lashes: Texture | null, win?: readonly [number, number, number, number]): MakeupLayer[];
+  dispose(): void;
+}
+
+export function createProcMakeupPass(gl: GL): ProcMakeupPass {
+  const prog = createProgram(gl, PMAKEUP_VS, PMAKEUP_FS, 'makeup-proc');
+  prog.use();
+  gl.uniform1i(prog.u('uSrc'), 0);
+  gl.uniform1i(prog.u('uLashes'), LASHES_UNIT);
+  const STRIDE = FLOATS_PER_VERTEX * 4;
+  let capacity = MAX_RENDER_FACES * MAX_PMAKEUP_VERTS_PER_FACE * STRIDE;
+  const vao = gl.createVertexArray();
+  const vbo = gl.createBuffer();
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+  gl.bufferData(gl.ARRAY_BUFFER, capacity, gl.DYNAMIC_DRAW);
+  const attr = (name: string, size: number, offset: number) => {
+    const loc = gl.getAttribLocation(prog.program, name);
+    if (loc < 0) return;
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, size, gl.FLOAT, false, STRIDE, offset * 4);
+  };
+  attr('aPos', 2, 0);
+  attr('aLoc', 2, 2);
+  attr('aAux', 2, 4);
+  attr('aCol', 4, 6);
+  attr('aKind', 1, 10);
+  gl.bindVertexArray(null);
+  gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  // bound on the lashes unit when the texture is unavailable (its layer is skipped then), so no unit is empty
+  const blank = createTexture(gl, 1, 1);
+
+  return {
+    draw(target, geom, src, lashes, win = [0, 0, 1, 1]) {
+      let used = 0;
+      for (const l of LAYER_ORDER) used = Math.max(used, geom.ranges[l][0] + geom.ranges[l][1]);
+      const drawn: MakeupLayer[] = [];
+      if (used === 0) return drawn;
+      bindTarget(gl, target);
+      prog.use();
+      gl.uniform2f(prog.u('uInvDst'), 1 / target.width, 1 / target.height);
+      gl.uniform4f(prog.u('uWin'), win[0], win[1], win[2], win[3]);
+      bindTexture(gl, 0, src);
+      bindTexture(gl, LASHES_UNIT, lashes ?? blank);
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      if (used * STRIDE > capacity) {
+        capacity = used * STRIDE;
+        gl.bufferData(gl.ARRAY_BUFFER, capacity, gl.DYNAMIC_DRAW);
+      }
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, geom.data, 0, used * FLOATS_PER_VERTEX);
+      gl.disable(gl.CULL_FACE); // strips join faces with degenerate vertices; nothing relies on winding
+      gl.enable(gl.BLEND);
+      gl.blendEquation(gl.FUNC_ADD);
+      for (const layer of LAYER_ORDER) {
+        const [first, count] = geom.ranges[layer];
+        if (count < 3 || (layer === 'lashes' && !lashes)) continue;
+        const mode = LAYER_MODE[layer];
+        // destination alpha is kept at 1 by every mode (ZERO, ONE)
+        if (mode === 0) gl.blendFuncSeparate(gl.DST_COLOR, gl.ZERO, gl.ZERO, gl.ONE);
+        else if (mode === 1) gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_COLOR, gl.ZERO, gl.ONE);
+        else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
+        gl.uniform1i(prog.u('uLayerMode'), mode);
+        gl.drawArrays(gl.TRIANGLE_STRIP, first, count);
+        drawn.push(layer);
+      }
+      gl.disable(gl.BLEND);
+      gl.bindVertexArray(null);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+      bindTexture(gl, LASHES_UNIT, null);
+      gl.activeTexture(gl.TEXTURE0);
+      return drawn;
+    },
+    dispose() {
+      prog.dispose();
+      gl.deleteVertexArray(vao);
+      gl.deleteBuffer(vbo);
+      deleteTexture(gl, blank);
+    },
+  };
+}

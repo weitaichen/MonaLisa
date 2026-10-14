@@ -5243,7 +5243,7 @@ S5 §8.3 items 2, 3, 4 and 9, the §8.4 contact sheet, and two failure modes of 
 - Consumes: Tasks 8–11 (`createProcMakeupPass`, `createMakeupPass(gl, assetBase?, lashesUrl?)`, `MakeupPass.drawFaces(src, dst, faces, proc, win?)`, `ensureProc`, `meshReady`, `buildMakeupGeometry`, `KIND`, `LAYER_MODE`, `LAYER_ORDER`, `FLOATS_PER_VERTEX`, `fragment`, `blend`, `loadImageTexture(…, {r8, mipmap})`, pass names `mk.<layer>`); Task 5 `closeEye`, `eyeFrames`; Task 1 `MAKEUP_PARAM`, `SHADES`, `isShadePart`, `neutralValue`, `paramDef`; step 1 `RenderInput` (RM §4.1), `defaultPhoto()`, `neutralPerson()`, `emptyShades()` (Task 1); `createEngine` (`src/engine/index.ts`) with `ready` (re-read after a restore), `lost`, `render`, `renderToImageData`; `decodeDataUrl`, `Pixels` (`tests/e2e/fixtures.ts`); step 3's tile harness `window.runExportTiles()` in `tests/e2e/pages/export.ts` (its `cases: { name; w; h; geometry(size) }[]`, the shared `person`, the per-case `faces: RenderFace[] = [{ face, weight: 1, person, protect: null }]`) and `tests/e2e/export.spec.ts` (it asserts the list of case names: `['identity', 'quarter 1 + flip', 'θ 12° + crop', '601×799 identity']`); step 1's `tests/fixtures/group_faces.png` and `group_faces.landmarks.json` (`{ source, width, height, …, faces: number[][] }`, 478 × 3 values per face, RM §8.3).
 - Produces: `window.runMakeupPin(): Promise<MakeupPinCase[]>`, `window.runMakeupRegions(): Promise<MakeupRegions>`, `window.runMakeupBlink(): Promise<Record<string, string>>`, `window.runMakeupLashesFail(): Promise<{ settled: boolean; meshReady: boolean; compiled: boolean; layers: string[] }>`, `window.runMakeupContextLoss(): Promise<{ before: string; after: string; restored: boolean }>`, `window.runMakeupSheet(): Promise<{ name: string; png: string }[]>`; the export-harness case field `faceDetail?: boolean` (step 6's release-gate case sets it)
 
-- [ ] **Step 1: Write the failing e2e tests**
+- [x] **Step 1: Write the failing e2e tests**
 
 Append to `tests/e2e/shape-makeup.spec.ts` (extend the import to `import { decodeDataUrl, expect, test, type Pixels } from './fixtures';` and add `import { mkdirSync, writeFileSync } from 'node:fs'; import { resolve } from 'node:path';`):
 
@@ -5370,12 +5370,12 @@ test('contact sheet @sheet', async ({ page }) => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx playwright test tests/e2e/shape-makeup.spec.ts -g "PMAKEUP|region|blink|lashes|context"`
 Expected: FAIL — `page.goto` of `makeup.html` returns the dev server's 404 page, so `waitForFunction` times out.
 
-- [ ] **Step 3: The harness page**
+- [x] **Step 3: The harness page**
 
 Create `tests/e2e/pages/makeup.html`:
 
@@ -5770,7 +5770,7 @@ window.runMakeupSheet = async () => {
 };
 ```
 
-- [ ] **Step 4: The tile cases (S5 §8.3 item 9)**
+- [x] **Step 4: The tile cases (S5 §8.3 item 9)**
 
 In step 3's tile harness `tests/e2e/pages/export.ts` (`window.runExportTiles`):
 1. The case type gains `faceDetail?: boolean` (every makeup part at 100 and every new warp at max on the composited face); append three cases, the S3 geometries with that flag:
@@ -5799,14 +5799,14 @@ const step5Person = (): PersonParams => {
 
 In `tests/e2e/export.spec.ts`, append `'step 5 identity', 'step 5 quarter 1 + flip', 'step 5 θ 12° + crop'` to the end of its `expect(res.map((r) => r.name)).toEqual([...])` list; its loop assertions (no GL error, more than one tile, max channel difference ≤ 1/255) then cover them. The lashes mip level follows the output scale, never the tile (S5 §4.11), so the forced `TILE = 256` plan must equal the untiled render.
 
-- [ ] **Step 5: Run the e2e**
+- [x] **Step 5: Run the e2e**
 
 Run: `npx playwright test tests/e2e/shape-makeup.spec.ts -g "PMAKEUP|region|blink|lashes|context" && npx playwright test tests/e2e/export.spec.ts`
 Expected: PASS — 14 kinds within 2/255 of the CPU port; every part outside its boxes ≤ 2/255 and inside > 8/255, with its `mk.<layer>` passes; 美瞳 inside iris ∩ aperture; blink case 0 / 0 / > 8; a missing `lashes.png` settles `ready` and skips only `lashes`; a lost and restored context renders 眼影 within 1/255 of before; step 3's tile cases (including the three new ones) ≤ 1/255.
 
 Then write the contact sheet once to check it renders: `SHEET=1 npx playwright test tests/e2e/shape-makeup.spec.ts --grep @sheet` — Expected: `contact sheet: N images in …/test-results/makeup-sheet` (not committed).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add tests/e2e/pages/makeup.html tests/e2e/pages/makeup.ts tests/e2e/shape-makeup.spec.ts tests/e2e/pages/export.ts tests/e2e/export.spec.ts
@@ -5822,6 +5822,8 @@ part and warp on; @sheet contact sheet (sample face and group faces).
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
+
+**Landed deviations:** (1) The shared console guard of `tests/e2e/fixtures.ts` fails every test on a `console.error`, and the makeup pass logs `[engine] lashes.png failed to load; 睫毛 disabled` by design. So the lashes case takes `guard`, polls until that line was logged (the failure path ran) and then drops it, and the browser's own "Failed to load resource" line, from `guard.consoleErrors`; the guard still checks every other line and the requests. (2) `step 5 quarter 1 + flip` measures 2/255 at one interior pixel (B, 44 px from the nearest tile edge on SwiftShader). That is the 膠片 lift of a 1-LSB fp32 flip that `export.spec.ts` already documents for `θ 12° + crop`: the case is ≤ 1/255 with the look off, and also with only the makeup or only the warps on. Its bound is 2/255, like the `601` and `θ` cases; `step 5 identity` and `step 5 θ 12° + crop` keep 1/255. Against a neutral person, the three step-5 cases change about 27 000 px by more than 8/255, so they are not vacuous.
 
 ### Task 13: 美型 strip: group dividers, 左右分開 switch, badges and the side slider
 

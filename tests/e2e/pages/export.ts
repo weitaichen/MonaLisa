@@ -2,8 +2,9 @@
 // covering V and once with the planner's TILE = 256 tiles, at three geometries; the PNG-free comparison happens here.
 // Steps 4, 5 and 6 add their cases to `CASES` (spots and tone, every makeup part, strokes).
 import landmarks from '../../fixtures/landmarks_sample_face.json';
-import { defaultPhoto, neutralPerson } from '../../../src/edit/state';
+import { defaultPhoto, emptyShades, neutralPerson } from '../../../src/edit/state';
 import { createEngine } from '../../../src/engine/index';
+import { MAKEUP_PARAM } from '../../../src/engine/params';
 import { IDENTITY_GEOMETRY, setStraighten, snapCrop, viewSize } from '../../../src/geometry/view';
 import { faceBoundsFor, planTiles, type TileGrid } from '../../../src/media/exportPlan';
 import { adapt } from '../../../src/tracking/adapter111';
@@ -52,6 +53,15 @@ function bodyField(): BodyField {
   return { width: bw, height: bh, data, version: 1 };
 }
 
+/** step 5's tile person (S5 §8.3 item 9): every procedural makeup part at 100 with a shade, every new warp at max */
+const step5Person = (): PersonParams => {
+  const p = neutralPerson();
+  const values = { ...p.values };
+  for (const part of ['brow', 'eyeshadow', 'liner', 'lashes', 'aegyo', 'contour', 'highlight', 'lens'] as const) values[MAKEUP_PARAM[part]] = 1;
+  for (const id of ['shape.jawline', 'shape.temple', 'shape.hairline', 'shape.noseWing', 'shape.noseBridge', 'shape.mouthHeight'] as const) values[id] = 1;
+  return { ...p, values, shades: { ...emptyShades(), brow: 'black', eyeshadow: 'earth', liner: 'black', lens: 'blue' } };
+};
+
 window.runExportTiles = async () => {
   const canvas = document.getElementById('gl') as HTMLCanvasElement;
   const engine = createEngine(canvas, { mirror: false });
@@ -64,11 +74,15 @@ window.runExportTiles = async () => {
     values: { ...neutralPerson().values, 'shape.eyeEnlarge': 1, 'shape.faceSlim': 1, 'skin.smooth': 0.8, 'makeup.lip': 0.8 },
   };
   const out: TileCheck[] = [];
-  const cases: { name: string; w: number; h: number; geometry: (size: { width: number; height: number }) => Geometry }[] = [
+  const cases: { name: string; w: number; h: number; geometry: (size: { width: number; height: number }) => Geometry; faceDetail?: boolean }[] = [
     { name: 'identity', w: 800, h: 600, geometry: () => IDENTITY_GEOMETRY },
     { name: 'quarter 1 + flip', w: 800, h: 600, geometry: () => ({ ...IDENTITY_GEOMETRY, flipH: true, quarter: 1 }) },
     { name: 'θ 12° + crop', w: 800, h: 600, geometry: (size) => setStraighten(IDENTITY_GEOMETRY, 12, size) },
     { name: '601×799 identity', w: 601, h: 799, geometry: () => IDENTITY_GEOMETRY },
+    // step 5 (S5 §8.3 item 9): every makeup part at 100 and every new warp at max on the composited face
+    { name: 'step 5 identity', w: 800, h: 600, geometry: () => IDENTITY_GEOMETRY, faceDetail: true },
+    { name: 'step 5 quarter 1 + flip', w: 800, h: 600, geometry: () => ({ ...IDENTITY_GEOMETRY, flipH: true, quarter: 1 }), faceDetail: true },
+    { name: 'step 5 θ 12° + crop', w: 800, h: 600, geometry: (size) => setStraighten(IDENTITY_GEOMETRY, 12, size), faceDetail: true },
   ];
   for (const c of cases) {
     const decode = { width: c.w, height: c.h };
@@ -81,7 +95,7 @@ window.runExportTiles = async () => {
       pts[i + 2] = (landmarks.points[i + 2] * landmarks.width * place.s) / c.w;
     }
     const face = adapt({ points: pts }, c.w, c.h);
-    const faces: RenderFace[] = [{ face, weight: 1, person, protect: null }];
+    const faces: RenderFace[] = [{ face, weight: 1, person: c.faceDetail ? step5Person() : person, protect: null }];
     const g = snapCrop(c.geometry(decode), decode);
     // 銳化 and 美白 at 0 (S §8.2 lists neither): a warped P2 resample differs from the untiled one by fp32 coordinate
     // rounding (≤ 1/255 in B at scattered interior pixels, not at tile edges), and 自然's sharpen gain and the whiten

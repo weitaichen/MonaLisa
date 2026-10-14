@@ -1,5 +1,6 @@
 // 祛痘 spots (skin-cleanup spec §2.3, §3.3, §3.5, §5): the photo-level list, edited immutably, and its sanitizer; the
 // tap planning (radius, regions, owner, snap, donor) on a patch of the working bitmap. Pure.
+import { segDist } from '../body/geom';
 import { SPOT_CAP } from '../config/limits';
 import type { DetectionCache, EditState, Face, PersonId, PersonMask, Rect, Selection, Spot, SpotSize } from '../types';
 
@@ -108,26 +109,23 @@ export function inPolygon(p: V2, poly: readonly V2[]): boolean {
   }
   return inside;
 }
-/** every vertex pushed `d` away from the vertex centroid */
-function grown(poly: readonly V2[], d: number): V2[] {
-  const cx = poly.reduce((s, p) => s + p[0], 0) / poly.length;
-  const cy = poly.reduce((s, p) => s + p[1], 0) / poly.length;
-  return poly.map(([x, y]): V2 => {
-    const l = Math.hypot(x - cx, y - cy);
-    return l > 1e-12 ? [x + ((x - cx) / l) * d, y + ((y - cy) / l) * d] : [x, y];
-  });
+/** inside `poly`, or within `d` of its outline (the polygon padded by `d`; a closed, zero-area ring keeps its band) */
+function inPadded(p: V2, poly: readonly V2[], d: number): boolean {
+  return inPolygon(p, poly) || poly.some((a, i) => segDist(p, a, poly[(i + 1) % poly.length]) <= d);
 }
 
 /**
  * Where an O point lies (S §3.3): an eye ring padded by 0.15 eye width → eye; the inner lips → mouth; the outer lips
  * minus the inner → lip; the oval → skin of that face; anything else → other. Eyes and mouths of every face win first.
+ * The eye padding is a distance band round the ring, so it is 0.15 eye width at any openness: a squint or a closed eye
+ * keeps its lash line in the eye (the §2.3 refusal and the §3.5 donor rim rule).
  */
 export function regionAt(o: V2, faces: readonly SpotFace[], aspect: number): Region {
   const q: V2 = [o[0], o[1] / aspect];
   for (const { id, face } of faces) {
     for (const side of ['L', 'R'] as const) {
       const ring = isoPoly(face, EYE[side], aspect);
-      if (inPolygon(q, grown(ring, 0.15 * dist(ring[0], ring[4])))) return { kind: 'eye', face: id };
+      if (inPadded(q, ring, 0.15 * dist(ring[0], ring[4]))) return { kind: 'eye', face: id };
     }
     if (inPolygon(q, isoPoly(face, INNER_LIP, aspect))) return { kind: 'mouth', face: id };
   }

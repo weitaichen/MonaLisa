@@ -145,6 +145,20 @@ const shifted = (f: Face, dx: number): Face => {
   const sh = (a: Float32Array) => a.map((v, i) => (i % 2 ? v : v + dx));
   return { ...f, pts111: sh(f.pts111), ext: sh(f.ext), oval: sh(f.oval) };
 };
+/** `f` with both eyes shut: the upper-lid points moved onto the lower-lid ones (53·72·54 → 57·73·56, 59·75·60 → 63·76·62) */
+const closedEyes = (f: Face): Face => {
+  const pts = f.pts111.slice();
+  for (const [u, l] of [[53, 57], [72, 73], [54, 56], [59, 63], [75, 76], [60, 62]]) {
+    pts[u * 2] = pts[l * 2];
+    pts[u * 2 + 1] = pts[l * 2 + 1];
+  }
+  return { ...f, pts111: pts };
+};
+const CLOSED: SpotFace[] = [{ id: 'f0', face: closedEyes(FACE) }];
+/** the image-left eye's width |P(52) − P(55)| in short-edge units (the regionAt pad is 0.15 of it) */
+const EYE_W = isoDist(P(52), P(55));
+/** the O point `k` eye widths straight below `p` (above it for k < 0) */
+const downBy = (p: V2, k: number): V2 => [p[0], p[1] + k * EYE_W * ASPECT];
 
 describe('regionAt / spotRadius / ownerAt (skin-cleanup spec §2.3, §3.3)', () => {
   it('tells the eyes, the open mouth, the lips, the skin and the rest apart', () => {
@@ -153,6 +167,21 @@ describe('regionAt / spotRadius / ownerAt (skin-cleanup spec §2.3, §3.3)', () 
     expect(regionAt(mid(P(87), P(98)), FACES, ASPECT)).toEqual({ kind: 'lip', face: 'f0' });
     expect(regionAt(mid(P(6), P(82)), FACES, ASPECT)).toEqual({ kind: 'skin', face: 'f0' });
     expect(regionAt([0.03, 0.03], FACES, ASPECT)).toEqual({ kind: 'other' });
+  });
+
+  it('pads an open eye by 0.15 eye width: 0.14 eye width above the upper lid or below the lower one is still the eye', () => {
+    const eye = { kind: 'eye', face: 'f0' };
+    const skin = { kind: 'skin', face: 'f0' };
+    expect(regionAt(downBy(P(72), -0.14), FACES, ASPECT)).toEqual(eye);
+    expect(regionAt(downBy(P(73), 0.14), FACES, ASPECT)).toEqual(eye);
+    expect(regionAt(downBy(P(72), -0.2), FACES, ASPECT)).toEqual(skin);
+    expect(regionAt(downBy(P(73), 0.2), FACES, ASPECT)).toEqual(skin);
+  });
+
+  it('pads a closed eye the same: the lid line and 0.1 eye width either side of it are the eye (§2.3, §3.3)', () => {
+    const lid = [P(73), mid(P(57), P(73)), mid(P(73), P(56)), mid(P(52), P(57)), mid(P(56), P(55))];
+    for (const p of lid) for (const k of [0, -0.1, 0.1]) expect(regionAt(downBy(p, k), CLOSED, ASPECT)).toEqual({ kind: 'eye', face: 'f0' });
+    for (const k of [-0.2, 0.2]) expect(regionAt(downBy(mid(P(57), P(73)), k), CLOSED, ASPECT)).toEqual({ kind: 'skin', face: 'f0' });
   });
 
   it('sizes the spot by the reference face: own oval, a padded box, the median width, else 0.35 of the short edge', () => {
@@ -288,24 +317,28 @@ describe('planSpot (§3.5)', () => {
     expect(planSpot(patch(200, img), [0.5, 0.5], r, { faces: [], aspect: 1, existing: [] })).toEqual(first);
   });
 
-  it('never takes a donor whose rim reaches an eye or the open mouth, even when it matches best', () => {
+  it('never takes a donor whose rim reaches an eye (open or closed) or the open mouth, even when it matches best', () => {
     const below = mid(P(73), P(57));
-    const cases: { o: V2; rr: number; kind: 'skin' | 'lip'; rim: 'eye' | 'mouth' }[] = [
-      { o: [below[0], below[1] + 0.03], rr: 0.012, kind: 'skin', rim: 'eye' }, // skin under an eye
-      { o: [P(102)[0] + 0.3 * (P(93)[0] - P(102)[0]), P(102)[1] + 0.3 * (P(93)[1] - P(102)[1])], rr: 0.006, kind: 'lip', rim: 'mouth' }, // the lower lip, ≈ 3 r under the open mouth
+    const cases: { o: V2; rr: number; kind: 'skin' | 'lip'; rim: 'eye' | 'mouth'; faces: SpotFace[] }[] = [
+      { o: [below[0], below[1] + 0.03], rr: 0.012, kind: 'skin', rim: 'eye', faces: FACES }, // skin under an eye
+      // skin 3.4 r under a closed eye's lid (flat here): the donor 2.4 r up is 1 r = 0.19 eye width under the lid, so its
+      // centre is skin, and its top rim point 0.1 r under the lid is inside the lid's padding, where the lashes are
+      { o: [below[0], below[1] + 3.4 * 0.02 * ASPECT], rr: 0.02, kind: 'skin', rim: 'eye', faces: CLOSED },
+      { o: [P(102)[0] + 0.3 * (P(93)[0] - P(102)[0]), P(102)[1] + 0.3 * (P(93)[1] - P(102)[1])], rr: 0.006, kind: 'lip', rim: 'mouth', faces: FACES }, // the lower lip, ≈ 3 r under the open mouth
     ];
-    for (const { o, rr, kind, rim } of cases) {
+    for (const { o, rr, kind, rim, faces } of cases) {
       const up = cand(o, rr, 2.4, 6); // 2.4 r straight up: the centre on the spot's own region, the rim in the eye or the mouth
-      expect(regionAt(up, FACES, ASPECT)).toEqual({ kind, face: 'f0' });
-      expect(rimKinds(up, rr, FACES)).toContain(rim);
+      expect(regionAt(o, faces, ASPECT)).toEqual({ kind, face: 'f0' });
+      expect(regionAt(up, faces, ASPECT)).toEqual({ kind, face: 'f0' });
+      expect(rimKinds(up, rr, faces)).toContain(rim);
       const img = lure((q) => isoDist(q, o) <= 1.7 * rr || isoDist(q, up) <= 1.7 * rr);
-      const s = planSpot(patchAround(o, rr, img), o, rr, { faces: FACES, aspect: ASPECT, existing: [] }) as Spot;
+      const s = planSpot(patchAround(o, rr, img), o, rr, { faces, aspect: ASPECT, existing: [] }) as Spot;
       expect([s.x, s.y]).toEqual(o); // no snap: the candidates are where `cand` puts them
       expect([s.dx, s.dy]).not.toEqual([0, 0]);
       const donor = donorOf(s);
       expect(isoDist(donor, up)).toBeGreaterThan(rr);
-      expect(regionAt(donor, FACES, ASPECT)).toEqual({ kind, face: 'f0' });
-      for (const k of rimKinds(donor, rr, FACES)) expect(['eye', 'mouth']).not.toContain(k);
+      expect(regionAt(donor, faces, ASPECT)).toEqual({ kind, face: 'f0' });
+      for (const k of rimKinds(donor, rr, faces)) expect(['eye', 'mouth']).not.toContain(k);
     }
   });
 
@@ -328,6 +361,9 @@ describe('planSpot (§3.5)', () => {
   it('refuses eyes, the open mouth and a full list', () => {
     const img = (x: number, y: number) => 0.62 + 0.02 * hash(x, y);
     expect(planSpot(patch(200, img), P(74), r, { faces: FACES, aspect: ASPECT, existing: [] })).toEqual({ refused: 'eye' });
+    // a closed eye: a tap on the lid line, or on the lash line just under it
+    expect(planSpot(patch(200, img), P(73), r, { faces: CLOSED, aspect: ASPECT, existing: [] })).toEqual({ refused: 'eye' });
+    expect(planSpot(patch(200, img), downBy(mid(P(57), P(73)), 0.1), r, { faces: CLOSED, aspect: ASPECT, existing: [] })).toEqual({ refused: 'eye' });
     expect(planSpot(patch(200, img), mid(P(98), P(102)), r, { faces: FACES, aspect: ASPECT, existing: [] })).toEqual({ refused: 'mouth' });
     const full = Array.from({ length: SPOT_CAP }, (_, i) => ({ x: i / 100, y: 0.1, r, dx: 0, dy: 0, owner: null }));
     expect(planSpot(patch(200, img), [0.5, 0.5], r, { faces: [], aspect: 1, existing: full })).toEqual({ refused: 'cap' });

@@ -36,9 +36,13 @@ import { createMakeupPass, makeupActive, type MakeupPass, type MakeupUniforms } 
 import { createMaskPass, type MaskPass } from './passes/mask';
 import { createLandmarkOverlay, type LandmarkOverlay } from './passes/overlay';
 import { createReshapePass, reshapeActive, type ReshapePass, type ReshapeUniforms, type ReshapeView } from './passes/reshape';
+import { createRetouchPass, createToneFieldPass, type FieldFbName, type RetouchPass, type ToneFieldPass, type ToneFieldTextures } from './passes/toneField';
+import { IDENTITY_WIN, Q_CLEAR, R_CLEAR } from './passes/toneGeometry';
+import { createToneMaskPass, type ToneMaskPass } from './passes/toneMask';
 import { COMPOSITE_UNITS } from './shaders/composite';
 import { MEAN_FS, MEAN_VS } from './shaders/mean';
 import { PRESENT_FS, PRESENT_VS } from './shaders/present';
+import type { ToneJob } from './toneJob';
 import {
   maskBufferSize,
   meanBufferSize,
@@ -119,12 +123,16 @@ export interface FrameJob {
   srcSize: Size;
   /** the O short edge in output pixels (k = fullShortEdge / 720) */
   fullShortEdge: number;
+  /** step 4: the 膚質 passes of this frame, null = none (toneJob.ts) */
+  tone: ToneJob | null;
 }
 
 export interface FrameResult {
   passes: string[];
   /** the capture framebuffer when target = 'fbo' */
   output: Framebuffer | null;
+  /** the tone field was rebuilt by this frame */
+  toneBuilt: boolean;
 }
 
 export interface PassPlanInput {
@@ -243,7 +251,9 @@ export interface Pipeline {
   dispose(lost?: boolean): void;
 }
 
-type FbName = 'A' | 'B' | 'C' | 'D' | 'M' | 'N';
+type FbName = 'A' | 'B' | 'C' | 'D' | 'M' | 'N' | 'R' | 'Q' | FieldFbName;
+/** what releaseBuffers shrinks: everything but the cached tone field (S §4.3: freed only on dispose or context loss) */
+const RELEASED: readonly FbName[] = ['A', 'B', 'C', 'D', 'M', 'N', 'R', 'Q'];
 
 /** sanity cap (fields are ≈256 long edge); keeps texImage2D within every device's MAX_TEXTURE_SIZE */
 export const MAX_BODY_FIELD_EDGE = 2048;
@@ -370,6 +380,24 @@ export function createPipeline(gl: GL): Pipeline {
   let bodyTex: Texture | null = null;
   let bodyKey: BodyUploadKey | null = null;
   let bodyWarned = false;
+  let toneMask: ToneMaskPass | null = null;
+  let toneField: ToneFieldPass | null = null;
+  let retouch: RetouchPass | null = null;
+  /** the key of the field the D8 / Delta8 targets hold (S §4.3 cache), and its textures */
+  let toneKey: string | null = null;
+  let toneTex: ToneFieldTextures | null = null;
+  let toneWarned = false;
+
+  /** P0c at working resolution from `base0`, with R already drawn into `rTex`; Q is drawn here */
+  function buildToneField(tj: ToneJob, base0: Texture, rTex: Texture): ToneFieldTextures {
+    toneMask ??= createToneMaskPass(gl);
+    toneField ??= createToneFieldPass(gl);
+    const q = fb('Q', maskBufferSize(tj.work));
+    toneMask.draw(q, tj.drawsQ, IDENTITY_WIN, Q_CLEAR);
+    toneTex = toneField.build(base0, tj.work, q.tex, rTex, tj.sigmaLowPx, tj.fieldOn, (name, size) => fb(name, size));
+    toneKey = tj.key;
+    return toneTex;
+  }
 
   /** The field's texture (uploaded only on version / size / buffer change), or null when unusable. */
   function bodyTexture(f: BodyField | null): Texture | null {
@@ -445,6 +473,7 @@ export function createPipeline(gl: GL): Pipeline {
   return {
     run(job) {
       const passes: string[] = [];
+      let toneBuilt = false;
       resetState();
       const live = job.faces.filter((f) => f.weight > 0);
       const meshes = live.filter((f) => makeupActive(f.makeup)).map((f) => ({ face: f.face, u: f.makeup }));
@@ -468,6 +497,35 @@ export function createPipeline(gl: GL): Pipeline {
 
       let base: Texture = job.src;
       let baseFb: Framebuffer | null = null;
+
+      // ── step 4: P0c tone field (cached) and P0d retouch, in O before P1 (skin-cleanup spec §4.1) ──
+      const tj = job.tone;
+      if (tj && tj.retouchOn) {
+        // a tile (its src covers only a window of O) never builds the field: it reuses the preview's (Task 18 prepares it)
+        const tile = job.win[0] !== 0 || job.win[1] !== 0 || job.win[2] !== 1 || job.win[3] !== 1;
+        toneMask ??= createToneMaskPass(gl);
+        const r = fb('R', maskBufferSize(job.srcSize));
+        toneMask.draw(r, tj.drawsR, job.win, R_CLEAR);
+        let field: ToneFieldTextures | null = null;
+        if (tj.mn8On) {
+          if (toneKey === tj.key && toneTex) field = toneTex;
+          else if (!tile) {
+            field = buildToneField(tj, base, r.tex);
+            toneBuilt = true;
+          } else if (!toneWarned) {
+            toneWarned = true;
+            console.warn('[engine] a tile asked for a tone field that was not prepared; drawing it without the field');
+          }
+          if (field) passes.push('toneField');
+        }
+        retouch ??= createRetouchPass(gl);
+        const b = full('B', baseFb, job.srcSize);
+        retouch.draw(base, b, field?.delta8 ?? null, field?.mn8 ?? null, r.tex, job.win, tj.fieldOn && !!field?.delta8);
+        base = b.tex;
+        baseFb = b;
+        passes.push('retouch');
+      }
+
       if (plan.makeup && makeup) {
         // in O (step 3): the window's size
         const a = full('A', baseFb, job.srcSize);
@@ -548,7 +606,7 @@ export function createPipeline(gl: GL): Pipeline {
 
       // Leave no FBO texture bound on a unit, so later passes never form a feedback loop by accident.
       for (let unit = 0; unit < 9; unit++) bindTexture(gl, unit, null);
-      return { passes, output };
+      return { passes, output, toneBuilt };
     },
 
     get adjustFailed() {
@@ -573,8 +631,12 @@ export function createPipeline(gl: GL): Pipeline {
     },
 
     releaseBuffers() {
-      // every FBO to 1 × 1: the next frame re-allocates at its own size (S §4.4, after a tiled export)
-      for (const f of Object.values(fbs)) if (f) resizeFramebuffer(gl, f, 1, 1);
+      // every FBO to 1 × 1: the next frame re-allocates at its own size (S §4.4, after a tiled export); the tone field's
+      // targets keep the cached field (skin-cleanup spec §4.3), and R / Q are redrawn by the frame that reads them
+      for (const k of RELEASED) {
+        const f = fbs[k];
+        if (f) resizeFramebuffer(gl, f, 1, 1);
+      }
     },
 
     drawOverlay(face, mirror) {
@@ -594,11 +656,18 @@ export function createPipeline(gl: GL): Pipeline {
         reshape?.dispose();
         overlay?.dispose();
         deleteTexture(gl, bodyTex);
+        toneMask?.dispose();
+        toneField?.dispose();
+        retouch?.dispose();
       }
       mask = makeup = reshape = overlay = null;
       bodyTex = null;
       bodyKey = null;
       makeupReady = false;
+      // the field's textures die with the FBOs: the next frame on a restored context rebuilds it (Review Focus 1)
+      toneMask = toneField = retouch = null;
+      toneKey = null;
+      toneTex = null;
       for (const k of Object.keys(fbs) as FbName[]) delete fbs[k];
     },
   };

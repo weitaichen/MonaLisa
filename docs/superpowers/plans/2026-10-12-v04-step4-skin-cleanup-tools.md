@@ -3533,6 +3533,8 @@ git commit -m "v0.4 step 4 (10/20): ping-pong the two full-size buffers" -m "Co-
 
 > **Open decision: ask the user before starting this task (from the Task 9 review).** Task 9 set `TARGETS.nasolabial` and `TARGETS.teeth` to 0 (the plan's fallback rule), so their recovery checks read "≥ 0" and would pass if either tool were deleted. On the CPU, 法令紋 recovers 0.003 / 0.006 (0.014 at lift ×5), because the 6 px fold is finer than σ_mid ≈ 14 px. 白牙 recovers 0, because the fixture's teeth have Y p95 0.235 and max 0.253, all below the 0.28 gate. Task 16's "inside > 0.5" e2e fails for both sliders: the CPU mean abs diff in the fold box is 0.025 and in the teeth box 0.000. Choose one: (a) change the Task 7 fixture: a fold with a soft width of about σ_mid, and teeth the gate can see; (b) change the spec: a 白牙 gate that works on shadowed teeth, and accept that 法令紋 is uncalibrated on this photo; (c) accept targets of 0 and amend Task 16 for both sliders. Record the choice here. Whatever the choice, the GPU case must not assert a bare ⅔·0 = "≥ 0" bound. Either keep a real non-zero target (after (a)), or, where a target stays 0, replace the recovery check with a tolerant "does not regress" bound. Size that bound from the defect: a 0.5/255 bias in the mean moves recovery by about 0.026 on foldL (shift 19.5/255) and about 0.04 on foldR and teeth (12.8/255).
 
+> **Task 11 as built — the choice is still open.** No choice was recorded when Task 11 ran, so Task 11 built only the part that holds for every choice. `toolChecks` (`toneStats.node.ts`) gives a zero target on the GPU (scale < 1) a "no regression" bound instead of ⅔·0, named "… (no regression)": recovery ≥ −(0.5/255) / (the defect's g-weighted shift), from `biasTolerance`. That gives foldL −0.026, foldR −0.039 and the teeth −0.039. A non-zero target keeps ⅔·target, so after (a) the GPU case picks up the new targets with no change. The CPU calibration (scale 1) is unchanged. The GPU run reads foldL 0.0025, foldR 0.0043 and the teeth 0.0000. Because the gate cannot see these teeth, the "mouth" crop of the GPU-vs-CPU case is max 0 / mean 0 at both levels, and it does not exercise RETOUCH_FS's 白牙 branch. A fourth harness case covers that branch: a synthetic colour sweep through the 白牙 and 亮眼 gates, with R.B and R.A set across the whole target.
+
 **Files:**
 - Modify: `src/engine/shaders/tone.ts` (GLSL)
 - Create: `src/engine/passes/toneField.ts`, `src/engine/toneJob.ts`, `src/engine/toneJob.test.ts`
@@ -3564,7 +3566,7 @@ git commit -m "v0.4 step 4 (10/20): ping-pong the two full-size buffers" -m "Co-
   // tests/e2e/pages/tone.ts: window.runToneField(), window.runToneEngine(); helpers fixtureBitmap(), inputFor(), toPng()
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/engine/toneJob.test.ts`:
 ```ts
@@ -3870,12 +3872,12 @@ test('tone engine: each tool changes only its region (⅔ of the calibrated targ
   expect(r.lossMaxDiff).toBeLessThanOrEqual(1);
 });
 ```
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `npx vitest run src/engine/toneJob.test.ts src/engine/toneCpu.test.ts`
 Expected: FAIL — `Failed to resolve import "./toneJob"`, and the pin test fails importing the GLSL names.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `src/engine/shaders/tone.ts`:
 ```ts
@@ -4365,19 +4367,19 @@ function toneCapOf(centre: readonly [number, number], cap: number): ToneCap | nu
 ```
 (add `RenderStats` to the file's `../types` type import, `still.ts:10`.)
 
-- [ ] **Step 4: Pin the shader hash and run the unit tests**
+- [x] **Step 4: Pin the shader hash and run the unit tests**
 
 Run: `npx vitest run src/engine/toneCpu.test.ts -t "tone shaders pin"`
 Expected: FAIL — `expected '<8 hex digits>' to be '00000000'`. Copy the received hash into the test in place of `'00000000'`.
 Run: `npx vitest run src/engine && npm run typecheck`
 Expected: PASS.
 
-- [ ] **Step 5: Run the engine harness and the existing engine specs**
+- [x] **Step 5: Run the engine harness and the existing engine specs**
 
 Run: `npm run build && npx playwright test tests/e2e/tone-engine.spec.ts tests/e2e/engine.spec.ts tests/e2e/parity.spec.ts`
 Expected: all pass. The log shows the six crops at both levels within max 2 and mean 0.25, every tool's checks, and `built [true, false, false, true]`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/engine/shaders/tone.ts src/engine/passes/toneField.ts src/engine/toneJob.ts src/engine/toneJob.test.ts src/engine/toneCpu.test.ts src/engine/pipeline.ts src/engine/index.ts src/types.ts src/app/still.ts tests/e2e/pages/tone.ts tests/e2e/tone-engine.spec.ts

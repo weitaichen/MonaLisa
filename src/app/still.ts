@@ -7,7 +7,7 @@ import { photoLuts } from '../engine/looks';
 import { IDENTITY_GEOMETRY, snapCrop, viewSize } from '../geometry/view';
 import type { TileInputBase } from '../media/exportFull';
 import { faceBoundsFor, type TileBounds } from '../media/exportPlan';
-import type { BodyField, CachedFace, CachedObstacle, Engine, Face, Geometry, Rect, RenderInput, Size, StillFrame, Tracker } from '../types';
+import type { BodyField, CachedFace, CachedObstacle, Engine, Face, Geometry, Rect, RenderInput, RenderStats, Size, StillFrame, Tracker } from '../types';
 import { debugState, reportError } from './debug';
 
 export interface SessionFace {
@@ -196,11 +196,19 @@ export function createStillSession(
     try {
       // the engine is shared with the live loop, whose front-camera preview is mirrored
       engine.setOptions({ mirror: false });
+      let st: RenderStats | null = null;
       if (compare) engine.renderOriginal({ source: bitmap, width, height, geometry: viewGeometry(frame) }, { still: true });
-      else engine.render({ ...input(frame), geometry: viewGeometry(frame) }, { still: true });
+      else st = engine.render({ ...input(frame), geometry: viewGeometry(frame) }, { still: true });
       drawn = frame;
       const d = debugState();
-      if (d) d.renderCount = (d.renderCount ?? 0) + 1;
+      if (d) {
+        d.renderCount = (d.renderCount ?? 0) + 1;
+        // skin-cleanup spec §3.2: the display frame's passes, and the tone-field rebuilds (e2e: a 瘦臉 drag rebuilds nothing)
+        if (st) {
+          d.passes = st.passes;
+          if (st.toneBuilt) d.toneBuilds += 1;
+        }
+      }
     } catch (err) {
       reportError('still render', err);
     }

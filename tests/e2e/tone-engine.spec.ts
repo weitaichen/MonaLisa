@@ -3,10 +3,13 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Page } from '@playwright/test';
+import { PNG } from 'pngjs';
 import { IDENTITY_WIN, NEUTRAL_TONE, Q_CLEAR, R_CLEAR, toneDrawsQ, toneDrawsR, type ToneFaceInput, type ToneValues } from '../../src/engine/passes/toneGeometry';
+import { fromRgba8, makeImg, retouchCpu, toneFieldCpu, toRgba8, type Img } from '../../src/engine/toneCpu';
 import { rasterizeTone } from '../../src/engine/toneRaster.node';
+import { TOOL_VALUES, toolChecks, type Rgba8, type ToneFixture, type ToolName } from '../../src/engine/toneStats.node';
 import { adapt } from '../../src/tracking/adapter111';
-import { expect, test } from './fixtures';
+import { decodeDataUrl, expect, test } from './fixtures';
 
 const DEV_URL = 'http://127.0.0.1:5190';
 const lm = JSON.parse(readFileSync(resolve(import.meta.dirname, '../fixtures/landmarks_sample_face.json'), 'utf8')) as {
@@ -62,4 +65,116 @@ test('tone masks: the GPU R and Q targets equal the CPU raster of toneGeometry',
   // far from the face: R empty, Q neutral
   expect(at(r.R, 5, 5)).toEqual([0, 0, 0, 0]);
   expect(at(r.Qwarm, 5, 5)).toEqual([0, 0, 128, 0]);
+});
+
+const FIXTURE_PNG = resolve(import.meta.dirname, '../fixtures/sample_face_tone.png');
+const loadFx = () => JSON.parse(readFileSync(resolve(import.meta.dirname, '../fixtures/sample_face_tone.json'), 'utf8')) as ToneFixture;
+const fixturePixels = (): Rgba8 => {
+  const p = PNG.sync.read(readFileSync(FIXTURE_PNG));
+  return { width: p.width, height: p.height, data: p.data };
+};
+const imgOf = (w: number, h: number, s: string): Img => fromRgba8(w, h, bytes(s));
+
+test('tone field + retouch: the GPU equals toneCpu (max 2/255, mean 0.25/255) on six crops', async ({ page }) => {
+  await openHarness(page, 'runToneField');
+  const r = await page.evaluate(() => window.runToneField!());
+  expect(r.err).toBe(0);
+  const fx = loadFx();
+  const src = fixturePixels();
+  const base = fromRgba8(src.width, src.height, src.data);
+  const centre = (name: string) => fx.defects.find((d) => d.name === name)!.center;
+  const crops: [string, [number, number]][] = [
+    ['cheek', [fx.regions.cheek[0] + 24, fx.regions.cheek[1] + 24]],
+    ['crescent L', centre('darkL')],
+    ['crescent R', centre('darkR')],
+    ['band', centre('foldL')],
+    ['mouth', centre('teeth')],
+    ['eye', centre('scleraL')],
+  ];
+  for (const lv of r.levels) {
+    const R = imgOf(r.qw, r.qh, lv.R);
+    const Q = imgOf(r.qw, r.qh, lv.Q);
+    const cpu = toRgba8(retouchCpu(base, toneFieldCpu(base, Q, R, r.sigmaLowPx, true), R, true));
+    const gpu = bytes(lv.out);
+    for (const [name, [cx, cy]] of crops) {
+      let max = 0;
+      let sum = 0;
+      let n = 0;
+      for (let y = Math.round(cy) - 32; y < Math.round(cy) + 32; y++)
+        for (let x = Math.round(cx) - 32; x < Math.round(cx) + 32; x++)
+          for (let c = 0; c < 3; c++) {
+            const d = Math.abs(gpu[(y * r.w + x) * 4 + c] - cpu[(y * r.w + x) * 4 + c]);
+            max = Math.max(max, d);
+            sum += d;
+            n++;
+          }
+      console.log(`level ${lv.level} ${name}: max ${max}, mean ${(sum / n).toFixed(3)}`);
+      expect(max, `${lv.level} ${name}`).toBeLessThanOrEqual(2);
+      expect(sum / n, `${lv.level} ${name}`).toBeLessThanOrEqual(0.25);
+    }
+  }
+});
+
+test('tone engine: each tool changes only its region (⅔ of the calibrated targets), passes, cache, context loss', async ({ page }) => {
+  await openHarness(page, 'runToneEngine');
+  const r = await page.evaluate(() => window.runToneEngine!());
+  const fx = loadFx();
+  const orig = (() => {
+    const p = PNG.sync.read(readFileSync(resolve(import.meta.dirname, '../fixtures/sample_face.png')));
+    return { width: p.width, height: p.height, data: p.data };
+  })();
+  const base = decodeDataUrl(r.png.base);
+  for (const tool of Object.keys(TOOL_VALUES) as ToolName[]) {
+    // a zero target (法令紋, 白牙 after Task 9) asks for no regression within a 0.5/255 bias, never a bare ⅔·0 (toolChecks)
+    const checks = toolChecks(tool, decodeDataUrl(r.png[tool]), base, orig, fx, FACE, 2 / 3);
+    console.log(`${tool}: ${checks.map((c) => `${c.ok ? '' : '✗ '}${c.name} ${c.value.toFixed(4)} (${c.bound})`).join(' · ')}`);
+    expect(checks.filter((c) => !c.ok).map((c) => `${c.name} = ${c.value.toFixed(4)} (${c.bound})`), tool).toEqual([]);
+  }
+  const step4 = (p: string[]) => p.filter((x) => x === 'heal' || x === 'toneField' || x === 'retouch');
+  expect(step4(r.passes.base)).toEqual([]);
+  expect(step4(r.passes.even)).toEqual(['toneField', 'retouch']);
+  expect(step4(r.passes.teeth)).toEqual(['retouch']);
+  expect(step4(r.passes.eyeBright)).toEqual(['toneField', 'retouch']);
+  console.log(`built ${JSON.stringify(r.built)}, context loss max diff ${r.lossMaxDiff}`);
+  expect(r.built).toEqual([true, false, false, true]);
+  expect(r.lossMaxDiff).toBeLessThanOrEqual(1);
+  console.log(`after releaseBuffers: rebuilt ${r.releaseBuilt}, max diff ${r.releaseMaxDiff}`);
+  expect([r.releaseBuilt, r.releaseMaxDiff]).toEqual([false, 0]);
+});
+
+test('retouch colour gates: the GPU equals retouchCpu on a sweep through the 白牙 and 亮眼 gates, with and without Mn8', async ({ page }) => {
+  await openHarness(page, 'runToneRetouch');
+  const r = await page.evaluate(() => window.runToneRetouch!());
+  expect(r.err).toBe(0);
+  const base = imgOf(r.w, r.h, r.base);
+  const R = imgOf(r.qw, r.qh, r.R);
+  const field = toneFieldCpu(base, makeImg(r.qw, r.qh), R, 0, false);
+  const src = bytes(r.base);
+  const cases: [string, string, Uint8ClampedArray][] = [
+    ['with Mn8', r.out, toRgba8(retouchCpu(base, field, R, false))],
+    ['without Mn8', r.outNoMn, toRgba8(retouchCpu(base, null, R, false))],
+  ];
+  for (const [name, out, cpu] of cases) {
+    const gpu = bytes(out);
+    let max = 0;
+    let sum = 0;
+    let n = 0;
+    let moved = 0;
+    for (let i = 0; i < gpu.length; i += 4) {
+      let m = 0;
+      for (let c = 0; c < 3; c++) {
+        const d = Math.abs(gpu[i + c] - cpu[i + c]);
+        max = Math.max(max, d);
+        sum += d;
+        n++;
+        m = Math.max(m, Math.abs(gpu[i + c] - src[i + c]));
+      }
+      if (m > 2) moved++;
+    }
+    console.log(`${name}: max ${max}, mean ${(sum / n).toFixed(3)}, pixels moved > 2/255: ${moved}`);
+    // the sweep reaches the gates: a large share of it is retouched
+    expect(moved, name).toBeGreaterThan(5000);
+    expect(max, name).toBeLessThanOrEqual(2);
+    expect(sum / n, name).toBeLessThanOrEqual(0.25);
+  }
 });

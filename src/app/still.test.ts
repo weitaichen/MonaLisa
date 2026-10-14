@@ -597,6 +597,25 @@ describe('crop view mode, display pause and tiles (step 3)', () => {
     expect(window.__meiyan!.renderCount).toBe(before + 1);
   });
 
+  it('a display frame publishes its passes and counts tone-field rebuilds (skin-cleanup spec §3.2, §4.3)', () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, null, bitmap(), { faces: [] });
+    const builds = window.__meiyan!.toneBuilds;
+    engine.render.mockReturnValueOnce({ cpuMs: 0, width: 1, height: 1, passes: ['toneField', 'retouch', 'composite'], toneBuilt: true });
+    s.render(frame());
+    vi.advanceTimersByTime(20);
+    expect(window.__meiyan!.passes).toEqual(['toneField', 'retouch', 'composite']);
+    expect(window.__meiyan!.toneBuilds).toBe(builds + 1);
+    // a cached field: the passes still list it, nothing is rebuilt
+    engine.render.mockReturnValueOnce({ cpuMs: 0, width: 1, height: 1, passes: ['toneField', 'retouch', 'composite'], toneBuilt: false });
+    s.render(frame(square));
+    vi.advanceTimersByTime(20);
+    expect(window.__meiyan!.toneBuilds).toBe(builds + 1);
+    // an export is not a display frame
+    s.exportImageData(frame());
+    expect(window.__meiyan!.toneBuilds).toBe(builds + 1);
+  });
+
   it('tileInput carries the raw geometry and the working aspect; bounds lists the body field', () => {
     const s = createStillSession(fakeEngine(), null, bitmap(), { faces: [] });
     const body = makeBodyField();

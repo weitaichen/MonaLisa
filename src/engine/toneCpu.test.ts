@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TONE_ZERO } from './passes/toneGeometry';
-import { gaussWeights, lFactor, sigmaLow, sigmaMid } from './shaders/tone';
+import { shaderHash } from './shaderHash';
+import { gaussWeights, lFactor, RETOUCH_FS, sigmaLow, sigmaMid, TONE_BLUR_FS, TONE_DOWN8_FS, TONE_FIELD_FS, TONE_LBOX_FS } from './shaders/tone';
 import { bandOf, fromYcc, LUMA709, makeImg, q8, retouchCpu, retouchPixel, sample, toneFieldCpu, toYcc, type Img } from './toneCpu';
 
 const SKIN = [0.8, 0.62, 0.52] as const;
@@ -158,5 +159,11 @@ describe('toneCpu (skin-cleanup spec §4.3–4.4)', () => {
     expect(back[0]).toBeCloseTo(0.8, 5);
     expect(back[1]).toBeCloseTo(0.62, 5);
     expect(back[2]).toBeCloseTo(0.52, 5);
+  });
+});
+
+describe('tone shaders pin', () => {
+  it('is pinned to the shader text and the TONE table: a change must be mirrored in toneCpu.ts (then update this hash)', () => {
+    expect(shaderHash([TONE_DOWN8_FS, TONE_BLUR_FS, TONE_LBOX_FS, TONE_FIELD_FS, RETOUCH_FS].join('\n'))).toBe('e1415f8e');
   });
 });

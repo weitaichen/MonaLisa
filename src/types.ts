@@ -520,6 +520,8 @@ export interface RenderInput {
   output?: RenderOutput;
   /** the working bitmap's width / height: the iso metric of every face warp; tiles pass it (never the decode's aspect) */
   oAspect?: number;
+  /** step 4: the working-resolution image the tone field is built from when `source` is only a tile window */
+  toneSource?: { source: TexImageSource; width: number; height: number };
 }
 
 /** the V tile a render writes (step 3, C §4.1): V-normalized rect, its pixel size, and the O short edge in output px */
@@ -540,6 +542,8 @@ export interface RenderStats {
   width: number;
   height: number;
   passes: string[];
+  /** the tone field (P0c) was rebuilt by this frame */
+  toneBuilt?: boolean;
 }
 
 export interface Engine {

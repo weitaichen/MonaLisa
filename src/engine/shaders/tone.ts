@@ -1,5 +1,6 @@
 // 膚質 shaders and their shared constants (skin-cleanup spec §4.3–4.4). The TONE table is baked into the GLSL text, so the
 // hash pin in toneCpu.test.ts covers it; src/engine/toneCpu.ts mirrors every stage. Original work.
+import { TONE_ZERO } from '../passes/toneGeometry';
 
 /**
  * Every tunable constant of the tone field and the retouch. The gains are calibrated on sample_face_tone.png by
@@ -82,3 +83,164 @@ export function fieldSizes(w: number, h: number, sigmaLowPx: number): FieldSizes
 export function glf(v: number): string {
   return Number.isInteger(v) ? v.toFixed(1) : String(v);
 }
+
+const T = TONE;
+const E = TONE.eye;
+const g = glf;
+const v3 = (a: readonly number[]) => `vec3(${a.map(glf).join(', ')})`;
+
+const COMMON = /* glsl */ `
+const vec3 L709 = vec3(0.2126, 0.7152, 0.0722);
+const float ZERO = ${g(TONE_ZERO)};
+vec3 toYcc(vec3 c) {
+  return vec3(dot(c, vec3(0.299, 0.587, 0.114)),
+              0.5 - 0.168736 * c.r - 0.331264 * c.g + 0.5 * c.b,
+              0.5 + 0.5 * c.r - 0.418688 * c.g - 0.081312 * c.b);
+}
+vec3 toRgb(vec3 y) {
+  return vec3(y.x + 1.402 * (y.z - 0.5), y.x - 0.344136 * (y.y - 0.5) - 0.714136 * (y.z - 0.5), y.x + 1.772 * (y.y - 0.5));
+}`;
+
+/** D8: the 8 × 8 box mean of base0 in 16 bilinear taps (each the mean of a 2 × 2 block) */
+export const TONE_DOWN8_FS = /* glsl */ `#version 300 es
+precision highp float;
+uniform sampler2D uSrc;
+uniform vec2 uSrcSize;
+out vec4 outColor;
+void main() {
+  vec2 o = floor(gl_FragCoord.xy) * 8.0;
+  vec4 s = vec4(0.0);
+  for (int b = 0; b < 4; b++)
+    for (int a = 0; a < 4; a++) s += texture(uSrc, (o + vec2(float(2 * a + 1), float(2 * b + 1))) / uSrcSize);
+  outColor = s / 16.0;
+}`;
+
+/** one pass of the separable Gaussian, direct texel taps with CPU-made weights (gaussWeights) */
+export const TONE_BLUR_FS = /* glsl */ `#version 300 es
+precision highp float;
+uniform sampler2D uSrc;
+uniform ivec2 uDir;
+uniform int uR;
+uniform float uW[${MAX_BLUR_RADIUS + 1}];
+out vec4 outColor;
+void main() {
+  ivec2 size = textureSize(uSrc, 0);
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec4 s = uW[0] * texelFetch(uSrc, p, 0);
+  for (int k = 1; k <= ${MAX_BLUR_RADIUS}; k++) {
+    if (k > uR) break;
+    s += uW[k] * (texelFetch(uSrc, clamp(p + uDir * k, ivec2(0), size - 1), 0) + texelFetch(uSrc, clamp(p - uDir * k, ivec2(0), size - 1), 0));
+  }
+  outColor = s;
+}`;
+
+/** L's first stage: the uK × uK box of (Mn8 · q, q), q = Q.G at each Mn8 texel centre */
+export const TONE_LBOX_FS = /* glsl */ `#version 300 es
+precision highp float;
+uniform sampler2D uMn8;
+uniform sampler2D uQ;
+uniform int uK;
+out vec4 outColor;
+void main() {
+  ivec2 size = textureSize(uMn8, 0);
+  ivec2 o = ivec2(gl_FragCoord.xy) * uK;
+  vec4 s = vec4(0.0);
+  for (int j = 0; j < 4; j++) {
+    if (j >= uK) break;
+    for (int i = 0; i < 4; i++) {
+      if (i >= uK) break;
+      ivec2 t = min(o + ivec2(i, j), size - 1);
+      float q = texture(uQ, (vec2(t) + 0.5) / vec2(size)).g;
+      s += vec4(texelFetch(uMn8, t, 0).rgb * q, q);
+    }
+  }
+  outColor = s / float(uK * uK);
+}`;
+
+/** Δ8 = ZERO + 2·clamp(Δ): 勻膚, 黑眼圈, 法令紋 on the mid band, then 膚色 (S §4.3) */
+export const TONE_FIELD_FS = /* glsl */ `#version 300 es
+precision highp float;
+${COMMON}
+uniform sampler2D uMn8;
+uniform sampler2D uL;
+uniform sampler2D uQ;
+uniform sampler2D uR;
+out vec4 outColor;
+float box(float x, float lo, float hi, float e) { return smoothstep(lo - e, lo, x) * (1.0 - smoothstep(hi, hi + e, x)); }
+float skinGate(vec3 c) {
+  vec3 y = toYcc(c);
+  return box(y.y, ${g(T.skinCb[0])}, ${g(T.skinCb[1])}, ${g(T.skinSoft)}) * box(y.z, ${g(T.skinCr[0])}, ${g(T.skinCr[1])}, ${g(T.skinSoft)});
+}
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec2 uv = (vec2(p) + 0.5) / vec2(textureSize(uMn8, 0));
+  vec3 m = texelFetch(uMn8, p, 0).rgb;
+  vec4 L = texture(uL, uv);
+  vec3 b = m - L.rgb / max(L.a, 1.0 / 255.0);
+  float conf = smoothstep(${g(T.conf[0])}, ${g(T.conf[1])}, L.a);
+  float bY = dot(b, L709);
+  vec3 bC = b - vec3(bY);
+  float lift = -min(bY, 0.0);
+  float gE = 1.0 - smoothstep(${g(T.evenGuard[0])}, ${g(T.evenGuard[1])}, abs(bY));
+  float gD = 1.0 - smoothstep(${g(T.darkGuard[0])}, ${g(T.darkGuard[1])}, -bY);
+  vec4 q = texture(uQ, uv);
+  vec4 r = texture(uR, uv);
+  vec3 d = q.r * conf * gE * (-${g(T.even.chroma)} * bC + ${g(T.even.lift)} * lift)
+         + r.r * conf * gD * (${g(T.darkCircle.lift)} * lift - ${g(T.darkCircle.chroma)} * bC)
+         + r.g * conf * gD * (${g(T.nasolabial.lift)} * lift - ${g(T.nasolabial.chroma)} * bC);
+  float s = clamp(2.0 * (q.b - ZERO), -1.0, 1.0);
+  if (abs(s) > 0.5 / 255.0) {
+    vec3 c0 = m + d;
+    vec3 k = s >= 0.0 ? ${v3(T.warm)} : ${v3(T.cool)};
+    vec3 c1 = c0 * (1.0 + abs(s) * k);
+    c1 *= dot(c0, L709) / max(dot(c1, L709), 1e-4);
+    d += (c1 - c0) * skinGate(c0);
+  }
+  outColor = vec4(ZERO + 2.0 * clamp(d, -${g(T.deltaMax)}, ${g(T.deltaMax)}), 1.0);
+}`;
+
+/**
+ * P0d: c = base0 + Δ8, then 白牙 (R.B) and 亮眼 (R.A); base0 and R cover the buffer, Δ8 and Mn8 the whole O (S §4.4).
+ * Without Mn8 (uMnOn 0: a tile whose field was not prepared) 亮眼's clarity reads base0 itself, so it adds nothing, as
+ * retouchCpu does with no field.
+ */
+export const RETOUCH_FS = /* glsl */ `#version 300 es
+precision highp float;
+${COMMON}
+in vec2 vUv;
+uniform sampler2D uBase;
+uniform sampler2D uDelta;
+uniform sampler2D uMn8;
+uniform sampler2D uR;
+uniform vec4 uWin;
+uniform float uFieldOn;
+uniform float uMnOn;
+out vec4 outColor;
+void main() {
+  vec2 o = uWin.xy + vUv * uWin.zw;
+  vec3 b0 = texture(uBase, vUv).rgb;
+  vec3 c = b0;
+  if (uFieldOn > 0.5) c += (texture(uDelta, o).rgb - ZERO) * 0.5;
+  vec4 r = texture(uR, vUv);
+  if (r.b > 0.0) {
+    vec3 y = toYcc(c);
+    float k = r.b * smoothstep(${g(T.teeth.y[0])}, ${g(T.teeth.y[1])}, y.x) * (1.0 - smoothstep(${g(T.teeth.cr[0])}, ${g(T.teeth.cr[1])}, y.z));
+    y.y += max(0.0, 0.5 - y.y) * ${g(T.teeth.cb)} * k;
+    y.z += (0.5 - y.z) * ${g(T.teeth.crPull)} * k;
+    y.x += ${g(T.teeth.lift)} * k * (1.0 - y.x);
+    c = toRgb(y);
+  }
+  if (r.a > 0.0) {
+    vec3 y = toYcc(c);
+    float ch = 2.0 * length(y.yz - 0.5);
+    float sc = smoothstep(${g(E.scY[0])}, ${g(E.scY[1])}, y.x) * (1.0 - smoothstep(${g(E.scCh[0])}, ${g(E.scCh[1])}, ch));
+    y.yz += (0.5 - y.yz) * ${g(E.detint)} * r.a * sc;
+    y.x += ${g(E.scLift)} * r.a * sc * (1.0 - y.x);
+    float ir = smoothstep(${g(E.irCh[0])}, ${g(E.irCh[1])}, ch) * smoothstep(${g(E.irY0[0])}, ${g(E.irY0[1])}, y.x) * (1.0 - smoothstep(${g(E.irY1[0])}, ${g(E.irY1[1])}, y.x));
+    y.x += ${g(E.irLift)} * r.a * ir;
+    c = toRgb(y);
+    vec3 mn = uMnOn > 0.5 ? texture(uMn8, o).rgb : b0;
+    c += ${g(E.clarity)} * r.a * (1.0 - sc) * clamp(b0 - mn, -${g(E.clamp)}, ${g(E.clamp)});
+  }
+  outColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+}`;

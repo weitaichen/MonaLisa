@@ -58,3 +58,44 @@ describe('toolChecks: the 白牙 region', () => {
     expect([far.value, far.ok]).toEqual([20, false]);
   });
 });
+
+describe('toolChecks: a zero target on the GPU', () => {
+  const recoveryChecks = (tool: 'nasolabial' | 'teeth', out: Rgba8, scale: number) => toolChecks(tool, out, fix, orig, fx, face, scale).filter((c) => c.name.includes('recovery'));
+  const bound = (b: string) => Number(b.replace('≥', '').trim());
+  /** fix with every channel of the given defect pixels moved by k (8-bit) */
+  const shifted = (kind: 'fold' | 'teeth', k: number): Rgba8 => {
+    const data = Uint8ClampedArray.from(fix.data);
+    for (const d of fx.defects.filter((e) => e.kind === kind))
+      for (const [x, y] of d.pixels) for (let c = 0; c < 3; c++) data[(y * fix.width + x) * 4 + c] += k;
+    return { width: fix.width, height: fix.height, data };
+  };
+
+  it('asks only that the tool does not regress the defect, tolerating a 0.5/255 bias in the mean (never a bare ⅔·0 = "≥ 0")', () => {
+    const folds = recoveryChecks('nasolabial', fix, 2 / 3);
+    expect(folds.map((c) => c.name)).toEqual(['foldL Y recovery (core) (no regression)', 'foldR Y recovery (core) (no regression)']);
+    // 0.5/255 over the defect's own shift: foldL 19.5/255, foldR and the teeth 12.8/255
+    expect(bound(folds[0].bound)).toBeCloseTo(-0.026, 2);
+    expect(bound(folds[1].bound)).toBeCloseTo(-0.039, 2);
+    expect(folds.every((c) => c.ok && c.value === 0)).toBe(true);
+    const teeth = recoveryChecks('teeth', fix, 2 / 3);
+    expect(teeth.map((c) => c.name)).toEqual(['teeth Cb recovery (no regression)']);
+    expect(bound(teeth[0].bound)).toBeCloseTo(-0.039, 2);
+  });
+
+  it('fails a tool that deepens the defect by 2/255', () => {
+    expect(recoveryChecks('nasolabial', shifted('fold', -2), 2 / 3).map((c) => c.ok)).toEqual([false, false]);
+    // the teeth defect is Cb − 0.05: more yellow is Cb lower, i.e. less blue
+    const data = Uint8ClampedArray.from(fix.data);
+    for (const d of fx.defects.filter((e) => e.kind === 'teeth')) for (const [x, y] of d.pixels) data[(y * fix.width + x) * 4 + 2] -= 4;
+    expect(recoveryChecks('teeth', { width: fix.width, height: fix.height, data }, 2 / 3).map((c) => c.ok)).toEqual([false]);
+  });
+
+  it('leaves the CPU calibration (scale 1) and every non-zero target as they were', () => {
+    expect(recoveryChecks('nasolabial', fix, 1).map((c) => [c.name, c.bound])).toEqual([
+      ['foldL Y recovery (core)', '≥ 0.000'],
+      ['foldR Y recovery (core)', '≥ 0.000'],
+    ]);
+    const dark = toolChecks('darkCircle', fix, fix, orig, fx, face, 2 / 3).filter((c) => c.name.includes('recovery'));
+    expect(dark.map((c) => c.bound)).toEqual(['≥ 0.300', '≥ 0.300']);
+  });
+});

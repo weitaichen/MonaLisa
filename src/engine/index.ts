@@ -17,10 +17,12 @@ import {
 } from './gl/gl';
 import { probeFaceTable, probeR16FArray, readGlLimits } from './glProbe';
 import { lookDef } from './looks';
-import { boxCentre, ovalBox } from './passes/faceCap';
+import { boxCentre, capsFor, ovalBox } from './passes/faceCap';
 import { makeupUniformsFor } from './passes/makeup';
 import { reshapeUniforms, type ReshapeUniforms } from './passes/reshape';
+import type { ToneCap } from './passes/toneGeometry';
 import { createPipeline, type FrameFace, type FrameJob, type Pipeline, type StaticLuts } from './pipeline';
+import { buildToneJob, objectId } from './toneJob';
 import { adjustFrameFor, processingSize, type Size, skinMaxima, skinUniformsFor } from './uniforms';
 
 const CONTEXT_ATTRS: WebGLContextAttributes = {
@@ -58,6 +60,11 @@ function scaleUniforms(u: ReshapeUniforms, k: number): ReshapeUniforms {
   const o = { ...u };
   for (const key of Object.keys(o) as (keyof ReshapeUniforms)[]) o[key] *= Math.min(1, Math.max(0, k));
   return o;
+}
+
+/** a face's cap (capsFor: iso radius, −1 = none) around its oval-box centre (UV) as toneGeometry's ToneCap */
+function toneCapOf(centre: readonly [number, number], cap: number): ToneCap | null {
+  return cap >= 0 ? { c: [centre[0], centre[1]], r: cap } : null;
 }
 
 export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOptions>): Engine {
@@ -325,6 +332,10 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
     const def = look ? lookDef(look.id) : null;
     const lookRef = look && def ? { def, amount: look.amount } : null;
     const lookLut = lookRef ? lutFor('look', lookRef.def.id) : null;
+    // the same caps step 1's tableFaces() gives the face table (texel 73), for every listed face, warps or not
+    const toneCaps = capsFor(faces.map((f) => f.centre), input.obstacles ?? [], view.oAspect, faces.map((f) => f.presence));
+    // the tone field is built from the working image: the preview's source, or a tile's toneSource (S §4.6)
+    const work = input.toneSource ?? input;
     return {
       src,
       size,
@@ -346,6 +357,13 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       target,
       mirror,
       ...view,
+      tone: buildToneJob({
+        faces: faces.map((f, i) => ({ face: f.face, weight: f.weight, values: listed[i].person.values, cap: toneCapOf(f.centre, toneCaps[i]) })),
+        spots: input.photo.spots ?? [],
+        aspect: view.oAspect,
+        work: { width: work.width, height: work.height },
+        sourceId: objectId(work.source as object),
+      }),
     };
   }
 
@@ -393,7 +411,7 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
         for (const f of input.faces) pipeline.drawOverlay(f.face, options.mirror);
         res.passes.push('overlay');
       }
-      return { cpuMs: performance.now() - t0, width: size.width, height: size.height, passes: res.passes };
+      return { cpuMs: performance.now() - t0, width: size.width, height: size.height, passes: res.passes, toneBuilt: res.toneBuilt };
     },
 
     renderToImageData(input, opts) {

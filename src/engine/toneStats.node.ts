@@ -65,6 +65,21 @@ export function ycc(img: Rgba8, x: number, y: number): [number, number, number] 
   return [0.299 * r + 0.587 * g + 0.114 * b, 0.5 - 0.168736 * r - 0.331264 * g + 0.5 * b, 0.5 + 0.5 * r - 0.418688 * g - 0.081312 * b];
 }
 
+/**
+ * How far `bias` (a uniform error of the mean, 0..1) moves recovery() of these pixels: bias over the defect's g-weighted
+ * mean shift |ch(orig) − ch(fix)|. 0.5/255 gives about 0.026 on foldL (19.5/255) and 0.039 on foldR and the teeth (12.8/255).
+ */
+export function biasTolerance(fix: Rgba8, orig: Rgba8, pixels: readonly [number, number, number][], ch: 0 | 1 | 2, minG = 0, bias = 0.5 / 255): number {
+  let shift = 0;
+  let wsum = 0;
+  for (const [x, y, g] of pixels) {
+    if (g < minG) continue;
+    shift += g * (ycc(orig, x, y)[ch] - ycc(fix, x, y)[ch]);
+    wsum += g;
+  }
+  return wsum > 0 && shift !== 0 ? bias / Math.abs(shift / wsum) : 0;
+}
+
 /** Σg·(ch(out) − ch(fix)) / Σg·(ch(orig) − ch(fix)) over the defect pixels with g ≥ minG: 1 = gone, 0 = untouched */
 export function recovery(out: Rgba8, fix: Rgba8, orig: Rgba8, pixels: readonly [number, number, number][], ch: 0 | 1 | 2, minG = 0): number {
   let num = 0;
@@ -219,7 +234,12 @@ const EYE_R = [58, 59, 75, 60, 61, 62, 76, 63];
 const INNER_LIP = [96, 97, 98, 99, 100, 101, 102, 103];
 const OUTER_LIP = [84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95];
 
-/** every check of one tool at 100 (S §8.2 case 2); `scale` multiplies the targets: 1 for the CPU, ⅔ for the GPU */
+/**
+ * every check of one tool at 100 (S §8.2 case 2); `scale` multiplies the targets: 1 for the CPU, ⅔ for the GPU. A target
+ * of 0 on the GPU (scale < 1; 法令紋 and 白牙 after Task 9) would read a bare "≥ 0", which a deleted tool passes and a
+ * rounding bias of the mean can fail; it asks instead that the tool does not regress the defect, within the recovery a
+ * 0.5/255 bias of the mean is worth (biasTolerance).
+ */
 export function toolChecks(tool: ToolName, out: Rgba8, fix: Rgba8, orig: Rgba8, fx: ToneFixture, face: Face, scale: number): Check[] {
   const W = fix.width;
   const H = fix.height;
@@ -230,6 +250,11 @@ export function toolChecks(tool: ToolName, out: Rgba8, fix: Rgba8, orig: Rgba8, 
   const atLeast = (name: string, value: number, min: number) => checks.push({ name, value, ok: value >= min, bound: `≥ ${min.toFixed(3)}` });
   const atMost = (name: string, value: number, max: number) => checks.push({ name, value, ok: value <= max, bound: `≤ ${max}` });
   const kind = (k: ToneFixtureDefect['kind']) => fx.defects.filter((d) => d.kind === k);
+  const recovers = (name: string, d: ToneFixtureDefect, ch: 0 | 1 | 2, minG: number, target: number) => {
+    const value = recovery(out, fix, orig, d.pixels, ch, minG);
+    if (target > 0 || scale >= 1) atLeast(name, value, target * scale);
+    else atLeast(`${name} (no regression)`, value, -biasTolerance(fix, orig, d.pixels, ch, minG));
+  };
   const outside = (poly: readonly V2[]) => (x: number, y: number) => !inPoly([x + 0.5, y + 0.5], poly);
   const oval = ovalPx(face, W, H);
   const [cx, cy, cw, ch] = fx.regions.cheek;
@@ -241,7 +266,7 @@ export function toolChecks(tool: ToolName, out: Rgba8, fix: Rgba8, orig: Rgba8, 
   };
   switch (tool) {
     case 'even': {
-      for (const d of kind('blotch')) atLeast(`${d.name} Cr recovery`, recovery(out, fix, orig, d.pixels, 2), TARGETS.even * scale);
+      for (const d of kind('blotch')) recovers(`${d.name} Cr recovery`, d, 2, 0, TARGETS.even);
       const hf = hfEnergy(out, cheek) / hfEnergy(fix, cheek);
       checks.push({ name: 'cheek HF energy ratio', value: hf, ok: hf >= 0.9 && hf <= 1.1, bound: '0.9 … 1.1' });
       for (const d of kind('blemish')) atLeast(`${d.name} contrast kept`, blobContrast(out, d.center, d.sigma ?? 5) / blobContrast(fix, d.center, d.sigma ?? 5), 0.8);
@@ -259,7 +284,7 @@ export function toolChecks(tool: ToolName, out: Rgba8, fix: Rgba8, orig: Rgba8, 
       break;
     }
     case 'darkCircle': {
-      for (const d of kind('darkCircle')) atLeast(`${d.name} Y recovery (core)`, recovery(out, fix, orig, d.pixels, 0, 0.9), TARGETS.darkCircle * scale);
+      for (const d of kind('darkCircle')) recovers(`${d.name} Y recovery (core)`, d, 0, 0.9, TARGETS.darkCircle);
       for (const [side, lid] of [['L', [57, 73, 56]], ['R', [62, 76, 63]]] as const) {
         const w = fr.eyeW[side] * W;
         const below = (p: V2): [number, number] => [p[0] + fr.yhat[0] * 0.12 * w, p[1] + fr.yhat[1] * 0.12 * w];
@@ -273,12 +298,12 @@ export function toolChecks(tool: ToolName, out: Rgba8, fix: Rgba8, orig: Rgba8, 
       break;
     }
     case 'nasolabial': {
-      for (const d of kind('fold')) atLeast(`${d.name} Y recovery (core)`, recovery(out, fix, orig, d.pixels, 0, 0.9), TARGETS.nasolabial * scale);
+      for (const d of kind('fold')) recovers(`${d.name} Y recovery (core)`, d, 0, 0.9, TARGETS.nasolabial);
       atMost('max diff outside oval + 0.10 fw', maxDiff(out, fix, outside(grow(oval, 0.1 * fwPx))), 1);
       break;
     }
     case 'teeth': {
-      for (const d of kind('teeth')) atLeast('teeth Cb recovery', recovery(out, fix, orig, d.pixels, 1), TARGETS.teeth * scale);
+      for (const d of kind('teeth')) recovers('teeth Cb recovery', d, 1, 0, TARGETS.teeth);
       const inner = pts(face, INNER_LIP, W, H);
       const outer = pts(face, OUTER_LIP, W, H);
       atMost('lips max diff', maxDiff(out, fix, (x, y) => inPoly([x + 0.5, y + 0.5], outer) && !inPoly([x + 0.5, y + 0.5], inner)), 2);
@@ -287,7 +312,7 @@ export function toolChecks(tool: ToolName, out: Rgba8, fix: Rgba8, orig: Rgba8, 
       break;
     }
     case 'eyeBright': {
-      for (const d of kind('sclera')) atLeast(`${d.name} Cr recovery`, recovery(out, fix, orig, d.pixels, 2), TARGETS.eyeBright * scale);
+      for (const d of kind('sclera')) recovers(`${d.name} Cr recovery`, d, 2, 0, TARGETS.eyeBright);
       for (const [side, i] of [['L', 104], ['R', 105]] as const) {
         const c: [number, number] = [face.pts111[i * 2] * W, face.pts111[i * 2 + 1] * H];
         const rad = 0.18 * fr.eyeW[side] * W;

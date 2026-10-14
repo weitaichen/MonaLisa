@@ -1176,6 +1176,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
 
+**Landed:** the code is `1aaa05c`. Its subject wrongly reads "v0.4 step 4 task 3: tone gate in the lens, the 美膚 ⊘ covers tone, owners follow renames, spots survive a load" (a leftover message file again, as in `db1f468` and `6502bf2`). It is not amended; the next commit records it. Deviation: `state.test.ts` has one case beyond this task's list, "keeps valid new-part shades and a valid right through sanitize", which failed before the `sanitizePerson` edit (Task 1's literal dropped `brow` / `eyeshadow` / `liner` / `lens` and `right` on every load). The plan's fuzz case alone passes when both are always dropped, so this case pins that a saved entry reopens with them. No other deviation: `sides.ts` and both `state.ts` edits are as written.
+
 ### Task 4: Side-aware lens, 左右分開, 自然 and 無 per part
 
 Every panel read and write goes through step 1's lens (RM §3.3). This task wraps it with the step-5 operations of S5 §3.4 so the panel (Tasks 13–14) never touches `right` itself. Side reads and writes reuse step 1's routing (selection, 全部, applies, mixed) by presenting each split person's requested half as `values`.

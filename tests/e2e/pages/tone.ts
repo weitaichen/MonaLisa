@@ -2,10 +2,14 @@
 // sample_face.png and hands raw RGBA8 readbacks (base64) or lossless PNGs to tests/e2e/tone-engine.spec.ts, which
 // compares them with the CPU references in Node.
 import landmarks from '../../fixtures/landmarks_sample_face.json';
+import { HEAL_RING_SAMPLES } from '../../../src/config/limits';
+import { patchPlan, readPatch } from '../../../src/edit/patch';
+import { planSpot, spotRadius } from '../../../src/edit/spots';
 import { defaultPhoto, neutralPerson } from '../../../src/edit/state';
 import { createFramebuffer, createTexture, resizeFramebuffer, uploadSource, type Framebuffer } from '../../../src/engine/gl/gl';
 import { createEngine } from '../../../src/engine/index';
 import { neutralValue, paramDef } from '../../../src/engine/params';
+import { createHealPass } from '../../../src/engine/passes/heal';
 import { createRetouchPass, createToneFieldPass } from '../../../src/engine/passes/toneField';
 import { createToneMaskPass } from '../../../src/engine/passes/toneMask';
 import { faceFrame, IDENTITY_WIN, NEUTRAL_TONE, Q_CLEAR, R_CLEAR, toneDrawsQ, toneDrawsR, type ToneDraw, type ToneFaceInput, type ToneValues } from '../../../src/engine/passes/toneGeometry';
@@ -115,6 +119,7 @@ declare global {
       releaseBuilt: boolean;
       releaseMaxDiff: number;
     }>;
+    runToneHeal?: () => Promise<{ spots: Spot[]; out: string; err: number; passes: { none: string[]; spots: string[] } }>;
   }
 }
 
@@ -291,4 +296,40 @@ window.runToneRetouch = () => {
   field.dispose();
   retouch.dispose();
   return { w, h, qw, qh, err, base: b64(new Uint8Array(img.data.buffer)), R, out: withMn, outNoMn };
+};
+
+/** the three fixture blemishes planned as the editor plans a tap (中), plus a border spot in fill mode */
+window.runToneHeal = async () => {
+  const bmp = await fixtureBitmap();
+  const fx = (await (await fetch('/tests/fixtures/sample_face_tone.json')).json()) as { defects: { name: string; center: [number, number] }[] };
+  const faces = [{ id: 'f0', face: FACE }];
+  const work = { width: W, height: H };
+  const spots: Spot[] = [];
+  for (const name of ['dot1', 'dot2', 'dot3']) {
+    const c = fx.defects.find((d) => d.name === name)!.center;
+    const o: [number, number] = [c[0] / W, c[1] / H];
+    const r = spotRadius(o, 'M', faces, work);
+    const res = planSpot(readPatch(bmp, patchPlan(o, r, work)), o, r, { faces, aspect: ASPECT, existing: spots });
+    if ('refused' in res) throw new Error(`${name} refused: ${res.refused}`);
+    spots.push(res);
+  }
+  spots.push({ x: 0.004, y: 0.5, r: 0.02, dx: 0, dy: 0, owner: null });
+  const gl = glOf();
+  const src = createTexture(gl, 0, 0);
+  uploadSource(gl, src, bmp, W, H);
+  const heal = createHealPass(gl);
+  const a = createFramebuffer(gl, W, H);
+  const ring = createFramebuffer(gl, HEAL_RING_SAMPLES, spots.length);
+  heal.draw(src, a, ring, spots, IDENTITY_WIN, { width: W, height: H });
+  const out = b64(readFb(gl, a));
+  const err = gl.getError();
+  heal.dispose();
+  const canvas = document.createElement('canvas');
+  document.body.append(canvas);
+  const engine = createEngine(canvas, { mirror: false });
+  await engine.ready;
+  const passes = { none: engine.render(inputFor(bmp, NEUTRAL_TONE), { still: true }).passes, spots: engine.render(inputFor(bmp, NEUTRAL_TONE, spots), { still: true }).passes };
+  engine.dispose();
+  bmp.close();
+  return { spots, out, err, passes };
 };

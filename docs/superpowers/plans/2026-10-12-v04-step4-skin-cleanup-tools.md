@@ -5511,7 +5511,7 @@ git commit -m "v0.4 step 4 (13/20): spot planning — radius, regions, owner, sn
   // tests/e2e/pages/tone.ts: window.runToneHeal()
   ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `tests/e2e/pages/tone.ts` (imports at the top: `createHealPass` from `../../../src/engine/passes/heal`; `patchPlan`, `readPatch` from `../../../src/edit/patch`; `planSpot`, `spotRadius` from `../../../src/edit/spots`; `HEAL_RING_SAMPLES` from `../../../src/config/limits`):
 ```ts
@@ -5582,12 +5582,12 @@ test('heal: the GPU equals healCpu within 2/255, a blemish disappears, a border 
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [x] **Step 2: Run it to see it fail**
 
 Run: `npm run build && npx playwright test tests/e2e/tone-engine.spec.ts -g heal`
 Expected: FAIL — the page does not compile (`createHealPass` missing), so `runToneHeal` never appears.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/engine/passes/heal.ts`:
 ```ts
@@ -5723,12 +5723,12 @@ export function createHealPass(gl: GL): HealPass {
   ```
 - `buildToneField` is called with `base` after this block, so the tone field is built from the healed image (the key already includes the spots).
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npm run typecheck && npm run build && npx playwright test tests/e2e/tone-engine.spec.ts tests/e2e/engine.spec.ts tests/e2e/parity.spec.ts`
 Expected: all pass; the log prints `heal GPU vs CPU max ≤ 2` and the planned spots (each with a non-zero donor except the border one).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/engine/passes/heal.ts src/engine/pipeline.ts tests/e2e/pages/tone.ts tests/e2e/tone-engine.spec.ts

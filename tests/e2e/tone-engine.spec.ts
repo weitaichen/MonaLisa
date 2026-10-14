@@ -4,10 +4,11 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Page } from '@playwright/test';
 import { PNG } from 'pngjs';
+import { healCpu } from '../../src/engine/healCpu';
 import { IDENTITY_WIN, NEUTRAL_TONE, Q_CLEAR, R_CLEAR, toneDrawsQ, toneDrawsR, type ToneFaceInput, type ToneValues } from '../../src/engine/passes/toneGeometry';
 import { fromRgba8, makeImg, retouchCpu, toneFieldCpu, toRgba8, type Img } from '../../src/engine/toneCpu';
 import { rasterizeTone } from '../../src/engine/toneRaster.node';
-import { TOOL_VALUES, toolChecks, type Rgba8, type ToneFixture, type ToolName } from '../../src/engine/toneStats.node';
+import { discStats, TOOL_VALUES, toolChecks, type Rgba8, type ToneFixture, type ToolName } from '../../src/engine/toneStats.node';
 import { adapt } from '../../src/tracking/adapter111';
 import { decodeDataUrl, expect, test } from './fixtures';
 
@@ -177,4 +178,26 @@ test('retouch colour gates: the GPU equals retouchCpu on a sweep through the 白
     expect(max, name).toBeLessThanOrEqual(2);
     expect(sum / n, name).toBeLessThanOrEqual(0.25);
   }
+});
+
+test('heal: the GPU equals healCpu within 2/255, a blemish disappears, a border spot is a smooth fill', async ({ page }) => {
+  await openHarness(page, 'runToneHeal');
+  const r = await page.evaluate(() => window.runToneHeal!());
+  expect(r.err).toBe(0);
+  const fx = loadFx();
+  const src = fixturePixels();
+  const cpu = toRgba8(healCpu(fromRgba8(src.width, src.height, src.data), r.spots));
+  const gpu = bytes(r.out);
+  let max = 0;
+  for (let i = 0; i < gpu.length; i++) if (i % 4 !== 3) max = Math.max(max, Math.abs(gpu[i] - cpu[i]));
+  console.log(`heal GPU vs CPU max ${max}; spots ${JSON.stringify(r.spots.map((s) => [s.x.toFixed(3), s.y.toFixed(3), s.dx.toFixed(3), s.dy.toFixed(3)]))}`);
+  expect(max).toBeLessThanOrEqual(2);
+  const dot = fx.defects.find((d) => d.name === 'dot1')!;
+  const healed = { width: src.width, height: src.height, data: gpu };
+  const disc = (img: Rgba8) => discStats(img, dot.center, 1.2 * (dot.sigma ?? 5));
+  expect(disc(healed).sd).toBeLessThanOrEqual(0.4 * disc(src).sd);
+  const around = discStats(healed, dot.center, 4 * (dot.sigma ?? 5)).mean;
+  expect(Math.abs(disc(healed).mean - around) / around).toBeLessThanOrEqual(0.03);
+  expect(r.passes.none.filter((p) => p === 'heal')).toEqual([]);
+  expect(r.passes.spots).toContain('heal');
 });

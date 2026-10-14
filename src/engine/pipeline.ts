@@ -10,7 +10,7 @@
 // v0.4 (S §4): every listed face (≤ MAX_RENDER_FACES) through mask, makeup and the face-table reshape, capped by its
 // neighbours and the obstacles; one face is v0.3's frame.
 // P5 has two programs (step 2): the base composite and the 調節 one (質感 LUT + 調節 stages), compiled on first need.
-import { FACE_TABLE_CARRIER } from '../config/limits';
+import { FACE_TABLE_CARRIER, HEAL_RING_SAMPLES } from '../config/limits';
 import { IDENTITY_MAT3 } from '../geometry/view';
 import type { BodyField, Face, FaceProtect, PhotoParams } from '../types';
 import type { AdjustUniforms } from './adjustMath';
@@ -32,6 +32,7 @@ import {
   type Texture,
 } from './gl/gl';
 import { attenuate, capsFor, faceDrawn, WHOLE, type TableFace } from './passes/faceCap';
+import { createHealPass, type HealPass } from './passes/heal';
 import { createMakeupPass, makeupActive, type MakeupPass, type MakeupUniforms } from './passes/makeup';
 import { createMaskPass, type MaskPass } from './passes/mask';
 import { createLandmarkOverlay, type LandmarkOverlay } from './passes/overlay';
@@ -251,9 +252,9 @@ export interface Pipeline {
   dispose(lost?: boolean): void;
 }
 
-type FbName = 'A' | 'B' | 'C' | 'D' | 'M' | 'N' | 'R' | 'Q' | FieldFbName;
+type FbName = 'A' | 'B' | 'C' | 'D' | 'M' | 'N' | 'R' | 'Q' | 'RING' | FieldFbName;
 /** what releaseBuffers shrinks: everything but the cached tone field (S §4.3: freed only on dispose or context loss) */
-const RELEASED: readonly FbName[] = ['A', 'B', 'C', 'D', 'M', 'N', 'R', 'Q'];
+const RELEASED: readonly FbName[] = ['A', 'B', 'C', 'D', 'M', 'N', 'R', 'Q', 'RING'];
 
 /** sanity cap (fields are ≈256 long edge); keeps texImage2D within every device's MAX_TEXTURE_SIZE */
 export const MAX_BODY_FIELD_EDGE = 2048;
@@ -380,6 +381,7 @@ export function createPipeline(gl: GL): Pipeline {
   let bodyTex: Texture | null = null;
   let bodyKey: BodyUploadKey | null = null;
   let bodyWarned = false;
+  let heal: HealPass | null = null;
   let toneMask: ToneMaskPass | null = null;
   let toneField: ToneFieldPass | null = null;
   let retouch: RetouchPass | null = null;
@@ -497,9 +499,20 @@ export function createPipeline(gl: GL): Pipeline {
 
       let base: Texture = job.src;
       let baseFb: Framebuffer | null = null;
+      const tj = job.tone;
+
+      // ── step 4: P0b heal in O (skin-cleanup spec §4.5); base0 of P0c / P0d is its output ──
+      if (tj && tj.spots.length > 0) {
+        heal ??= createHealPass(gl);
+        const a = full('A', baseFb, job.srcSize);
+        const ring = fb('RING', { width: HEAL_RING_SAMPLES, height: tj.spots.length });
+        heal.draw(job.src, a, ring, tj.spots, job.win, job.srcSize);
+        base = a.tex;
+        baseFb = a;
+        passes.push('heal');
+      }
 
       // ── step 4: P0c tone field (cached) and P0d retouch, in O before P1 (skin-cleanup spec §4.1) ──
-      const tj = job.tone;
       if (tj && tj.retouchOn) {
         // a tile (its src covers only a window of O) never builds the field: it reuses the preview's (Task 18 prepares it)
         const tile = job.win[0] !== 0 || job.win[1] !== 0 || job.win[2] !== 1 || job.win[3] !== 1;
@@ -656,6 +669,7 @@ export function createPipeline(gl: GL): Pipeline {
         reshape?.dispose();
         overlay?.dispose();
         deleteTexture(gl, bodyTex);
+        heal?.dispose();
         toneMask?.dispose();
         toneField?.dispose();
         retouch?.dispose();
@@ -665,6 +679,7 @@ export function createPipeline(gl: GL): Pipeline {
       bodyKey = null;
       makeupReady = false;
       // the field's textures die with the FBOs: the next frame on a restored context rebuilds it (Review Focus 1)
+      heal = null;
       toneMask = toneField = retouch = null;
       toneKey = null;
       toneTex = null;

@@ -3531,6 +3531,8 @@ git commit -m "v0.4 step 4 (10/20): ping-pong the two full-size buffers" -m "Co-
 
 ### Task 11: Tone field P0c and retouch P0d on the GPU, with the field cache
 
+> **Open decision: ask the user before starting this task (from the Task 9 review).** Task 9 set `TARGETS.nasolabial` and `TARGETS.teeth` to 0 (the plan's fallback rule), so their recovery checks read "≥ 0" and would pass if either tool were deleted. On the CPU, 法令紋 recovers 0.003 / 0.006 (0.014 at lift ×5), because the 6 px fold is finer than σ_mid ≈ 14 px. 白牙 recovers 0, because the fixture's teeth have Y p95 0.235 and max 0.253, all below the 0.28 gate. Task 16's "inside > 0.5" e2e fails for both sliders: the CPU mean abs diff in the fold box is 0.025 and in the teeth box 0.000. Choose one: (a) change the Task 7 fixture: a fold with a soft width of about σ_mid, and teeth the gate can see; (b) change the spec: a 白牙 gate that works on shadowed teeth, and accept that 法令紋 is uncalibrated on this photo; (c) accept targets of 0 and amend Task 16 for both sliders. Record the choice here. Whatever the choice, the GPU case must not assert a bare ⅔·0 = "≥ 0" bound. Either keep a real non-zero target (after (a)), or, where a target stays 0, replace the recovery check with a tolerant "does not regress" bound. Size that bound from the defect: a 0.5/255 bias in the mean moves recovery by about 0.026 on foldL (shift 19.5/255) and about 0.04 on foldR and teeth (12.8/255).
+
 **Files:**
 - Modify: `src/engine/shaders/tone.ts` (GLSL)
 - Create: `src/engine/passes/toneField.ts`, `src/engine/toneJob.ts`, `src/engine/toneJob.test.ts`

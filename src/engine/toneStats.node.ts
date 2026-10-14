@@ -166,7 +166,31 @@ export function inPoly(p: V2, poly: readonly V2[]): boolean {
   }
   return inside;
 }
-/** the polygon pushed out radially from its centroid by d px */
+/** distance from p to the segment ab */
+function segDist(p: V2, a: V2, b: V2): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const l2 = dx * dx + dy * dy;
+  const t = l2 > 0 ? Math.min(1, Math.max(0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
+  return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+}
+/**
+ * The pixels whose centre lies outside `poly` and more than d px from every edge: outside the polygon grown by d in
+ * the true (Minkowski) sense. grow() is stricter: on a thin opening such as the inner lip it moves the upper and lower
+ * vertices almost sideways, so above and below the lip it sits only a pixel or two outside the edge.
+ */
+function beyond(poly: readonly V2[], d: number): (x: number, y: number) => boolean {
+  const xs = poly.map((p) => p[0]);
+  const ys = poly.map((p) => p[1]);
+  const [x0, x1, y0, y1] = [Math.min(...xs) - d, Math.max(...xs) + d, Math.min(...ys) - d, Math.max(...ys) + d];
+  return (x, y) => {
+    const p: V2 = [x + 0.5, y + 0.5];
+    if (p[0] < x0 || p[0] > x1 || p[1] < y0 || p[1] > y1) return true;
+    if (inPoly(p, poly)) return false;
+    return poly.every((a, i) => segDist(p, a, poly[(i + 1) % poly.length]) > d);
+  };
+}
+/** the polygon pushed out radially from its centroid by d px; it never reaches past beyond()'s region, so its check is stricter */
 function grow(poly: readonly V2[], d: number): V2[] {
   const cx = poly.reduce((s, p) => s + p[0], 0) / poly.length;
   const cy = poly.reduce((s, p) => s + p[1], 0) / poly.length;
@@ -258,7 +282,8 @@ export function toolChecks(tool: ToolName, out: Rgba8, fix: Rgba8, orig: Rgba8, 
       const inner = pts(face, INNER_LIP, W, H);
       const outer = pts(face, OUTER_LIP, W, H);
       atMost('lips max diff', maxDiff(out, fix, (x, y) => inPoly([x + 0.5, y + 0.5], outer) && !inPoly([x + 0.5, y + 0.5], inner)), 2);
-      atMost('max diff outside mouth + 0.06 mouthW', maxDiff(out, fix, outside(grow(inner, 0.06 * fr.mouthW * W))), 1);
+      // by true distance: R.B's 0.04·mouthW ramp, read bilinearly from the ¼ target, reaches past grow(inner) above and below the lip
+      atMost('max diff outside mouth + 0.06 mouthW', maxDiff(out, fix, beyond(inner, 0.06 * fr.mouthW * W)), 1);
       break;
     }
     case 'eyeBright': {

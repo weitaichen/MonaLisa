@@ -15,7 +15,7 @@
 // V → O geometry, buffer tile and source window uniforms (uGeo, uTile, uWin) around the chain.
 import { MAX_RENDER_FACES } from '../../config/limits';
 import { IDENTITY_MAT3 } from '../../geometry/view';
-import type { Face, FaceProtect, ParamId } from '../../types';
+import type { Face, FaceProtect, ParamId, PersonParams, SplitParamId } from '../../types';
 import { signed } from '../params';
 import {
   bindTarget,
@@ -34,7 +34,7 @@ import { FACE_TEMPLATE } from './faceMesh';
 import { FT } from './faceTable';
 import { attenuate, boxCentre, ovalBox, packFaceTable, WHOLE, type TableFace } from './faceCap';
 
-/** Engine-space deltas (already scaled per RB §2.4 table and multiplied by faceWeight). */
+/** Engine-space deltas (already scaled per RB §2.4 / face-detail spec §4.2 and multiplied by the live weight). */
 export interface ReshapeUniforms {
   faceSlim: number;
   faceV: number;
@@ -45,9 +45,25 @@ export interface ReshapeUniforms {
   mouthSize: number;
   eyeDistance: number;
   eyeEnlarge: number;
+  /** 左右分開: GPUPixel-right strengths of the split items; equal to the left ones, bit for bit, while it is off */
+  faceSlimR: number;
+  faceVR: number;
+  faceNarrowR: number;
+  eyeEnlargeR: number;
+  /** step 5 (face-detail spec §4.2) */
+  jawline: number;
+  jawlineR: number;
+  temple: number;
+  templeR: number;
+  hairline: number;
+  noseWing: number;
+  noseBridge: number;
+  mouthHeight: number;
 }
 
-/** RB §2.4 "Delta" column. eyeDistance is a fraction of the inter-ocular distance (signed). */
+type ScaleKey = Exclude<keyof ReshapeUniforms, 'faceSlimR' | 'faceVR' | 'faceNarrowR' | 'eyeEnlargeR' | 'jawlineR' | 'templeR'>;
+
+/** RB §2.4 "Delta" column; the step-5 rows are face-detail spec §4.2's engine deltas. eyeDistance is a fraction of the inter-ocular distance (signed). */
 export const RESHAPE_SCALE = {
   faceSlim: 0.1,
   faceV: 0.1,
@@ -58,7 +74,13 @@ export const RESHAPE_SCALE = {
   mouthSize: 0.3,
   eyeDistance: 0.08,
   eyeEnlarge: 0.2,
-} as const satisfies ReshapeUniforms;
+  jawline: 0.12,
+  temple: 0.22,
+  hairline: 0.09,
+  noseWing: 0.1,
+  noseBridge: 0.3,
+  mouthHeight: 0.18,
+} as const satisfies Record<ScaleKey, number>;
 
 const clamp01 = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
 const clampS = (v: number) => Math.min(1, Math.max(-1, signed(clamp01(v))));
@@ -66,10 +88,17 @@ const clampS = (v: number) => Math.min(1, Math.max(-1, signed(clamp01(v))));
 /** the 美型 items: what the reshape uniforms read (a full Record<ParamId, number> and PersonParams.values both fit) */
 type ShapeId = Extract<ParamId, `shape.${string}`>;
 
-export function reshapeUniforms(values: Readonly<Record<ShapeId, number>>, faceWeight: number): ReshapeUniforms {
+export function reshapeUniforms(values: Readonly<Record<ShapeId, number>>, faceWeight: number, right: PersonParams['right'] = null): ReshapeUniforms {
   const w = clamp01(faceWeight);
   const one = (id: ShapeId) => clamp01(values[id]) * w;
   const bi = (id: ShapeId) => clampS(values[id]) * w;
+  /** the GPUPixel-right value of a split item: right[id] while 左右分開 is on, else the shared value (same float ops) */
+  const rv = (id: SplitParamId) => {
+    const r = right?.[id];
+    return typeof r === 'number' ? r : values[id];
+  };
+  const oneR = (id: SplitParamId) => clamp01(rv(id)) * w;
+  const biR = (id: SplitParamId) => clampS(rv(id)) * w;
   const k = RESHAPE_SCALE;
   return {
     faceSlim: k.faceSlim * one('shape.faceSlim'),
@@ -81,6 +110,18 @@ export function reshapeUniforms(values: Readonly<Record<ShapeId, number>>, faceW
     mouthSize: k.mouthSize * bi('shape.mouthSize'),
     eyeDistance: k.eyeDistance * bi('shape.eyeDistance'),
     eyeEnlarge: k.eyeEnlarge * one('shape.eyeEnlarge'),
+    faceSlimR: k.faceSlim * oneR('shape.faceSlim'),
+    faceVR: k.faceV * oneR('shape.faceV'),
+    faceNarrowR: k.faceNarrow * oneR('shape.faceNarrow'),
+    eyeEnlargeR: k.eyeEnlarge * oneR('shape.eyeEnlarge'),
+    jawline: k.jawline * one('shape.jawline'),
+    jawlineR: k.jawline * oneR('shape.jawline'),
+    temple: k.temple * bi('shape.temple'),
+    templeR: k.temple * biR('shape.temple'),
+    hairline: k.hairline * bi('shape.hairline'),
+    noseWing: k.noseWing * bi('shape.noseWing'),
+    noseBridge: k.noseBridge * bi('shape.noseBridge'),
+    mouthHeight: k.mouthHeight * bi('shape.mouthHeight'),
   };
 }
 
@@ -116,8 +157,23 @@ export const SLIM: readonly (readonly [number, number])[] = [
 export const V_JAW = [8, 10, 12, 24, 22, 20] as const;
 export const NARROW = [2, 4, 30, 28] as const;
 export const NOSE: readonly (readonly [number, number])[] = [[80, 46], [81, 46], [82, 49], [83, 49]];
+/** 下頜線 origins: contour L 6–14, R 26–18 (jaw angle → chin, chin 16 excluded; S5 §4.1) */
+export const JAW = [6, 8, 10, 12, 14, 26, 24, 22, 20, 18] as const;
+/** 太陽穴 anchors, Face.oval indices: GPUPixel-left MP 162, 21, 54 · right MP 389, 251, 284 (faceOval.ts:6-9) */
+export const TEMPLE = [30, 31, 32, 6, 5, 4] as const;
+export const TEMPLE_W = [0.6, 1, 0.6, 0.6, 1, 0.6] as const;
+/** side of each split anchor: 0 GPUPixel-left, 1 right, 0.5 the midline p16 (S5 §4.3) */
+export const SLIM_SIDE = [0, 1, 0, 1, 0, 1, 0, 1, 0.5] as const;
+export const VJAW_SIDE = [0, 0, 0, 1, 1, 1] as const;
+export const NARROW_SIDE = [0, 0, 1, 1] as const;
+export const JAW_SIDE = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1] as const;
+export const TEMPLE_SIDE = [0, 0, 0, 1, 1, 1] as const;
+/** the strength of an anchor on `side`: exactly `dl` when dr === dl (左右分開 off), so v0.3 maps stay bit-identical */
+export function sided(dl: number, dr: number, side: number): number {
+  return dl + (dr - dl) * side;
+}
 
-/** Anchors derived on the CPU once per frame (cheaper than per fragment). All in UV space. */
+/** Anchors derived on the CPU once per frame (cheaper than per fragment). All in UV space unless marked iso. */
 export interface ReshapeGeometry {
   vTargets: Float32Array; // 6 × vec2
   narrowTargets: Float32Array; // 4 × vec2
@@ -125,8 +181,32 @@ export interface ReshapeGeometry {
   mouthR: number; // iso units
   eyeR: V2; // iso units, image-left / image-right eye
   eyeDisp: V2; // UV displacement of the image-left eye (right eye gets the negation)
-  /** UV bounding box (minX, minY, maxX, maxY) of every active warp's influence disc */
+  /** UV bounding box (minX, minY, maxX, maxY) of every active warp's influence region */
   box: [number, number, number, number];
+  /** iso unit axes: r̂ (GPUPixel-left eye → right eye), m̂ (toward the chin) — S5 §4.1 */
+  axes: [number, number, number, number];
+  /** 下頜線 targets, 10 × vec2, JAW order */
+  jawTargets: Float32Array;
+  /** 太陽穴 anchors and targets, 6 × vec2 each, TEMPLE order */
+  templeAnchors: Float32Array;
+  templeTargets: Float32Array;
+  /** 髮際線 at ext[0]: effective strength (0 on a degenerate face), radii (rx, ry↑, ry↓) iso, clamped disp UV */
+  hairlineS: number;
+  hairlineRadii: [number, number, number];
+  hairlineDisp: V2;
+  /** 嘴高 at p106: effective strength, radii (rx, ry↑, ry↓) iso, axis ay (iso, toward the chin side), clamped disp UV */
+  mouthHS: number;
+  mouthHRadii: [number, number, number];
+  mouthHAxis: V2;
+  mouthHDisp: V2;
+  /** 鼻翼: effective strength, disc radius iso, clamped UV displacement of the left wing (the right gets −) */
+  noseWingS: number;
+  noseWingR: number;
+  noseWingDisp: V2;
+  /** 山根: band centre (UV), r− and r+ (iso); band half-height iso; clamped k (0 when the band is under 0.01 FW) */
+  root: [number, number, number, number];
+  rootRy: number;
+  rootK: number;
 }
 
 /** Compute warp anchors for `face` at aspect W/H. Exported for unit tests and the harness. */
@@ -140,6 +220,17 @@ export function reshapeGeometry(face: Face, aspect: number, u: ReshapeUniforms):
     return Math.hypot(ia[0] - ib[0], ia[1] - ib[1]);
   };
   const p = (i: number) => pt(P, i);
+  const sub = (a: V2, b: V2): V2 => [a[0] - b[0], a[1] - b[1]];
+  const dot = (a: V2, b: V2) => a[0] * b[0] + a[1] * b[1];
+  const unit = (a: V2): V2 => {
+    const l = Math.hypot(a[0], a[1]);
+    return l > 1e-12 ? [a[0] / l, a[1] / l] : [0, 0];
+  };
+  /** a UV vector whose iso length is clamped to `maxIso` (S5 §4.2 fold-safety clamps) */
+  const clampDisp = (d: V2, maxIso: number): V2 => {
+    const l = Math.hypot(d[0], d[1] / aspect);
+    return l > maxIso && l > 0 ? [(d[0] * maxIso) / l, (d[1] * maxIso) / l] : d;
+  };
 
   // Projection on the face midline p43 → p16, done in iso space so it is a true perpendicular.
   const m0 = iso(p(43));
@@ -168,8 +259,83 @@ export function reshapeGeometry(face: Face, aspect: number, u: ReshapeUniforms):
   const e1 = p(77);
   const eyeDisp: V2 = [-u.eyeDistance * (e1[0] - e0[0]), -u.eyeDistance * (e1[1] - e0[1])];
 
-  // Union of influence discs (iso radius r around o) → UV box. Warps outside every disc are identity,
-  // and a coordinate outside all discs is never moved, so skipping it is exact.
+  // ── step 5 (face-detail spec §4.1–4.2) ──
+  const fw = faceWidthIso(face, aspect);
+  const mh = unit(md);
+  const rh0: V2 = [-mh[1], mh[0]];
+  const rh: V2 = dot(rh0, sub(iso(e1), iso(e0))) < 0 ? [-rh0[0], -rh0[1]] : rh0;
+  const axes: [number, number, number, number] = [rh[0], rh[1], mh[0], mh[1]];
+
+  // 下頜線: t_i = p_i + uv(0.22·FW·unit(n_i − 0.35·m̂)), n_i ⊥ (p_{i+1} − p_{i−1}) toward the nose tip p46
+  const jawTargets = new Float32Array(20);
+  JAW.forEach((i, k) => {
+    const tg = sub(iso(p(i + 1)), iso(p(i - 1)));
+    const n0 = unit([-tg[1], tg[0]]);
+    const n = dot(n0, sub(iso(p(46)), iso(p(i)))) < 0 ? [-n0[0], -n0[1]] : n0;
+    const dir = unit([n[0] - 0.35 * mh[0], n[1] - 0.35 * mh[1]]);
+    const d = uv([dir[0] * 0.22 * fw, dir[1] * 0.22 * fw]);
+    jawTargets[k * 2] = p(i)[0] + d[0];
+    jawTargets[k * 2 + 1] = p(i)[1] + d[1];
+  });
+
+  // 太陽穴: t_k = o_k + uv(0.12·FW·n_out), n_out ⊥ (oval[k+1] − oval[k−1]) away from the oval centroid
+  const ov = (k: number): V2 => {
+    const j = ((k % 36) + 36) % 36;
+    return [face.oval[j * 2], face.oval[j * 2 + 1]];
+  };
+  const cen: V2 = [0, 0];
+  for (let k = 0; k < 36; k++) {
+    const q = iso(ov(k));
+    cen[0] += q[0] / 36;
+    cen[1] += q[1] / 36;
+  }
+  const templeAnchors = new Float32Array(12);
+  const templeTargets = new Float32Array(12);
+  TEMPLE.forEach((j, k) => {
+    const o = ov(j);
+    const tg = sub(iso(ov(j + 1)), iso(ov(j - 1)));
+    const n0 = unit([-tg[1], tg[0]]);
+    const n = dot(n0, sub(iso(o), cen)) < 0 ? [-n0[0], -n0[1]] : n0;
+    const d = uv([n[0] * 0.12 * fw, n[1] * 0.12 * fw]);
+    templeAnchors.set(o, k * 2);
+    templeTargets.set([o[0] + d[0], o[1] + d[1]], k * 2);
+  });
+
+  // 髮際線: shiftEllipse at ext[0], axes r̂ / m̂, radii (0.40 FW, 0.50 FH, 0.55 FH); disp = uv(0.09·s·FH·m̂), + moves down
+  const ext0 = pt(face.ext, 0);
+  const fh = dist(ext0, pt(face.ext, 2));
+  const hairlineRadii: [number, number, number] = [0.4 * fw, 0.5 * fh, 0.55 * fh];
+  const hairOk = fh > 1e-6 && fw > 1e-6;
+  const hairlineDisp = hairOk ? clampDisp(uv([u.hairline * fh * mh[0], u.hairline * fh * mh[1]]), 0.2 * hairlineRadii[1]) : ([0, 0] as V2);
+  const hairlineS = hairOk ? u.hairline : 0;
+
+  // 嘴高: shiftEllipse at p106, ay = unit(p106 − p49), rx = 2·max corner offset along ax, ry = (L, 1.6·L); disp = uv(−0.18·s·L·ay)
+  const L = dist(p(106), p49);
+  const ay = unit(sub(iso(p(106)), iso(p49)));
+  const axm: V2 = [-ay[1], ay[0]];
+  const rxM = 2 * Math.max(Math.abs(dot(axm, sub(iso(p(84)), iso(p(106))))), Math.abs(dot(axm, sub(iso(p(90)), iso(p(106))))));
+  const mouthHRadii: [number, number, number] = [rxM, L, 1.6 * L];
+  const mouthOk = L > 1e-6 && rxM > 1e-6;
+  const mouthHDisp = mouthOk ? clampDisp(uv([-u.mouthHeight * L * ay[0], -u.mouthHeight * L * ay[1]]), 0.2 * L) : ([0, 0] as V2);
+  const mouthHS = mouthOk ? u.mouthHeight : 0;
+
+  // 鼻翼: opposed shiftArounds at p80 / p81, R = 0.55·|p81 − p80|, disp_L = −0.10·s·(p81 − p80)
+  const noseWingR = 0.55 * dist(p(81), p(80));
+  const wingOk = noseWingR > 1e-6;
+  const noseWingDisp = wingOk ? clampDisp([-u.noseWing * (p(81)[0] - p(80)[0]), -u.noseWing * (p(81)[1] - p(80)[1])], 0.32 * noseWingR) : ([0, 0] as V2);
+  const noseWingS = wingOk ? u.noseWing : 0;
+
+  // 山根: squeezeAxis across the band between the inner eye corners p55 / p58, centred on mid(p78, p79)
+  const rc: V2 = [(p(78)[0] + p(79)[0]) / 2, (p(78)[1] + p(79)[1]) / 2];
+  const rMinus = dot(rh, sub(iso(rc), iso(p(55))));
+  const rPlus = dot(rh, sub(iso(p(58)), iso(rc)));
+  const rootRy = dist(p(45), p(43));
+  const rootOk = rMinus >= 0.01 * fw && rPlus >= 0.01 * fw && rootRy > 1e-6;
+  const rootK = rootOk ? Math.min(0.5, Math.max(-0.5, u.noseBridge)) : 0;
+  const root: [number, number, number, number] = [rc[0], rc[1], rMinus, rPlus];
+
+  // Union of influence regions → UV box. Warps outside every region are identity, and a coordinate outside all of
+  // them is never moved, so skipping it is exact.
   const box: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
   const disc = (o: V2, r: number) => {
     box[0] = Math.min(box[0], o[0] - r);
@@ -177,15 +343,36 @@ export function reshapeGeometry(face: Face, aspect: number, u: ReshapeUniforms):
     box[2] = Math.max(box[2], o[0] + r);
     box[3] = Math.max(box[3], o[1] + r * aspect);
   };
+  /** bounding box of a rotated ellipse: semi-axes rx along ax and ry along ay (iso), S5 §4.4 */
+  const ellipse = (c: V2, ax: V2, ayy: V2, rx: number, ry: number) => {
+    const hx = Math.hypot(rx * ax[0], ry * ayy[0]);
+    const hy = Math.hypot(rx * ax[1], ry * ayy[1]) * aspect;
+    box[0] = Math.min(box[0], c[0] - hx);
+    box[1] = Math.min(box[1], c[1] - hy);
+    box[2] = Math.max(box[2], c[0] + hx);
+    box[3] = Math.max(box[3], c[1] + hy);
+  };
   const curve = (o: V2, t: V2) => disc(o, dist(o, t));
-  if (u.faceSlim) for (const [o, t] of SLIM) curve(p(o), p(t));
-  if (u.faceV) V_JAW.forEach((i, k) => curve(p(i), [vTargets[k * 2], vTargets[k * 2 + 1]]));
-  if (u.faceNarrow) NARROW.forEach((i, k) => curve(p(i), [narrowTargets[k * 2], narrowTargets[k * 2 + 1]]));
+  const at2 = (a: Float32Array, k: number): V2 => [a[k * 2], a[k * 2 + 1]];
+  if (u.faceSlim || u.faceSlimR) for (const [o, t] of SLIM) curve(p(o), p(t));
+  if (u.faceV || u.faceVR) V_JAW.forEach((i, k) => curve(p(i), at2(vTargets, k)));
+  if (u.faceNarrow || u.faceNarrowR) NARROW.forEach((i, k) => curve(p(i), at2(narrowTargets, k)));
+  if (u.jawline || u.jawlineR) JAW.forEach((i, k) => curve(p(i), at2(jawTargets, k)));
+  if (u.temple || u.templeR) TEMPLE.forEach((_, k) => curve(at2(templeAnchors, k), at2(templeTargets, k)));
   if (u.chin) curve(p16, chinTarget);
   if (u.forehead) curve(pt(face.ext, 0), pt(face.ext, 3));
+  if (hairlineS) ellipse(ext0, rh, mh, hairlineRadii[0], Math.max(hairlineRadii[1], hairlineRadii[2]));
   if (u.noseSlim) for (const [o, t] of NOSE) curve(p(o), p(t));
+  if (noseWingS) {
+    disc(p(80), noseWingR);
+    disc(p(81), noseWingR);
+  }
+  // the band is the rectangle |a| ≤ r±, |v| ≤ ry around rc: its circumscribed disc (S5 §4.4's max(r−, r+, ry) misses
+  // the corners, where the squeeze still moves content by up to 0.09 px on the fixture: a seam at the box edge)
+  if (rootK) disc(rc, Math.hypot(Math.max(rMinus, rPlus), rootRy));
+  if (mouthHS) ellipse(p(106), axm, ay, mouthHRadii[0], mouthHRadii[2]);
   if (u.mouthSize) disc(p(106), mouthR);
-  if (u.eyeDistance || u.eyeEnlarge) {
+  if (u.eyeDistance || u.eyeEnlarge || u.eyeEnlargeR) {
     disc(p(74), eyeR[0]);
     disc(p(77), eyeR[1]);
   }
@@ -194,7 +381,32 @@ export function reshapeGeometry(face: Face, aspect: number, u: ReshapeUniforms):
   box[1] -= pad;
   box[2] += pad;
   box[3] += pad;
-  return { vTargets, narrowTargets, chinTarget, mouthR, eyeR, eyeDisp, box };
+  return {
+    vTargets,
+    narrowTargets,
+    chinTarget,
+    mouthR,
+    eyeR,
+    eyeDisp,
+    box,
+    axes,
+    jawTargets,
+    templeAnchors,
+    templeTargets,
+    hairlineS,
+    hairlineRadii,
+    hairlineDisp,
+    mouthHS,
+    mouthHRadii,
+    mouthHAxis: ay,
+    mouthHDisp,
+    noseWingS,
+    noseWingR,
+    noseWingDisp,
+    root,
+    rootRy,
+    rootK,
+  };
 }
 
 /**
@@ -255,6 +467,29 @@ export const PROTECT_SMOOTH = 0.025;
 export function faceWidthIso(face: Face, aspect: number): number {
   const P = face.pts111;
   return Math.hypot(P[0] - P[64], (P[1] - P[65]) / aspect);
+}
+
+/**
+ * The step-5 block of one face row of the face table (face-detail spec §4.4; S1 §4.4 keeps 72–74). `row` is the face's
+ * 96-texel slice; texels 70–71 and 75–95, all other texels untouched.
+ */
+export function packFaceDetail(row: Float32Array, u: ReshapeUniforms, g: ReshapeGeometry): void {
+  const set = (t: number, a: number, b: number, c: number, d: number) => row.set([a, b, c, d], t * 4);
+  set(70, u.faceSlimR, u.faceVR, u.faceNarrowR, u.eyeEnlargeR);
+  set(71, u.jawlineR, u.templeR, 0, 0);
+  set(75, u.jawline, u.temple, g.hairlineS, g.noseWingS);
+  set(76, g.rootK, g.mouthHS, 0, 0);
+  row.set(g.jawTargets, 77 * 4);
+  row.set(g.templeAnchors, 82 * 4);
+  row.set(g.templeTargets, 85 * 4);
+  set(88, g.axes[0], g.axes[1], g.axes[2], g.axes[3]);
+  set(89, g.hairlineRadii[0], g.hairlineRadii[1], g.hairlineRadii[2], 0);
+  set(90, g.hairlineDisp[0], g.hairlineDisp[1], g.mouthHDisp[0], g.mouthHDisp[1]);
+  set(91, g.mouthHRadii[0], g.mouthHRadii[1], g.mouthHRadii[2], 0);
+  set(92, g.mouthHAxis[0], g.mouthHAxis[1], 0, 0);
+  set(93, g.noseWingR, g.noseWingDisp[0], g.noseWingDisp[1], 0);
+  set(94, g.root[0], g.root[1], g.root[2], g.root[3]);
+  set(95, g.rootRy, 0, 0, 0);
 }
 
 const glslFloat = (n: number) => (Number.isInteger(n) ? n.toFixed(1) : String(n));

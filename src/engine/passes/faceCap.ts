@@ -1,15 +1,18 @@
 // Per-face geometry shared by the detection cache, the face table and the caps (S §4.1, §4.4).
-import type { Face, Rect } from '../../types';
+import type { Face, ParamId, Rect } from '../../types';
+import { neutralValue, PARAM_DEFS, paramsInGroup } from '../params';
 import {
   EMPTY_BOX,
   faceWidthIso,
+  packFaceDetail,
   PROTECT_RAMP,
   PROTECT_REACH,
   PROTECT_SLOPE,
   PROTECT_SMOOTH,
-  RESHAPE_SCALE,
   reshapeGeometry,
+  reshapeUniforms,
   yawAttenuation,
+  type ReshapeGeometry,
   type ReshapeUniforms,
 } from './reshape';
 import { FT } from './faceTable';
@@ -108,8 +111,16 @@ export function influenceBox(t: TableFace, aspect: number): [number, number, num
 }
 
 /** the box every 美型 item at its maximum (both ends of the bidirectional ones) could reach: sizes the protect window (A3) */
-export function uMaxBox(face: Face, aspect: number): [number, number, number, number] {
-  return reshapeGeometry(face, aspect, { ...RESHAPE_SCALE }).box;
+export function uMaxBox(face: Face, aspect: number): ReshapeGeometry['box'] {
+  const neutral = Object.fromEntries(PARAM_DEFS.map((d) => [d.id, neutralValue(d)])) as Record<ParamId, number>;
+  const at = (bi: number) => {
+    const v = { ...neutral };
+    for (const d of paramsInGroup('shape')) v[d.id] = d.bidirectional ? bi : 1;
+    return reshapeGeometry(face, aspect, reshapeUniforms(v, 1)).box;
+  };
+  const a = at(1);
+  const b = at(0);
+  return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
 }
 
 /** Pack the face table (S §4.4) for MAX_RENDER_FACES rows; `out` holds faces.length × 96 × 4 floats or more. */
@@ -134,5 +145,6 @@ export function packFaceTable(faces: readonly TableFace[], aspect: number, out: 
     at(FT.BOX, box[0], box[1], box[2], box[3]);
     at(FT.CAP, t.centre[0], t.centre[1], t.cap, PROTECT_SMOOTH * fw);
     at(FT.WIN, t.window.x, t.window.y, 1 / t.window.w, 1 / t.window.h);
+    packFaceDetail(out.subarray(o, o + FT.ROW * 4), u, g);
   });
 }

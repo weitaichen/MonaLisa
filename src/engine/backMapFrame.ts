@@ -32,7 +32,7 @@ export function backMapFrameOf(input: BackMapInput, oSize: Size): BackMapFrame {
     return {
       face: f.face,
       weight: w,
-      reshape: scaled(reshapeUniforms(f.person.values, w), f.warpScale ?? 1),
+      reshape: scaled(reshapeUniforms(f.person.values, w, f.person.right), f.warpScale ?? 1),
       makeup: makeupUniformsFor(f.person, w),
       kS: 1, // tableFaces reads neither kS nor kR
       kR: 1,

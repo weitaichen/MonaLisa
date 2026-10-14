@@ -85,7 +85,7 @@ describe('planPasses: the mask clear (S §3.3, A2)', () => {
 });
 
 describe('planFrame (run()’s plan of a job)', () => {
-  const reshape = { faceSlim: 0.1, faceV: 0, faceNarrow: 0, chin: 0, forehead: 0, noseSlim: 0, mouthSize: 0, eyeDistance: 0, eyeEnlarge: 0 };
+  const reshape = { faceSlim: 0.1, faceV: 0, faceNarrow: 0, chin: 0, forehead: 0, noseSlim: 0, mouthSize: 0, eyeDistance: 0, eyeEnlarge: 0, faceSlimR: 0.1, faceVR: 0, faceNarrowR: 0, eyeEnlargeR: 0, jawline: 0, jawlineR: 0, temple: 0, templeR: 0, hairline: 0, noseWing: 0, noseBridge: 0, mouthHeight: 0 };
   const makeup = { lip: 0.5, blush: 0, lipColor: null, blushColor: null };
   const job = (weights: number[], maskClear: [number, number]) => ({
     faces: weights.map((weight) => ({ weight, reshape, makeup })),
@@ -206,7 +206,7 @@ describe('tableFaces (S §4.1)', () => {
   const f = (cx: number, over: Partial<FrameFace> = {}): FrameFace => ({
     face: makeFace(0, cx),
     weight: 1,
-    reshape: { faceSlim: 0.1, faceV: 0, faceNarrow: 0, chin: 0, forehead: 0, noseSlim: 0, mouthSize: 0, eyeDistance: 0, eyeEnlarge: 0 },
+    reshape: { faceSlim: 0.1, faceV: 0, faceNarrow: 0, chin: 0, forehead: 0, noseSlim: 0, mouthSize: 0, eyeDistance: 0, eyeEnlarge: 0, faceSlimR: 0.1, faceVR: 0, faceNarrowR: 0, eyeEnlargeR: 0, jawline: 0, jawlineR: 0, temple: 0, templeR: 0, hairline: 0, noseWing: 0, noseBridge: 0, mouthHeight: 0 },
     makeup: { lip: 0, blush: 0, lipColor: null, blushColor: null },
     kS: 1,
     kR: 1,
@@ -222,7 +222,7 @@ describe('tableFaces (S §4.1)', () => {
     expect(t.protects).toEqual([prot]);
   });
   it('two faces and an obstacle: caps; a neutral or weight-0 face is listed with zero deltas and no layer', () => {
-    const neutral = f(0.7, { reshape: { ...f(0).reshape, faceSlim: 0 }, protect: prot });
+    const neutral = f(0.7, { reshape: { ...f(0).reshape, faceSlim: 0, faceSlimR: 0 }, protect: prot });
     const t = tableFaces({ faces: [f(0.3), neutral, f(0.9, { weight: 0 })], obstacles: [[0.4, 0.5]] }, 1);
     expect(t.faces[0].cap).toBeCloseTo(0.05);
     expect(t.faces[1].layer).toBe(-1);

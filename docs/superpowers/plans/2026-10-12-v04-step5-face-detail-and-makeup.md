@@ -2164,7 +2164,7 @@ CPU side of the six new warps and of 左右分開 (S5 §4.2–4.4): the engine d
   - `ReshapeGeometry` += `axes: [number, number, number, number]` (r̂, m̂ iso), `jawTargets: Float32Array` (10 × vec2 UV), `templeAnchors`, `templeTargets: Float32Array` (6 × vec2 UV), `hairlineS: number`, `hairlineRadii: [number, number, number]`, `hairlineDisp: V2`, `mouthHS: number`, `mouthHRadii: [number, number, number]`, `mouthHAxis: V2`, `mouthHDisp: V2`, `noseWingS: number`, `noseWingR: number`, `noseWingDisp: V2`, `root: [number, number, number, number]` (centre UV, r−, r+), `rootRy: number`, `rootK: number` — the `…S` / `rootK` fields are the effective strengths (0 for a degenerate face), the vectors are clamped
   - `packFaceDetail(row: Float32Array, u: ReshapeUniforms, g: ReshapeGeometry): void` — `row` is one face's 96-texel slice (384 floats)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/engine/passes/reshape.test.ts` (CRLF). Step 3 already added `import { readFileSync } from 'node:fs';`, `import { adapt } from '../../tracking/adapter111';` and `PARAM_DEFS` in the `../params` import; merge the rest into the existing lines, never importing a name twice: `neutralValue`, `SPLIT_IDS` into the `../params` import; `import { uMaxBox } from './faceCap';`; `faceWidthIso`, `JAW`, `JAW_SIDE`, `NARROW`, `NARROW_SIDE`, `packFaceDetail`, `sided`, `SLIM`, `SLIM_SIDE`, `TEMPLE`, `TEMPLE_SIDE`, `TEMPLE_W`, `V_JAW`, `VJAW_SIDE` into the `./reshape` import (it already has `reshapeActive`, `reshapeGeometry`, `reshapeUniforms`); `PersonParams` into the `../../types` type import:
 
@@ -2362,12 +2362,12 @@ describe('step-5 geometry (face-detail spec §4.1, §4.2, §4.4)', () => {
 
 (`P[212]`/`P[213]` are p106, `P[98]`/`P[99]` p49, `P[160]`…`P[163]` p80 / p81; `ext[4..5]` is ext[2], the glabella.)
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run src/engine/passes/reshape.test.ts`
 Expected: FAIL — `JAW` / `packFaceDetail` not exported; `hi.jawline` is `undefined`.
 
-- [ ] **Step 3: Implement the uniforms**
+- [x] **Step 3: Implement the uniforms**
 
 Replace `reshape.ts:37-85` (`values` keeps step 1's landed key type `ShapeId`, the 美型 ids, so a `PersonParams.values` and a full `Record<ParamId, number>` both fit; existing callers keep compiling):
 
@@ -2468,7 +2468,7 @@ Add `PersonParams` and `SplitParamId` to the `import type` line (`reshape.ts:18`
 
 Step 1's `ZERO_U` (`pipeline.ts:213`, CRLF), the uniforms of a face without a drawn warp in `tableFaces`, is a typed `ReshapeUniforms` literal: give it the twelve new keys at 0 (`faceSlimR: 0, faceVR: 0, faceNarrowR: 0, eyeEnlargeR: 0, jawline: 0, jawlineR: 0, temple: 0, templeR: 0, hairline: 0, noseWing: 0, noseBridge: 0, mouthHeight: 0`). The two literals of `pipeline.test.ts` (`:88` the `planFrame` job's `reshape`, `:209` the `tableFaces` face) get the same keys, with `faceSlimR: 0.1` next to their `faceSlim: 0.1` (the right side equals the left while 左右分開 is off); their assertions are unchanged.
 
-- [ ] **Step 4: Implement the tables, the geometry and the packing**
+- [x] **Step 4: Implement the tables, the geometry and the packing**
 
 After `export const NOSE …` (`reshape.ts:118`):
 
@@ -2790,12 +2790,12 @@ export function uMaxBox(face: Face, aspect: number): ReshapeGeometry['box'] {
 
 (imports: a new line `import { neutralValue, PARAM_DEFS, paramsInGroup } from '../params';` (faceCap imports nothing from it yet); `reshapeUniforms`, `type ReshapeGeometry` merged into the `./reshape` import, which already has `reshapeGeometry`; `ParamId` merged into `import type { Face, Rect } from '../../types'`. Drop `RESHAPE_SCALE` from faceCap's `./reshape` import: `uMaxBox` was its only user, and `noUnusedLocals` rejects it.) At both ends every box of the v0.3 items is the same disc (a `curveWarp` box does not depend on the sign of its strength), so their part of the box is step 1's; the new items' boxes lie inside it on the fixture face and its mirror (Task 6's test), so there the protect window does not change (S5 §4.4).
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `npx vitest run src/engine src/media src/edit && npm run typecheck`
 Expected: PASS. The step-1 packing tests (texels 0–69, 72–74), step 1's `uMaxBox` test, step 3's `faceBoundsFor` tests, the `warpGuard` / `backMapFrame` tests and every existing reshape test are unchanged.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 file src/engine/passes/reshape.ts src/engine/passes/reshape.test.ts src/engine/index.ts src/engine/pipeline.ts src/engine/passes/faceCap.ts src/media/exportPlan.ts

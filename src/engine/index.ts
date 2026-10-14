@@ -318,7 +318,7 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       return {
         face: f.face,
         weight: w,
-        reshape: scaleUniforms(reshapeUniforms(f.person.values, w), f.warpScale ?? 1),
+        reshape: scaleUniforms(reshapeUniforms(f.person.values, w, f.person.right), f.warpScale ?? 1),
         makeup: makeupUniformsFor(f.person, w),
         kS: m.k[i][0],
         kR: m.k[i][1],

@@ -244,7 +244,7 @@ export function faceBoundsFor(faces: readonly RenderFace[], oAspect: number): Fa
   for (const f of faces) {
     if (!(f.weight > 0)) continue;
     // as the engine's job(): the person's shape.* values at the face weight (warpScale ≤ 1 and the caps only shrink moves)
-    const u = reshapeUniforms(f.person.values, f.weight);
+    const u = reshapeUniforms(f.person.values, f.weight, f.person.right);
     if (!reshapeActive(u)) continue;
     out.push({ box: reshapeGeometry(f.face, oAspect, u).box, bound: displacementBound(f.face, oAspect, u) });
   }

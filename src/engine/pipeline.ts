@@ -210,7 +210,7 @@ export function planFrame(
   });
 }
 
-const ZERO_U: ReshapeUniforms = { faceSlim: 0, faceV: 0, faceNarrow: 0, chin: 0, forehead: 0, noseSlim: 0, mouthSize: 0, eyeDistance: 0, eyeEnlarge: 0 };
+const ZERO_U: ReshapeUniforms = { faceSlim: 0, faceV: 0, faceNarrow: 0, chin: 0, forehead: 0, noseSlim: 0, mouthSize: 0, eyeDistance: 0, eyeEnlarge: 0, faceSlimR: 0, faceVR: 0, faceNarrowR: 0, eyeEnlargeR: 0, jawline: 0, jawlineR: 0, temple: 0, templeR: 0, hairline: 0, noseWing: 0, noseBridge: 0, mouthHeight: 0 };
 
 /** The face table of a frame (S §4.1): caps over every listed face and obstacle; a layer per drawn face with a limit. */
 export function tableFaces(job: Pick<FrameJob, 'faces' | 'obstacles'>, aspect: number): { faces: TableFace[]; protects: FaceProtect[] } {

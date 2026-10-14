@@ -28,7 +28,7 @@ function guardTable(frame: StillFrame, aspect: number): GuardTable {
   const protects: FaceProtect[] = [];
   const base: TableFace[] = frame.faces.map((f, i) => {
     const w = Number.isFinite(f.weight) ? Math.min(1, Math.max(0, f.weight)) : 0;
-    const raw = scaled(reshapeUniforms(f.person.values, w), Math.min(1, Math.max(0, f.warpScale ?? 1)));
+    const raw = scaled(reshapeUniforms(f.person.values, w, f.person.right), Math.min(1, Math.max(0, f.warpScale ?? 1)));
     const u = w > 0 && reshapeActive(raw) ? attenuate(raw, f.face.yaw) : scaled(raw, 0);
     let layer = -1;
     if (f.protect && faceDrawn(u)) {

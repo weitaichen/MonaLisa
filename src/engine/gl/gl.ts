@@ -144,14 +144,30 @@ export function shrinkTexture(gl: GL, tex: Texture): void {
   tex.height = 1;
 }
 
-/** Fetch a PNG and upload it as an RGBA8 LINEAR/CLAMP texture with no colour management. */
-export async function loadImageTexture(gl: GL, url: string): Promise<Texture> {
+/**
+ * Fetch a PNG and upload it with no colour management: RGBA8 LINEAR / CLAMP by default; `r8` uploads the red channel
+ * only (R8, from RED); `mipmap` builds the mip chain and samples it LINEAR_MIPMAP_LINEAR (the lashes texture, S5 §4.10).
+ */
+export async function loadImageTexture(gl: GL, url: string, opts: { mipmap?: boolean; r8?: boolean } = {}): Promise<Texture> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`GET ${url} -> ${res.status}`);
   const blob = await res.blob();
   const bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
   const t = createTexture(gl, 0, 0);
-  uploadSource(gl, t, bmp, bmp.width, bmp.height);
+  if (opts.r8) {
+    gl.bindTexture(gl.TEXTURE_2D, t.tex);
+    setUnpackState(gl);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, gl.RED, gl.UNSIGNED_BYTE, bmp);
+    t.width = bmp.width;
+    t.height = bmp.height;
+  } else {
+    uploadSource(gl, t, bmp, bmp.width, bmp.height);
+  }
+  if (opts.mipmap) {
+    gl.bindTexture(gl.TEXTURE_2D, t.tex);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  }
   bmp.close();
   return t;
 }

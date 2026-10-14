@@ -3454,7 +3454,7 @@ git commit -m "v0.4 step 4 (9/20): calibrate TONE on the 膚質 fixture" -m "$(c
   ```
   Rule (S §4.1): each full-size pass writes its preferred buffer unless that buffer is its input. Heal prefers A, retouch B, makeup A, reshape B — with every pass on: P0b src→A, P0d A→B, P1 B→A, P2 A→B, composite reads B, capture writes A. Without the step-4 passes this is exactly today's choice (makeup → A, reshape → B).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `src/engine/pipeline.test.ts` (add `pickFull` to its import from `./pipeline`):
 ```ts
@@ -3483,12 +3483,12 @@ describe('pickFull (skin-cleanup spec §4.1 ping-pong)', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [x] **Step 2: Run it to see it fail**
 
 Run: `npx vitest run src/engine/pipeline.test.ts`
 Expected: FAIL — `pickFull is not a function`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/engine/pipeline.ts`, above `createPipeline` (after `bodyUploadNeeded`, `pipeline.ts:312-321`):
 ```ts
@@ -3513,14 +3513,14 @@ Then in `run()`:
 - the reshape target `const b = fb('B', job.size);` (`pipeline.ts:474`) becomes `const b = full('B', baseFb, job.size);` (P2 renders at the V size, crop spec §4.3).
 The capture rule (`pipeline.ts:500-502`, "whichever full-size buffer is not the composite input") stays as it is.
 
-- [ ] **Step 4: Run the tests and the existing engine checks**
+- [x] **Step 4: Run the tests and the existing engine checks**
 
 Run: `npx vitest run src/engine && npm run typecheck`
 Expected: PASS.
 Run: `npm run build && npx playwright test tests/e2e/engine.spec.ts tests/e2e/parity.spec.ts tests/e2e/reshape.spec.ts`
 Expected: all pass — the pixels are unchanged (without step-4 passes the buffers chosen are v0.3's).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/engine/pipeline.ts src/engine/pipeline.test.ts

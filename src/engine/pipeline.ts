@@ -320,6 +320,14 @@ export function bodyUploadNeeded(prev: BodyUploadKey | null, f: BodyField): bool
   );
 }
 
+/**
+ * Which full-size buffer a pass writes (skin-cleanup spec §4.1): its preferred one, unless that is its input. Heal and
+ * makeup prefer A, retouch and reshape prefer B, so a frame never adds a third full-size buffer.
+ */
+export function pickFull(prefer: 'A' | 'B', input: 'A' | 'B' | null): 'A' | 'B' {
+  return input === prefer ? (prefer === 'A' ? 'B' : 'A') : prefer;
+}
+
 export function createPipeline(gl: GL): Pipeline {
   const meanProg = createProgram(gl, MEAN_VS, MEAN_FS, 'mean');
   const comp = createCompositePrograms(gl);
@@ -347,6 +355,11 @@ export function createPipeline(gl: GL): Pipeline {
       resizeFramebuffer(gl, f, size.width, size.height);
     }
     return f;
+  }
+  const fullName = (f: Framebuffer | null): 'A' | 'B' | null => (f !== null && f === fbs.A ? 'A' : f !== null && f === fbs.B ? 'B' : null);
+  /** the full-size buffer a pass writes (pickFull), sized for that pass */
+  function full(prefer: 'A' | 'B', input: Framebuffer | null, size: Size): Framebuffer {
+    return fb(pickFull(prefer, fullName(input)), size);
   }
 
   let mask: MaskPass | null = null;
@@ -457,7 +470,7 @@ export function createPipeline(gl: GL): Pipeline {
       let baseFb: Framebuffer | null = null;
       if (plan.makeup && makeup) {
         // in O (step 3): the window's size
-        const a = fb('A', job.srcSize);
+        const a = full('A', baseFb, job.srcSize);
         makeup.drawFaces(base, a, meshes, job.win);
         base = a.tex;
         baseFb = a;
@@ -471,7 +484,7 @@ export function createPipeline(gl: GL): Pipeline {
         // every listed face with its cap; a face without weight or an active warp gets zero deltas (EMPTY_BOX), so a
         // body-only frame draws no face chain; its limit is a layer only with a warp drawn (no upload otherwise)
         const t = tableFaces(job, aspect);
-        const b = fb('B', job.size);
+        const b = full('B', baseFb, job.size);
         reshape.drawFaces(base, b, t.faces, { aspect, body, protects: t.protects, view });
         base = b.tex;
         baseFb = b;

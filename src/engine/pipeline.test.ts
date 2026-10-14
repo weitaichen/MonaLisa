@@ -6,6 +6,7 @@ import {
   bodyUploadNeeded,
   faceProtectValid,
   MAX_BODY_FIELD_EDGE,
+  pickFull,
   planFrame,
   planPasses,
   protectUploadNeeded,
@@ -238,5 +239,29 @@ describe('planPasses with geometry and windows (step 3)', () => {
   it('a geometry or a window always runs P2', () => {
     expect(planPasses({ ...quiet, geoIdentity: false }).reshape).toBe(true);
     expect(planPasses({ ...quiet, windowed: true }).reshape).toBe(true);
+  });
+});
+
+describe('pickFull (skin-cleanup spec §4.1 ping-pong)', () => {
+  it('a pass writes its preferred buffer unless that buffer is its input', () => {
+    expect(pickFull('A', null)).toBe('A');
+    expect(pickFull('B', null)).toBe('B');
+    expect(pickFull('A', 'A')).toBe('B');
+    expect(pickFull('B', 'A')).toBe('B');
+    expect(pickFull('B', 'B')).toBe('A');
+    expect(pickFull('A', 'B')).toBe('A');
+  });
+
+  it('every pass on: P0b src→A, P0d A→B, P1 B→A, P2 A→B; the capture then takes A', () => {
+    let cur: 'A' | 'B' | null = null;
+    const chain = (['A', 'B', 'A', 'B'] as const).map((prefer) => (cur = pickFull(prefer, cur)));
+    expect(chain).toEqual(['A', 'B', 'A', 'B']);
+    expect(cur === 'A' ? 'B' : 'A').toBe('A');
+  });
+
+  it('no step-4 pass: makeup still writes A and reshape B, as v0.3 does', () => {
+    expect(pickFull('A', null)).toBe('A');
+    expect(pickFull('B', 'A')).toBe('B');
+    expect(pickFull('B', null)).toBe('B');
   });
 });

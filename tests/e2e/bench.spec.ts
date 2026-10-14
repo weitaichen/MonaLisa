@@ -24,6 +24,9 @@ test('bench.html: 多臉 section keeps its own classes (the 美體偵測 / gate-
   // runs, so none yet); tests/harness/t8/run-bench.mjs reads '.gate .note' (gateProgress alone)
   await expect(page.locator('.body-bench')).toHaveCount(0);
   await expect(page.locator('.gate .note')).toHaveCount(1);
+  // tests/harness/t8/run-bench.mjs and run-bench2.mjs read '.panel .note' (the 複製結果 row's note alone); the 膚質量測
+  // output sits in .panel from load, so it keeps its own class (.tone-note)
+  await expect(page.locator('.panel .note')).toHaveCount(1);
 });
 
 test('bench.html: 調節效能 — base vs 調節 program, compile time, grain hash bit-exact on the GPU', async ({ page }) => {

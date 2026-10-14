@@ -158,6 +158,7 @@ button.primary { background: #B8F02A; color: #000; border-color: #B8F02A; font-w
 .multi-bench { max-width: 100%; max-height: 40vh; overflow: auto; text-align: left; -webkit-user-select: text; user-select: text; }
 .multi-note { color: #B8F02A; font: 12px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
 .adjust-note { color: #B8F02A; font: 12px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; text-align: left; }
+.tone-note { color: #B8F02A; font: 12px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; text-align: left; }
 table { border-collapse: collapse; width: 100%; font: 11px/1.3 ui-monospace, Menlo, monospace; margin-top: 6px; }
 td, th { padding: 1px 4px; text-align: right; color: #ddd; } th { color: #8E8E93; font-weight: 400; }
 textarea { width: 100%; height: 30vh; background: #1C1C1E; color: #fff; border: 1px solid #4A4A4C; border-radius: 8px;
@@ -775,7 +776,8 @@ function renderTable(): void {
 
 // ───────────────────────── 膚質 (skin-cleanup spec §6) ─────────────────────────
 
-const toneOut = el('pre', { className: 'note' });
+// own class, not .note: tests/harness/t8/run-bench*.mjs and bench.spec.ts need '.panel .note' to be the 複製結果 note alone
+const toneOut = el('pre', { className: 'tone-note', id: 'tone-bench' });
 const toneInput = (() => {
   const input = document.createElement('input');
   input.type = 'file';

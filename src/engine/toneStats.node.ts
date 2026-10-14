@@ -44,7 +44,9 @@ export const TOOL_VALUES: Record<ToolName, ToneValues> = {
  * CPU targets at 100 (S §8.2): 勻膚 Cr excess, 黑眼圈 / 法令紋 Y darkening, 白牙 Cb shift, 亮眼 sclera Cr shift. The GPU asserts ⅔.
  * Calibrated (plan Task 9): where the spec's target cannot be met without breaking a keep, the entry is the best value
  * reached, rounded down to 0.05 (S §9) — 黑眼圈 0.6 → 0.45 (darkR; one more lift step breaks the left lash line),
- * 法令紋 0.5 → 0 (the 6 px fold is finer than σ_mid and sits on a highlight, so the field lifts nothing there),
+ * 法令紋 0.5 → 0 (the fold sits on a cheek highlight: even as the 28 px soft shadow of plan Task 11's decision (a) its
+ * core keeps a mean mid-band bY of +0.036 / +0.023 above L, and the field lifts only what is darker than L; recovery
+ * 0.002 / 0.013, 0.002 / 0.021 at lift ×2),
  * 亮眼 0.45 → 0.25 (the eye region's inset ramps leave the sclera near the lids and corners at R.A < 1),
  * 勻膚 0.5 → 0.45 (step 4 follow-up: its chroma factor is capped at 1 so it never inverts bC; blotch2 then reaches
  * 0.4956, and no even.chroma up to 2× gets it past 0.4959, since about half of a σ 0.04 fw blotch lies in L's band).

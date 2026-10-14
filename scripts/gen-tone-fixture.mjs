@@ -169,15 +169,25 @@ export function generateToneFixture(
     };
     apply('darkCircle', name, c, [c[0] - a - 2, c[1] - a - 2, c[0] + a + 2, c[1] + a + 2], weight, ([y, cb, cr], g) => [y * (1 - 0.16 * g), cb + 0.015 * g, cr]);
   }
-  // nasolabial folds: a soft 6 px line from P(82|83) + 0.04 fw·o to P(84|90) + 0.06 fw·o: Y × (1 − 0.12 g)
+  // nasolabial folds: a soft shadow along P(82|83) + 0.04 fw·o → P(84|90) + 0.06 fw·o, a Gaussian across the line with
+  // σ 0.02 fw (28 px wide at half depth on sample_face.png, 2σ_mid), fading in and out over the first and last 15 % of
+  // its length as the 法令紋 band does (so it stays off dot1 at the nose end): Y × (1 − 0.12 g). A real fold is a shadow
+  // at the scale of the field's mid band; the first fixture's 6 px line was finer than σ_mid ≈ 14 px (plan Task 11, a).
   for (const [name, ia, ib, o] of [
     ['foldL', 82, 84, mul(xhat, -1)],
     ['foldR', 83, 90, xhat],
   ]) {
     const a = add(P(ia), mul(o, 0.04 * fw));
     const b = add(P(ib), mul(o, 0.06 * fw));
-    const pad = 4;
-    apply('fold', name, mid(a, b), [Math.min(a[0], b[0]) - pad, Math.min(a[1], b[1]) - pad, Math.max(a[0], b[0]) + pad, Math.max(a[1], b[1]) + pad], (p) => 1 - smooth(1, 3, segDist(p, a, b)), ([y, cb, cr], g) => [y * (1 - 0.12 * g), cb, cr]);
+    const s = 0.02 * fw;
+    const pad = 3 * s;
+    const ab = sub(b, a);
+    const weight = (p) => {
+      const d = segDist(p, a, b);
+      const t = Math.min(1, Math.max(0, dot(sub(p, a), ab) / dot(ab, ab)));
+      return d <= 3 * s ? Math.exp(-(d * d) / (2 * s * s)) * smooth(0, 0.15, t) * (1 - smooth(0.85, 1, t)) : 0;
+    };
+    apply('fold', name, mid(a, b), [Math.min(a[0], b[0]) - pad, Math.min(a[1], b[1]) - pad, Math.max(a[0], b[0]) + pad, Math.max(a[1], b[1]) + pad], weight, ([y, cb, cr], g) => [y * (1 - 0.12 * g), cb, cr], { sigma: Math.round(s * 100) / 100 });
   }
   // yellow teeth: inner-lip polygon (96–103), pixels with Y > 0.15 and chroma < 0.15: Cb − 0.05. sample_face.png's teeth
   // are in shadow (Y 0.15–0.24, the gap between them ≤ 0.13), so spec §8.3's Y > 0.35 would catch only 8 lip-corner pixels;

@@ -53,6 +53,29 @@ describe('gen-tone-fixture', () => {
       for (const d of dots) expect(Math.hypot(b.center[0] - d.center[0], b.center[1] - d.center[1]) / out.json.fw).toBeGreaterThanOrEqual(0.16);
   });
 
+  it('draws each nasolabial fold as a soft shadow 20–40 px wide at half depth (σ_mid…2σ_mid), not a line finer than the mid band', () => {
+    const lm = JSON.parse(readFileSync(resolve(root, 'tests/fixtures/landmarks_sample_face.json'), 'utf8')) as { width: number; height: number; points: number[] };
+    const face = adapt({ points: new Float32Array(lm.points) }, lm.width, lm.height);
+    const { width: W, height: H, fw } = out.json;
+    const P = (i: number): [number, number] => [face.pts111[i * 2] * W, face.pts111[i * 2 + 1] * H];
+    const ex = [P(77)[0] - P(74)[0], P(77)[1] - P(74)[1]];
+    const xhat = [ex[0] / Math.hypot(ex[0], ex[1]), ex[1] / Math.hypot(ex[0], ex[1])];
+    const sigmaMid = 0.0141 * Math.min(W, H);
+    for (const [name, ia, ib, s] of [['foldL', 82, 84, -1], ['foldR', 83, 90, 1]] as const) {
+      // the spec's path (S §8.3): P(82|83) + 0.04 fw·o to P(84|90) + 0.06 fw·o
+      const a = [P(ia)[0] + s * xhat[0] * 0.04 * fw, P(ia)[1] + s * xhat[1] * 0.04 * fw];
+      const b = [P(ib)[0] + s * xhat[0] * 0.06 * fw, P(ib)[1] + s * xhat[1] * 0.06 * fw];
+      const dist = (x: number, y: number) => {
+        const t = Math.min(1, Math.max(0, ((x - a[0]) * (b[0] - a[0]) + (y - a[1]) * (b[1] - a[1])) / ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)));
+        return Math.hypot(x - a[0] - t * (b[0] - a[0]), y - a[1] - t * (b[1] - a[1]));
+      };
+      const d = out.json.defects.find((e) => e.name === name)!;
+      const halfDepth = Math.max(...d.pixels.filter((p) => p[2] >= 0.5).map(([x, y]) => dist(x + 0.5, y + 0.5)));
+      expect(2 * halfDepth, `${name} width at half depth`).toBeGreaterThanOrEqual(Math.max(20, sigmaMid));
+      expect(2 * halfDepth, `${name} width at half depth`).toBeLessThanOrEqual(Math.min(40, 2 * sigmaMid + 4));
+    }
+  });
+
   it('changes pixels only inside the defect boxes, and keeps the cheek patch clean', () => {
     const src = PNG.sync.read(readFileSync(resolve(root, 'tests/fixtures/sample_face.png')));
     const fix = PNG.sync.read(out.png);

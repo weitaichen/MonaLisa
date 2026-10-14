@@ -29,7 +29,7 @@ Checked against the code at the step base `3aebedf` (steps 1–4 committed with 
 - **Task 16:** the Editor snippets use the landed names (`detect`, `infos`, `selected`, `sessionFaces`, `g`, `photo`). The matrix is named `oView`, because the component already has a `view`.
 - **Task 17:** `exportPng` reads the image through a canvas, because the CSP blocks `fetch()` of the fallback's `blob:` URL (`fixtures.ts`). 全部 is `selectPerson(page, 0)`.
 - **Task 18:** the `copyResults` text appends to steps 1–4's sections. The `@bench` case forces the 全部套用 chip visible, as `camera-group.spec.ts` does.
-- **Task 19:** `BASE` resolves to `3aebedf`, through this reconcile commit. The commit count and Step 6's list of mechanical ports follow the items above.
+- **Task 19:** `BASE` resolves to `db1f468`. This reconciliation was committed there under a stale step-3 subject (a leftover message file, as in step 4's `905c34f`). The `v0.4 step 5: reconcile plan` commit on top of it records that and is the first `^v0.4 step 5` match. Both commits change only this plan, so `db1f468` has the step base `3aebedf`'s code. The commit count and Step 6's list of mechanical ports follow the items above.
 - **Commits:** the workflow's message format replaces the plan's `git commit -F- <<'EOF'` blocks: `v0.4 step 5 task <N>: <title>`, fixes `v0.4 step 5 task <N> fix: …`. Each message has a blank line and the `Co-Authored-By` trailer, is written to a file and is committed with `git commit -F <file>` (heredocs break in this shell). A block's `git add` list shows the task's files; also stage every file this reconciliation adds to the task's **Files**.
 - **Imports:** put new names into a file's existing import declarations; never import a name twice.
 
@@ -7305,12 +7305,12 @@ Everything green on a clean tree, plus the equivalence checks the roadmap asks o
 - Consumes: Tasks 1–18; step 1's `tests/e2e/parity.spec.ts` and `src/engine/passes/reshapeCpuV03.ts`; the full Playwright suite including step 1's `chromium-group` project.
 - Produces: the step-5 hand-off note (in the final message to the user, not a file).
 
-Every command below that needs the base of step 5 computes it itself (the shell keeps no variables between commands): `BASE="$(git log --format=%H --grep='^v0.4 step 5' --reverse | head -1)~1"`, the parent of the first step-5 commit. The first one is `v0.4 step 5: reconcile plan` (it changes only this plan), so `BASE` is the step base `3aebedf`.
+Every command below that needs the base of step 5 computes it itself (the shell keeps no variables between commands): `BASE="$(git log --format=%H --grep='^v0.4 step 5' --reverse | head -1)~1"`, the parent of the first step-5 commit. The first one is `v0.4 step 5: reconcile plan`; its parent `db1f468` holds the rest of the plan reconciliation under a stale step-3 subject. Both change only this plan, so `BASE` = `db1f468` has the step base `3aebedf`'s code.
 
 - [ ] **Step 1: Clean tree and the base of step 5**
 
 Run: `git status --short && BASE="$(git log --format=%H --grep='^v0.4 step 5' --reverse | head -1)~1" && git log --oneline "$BASE"..HEAD | cat`
-Expected: no uncommitted changes; on `feat/meiyan-pwa`, the `v0.4 step 5: reconcile plan` commit, then one local `v0.4 step 5 task <N>: …` commit per task 1–18 (plus any `v0.4 step 5 task <N> fix: …` commits).
+Expected: no uncommitted changes; on `feat/meiyan-pwa`, the `v0.4 step 5: reconcile plan` commit (on top of `db1f468`), then one local `v0.4 step 5 task <N>: …` commit per task 1–18 (plus any `v0.4 step 5 task <N> fix: …` commits).
 
 - [ ] **Step 2: Typecheck**
 

@@ -1092,6 +1092,23 @@ describe('左右分開 without a face target', () => {
     expect(r.notice).toBeUndefined();
     expect(r.edit).toBe(e);
   });
+
+  it('a photo with no face: the tap on the dimmed switch changes nothing and claims nothing, like ⊘', () => {
+    const e = E5();
+    const s = { ...INITIAL_SELECTION, tab: 'shape' as const, side: 'R' as const };
+    for (const at of [{ kind: 'person', id: 'f0' }, { kind: 'all' }] as const) {
+      const lens = (x: EditState) => lensFor(x, at, [{ id: 'f0', face: false, body: false }], 'f0');
+      const l = lens(e);
+      expect(l.noFace).toBe(true);
+      const r = activate(byKey(itemsFor(l, s), 'split'), l, s);
+      expect(r.changed, at.kind).toBe(false);
+      expect(r.notice, at.kind).toBeUndefined();
+      expect(r.edit, at.kind).toBe(e);
+      expect(r.sel, at.kind).toBe(s);
+      // the 一鍵 link and its 程度 slider survive (the tap must not turn f0's preset into 自訂)
+      expect(sliderFor(lens(r.edit), { ...s, tab: 'preset' })?.key, at.kind).toBe('preset.natural');
+    }
+  });
 });
 
 describe('美型 dots under 全部 (face-detail spec §2.1, S1 §2.4 Dots)', () => {

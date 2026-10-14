@@ -987,6 +987,9 @@ export function activate(item: PanelItem, lens: Lens, sel: PanelSelection, ctx: 
       return done(lens.setBodyProtect(on), sel, on ? '背景保護已開啟：背景變形範圍較小' : '背景保護已關閉：背景變形範圍較大但較平緩');
     }
     case 'split': {
+      // a photo with no face: the strip is dimmed and nothing is drawn, so the tap is a no-op like ⊘. faceTargets()
+      // is [primary] there, so splitToggle would write `right` onto it and break its 一鍵 link (自訂, no 程度 slider)
+      if (lens.noFace) return done();
       // one EditState for every target (one undo step); it never changes sel.shape (S5 §2.1)
       const r = splitToggle(lens, sel);
       // no face target (a body-only person): nothing to split, so no side change and no notice

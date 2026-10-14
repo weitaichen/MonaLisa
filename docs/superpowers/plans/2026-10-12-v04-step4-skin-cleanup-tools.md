@@ -7633,7 +7633,7 @@ git commit -m "v0.4 step 4 (18/20): tiled export with toneSource and spot window
   ```
   Rows (S §6): `frame (no 膚質)` (the base), `+ every tone tool, field cached`, `+ field rebuild every frame (勻膚 0.50 ↔ 0.51)`, `+ P0d only (白牙 + 亮眼)`, `+ 20 spots`, `+ 100 spots`, `tone + 20 spots, identity`, `tone + 20 spots, 3:4 crop + 旋轉`; plus `planSpot CPU, median of 20 taps`. Desktop now; the iPhone run needs the user's go-ahead for a preview deploy (C §6.2.3). The Web Inspector memory timeline over 10 s of a 瘦臉 drag is a manual step on the device.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/bench/toneBench.test.ts`:
 ```ts
@@ -7670,12 +7670,12 @@ describe('toneBench helpers', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [x] **Step 2: Run it to see it fail**
 
 Run: `npx vitest run src/bench/toneBench.test.ts`
 Expected: FAIL — `Failed to resolve import "./toneBench"`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/bench/toneBench.ts`:
 ```ts
@@ -7845,12 +7845,12 @@ Mount it (the bench needs the engine, so it lives in the panel shown after 開�
 
 Imports: `adapt` from `../tracking/adapter111`; `defaultPhoto`, `neutralPerson` from `../edit/state`; `patchPlan`, `readPatch` from `../edit/patch`; `planSpot`, `spotRadius` from `../edit/spots`; `applyRatio`, `IDENTITY_GEOMETRY`, `rotateLeft` from `../geometry/view` (step 3's names; `applyRatio(g, lock, oSize)`, crop spec §3.3); `formatToneBench`, `runToneBench`, `spotGrid`, `type ToneBenchCase` from `./toneBench` (not `median`: `main.ts` already imports an equal `median` from `./report`, `:45`, and uses it here); `type Geometry`, `type ParamId`, `type RenderInput`, `type Spot` added to the `../types` type import (`:22-31`). `tracker`, `engine`, `busy`, `nextPaint`, `showError`, `errText`, `el`, `button`, `root`, `panel` are main.ts's own.
 
-- [ ] **Step 4: Run the tests and build the bench page**
+- [x] **Step 4: Run the tests and build the bench page**
 
 Run: `npx vitest run src/bench && npm run typecheck && npm run build`
 Expected: PASS; the build includes `bench.html`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/bench/toneBench.ts src/bench/toneBench.test.ts src/bench/main.ts

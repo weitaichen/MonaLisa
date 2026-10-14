@@ -11,12 +11,17 @@ import { type LiveLoop, type LiveStats, autoTierSession, resetAutoTierSession, s
 import { type StillSession, createStillSession } from '../app/still';
 import { legacyFrame } from '../edit/frame';
 import { splitLegacy } from '../edit/legacy';
+import { patchPlan, readPatch } from '../edit/patch';
+import { planSpot, spotRadius } from '../edit/spots';
+import { defaultPhoto, neutralPerson } from '../edit/state';
 import { ENGINE_PATHS, loadEngineAssets, loadPoseModel } from '../engine/assets';
 import { createEngine, isWebGL2Supported } from '../engine/index';
 import { applyPreset, resetGroup } from '../engine/params';
+import { applyRatio, IDENTITY_GEOMETRY, rotateLeft } from '../geometry/view';
 import { createCamera } from '../media/camera';
 import { encodeJpeg } from '../media/exporter';
 import { importPhoto } from '../media/importer';
+import { adapt } from '../tracking/adapter111';
 import { createBodyTracker } from '../tracking/bodyTracker';
 import { createTracker } from '../tracking/tracker';
 import type {
@@ -26,13 +31,18 @@ import type {
   Delegate,
   Engine,
   EngineAssetsProgress,
+  Geometry,
+  ParamId,
   Prefs,
+  RenderInput,
+  Spot,
   Tracker,
 } from '../types';
 import { primaryBody } from '../detect/cache';
 import { formatAdjustBench, runAdjustBench } from './adjustBench';
 import { runExportBench } from './exportBench';
 import { mountMultiFace } from './multiFace';
+import { formatToneBench, runToneBench, spotGrid, type ToneBenchCase } from './toneBench';
 import {
   type BenchSample,
   type BodyBenchRow,
@@ -226,6 +236,7 @@ const captureBtn = button('擷取測試', () => void captureTest());
 const stillBtn = button('靜態圖片測試', () => void stillTest());
 const copyBtn = button('複製結果', () => copyResults());
 const bodyBtn = button('美體偵測', () => bodyTest());
+const toneBtn = button('膚質量測', () => toneTest());
 const bodyOut = el('div', { className: 'note' });
 const exportBtn = button('輸出測試', () => void runExport());
 // synchronous inside the tap (iOS user-activation rule, as bodyTest); exportInput is declared after bodyInput
@@ -266,7 +277,7 @@ const panel = el(
   { className: 'panel' },
   el('div', { className: 'row' }, el('span', { textContent: '畫質' }), ...tierBtns),
   el('div', { className: 'row' }, el('span', { textContent: '參數' }), ...modeBtns),
-  el('div', { className: 'row' }, delegateBtn, landmarksBtn, compareBtn, captureBtn, stillBtn, bodyBtn, exportBtn, exportPhotoBtn, resumeBtn),
+  el('div', { className: 'row' }, delegateBtn, landmarksBtn, compareBtn, captureBtn, stillBtn, bodyBtn, toneBtn, exportBtn, exportPhotoBtn, resumeBtn),
   el('div', { className: 'row' }, copyBtn, note),
   table,
   copyArea,
@@ -762,6 +773,91 @@ function renderTable(): void {
   );
 }
 
+// ───────────────────────── 膚質 (skin-cleanup spec §6) ─────────────────────────
+
+const toneOut = el('pre', { className: 'note' });
+const toneInput = (() => {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.tabIndex = -1;
+  input.setAttribute('aria-hidden', 'true');
+  input.style.cssText = 'position:fixed;left:-100px;top:0;width:1px;height:1px;opacity:0';
+  input.addEventListener('change', () => {
+    const f = input.files?.[0];
+    input.value = '';
+    if (f) void runToneBenchUi(f);
+  });
+  root.appendChild(input);
+  return input;
+})();
+let toneReport = '';
+panel.append(toneOut);
+
+function toneTest(): void {
+  if (busy || !engine) return;
+  toneInput.click(); // synchronous inside the tap (iOS user-activation rule), as bodyTest
+}
+
+async function runToneBenchUi(file: File): Promise<void> {
+  if (busy || !engine) return;
+  busy = true;
+  try {
+    const bitmap = await importPhoto(file, 2048);
+    const lms = tracker ? tracker.detectImage(bitmap, { maxFaces: 1 }) : [];
+    if (!lms.length) throw new Error('沒有偵測到臉部');
+    const face = adapt(lms[0], bitmap.width, bitmap.height);
+    const photo = { ...defaultPhoto(), spots: [] as Spot[] };
+    const person = (v: Partial<Record<ParamId, number>>) => ({ ...neutralPerson(), values: { ...neutralPerson().values, ...v } });
+    const input = (v: Partial<Record<ParamId, number>>, spots: Spot[] = [], geometry?: Geometry): RenderInput => ({
+      source: bitmap,
+      width: bitmap.width,
+      height: bitmap.height,
+      faces: [{ face, weight: 1, person: person(v), protect: null }],
+      obstacles: [],
+      globalSkin: null,
+      photo: { ...photo, spots, ...(geometry ? { geometry } : {}) },
+      // the engine draws the view from RenderInput.geometry (as still.ts passes it), not from photo.geometry
+      ...(geometry ? { geometry } : {}),
+    });
+    const all = { 'tone.even': 0.5, 'tone.warmth': 0.65, 'tone.darkCircle': 0.5, 'tone.nasolabial': 0.5, 'tone.teeth': 0.5, 'tone.eyeBright': 0.5 };
+    const box = { x: 0.25, y: 0.3, w: 0.5, h: 0.4 };
+    const s20 = spotGrid(20, box);
+    const crop34 = rotateLeft(applyRatio(IDENTITY_GEOMETRY, '3:4', bitmap));
+    const cases: ToneBenchCase[] = [
+      { row: 'frame (no 膚質)', input: () => input({}) },
+      { row: '+ every tone tool, field cached', input: () => input(all) },
+      { row: '+ field rebuild every frame (勻膚 0.50 ↔ 0.51)', input: (i) => input({ ...all, 'tone.even': i % 2 ? 0.51 : 0.5 }) },
+      { row: '+ P0d only (白牙 + 亮眼)', input: () => input({ 'tone.teeth': 0.5, 'tone.eyeBright': 0.5 }) },
+      { row: '+ 20 spots', input: () => input({}, s20) },
+      { row: '+ 100 spots', input: () => input({}, spotGrid(100, box)) },
+      { row: 'tone + 20 spots, identity', input: () => input(all, s20) },
+      { row: 'tone + 20 spots, 3:4 crop + 旋轉', input: () => input(all, s20, crop34) },
+    ];
+    toneOut.textContent = '量測中…';
+    const rows = await runToneBench(engine, cases, 'frame (no 膚質)', nextPaint);
+    const faces = [{ id: 'f0', face }];
+    const work = { width: bitmap.width, height: bitmap.height };
+    const plan: number[] = [];
+    for (const s of s20) {
+      const o: [number, number] = [s.x, s.y];
+      const r = spotRadius(o, 'M', faces, work);
+      const t = performance.now();
+      planSpot(readPatch(bitmap, patchPlan(o, r, work)), o, r, { faces, aspect: work.width / work.height, existing: [] });
+      plan.push(performance.now() - t);
+    }
+    rows.push({ row: 'planSpot CPU, median of 20 taps', ms: median(plan), delta: null });
+    toneReport = formatToneBench(rows);
+    toneOut.textContent = toneReport;
+    bitmap.close();
+  } catch (err) {
+    showError('tone', err);
+    toneOut.textContent = `失敗：${errText(err)}`;
+  } finally {
+    busy = false;
+  }
+}
+
 function reportMeta(): Record<string, string> {
   const s = camera?.snapshot;
   return {
@@ -781,7 +877,7 @@ function reportMeta(): Record<string, string> {
 function copyResults(): void {
   const multiText = multi.rows().length ? `\n\n${formatMultiRows(multi.rows())}` : '';
   const exportText = exportRows.length > 0 ? `\n\n${formatExportRows(exportRows)}` : '';
-  const text = formatReport(reportMeta(), samples, bodyRows) + multiText + exportText;
+  const text = formatReport(reportMeta(), samples, bodyRows) + multiText + exportText + (toneReport ? `\n\n膚質\n${toneReport}` : '');
   // the body section may be on the start screen, where the panel (and its textarea) is hidden
   if (panel.hidden) bodySection.append(copyArea);
   else if (copyArea.parentElement !== panel) panel.append(copyArea);

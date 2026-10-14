@@ -10,6 +10,29 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-12-face-detail-and-makeup-design.md` (cited **S5 §n**), under the contract `docs/superpowers/specs/2026-10-12-v04-roadmap.md` (**RM §n**, status accepted). Every RM §12 question uses its recommended default, so for this step: presets reset the new items (#31), 左／右 follow the screen (#32), two-level 美妝 strip (#33), one shape per 睫毛/眼線/眉毛 (#34), one tone per 修容/高光 (#35), only 美瞳 and 睫毛 fade on closed eyes (#36), "+ = more" (#37: 髮際線 + lowers the hairline), 下頜線 one-way (#38), all S5 §1.3 refinements approved (#39). Names consumed from earlier steps come from `2026-10-12-face-person-select-design.md` (**S1**), `2026-10-12-adjust-and-looks-design.md` (**S2**), `2026-10-12-crop-and-fullres-export-design.md` (**S3**) and `2026-10-12-skin-cleanup-tools-design.md` (**S4**).
 
+## Reconciliation (step 5)
+
+Checked against the code at the step base `3aebedf` (steps 1–4 committed with their fixes and follow-ups); no code was changed. Every consumed name exists as the Global Constraints list it, except where an item below says otherwise. Task 9's `PMAKEUP_FS` text still hashes to `'f76b819e'`. These edits were made:
+
+- **Anchors:** the File Structure table, the **Files** lines and the step instructions cite `3aebedf` lines where they had moved (types, params, state, legacy, lens, adapter111, reshape, reshapeCpu, faceCap, makeup, pipeline, index, gl, panelModel, BeautyPanel, Slider, theme.css, settings, ui/state, Camera, Review, Editor, bench main, faceProtect). Lines inside spec quotes may still read `892ea61` lines; when an anchor has moved, find the quoted code.
+- **Line endings** (`git ls-files --eol` at `3aebedf`): every file in the CRLF list of the Global Constraints is still CRLF. The files this reconciliation adds to tasks are LF (`src/engine/backMapFrame.ts`, `src/edit/warpGuard.ts`, `src/geometry/upFrame.ts`, `src/engine/pipeline.test.ts`, `src/ui/components/BeautyPanel.test.tsx`, `src/ui/components/Slider.test.tsx`, `tests/harness/t7/fakes.ts`), except `src/engine/pipeline.ts`, which is CRLF and already listed.
+- **Task 1:** the six-part `ShadePart` leaves `state.ts`'s local lip / blush `SHADES` sets uncompilable, so Task 3's six-part sets move into Task 1. Step 4's `mergeLegacy` (`50492fc`) takes only lip / blush from the 0.3 params, so the four new shades (and `right`) survive a rollback edit; a `legacy.test.ts` case pins it. The landed `BeautyPanel` part-row callback calls `partHasValue`, so the `isShadePart` narrowing goes there and `BeautyPanel.tsx` is untouched. More mechanical test ports: `MAKEUP_PICK_DEFAULT` `toEqual` → `toMatchObject`, the scope-table `shape.` count 9 → 15, and the exact shade assertions of `state.test.ts` / `legacy.test.ts`.
+- **Task 2:** the `Face` literals are listed at their landed lines, plus the ones steps 1–4 added. Step 3's `faceOToU` also maps `iris` / `lids`.
+- **Task 3:** its first `state.ts` edit is done in Task 1.
+- **Task 4:** `MAKEUP_PARAM` is `Record<MakeupPart, PersonParamId>`, so Tasks 12 and 18's `values[MAKEUP_PARAM[part]] = 1` type-check.
+- **Task 6:** `reshapeUniforms` keeps the landed `ShapeId` key type (`ParamId` stays imported). The landed `job()` line wraps the uniforms in `scaleUniforms(…, f.warpScale ?? 1)`, and `faceBoundsFor` has no cast. Step 4's `backMapFrameOf` and step 1's `guardTable` rebuild the face table on the CPU, so they pass `right` too. `pipeline.ts`'s `ZERO_U` and two `pipeline.test.ts` literals gain the twelve keys. `faceCap.ts` gets a new `../params` import line.
+- **Task 7:** the `PINNED` hash constant is `reshapeCpu.test.ts:19`. The comment anchors moved.
+- **Task 11:** `run` plans through step 1's `planFrame(job, makeupReady, bodyOn)`, which gains an optional fourth parameter for the procedural inputs. The t7 harness's `class FakeEngine implements Engine` also needs `procMakeupFailed`.
+- **Task 13:** `sides` goes on `SliderView`, which `SliderRow` reads (`SliderBinding` extends it), as step 4 did with `ends`. The anchors are now `sliderFor`'s landed `'skin'` / `'shape'` case and `tabHasValue`'s shared `'skin'` / `'shape'` / `'makeup'` case. The test reuses the file's existing imports.
+- **Task 14:** the landed code has no `shadeOf`. `partHasValue` is ported to `MAKEUP_PARAM` before `makeupKey` is deleted. The 美妝 slider keeps step 1's `usable` gate and `decorate`. `activate`'s switch stays exhaustive. The step-2 `BeautyPanel.test.tsx` 「口紅／腮紅 row」 case is ported (again in Task 15).
+- **Task 15:** the test file is `Slider.test.tsx`, and the helpers take a `SliderView`. `sliderAriaLabel` composes step 1's `aria` (「，人物 {n}」), and the chips keep the 「各人不同」 marker. `useState` gets imported. The item `aria-description` tells the 「左右」 badge from the 「整張」 one. The `BeautyPanel.test.tsx` case moves to the lead tile.
+- **Task 16:** the Editor snippets use the landed names (`detect`, `infos`, `selected`, `sessionFaces`, `g`, `photo`). The matrix is named `oView`, because the component already has a `view`.
+- **Task 17:** `exportPng` reads the image through a canvas, because the CSP blocks `fetch()` of the fallback's `blob:` URL (`fixtures.ts`). 全部 is `selectPerson(page, 0)`.
+- **Task 18:** the `copyResults` text appends to steps 1–4's sections. The `@bench` case forces the 全部套用 chip visible, as `camera-group.spec.ts` does.
+- **Task 19:** `BASE` resolves to `3aebedf`, through this reconcile commit. The commit count and Step 6's list of mechanical ports follow the items above.
+- **Commits:** the workflow's message format replaces the plan's `git commit -F- <<'EOF'` blocks: `v0.4 step 5 task <N>: <title>`, fixes `v0.4 step 5 task <N> fix: …`. Each message has a blank line and the `Co-Authored-By` trailer, is written to a file and is committed with `git commit -F <file>` (heredocs break in this shell). A block's `git add` list shows the task's files; also stage every file this reconciliation adds to the task's **Files**.
+- **Imports:** put new names into a file's existing import declarations; never import a name twice.
+
 ## Global Constraints
 
 - Base: `feat/meiyan-pwa` with steps 1–4 landed. Commits are LOCAL ONLY: never `git push`, never deploy. `package.json` `"version"` stays `0.3.0`.
@@ -60,35 +83,39 @@ The spec's own tests already cover 翻轉 / 旋轉 after split edits (Task 3 `sc
 | `tests/e2e/shape-makeup.spec.ts` | Step-5 e2e (RM §8.4 step 5) |
 | `src/bench/faceDetailBench.ts` | Pure bench inputs for the step-5 rows |
 
-**Modified files** (anchors at `1f0273d`, which equals `892ea61` for code; step 1–4 modules by name)
+**Modified files** (anchors at the step base `3aebedf`, steps 1–4 landed; step 1–4 modules by name)
 
 | File | Change |
 |---|---|
-| `src/types.ts:8-34, 36-47, 117-130, 303-328` | 14 ids, `ParamDef.split`, `SplitParamId`, `ShadePart` (full), `MakeupPart`, `PersonParams.right` / six shades, `Face.iris` / `Face.lids`, `Engine.procMakeupFailed` |
-| `src/engine/params.ts:4-37, 63-80, 273-276` | New defs in strip order, `SPLIT_IDS`, `SHADES`, `SHADE_PARTS`, `ORIG_PARTS`, `ORIG_TINT`, `MAKEUP_FIXED`, per-part `MAKEUP_PICK_DEFAULT`, `shadeColor(part)` |
-| `src/edit/state.ts`, `src/edit/legacy.ts` (step 1) | `emptyShades()`, `right: null` in `personFromPreset` and `splitLegacy`, `matchesPersonPreset`, `sanitizePerson` of `right` and the six shades |
+| `src/types.ts:8-54, 58-73, 175, 225-229, 309-322, 549-590` | 14 ids, `ParamDef.split`, `SplitParamId`, `ShadePart` (full), `MakeupPart`, `PersonParams.right` / six shades, `Face.iris` / `Face.lids`, `Engine.procMakeupFailed` |
+| `src/engine/params.ts:4-58, 84-101, 294-297` | New defs in strip order, `SPLIT_IDS`, `SHADES`, `SHADE_PARTS`, `ORIG_PARTS`, `ORIG_TINT`, `MAKEUP_FIXED`, per-part `MAKEUP_PICK_DEFAULT`, `shadeColor(part)` |
+| `src/edit/state.ts`, `src/edit/legacy.ts` (step 1) | `emptyShades()`, the six-part shade id sets, `right: null` in `personFromPreset` and `splitLegacy`, `matchesPersonPreset`, `sanitizePerson` of `right` and the six shades; step 4's `mergeLegacy` keeps the new shades |
 | `src/edit/lens.ts` (step 1) | `PersonInfo.screenSwap`, side-aware `get` / `set`, `split`, `setSplit`, `ensureOn`, `clearMakeup` widened to every part, `makeupKey` → `MAKEUP_PARAM`, `withPresetPart` / `resetGroup` clearing `right` and all shades |
 | `src/tracking/adapter111.ts:106-140` | `iris` (MP 468–477) and `lids` (two 16-point eye contours) |
-| `src/engine/passes/reshape.ts:20-65, 93-98, 101-178, 214-319` | New uniforms with L/R, new geometry, `packFaceDetail`, `faceDetailMoves`, side tables, primitives, chain (§4.5) |
+| `src/engine/passes/reshape.ts:37-85, 112-118, 120-198, 206-222, 270-424` | New uniforms with L/R, new geometry, `packFaceDetail`, `faceDetailMoves`, side tables, primitives, chain (§4.5) |
 | `src/engine/passes/faceCap.ts` (step 1) | `uMaxBox` covers the 15 shape items at both ends; `packFaceTable` calls `packFaceDetail` |
-| `src/engine/passes/reshapeCpu.ts:53-143` | Port of every addition |
-| `src/engine/passes/makeup.ts:113-119, 180-238` | Lashes load in `ready`, lazy PMAKEUP, procedural layers after the meshes, `procStatus` |
-| `src/engine/pipeline.ts:83-112, 320-332, 393-399, 486-490` | `FrameJob.procMakeup`, `planPasses` rule, pass names `mk.<layer>`, `procMakeupFailed`, overlay aspect |
-| `src/engine/index.ts:174-231` | Geometry built in `job()`, `procMakeupFailed` getter, overlay aspect |
-| `src/engine/gl/gl.ts:140-149` | `loadImageTexture(gl, url, {mipmap?, r8?})` |
+| `src/engine/backMapFrame.ts:35` (step 4), `src/edit/warpGuard.ts:31` (step 1), `src/media/exportPlan.ts:247` (step 3) | The CPU copies of the face table's uniforms take `person.right` |
+| `src/geometry/upFrame.ts:42-45` (step 3) | `faceOToU` maps `iris` / `lids` |
+| `src/engine/passes/reshapeCpu.ts:48-108` | Port of every addition |
+| `src/engine/passes/makeup.ts:119-135, 145, 194-268` | Lashes load in `ready`, lazy PMAKEUP, procedural layers after the meshes, `procStatus` |
+| `src/engine/pipeline.ts:84-260, 443-455, 486-557, 648-689` | `FrameJob.procMakeup`, `planPasses` rule and `planFrame`'s procedural input, `ZERO_U` keys (Task 6), pass names `mk.<layer>`, `procMakeupFailed`, overlay aspect |
+| `src/engine/index.ts:307-415` | Geometry built in `job()`, `procMakeupFailed` getter, overlay aspect |
+| `src/engine/gl/gl.ts:147-157` | `loadImageTexture(gl, url, {mipmap?, r8?})` |
 | `src/engine/passes/overlay.ts` | Lid stations, brow-gap ends and iris circles with 顯示臉部特徵點 |
 | `scripts/gen-makeup.mjs` | `lashes()`, `lashesPng()`, written by `main()` |
 | `src/ui/panelModel.ts` | `MAKEUP_PARTS` × 10, `makeupView`, `side`, level-1/level-2 items, 卸妝, 自然, liner effective shade, 左右分開 item, dividers, badges, side binding, notes |
 | `src/ui/components/BeautyPanel.tsx`, `Slider.tsx`, `src/ui/theme.css`, `src/ui/icons.tsx` | Two-level strip, lead tile, seen dot, mini swatch, 左｜右 chips and caption, 17 icons |
+| `src/ui/components/BeautyPanel.test.tsx`, `src/ui/components/Slider.test.tsx` (steps 1–4) | The 美妝 row case ported to the lead tile; the 左｜右 helper tests |
 | `src/store/settings.ts` | `meiyan.seen.makeupParts.v1` |
 | `src/ui/screens/Editor.tsx`, `Camera.tsx`, `Review.tsx`, `src/ui/state.ts` | `screenSwap` per person, strip notes, `Shot.mirrored`, hand-over |
-| `src/app/testFakes.ts:35, 121-150`, `src/body/synthetic.ts:167, 375`, `src/engine/passes/mask.test.ts:13`, `src/engine/passes/reshape.test.ts:21`, `src/ui/faceProtectModel.test.ts:23`, `tests/harness/t2/main.ts:981`, `tests/harness/t7/fakes.ts:240` | `Face` literals gain `iris` / `lids`; fake engine gains `procMakeupFailed` |
+| `src/app/testFakes.ts:50, 148-170`, `src/body/synthetic.ts:167, 375`, `src/engine/passes/mask.test.ts:13`, `src/engine/passes/reshape.test.ts:25`, `src/ui/faceProtectModel.test.ts:26`, `tests/harness/t2/main.ts:982`, `tests/harness/t7/fakes.ts:94-116, 296`, and the step 1–4 literals of Task 2 | `Face` literals gain `iris` / `lids`; both fake engines gain `procMakeupFailed` |
 | `tests/e2e/pages/reshape.ts` (step 1), `tests/e2e/pages/export.ts`, `tests/e2e/export.spec.ts` (step 3) | Step-5 warp pin cases through step 1's `pinCases`; three tile cases with every part and warp |
 | `src/ui/panelModel.adjust.test.ts` (step 2) | `partButtons` returns null on 美妝 (the lead tile replaces the part row): its one makeup assertion is ported |
+| `src/engine/params.test.ts`, `src/edit/state.test.ts`, `src/edit/legacy.test.ts`, `src/engine/pipeline.test.ts` (steps 1–4) | The mechanical ports Tasks 1, 6 and 11 name |
 | `tests/harness/t5/assets.test.mjs` | Lashes generator tests |
 | `LICENSES/NOTICE.txt:48` | Procedural makeup and `lashes.png` are original work |
 | `src/bench/main.ts`, `tests/e2e/camera-group.spec.ts` (step 1) | Step-5 bench rows (button, report lines, guarded `@bench` live-fps case) |
-| `src/tracking/faceProtect.ts:1-5` | Comment: the 瘦臉 limit also bounds 下頜線, 太陽穴, 髮際線 |
+| `src/tracking/faceProtect.ts:1-4` | Comment: the 瘦臉 limit also bounds 下頜線, 太陽穴, 髮際線 |
 
 ---
 
@@ -97,12 +124,12 @@ The spec's own tests already cover 翻轉 / 旋轉 after split edits (Task 3 `sc
 The 14 new ids, the split flag, the shade tables and the 17 icons, plus the type widening every later task builds on (`ShadePart`, `MakeupPart`, `PersonParams.right`). After this task the new 美型 items already appear in the strip (neutral, no effect yet); the new 美妝 parts are not reachable until Task 14.
 
 **Files:**
-- Modify: `src/types.ts:8-34` (ParamId), `src/types.ts:36-47` (ParamDef), step 1's `PersonParams` / `ShadePart` block (RM §3.2)
-- Modify: `src/engine/params.ts:4-37` (defs), `src/engine/params.ts:63-80` (shades, pick defaults), `src/engine/params.ts:273-276` (`shadeColor`)
-- Modify: `src/edit/state.ts`, `src/edit/legacy.ts`, `src/edit/lens.ts` (step 1): every `PersonParams` literal gets the six shades and `right: null`
-- Modify: `src/ui/panelModel.ts:23` (`MakeupPart` re-export), `src/ui/panelModel.ts` and `src/ui/components/BeautyPanel.tsx` (step 1–2 call sites narrowed to `ShadePart` until Task 14)
-- Modify: `src/ui/icons.tsx` (17 icons, inserted before the line `  // ── 美體 (body.* ParamDef.icon keys + tools) ──`)
-- Test: `src/engine/params.test.ts`, `src/ui/panelModel.test.ts`, step 1's scope-table test (the test that checks every id against RM §3.1)
+- Modify: `src/types.ts:8-54` (ParamId), `src/types.ts:58-73` (ParamDef), step 1's `ShadePart` (`:175`) and `PersonParams` (`:225-229`) (RM §3.2)
+- Modify: `src/engine/params.ts:4-58` (defs; the 美型 block is `:17-26`, the 美妝 block `:42-44`), `src/engine/params.ts:84-101` (shades, pick defaults), `src/engine/params.ts:294-297` (`shadeColor`)
+- Modify: `src/edit/state.ts`, `src/edit/legacy.ts`, `src/edit/lens.ts` (step 1): every `PersonParams` literal gets the six shades and `right: null`; `state.ts`'s module-local `SHADES` id sets (`:97-100`) cover the six parts; step 4's `mergeLegacy` (`legacy.ts:64-85`) keeps the new shades
+- Modify: `src/ui/panelModel.ts:12` (`MakeupPart` re-export) and the step 1–2 call sites in `src/ui/panelModel.ts` narrowed to `ShadePart` until Task 14 (`BeautyPanel.tsx` is not changed: its part-row callback calls `partHasValue`)
+- Modify: `src/ui/icons.tsx` (17 icons, inserted before the line `  // ── 美體 (body.* ParamDef.icon keys + tools) ──`, `icons.tsx:172`)
+- Test: `src/engine/params.test.ts`, `src/ui/panelModel.test.ts`, step 1's scope-table test (`src/edit/state.test.ts:27-46`), `src/edit/legacy.test.ts`; the mechanical shade-table ports in `src/edit/state.test.ts` and `src/edit/legacy.test.ts` (Step 1)
 
 **Interfaces:**
 - Consumes: step 1's `ParamDef.scope` / `ParamDef.live`, `PersonParamId`, `PersonParams`, `ShadePart` (`'lip' | 'blush'`), `personFromPreset()`, `neutralPerson()`, `naturalPerson()`, `sanitizePerson()`, `splitLegacy()` (RM §3.2), the lens's `withPresetPart` and `resetGroup`; step 1's `itemsFor` / `activate` 美妝 cases and step 2's `partButtons` callback in `BeautyPanel`; steps 2 and 4's `adjust.*` (12) and `tone.*` (6) ids, so `PARAM_DEFS` has 44 entries before this task.
@@ -218,9 +245,24 @@ Port the existing schema assertions in `src/engine/params.test.ts` (the mechanic
 - the count test: add 14 to the count steps 2 and 4 left (44 → 58), both in `toHaveLength` and in the `Set` size;
 - `BIDIRECTIONAL`: append `'shape.temple', 'shape.hairline', 'shape.noseWing', 'shape.noseBridge', 'shape.mouthHeight'`;
 - the defaults table: add `'shape.jawline': 0`, `'shape.temple': 0.5`, `'shape.hairline': 0.5`, `'shape.noseWing': 0.5`, `'shape.noseBridge': 0.5`, `'shape.mouthHeight': 0.5` and the eight new `makeup.*` ids at `0`;
-- `paramsInGroup('makeup')`: expect the ten ids (`'makeup.lip', 'makeup.blush'`, then the eight above).
+- `paramsInGroup('makeup')`: expect the ten ids (`'makeup.lip', 'makeup.blush'`, then the eight above);
+- step 1's `setShade` case (`params.test.ts:397`): `expect(MAKEUP_PICK_DEFAULT).toEqual({ lip: 0.5, blush: 0.4 })` becomes `toMatchObject({ lip: 0.5, blush: 0.4 })` (the full ten-part table is pinned by the new `SHADES` describe above).
 
-In step 1's scope-table test, add the 14 ids to the `person` row.
+In step 1's scope-table test (`src/edit/state.test.ts:27-46`), add the 14 ids to the `person` row (an `expect(person).toEqual(expect.arrayContaining([...]))` line like the tone one) and raise its `person.filter((id) => id.startsWith('shape.'))` count from 9 to 15.
+
+The six-part `shades` also reach four exact shade assertions of steps 1–4; port them to `{ ...emptyShades(), lip: …, blush: … }` (import `emptyShades` into the files' existing `./state` import): `state.test.ts:66` (`neutralPerson().shades`), `:197` (`{ lip: 'coral', blush: null }`), `:209` (`{ lip: null, blush: null }`) and `legacy.test.ts:56` (`{ lip: 'bean', blush: 'peach' }`).
+
+Append to the `describe('mergeLegacy: …')` block of `src/edit/legacy.test.ts` (step 4's rollback merge; `applyPreset`, `PARAM_DEFS`, `editFromLegacy` and `mergeLegacy` are already imported, add `emptyShades` to the `./state` import):
+
+```ts
+  it('step 5: keeps right and the four new shades, which 0.3 can neither show nor write', () => {
+    const e0 = editFromLegacy(applyPreset('glow', 1));
+    const p0 = { ...e0.persons.p0, right: { 'shape.faceSlim': 0.9 }, shades: { ...e0.persons.p0.shades, brow: 'mocha', lens: 'blue' } };
+    const m = mergeLegacy({ ...e0, persons: { p0 } }, applyPreset('refined', 1), 'p0', PARAM_DEFS.map((d) => d.id));
+    expect(m.persons.p0.right).toEqual({ 'shape.faceSlim': 0.9 });
+    expect(m.persons.p0.shades).toEqual({ ...emptyShades(), brow: 'mocha', lens: 'blue' });
+  });
+```
 
 Append to `src/ui/panelModel.test.ts` (it already imports `hasIcon`):
 
@@ -238,8 +280,8 @@ describe('step-5 icons (face-detail spec §3.1)', () => {
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `npx vitest run src/engine/params.test.ts src/ui/panelModel.test.ts`
-Expected: FAIL — `unknown param shape.jawline`, `SHADE_PARTS` / `SHADES` not exported, and `expected false to be true` for the icon keys.
+Run: `npx vitest run src/engine/params.test.ts src/ui/panelModel.test.ts src/edit/legacy.test.ts`
+Expected: FAIL — `unknown param shape.jawline`, `SHADE_PARTS` / `SHADES` not exported, `expected false to be true` for the icon keys, and `emptyShades` not exported by `./state` (`legacy.test.ts`).
 
 - [ ] **Step 3: Implement**
 
@@ -336,7 +378,7 @@ and the 美妝 block:
   { id: 'makeup.lens', label: '美瞳', group: 'makeup', bidirectional: false, default: 0, icon: 'lens', scope: 'person', live: true },
 ```
 
-Replace `params.ts:63-80` (the two shade arrays and `MAKEUP_PICK_DEFAULT`) with:
+Replace `params.ts:84-101` (the 原色 comment, the two shade arrays and `MAKEUP_PICK_DEFAULT`) with:
 
 ```ts
 export const SPLIT_IDS: readonly SplitParamId[] = PARAM_DEFS.filter((d) => d.split).map((d) => d.id as SplitParamId);
@@ -423,7 +465,7 @@ export function isShadePart(p: MakeupPart): p is ShadePart {
 }
 ```
 
-Replace `shadeColor` (`params.ts:273-276`):
+Replace `shadeColor` (`params.ts:294-297`):
 
 ```ts
 /** '#RRGGBB' of a shade, or null for 原色. 眼線 has no 原色: null (or an unknown id) reads as its first shade, 黑. */
@@ -435,7 +477,7 @@ export function shadeColor(part: ShadePart, shade: string | null): string | null
 }
 ```
 
-Add `MakeupPart, ShadePart, SplitParamId` to the `import type` line of `params.ts`. The v1 `sanitizeParams` (`params.ts:279-305`) keeps validating `lipShade` / `blushShade` against `LIP_SHADES` / `BLUSH_SHADES`, unchanged.
+Add `MakeupPart, ShadePart, SplitParamId` to the `import type` line of `params.ts`. The v1 `sanitizeParams` (`params.ts:299-326`) keeps validating `lipShade` / `blushShade` against `LIP_SHADES` / `BLUSH_SHADES`, unchanged.
 
 `src/edit/state.ts` (step 1):
 
@@ -445,22 +487,34 @@ export function emptyShades(): Record<ShadePart, string | null> {
 }
 ```
 
+Step 1's module-local `SHADES` id sets (`state.ts:97-100`, typed `Record<ShadePart, ReadonlySet<string>>` with lip and blush only) no longer type-check once `ShadePart` has six parts, so replace them here (this was Task 3's first `state.ts` edit) by sets for all six parts, built from the params table, which is imported under another name because the local keeps its name:
+
+```ts
+const SHADES: Record<ShadePart, ReadonlySet<string>> = Object.fromEntries(
+  SHADE_PARTS.map((k) => [k, new Set(SHADE_DEFS[k].map((s) => s.id))]),
+) as Record<ShadePart, ReadonlySet<string>>;
+```
+
+(add `SHADE_PARTS` and `SHADES as SHADE_DEFS` to `state.ts`'s import from `../engine/params` and drop `LIP_SHADES` / `BLUSH_SHADES` from it: these two lines were their only users.)
+
 Make every `PersonParams` object literal carry `right: null` and `shades: { ...emptyShades(), lip: …, blush: … }` with the lip and blush values it already sets. In step 1's code these are:
 - `personFromPreset` (`src/edit/state.ts`; `neutralPerson` and `naturalPerson` call it): `return { values, right: null, shades: { ...emptyShades(), lip: p.lipShade, blush: p.blushShade }, preset: { id, amount: p.presetAmount } };`
 - the lens's `withPresetPart` (`src/edit/lens.ts`): `return { values, right: null, shades: { ...emptyShades(), lip: q.lipShade, blush: q.blushShade }, preset: { id, amount: q.presetAmount } };` (its `values` start from `p.values` and take every `PRESET_PERSON_IDS` value from the preset, and `PRESET_PERSON_IDS` is derived from `PARAM_DEFS`, so the 14 new values come out neutral: the preset reset of RM §11 Q7 needs no other code);
 - the lens's `resetGroup`, 美妝 branch: `shades: { lip: null, blush: null }` → `shades: emptyShades()`;
 - `sanitizePerson` (`src/edit/state.ts`): `const shades = { ...emptyShades(), lip: shade('lip'), blush: shade('blush') };` and `right: null` in both object literals it builds (Task 3 rewrites both lines);
-- `splitLegacy` (`src/edit/legacy.ts`).
+- `splitLegacy` (`src/edit/legacy.ts:17`).
+
+Step 4's `mergeLegacy` (`src/edit/legacy.ts:82`, the merge of a v2 entry that 0.3 edited after a rollback) builds its person as `{ ...was, values, shades: { ...was.shades, ...split.person.shades }, preset }`. With `splitLegacy` now returning all six shades, that spread would null the four new shades, which 0.3 can neither show nor write (its contract: "everything else stays as the v2 edit has it"). Take only the two shades 0.3 writes: `shades: { ...was.shades, lip: split.person.shades.lip, blush: split.person.shades.blush }`. `right` stays as the v2 edit has it through `...was` (the appended `legacy.test.ts` case pins both).
 
 The wider `MakeupPart` also reaches step 1's and step 2's code that hands a `MakeupPart` to the lens's `ShadePart` API (`lens.shade`, `lens.setShade`, `lens.clearMakeup`). Until Task 14 rewrites the 美妝 strip only 口紅 and 腮紅 can be selected (`MAKEUP_PARTS` still lists two parts), so narrow those call sites without changing behaviour:
 - `src/ui/panelModel.ts` `ItemAction`: the shade action becomes `{ type: 'shade'; part: ShadePart; shade: string | null }` (add `ShadePart` to the type import);
 - step 1's `itemsFor`, case `'makeup'`: right after `const part = sel.makeupPart;` add `if (!isShadePart(part)) return [{ ...RESET_ITEM('無'), selected: true }];` (import `isShadePart` from `../engine/params`);
 - step 1's `activate`, case `'reset'`, 美妝 branch: start it with `if (!isShadePart(sel.makeupPart)) return done();`;
-- step 2's part-row callback in `src/ui/components/BeautyPanel.tsx` (CRLF): `makeupOn: (p) => lens.shade(p).on` → `makeupOn: (p) => isShadePart(p) && lens.shade(p).on`.
+- step 1's `partHasValue(lens, part)` (`panelModel.ts:371-375`; step 2's part-row callback in `BeautyPanel.tsx:94` is `makeupOn: (p) => partHasValue(lens, p)`, so `BeautyPanel.tsx` itself needs no change): start it with `if (!isShadePart(part)) return false;`.
 
 Then run `npm run typecheck`: any remaining error is a `PersonParams` literal missing `right` or a shade key (fix it as above) or another `MakeupPart` handed to the `ShadePart` API (narrow it with `isShadePart` the same way).
 
-`src/ui/panelModel.ts:23` (CRLF): replace `export type MakeupPart = 'lip' | 'blush';` with
+`src/ui/panelModel.ts:12` (CRLF): replace `export type MakeupPart = 'lip' | 'blush';` with
 
 ```ts
 export type { MakeupPart } from '../types';
@@ -614,9 +668,10 @@ EOF
 The adapter fills the two new `Face` fields from the 478 raw landmarks that step 1 caches, so reopening a photo needs no detection (S5 §4.7, RM §3.6).
 
 **Files:**
-- Modify: `src/types.ts:117-130` (`Face`)
+- Modify: `src/types.ts:309-322` (`Face`)
 - Modify: `src/tracking/adapter111.ts:5-6, 106-140`
-- Modify (Face literals gain the two fields): `src/app/testFakes.ts:35` (CRLF), `src/body/synthetic.ts:167, 375`, `src/engine/passes/mask.test.ts:13`, `src/engine/passes/reshape.test.ts:21` (CRLF), `src/ui/faceProtectModel.test.ts:23`, `tests/harness/t2/main.ts:981` (CRLF), `tests/harness/t7/fakes.ts:240`, and every literal steps 1–4 added (the typecheck lists them)
+- Modify (Face literals gain the two fields): `src/app/testFakes.ts:50` (CRLF), `src/body/synthetic.ts:167, 375`, `src/engine/passes/mask.test.ts:13`, `src/engine/passes/reshape.test.ts:25` (CRLF), `src/ui/faceProtectModel.test.ts:26`, `tests/harness/t2/main.ts:982` (CRLF), `tests/harness/t7/fakes.ts:296`, and the literals steps 1–4 added: `src/bench/exportBench.ts:30`, `src/bench/multiFace.ts:235`, `src/engine/passes/toneGeometry.test.ts:225`, `src/geometry/upFrame.test.ts:91`, `src/tracking/faceProtect.test.ts:106`, `tests/e2e/pages/reshape.ts:229, 261` (the typecheck lists any other)
+- Modify: `src/geometry/upFrame.ts:42-45` (step 3's `faceOToU`, the U-frame face of the body measure): map `iris` and `lids` with the other point arrays
 - Test: `src/tracking/adapter111.test.ts`
 
 **Interfaces:**
@@ -743,7 +798,9 @@ Port every `Face` object literal by spreading `...blankEyes()` into it (import `
   const face: Face = { pts111: new Float32Array(222), ext, oval: new Float32Array(72), yaw: 0, ...blankEyes() };
 ```
 
-Same edit at `src/body/synthetic.ts:375`, `src/app/testFakes.ts:35`, `src/engine/passes/mask.test.ts:13`, `src/engine/passes/reshape.test.ts:21`, `src/ui/faceProtectModel.test.ts:23`, `tests/harness/t2/main.ts:981` and `tests/harness/t7/fakes.ts:240` (there: `{ pts111: …, ext: …, oval: …, yaw: 0, ...blankEyes() }`). Run `npm run typecheck` and port each further literal it reports the same way.
+Same edit at `src/body/synthetic.ts:375`, `src/app/testFakes.ts:50`, `src/engine/passes/mask.test.ts:13`, `src/engine/passes/reshape.test.ts:25`, `src/ui/faceProtectModel.test.ts:26`, `tests/harness/t2/main.ts:982`, `tests/harness/t7/fakes.ts:296` (there: `{ pts111: …, ext: …, oval: …, yaw: 0, ...blankEyes() }`) and the step 1–4 literals listed under **Files** (a face built by mapping another face's arrays, e.g. `multiFace.ts:235`, `faceProtect.test.ts:106` or the two `shrink` helpers of `tests/e2e/pages/reshape.ts:229, 261`, may map `iris` and `lids` the same way instead). Run `npm run typecheck` and port each further literal it reports the same way.
+
+Step 3's `faceOToU` (`src/geometry/upFrame.ts:42-45`) spreads the face and maps `pts111`, `ext` and `oval` into U; add `iris: pointsOToU(f.iris, 2, q), lids: pointsOToU(f.lids, 2, q)` to it, so a U face never mixes frames (the body measure reads none of them today).
 
 - [ ] **Step 4: Run the tests and the typecheck**
 
@@ -773,7 +830,7 @@ The pure side helpers (S5 §3.4) and the edit-state rules for the new fields: pr
 
 **Files:**
 - Create: `src/edit/sides.ts`, `src/edit/sides.test.ts`
-- Modify: `src/edit/state.ts` (step 1): `matchesPersonPreset`, `sanitizePerson` (the per-person part of `sanitizeEditState`) and its module-local `SHADES` id sets
+- Modify: `src/edit/state.ts` (step 1): `matchesPersonPreset` (`:190-194`), `sanitizePerson` (`:210-228`, the per-person part of `sanitizeEditState`); its module-local `SHADES` id sets were widened in Task 1
 - Test: `src/edit/state.test.ts` (step 1)
 
 **Interfaces:**
@@ -1071,15 +1128,9 @@ export function screenLeftIsGpLeft(face: Face, toScreen: (p: [number, number]) =
 }
 ```
 
-`src/edit/state.ts` (step 1), three edits. The preset person part needs none: Task 1 already gave the lens's `withPresetPart` (what `lens.applyPreset` builds each person from) `right: null` and null new shades, and its `PRESET_PERSON_IDS` loop takes the 14 new values, neutral in every `PresetDef.values`, from the preset.
+`src/edit/state.ts` (step 1), two edits. The preset person part needs none: Task 1 already gave the lens's `withPresetPart` (what `lens.applyPreset` builds each person from) `right: null` and null new shades, and its `PRESET_PERSON_IDS` loop takes the 14 new values, neutral in every `PresetDef.values`, from the preset.
 
-1. Replace step 1's module-local `SHADES` id sets (lip and blush only) by sets for all six parts, built from the params table, which is imported under another name because the local keeps its name:
-
-```ts
-const SHADES: Record<ShadePart, ReadonlySet<string>> = Object.fromEntries(
-  SHADE_PARTS.map((k) => [k, new Set(SHADE_DEFS[k].map((s) => s.id))]),
-) as Record<ShadePart, ReadonlySet<string>>;
-```
+1. (Done in Task 1: step 1's module-local `SHADES` id sets already cover the six parts, built from `SHADE_PARTS` and `SHADES as SHADE_DEFS`, because the six-part `ShadePart` type left the lip / blush sets uncompilable there.)
 
 2. In `matchesPersonPreset(p, ref)`, replace the lip / blush comparison line (`if (q.shades.lip !== p.shades.lip || q.shades.blush !== p.shades.blush) return false;`) with:
 
@@ -1100,7 +1151,7 @@ const SHADES: Record<ShadePart, ReadonlySet<string>> = Object.fromEntries(
 
 (these replace its `const shades = …` line and the three lines after it). The preset-id check runs on the sanitized person, so a split person becomes `'custom'`. Missing new values fall back to `fallback.values`, neutral for the 14 new ids.
 
-Imports: `SHADE_PARTS`, `SHADES as SHADE_DEFS` from `../engine/params` (merged into step 1's import from it, which then no longer needs `LIP_SHADES` / `BLUSH_SHADES`: drop them unless another line of `state.ts` uses them); `sanitizeRight` from `./sides`.
+Imports: `sanitizeRight` from `./sides` (`SHADE_PARTS` and `SHADES as SHADE_DEFS` are imported since Task 1).
 
 - [ ] **Step 4: Run the tests**
 
@@ -1128,7 +1179,7 @@ EOF
 Every panel read and write goes through step 1's lens (RM §3.3). This task wraps it with the step-5 operations of S5 §3.4 so the panel (Tasks 13–14) never touches `right` itself. Side reads and writes reuse step 1's routing (selection, 全部, applies, mixed) by presenting each split person's requested half as `values`.
 
 **Files:**
-- Modify: `src/edit/lens.ts` (step 1)
+- Modify: `src/edit/lens.ts` (step 1; `PersonInfo` `:27-31`, `Lens` `:36-66`, the lens-local `makeupKey` `:82`, `lensFor` `:90-281`)
 - Modify: `src/engine/params.ts` (add `MAKEUP_PARAM` after `MAKEUP_PICK_DEFAULT`)
 - Test: `src/edit/lens.test.ts` (step 1)
 
@@ -1143,7 +1194,7 @@ Every panel read and write goes through step 1's lens (RM §3.3). This task wrap
   - `Lens.clearMakeup(part: MakeupPart): EditState` — step 1's operation widened from `ShadePart` to every part: value 0 and, for a shade part, shade null; returns the same `EditState` when every target is already off (no second "clear" operation is added)
   - `Lens.shade`, `Lens.setShade` and `Lens.clearMakeup` read a part's value id from `MAKEUP_PARAM[part]` (step 1's `makeupKey` knew lip and blush only, so 眉毛／眼影／眼線／美瞳 would have read the blush value)
   - `Lens.resetGroup('shape')` also sets `right = null`; `Lens.resetGroup('makeup')` also nulls all six shades
-  - `params.ts`: `MAKEUP_PARAM: Readonly<Record<MakeupPart, ParamId>>`
+  - `params.ts`: `MAKEUP_PARAM: Readonly<Record<MakeupPart, PersonParamId>>` (a `PersonParamId` is a `ParamId`, so every `ParamId` parameter takes it)
   - Every change made by the new operations sets the changed person's `preset = 'custom'` (RM §3.4).
 
 - [ ] **Step 1: Write the failing tests**
@@ -1269,11 +1320,11 @@ Expected: FAIL — `lens.setSplit is not a function` (and the side arguments are
 
 - [ ] **Step 3: Implement**
 
-`src/engine/params.ts`, after `MAKEUP_PICK_DEFAULT`:
+`src/engine/params.ts`, after `MAKEUP_PICK_DEFAULT` (add `PersonParamId` to its `import type` line: the ten ids are person-level, so `values[MAKEUP_PARAM[part]]` indexes a `PersonParams.values` without a cast, as Tasks 12 and 18 do):
 
 ```ts
 /** the ParamId of each 美妝 part */
-export const MAKEUP_PARAM: Readonly<Record<MakeupPart, ParamId>> = {
+export const MAKEUP_PARAM: Readonly<Record<MakeupPart, PersonParamId>> = {
   lip: 'makeup.lip',
   blush: 'makeup.blush',
   brow: 'makeup.brow',
@@ -1980,14 +2031,15 @@ EOF
 CPU side of the six new warps and of 左右分開 (S5 §4.2–4.4): the engine deltas with per-side values, every anchor the shader needs (with the fold-safety clamps and degenerate-face guards), the influence box, the step-5 block of the face table, and the `U_MAX` box. The shader does not read any of it until Task 7, so pixels do not change in this task.
 
 **Files:**
-- Modify: `src/engine/passes/reshape.ts:20-65` (uniforms), `:93-98` (tables), `:100-178` (geometry); add `packFaceDetail`
-- Modify: `src/engine/passes/faceCap.ts` (step 1): `packFaceTable` calls `packFaceDetail` (S5 §4.2 calls the packer `buildReshapeTable`; step 1 named it `packFaceTable`); `uMaxBox`
-- Modify: `src/engine/index.ts` (CRLF; step 1's `job()`): the per-face `reshape` uniforms take `f.person.right`
-- Modify: `src/media/exportPlan.ts` (step 3's `faceBoundsFor`): the tile-apron uniforms take `f.person.right`
+- Modify: `src/engine/passes/reshape.ts:37-85` (uniforms), `:112-118` (tables), `:120-198` (geometry); add `packFaceDetail`
+- Modify: `src/engine/passes/faceCap.ts` (step 1): `packFaceTable` (`:116-138`) calls `packFaceDetail` (S5 §4.2 calls the packer `buildReshapeTable`; step 1 named it `packFaceTable`); `uMaxBox` (`:111-113`)
+- Modify: `src/engine/index.ts` (CRLF; step 1's `job()`, `:321`), step 4's `src/engine/backMapFrame.ts:35` (the 祛痘 tap's back map) and step 1's `src/edit/warpGuard.ts:31` (the fold safety net): the per-face `reshape` uniforms take `f.person.right`
+- Modify: `src/media/exportPlan.ts` (step 3's `faceBoundsFor`, `:247`): the tile-apron uniforms take `f.person.right`
+- Modify: `src/engine/pipeline.ts:213` (CRLF; step 1's `ZERO_U` literal in `tableFaces`) and the two `ReshapeUniforms` literals of `src/engine/pipeline.test.ts:88, 209`: the twelve new keys
 - Test: `src/engine/passes/reshape.test.ts` (CRLF)
 
 **Interfaces:**
-- Consumes: step 1's face-table layout (`FT` in `src/engine/passes/faceTable.ts`, re-exported by `faceCap.ts`: `{ ROW: 96, PTS: 0, EXT: 56, VT: 60, NT: 63, CHIN_EYE: 65, S1: 66, S2: 67, RADII: 68, PROT: 69, RIGHT: 70, BOX: 72, CAP: 73, WIN: 74 }`; 70–71 reserved for step 5, 75–95 spare), `packFaceTable(faces: readonly TableFace[], aspect: number, out: Float32Array)` (per face: `const o = f * FT.ROW * 4`, `const u = t.u` — already attenuated —, `const g = reshapeGeometry(t.face, aspect, u)`, then texels 0–69 and 72–74), `uMaxBox(face, aspect): [number, number, number, number]` (step 1: `reshapeGeometry(face, aspect, { ...RESHAPE_SCALE }).box`), step 1's `job()` line `reshape: reshapeUniforms(f.person.values, w),`, `RenderFace.person` (RM §4.1); Task 1 `SplitParamId`, `PersonParams['right']`.
+- Consumes: step 1's face-table layout (`FT` in `src/engine/passes/faceTable.ts`, re-exported by `faceCap.ts`: `{ ROW: 96, PTS: 0, EXT: 56, VT: 60, NT: 63, CHIN_EYE: 65, S1: 66, S2: 67, RADII: 68, PROT: 69, RIGHT: 70, BOX: 72, CAP: 73, WIN: 74 }`; 70–71 reserved for step 5, 75–95 spare), `packFaceTable(faces: readonly TableFace[], aspect: number, out: Float32Array)` (per face: `const o = f * FT.ROW * 4`, `const u = t.u` — already attenuated —, `const g = reshapeGeometry(t.face, aspect, u)`, then texels 0–69 and 72–74), `uMaxBox(face, aspect): [number, number, number, number]` (step 1: `reshapeGeometry(face, aspect, { ...RESHAPE_SCALE }).box`), step 1's `job()` line, as landed `reshape: scaleUniforms(reshapeUniforms(f.person.values, w), f.warpScale ?? 1),` (λ_f of the fold safety net), `RenderFace.person` (RM §4.1); Task 1 `SplitParamId`, `PersonParams['right']`.
 - Produces:
   - `ReshapeUniforms` += `faceSlimR, faceVR, faceNarrowR, eyeEnlargeR, jawline, jawlineR, temple, templeR, hairline, noseWing, noseBridge, mouthHeight: number`
   - `RESHAPE_SCALE` += `jawline: 0.12, temple: 0.22, hairline: 0.09, noseWing: 0.1, noseBridge: 0.3, mouthHeight: 0.18`
@@ -2201,7 +2253,7 @@ Expected: FAIL — `JAW` / `packFaceDetail` not exported; `hi.jawline` is `undef
 
 - [ ] **Step 3: Implement the uniforms**
 
-Replace `reshape.ts:20-65` (`values` is typed by the person-level ids, so a `PersonParams.values` and a full `Record<ParamId, number>` both fit; existing callers keep compiling):
+Replace `reshape.ts:37-85` (`values` keeps step 1's landed key type `ShapeId`, the 美型 ids, so a `PersonParams.values` and a full `Record<ParamId, number>` both fit; existing callers keep compiling):
 
 ```ts
 /** Engine-space deltas (already scaled per RB §2.4 / face-detail spec §4.2 and multiplied by the live weight). */
@@ -2255,10 +2307,13 @@ export const RESHAPE_SCALE = {
 const clamp01 = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
 const clampS = (v: number) => Math.min(1, Math.max(-1, signed(clamp01(v))));
 
-export function reshapeUniforms(values: Readonly<Record<PersonParamId, number>>, faceWeight: number, right: PersonParams['right'] = null): ReshapeUniforms {
+/** the 美型 items: what the reshape uniforms read (a full Record<ParamId, number> and PersonParams.values both fit) */
+type ShapeId = Extract<ParamId, `shape.${string}`>;
+
+export function reshapeUniforms(values: Readonly<Record<ShapeId, number>>, faceWeight: number, right: PersonParams['right'] = null): ReshapeUniforms {
   const w = clamp01(faceWeight);
-  const one = (id: PersonParamId) => clamp01(values[id]) * w;
-  const bi = (id: PersonParamId) => clampS(values[id]) * w;
+  const one = (id: ShapeId) => clamp01(values[id]) * w;
+  const bi = (id: ShapeId) => clampS(values[id]) * w;
   /** the GPUPixel-right value of a split item: right[id] while 左右分開 is on, else the shared value (same float ops) */
   const rv = (id: SplitParamId) => {
     const r = right?.[id];
@@ -2293,11 +2348,13 @@ export function reshapeUniforms(values: Readonly<Record<PersonParamId, number>>,
 }
 ```
 
-Add `PersonParamId`, `PersonParams` and `SplitParamId` to the `import type` line, and drop `ParamId` from it unless another line of `reshape.ts` still uses it (at `892ea61` only `reshapeUniforms` did; `noUnusedLocals`). `reshapeActive`, step 1's `attenuate` and `faceDrawn` iterate `Object.keys(u)` / `Object.values(u)`, so they cover the new keys unchanged.
+Add `PersonParams` and `SplitParamId` to the `import type` line (`reshape.ts:18`); `ParamId` stays, the `ShapeId` alias uses it. `reshapeActive`, step 1's `attenuate` and `faceDrawn` iterate `Object.keys(u)` / `Object.values(u)`, and the λ_f scalers (`index.ts` `scaleUniforms`, `backMapFrame.ts` / `warpGuard.ts` `scaled`) iterate `Object.keys(o)`, so they cover the new keys unchanged.
+
+Step 1's `ZERO_U` (`pipeline.ts:213`, CRLF), the uniforms of a face without a drawn warp in `tableFaces`, is a typed `ReshapeUniforms` literal: give it the twelve new keys at 0 (`faceSlimR: 0, faceVR: 0, faceNarrowR: 0, eyeEnlargeR: 0, jawline: 0, jawlineR: 0, temple: 0, templeR: 0, hairline: 0, noseWing: 0, noseBridge: 0, mouthHeight: 0`). The two literals of `pipeline.test.ts` (`:88` the `planFrame` job's `reshape`, `:209` the `tableFaces` face) get the same keys, with `faceSlimR: 0.1` next to their `faceSlim: 0.1` (the right side equals the left while 左右分開 is off); their assertions are unchanged.
 
 - [ ] **Step 4: Implement the tables, the geometry and the packing**
 
-After `export const NOSE …` (`reshape.ts:98`):
+After `export const NOSE …` (`reshape.ts:118`):
 
 ```ts
 /** 下頜線 origins: contour L 6–14, R 26–18 (jaw angle → chin, chin 16 excluded; S5 §4.1) */
@@ -2317,7 +2374,7 @@ export function sided(dl: number, dr: number, side: number): number {
 }
 ```
 
-Replace `ReshapeGeometry` and `reshapeGeometry` (`reshape.ts:100-178`):
+Replace `ReshapeGeometry` and `reshapeGeometry` (`reshape.ts:120-198`):
 
 ```ts
 /** Anchors derived on the CPU once per frame (cheaper than per fragment). All in UV space unless marked iso. */
@@ -2557,7 +2614,7 @@ export function reshapeGeometry(face: Face, aspect: number, u: ReshapeUniforms):
 }
 ```
 
-After `faceWidthIso` (`reshape.ts:208-211`; `reshapeGeometry` calls it, and function declarations are hoisted):
+After `faceWidthIso` (`reshape.ts:254-258`; `reshapeGeometry` calls it, and function declarations are hoisted):
 
 ```ts
 /**
@@ -2593,8 +2650,9 @@ In step 1's `packFaceTable` (`src/engine/passes/faceCap.ts`), at the end of the 
 (`o`, `u` — the face's attenuated uniforms — and `g = reshapeGeometry(t.face, aspect, u)` are the callback's own locals; import `packFaceDetail` into faceCap's existing `./reshape` import). The packer's `out.fill(0)` runs first, so a face without step-5 items gets zeros in 75–95, and texels 70–71 always hold the right-side strengths (equal to the left ones while 左右分開 is off).
 
 Pass each person's split values wherever a `ReshapeUniforms` is built from a `RenderFace`:
-- step 1's `job()` in `src/engine/index.ts` (as step 4 left it): `reshape: reshapeUniforms(f.person.values, w),` → `reshape: reshapeUniforms(f.person.values, w, f.person.right),`;
-- step 3's `faceBoundsFor` in `src/media/exportPlan.ts` (the tile aprons): `reshapeUniforms(f.person.values as unknown as Record<ParamId, number>, f.weight)` → `reshapeUniforms(f.person.values, f.weight, f.person.right)` (the cast is no longer needed: the parameter is typed by the person-level ids; drop `ParamId` from that file's type import if nothing else there uses it), so a 右 side stronger than 左 still widens the apron.
+- step 1's `job()` in `src/engine/index.ts:321` (as landed, with λ_f): `reshape: scaleUniforms(reshapeUniforms(f.person.values, w), f.warpScale ?? 1),` → `reshape: scaleUniforms(reshapeUniforms(f.person.values, w, f.person.right), f.warpScale ?? 1),`;
+- the two places that rebuild the engine's face table on the CPU and must match it: step 4's `backMapFrameOf` (`src/engine/backMapFrame.ts:35`, the 祛痘 tap's back map) `scaled(reshapeUniforms(f.person.values, w), f.warpScale ?? 1)` and step 1's `guardTable` (`src/edit/warpGuard.ts:31`, the fold safety net) `scaled(reshapeUniforms(f.person.values, w), …)` each pass `f.person.right` as the third argument;
+- step 3's `faceBoundsFor` in `src/media/exportPlan.ts:247` (the tile aprons): `reshapeUniforms(f.person.values, f.weight)` (landed without a cast) → `reshapeUniforms(f.person.values, f.weight, f.person.right)`, so a 右 side stronger than 左 still widens the apron.
 
 `uMaxBox` below builds its own uniforms and needs no `right`.
 
@@ -2614,18 +2672,18 @@ export function uMaxBox(face: Face, aspect: number): ReshapeGeometry['box'] {
 }
 ```
 
-(imports, merged into faceCap's existing lines: `neutralValue`, `PARAM_DEFS`, `paramsInGroup` from `../params`; `reshapeUniforms`, `type ReshapeGeometry` from `./reshape`, which faceCap already imports `reshapeGeometry` from; `ParamId` from `../../types`. Drop `RESHAPE_SCALE` from faceCap's `./reshape` import: `uMaxBox` was its only user, and `noUnusedLocals` rejects it.) At both ends every box of the v0.3 items is the same disc (a `curveWarp` box does not depend on the sign of its strength), so their part of the box is step 1's; the new items' boxes lie inside it on the fixture face and its mirror (Task 6's test), so there the protect window does not change (S5 §4.4).
+(imports: a new line `import { neutralValue, PARAM_DEFS, paramsInGroup } from '../params';` (faceCap imports nothing from it yet); `reshapeUniforms`, `type ReshapeGeometry` merged into the `./reshape` import, which already has `reshapeGeometry`; `ParamId` merged into `import type { Face, Rect } from '../../types'`. Drop `RESHAPE_SCALE` from faceCap's `./reshape` import: `uMaxBox` was its only user, and `noUnusedLocals` rejects it.) At both ends every box of the v0.3 items is the same disc (a `curveWarp` box does not depend on the sign of its strength), so their part of the box is step 1's; the new items' boxes lie inside it on the fixture face and its mirror (Task 6's test), so there the protect window does not change (S5 §4.4).
 
 - [ ] **Step 5: Run the tests**
 
-Run: `npx vitest run src/engine src/media && npm run typecheck`
-Expected: PASS. The step-1 packing tests (texels 0–69, 72–74), step 1's `uMaxBox` test, step 3's `faceBoundsFor` tests and every existing reshape test are unchanged.
+Run: `npx vitest run src/engine src/media src/edit && npm run typecheck`
+Expected: PASS. The step-1 packing tests (texels 0–69, 72–74), step 1's `uMaxBox` test, step 3's `faceBoundsFor` tests, the `warpGuard` / `backMapFrame` tests and every existing reshape test are unchanged.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-file src/engine/passes/reshape.ts src/engine/passes/reshape.test.ts src/engine/index.ts src/engine/passes/faceCap.ts src/media/exportPlan.ts
-git add src/engine/passes/reshape.ts src/engine/passes/reshape.test.ts src/engine/passes/faceCap.ts src/engine/index.ts src/media/exportPlan.ts
+file src/engine/passes/reshape.ts src/engine/passes/reshape.test.ts src/engine/index.ts src/engine/pipeline.ts src/engine/passes/faceCap.ts src/media/exportPlan.ts
+git add src/engine/passes/reshape.ts src/engine/passes/reshape.test.ts src/engine/passes/faceCap.ts src/engine/index.ts src/engine/pipeline.ts src/engine/pipeline.test.ts src/engine/backMapFrame.ts src/edit/warpGuard.ts src/media/exportPlan.ts
 git commit -F- <<'EOF'
 v0.4 step 5: anchors, box and face-table block of the new warps
 
@@ -2643,8 +2701,8 @@ EOF
 The shader reads the step-5 block from the face table and runs the chain of S5 §4.5; the CPU port mirrors every operation; the hash pin is re-set; the e2e pin harness proves GPU = CPU within 0.05 px for every new warp at ±max, for split L ≠ R and for all 15 items together. Step 3's `displacementBound` learns the new warps.
 
 **Files:**
-- Modify: `src/engine/passes/reshape.ts` (`reshapeFs(carrier)` / `RESHAPE_FS` as steps 1 and 3 left it: constants, accessors, primitives, `faceChain`); add `faceDetailMoves`; step 3's `displacementBound`
-- Modify: `src/engine/passes/reshapeCpu.ts` (the closure step 1's `chainOf(face, u, aspect, prot, win)` returns)
+- Modify: `src/engine/passes/reshape.ts` (`reshapeFs(carrier)` `:270-424` / `RESHAPE_FS` as steps 1 and 3 left it: constants `:353-357`, accessors, primitives, `faceChain` `:359-391`); add `faceDetailMoves`; step 3's `displacementBound` (`:206-222`)
+- Modify: `src/engine/passes/reshapeCpu.ts` (the closure step 1's `chainOf(face, u, aspect, prot, win)` returns, `:87-107`)
 - Modify: `tests/e2e/pages/reshape.ts` (add `runReshapePinFaceDetail`)
 - Create: `tests/e2e/shape-makeup.spec.ts` (first test)
 - Test: `src/engine/passes/reshapeCpu.test.ts` (the hash pin "is pinned to the shader text", new describe blocks, step 1's fold sweep), `src/engine/passes/reshape.test.ts` (step 3's `displacementBound` fuzz)
@@ -3177,12 +3235,12 @@ vec2 faceChain(int f, vec2 tc) {
 }
 ```
 
-Update the comment block above `PROTECT_REACH` (`reshape.ts:185-201` at `892ea61`) and `src/tracking/faceProtect.ts:1-5`: the 瘦臉 limit now also bounds 下頜線, 太陽穴 and 髮際線 (they run before `protectContour`).
+Update the comment block above `PROTECT_REACH` (`reshape.ts:231-248`) and `src/tracking/faceProtect.ts:1-4`: the 瘦臉 limit now also bounds 下頜線, 太陽穴 and 髮際線 (they run before `protectContour`).
 
 - [ ] **Step 6: Re-pin the shader hash**
 
 Run: `npx vitest run src/engine/passes/reshapeCpu.test.ts -t "pinned to the shader text"`
-Expected: FAIL with `expected '<new hash>' to be '<step-3 hash>'`. Copy `<new hash>` into that test's `toBe(…)` (step 1 keeps the value in a `PINNED` constant; the line was `reshapeCpu.test.ts:32` at `892ea61`), then run `npx vitest run src/engine` — Expected: PASS.
+Expected: FAIL with `expected '<new hash>' to be '<step-3 hash>'`. Copy `<new hash>` into that test's `toBe(…)` (the value lives in the `PINNED` constant, `reshapeCpu.test.ts:19`, `'e65a71b2'` at the step base; the test is at `:32`), then run `npx vitest run src/engine` — Expected: PASS.
 
 - [ ] **Step 7: Add the GPU = CPU pin cases**
 
@@ -3290,7 +3348,7 @@ The CPU half of the makeup pass (S5 §4.6–4.9): for every listed face, the str
 - Test: `src/engine/passes/makeupProc.test.ts`
 
 **Interfaces:**
-- Consumes: `RenderFace` (RM §4.1: `face`, `weight`, `person`, `protect`), `Rect` (RM §3.2); Task 1 `shadeColor`, `MAKEUP_FIXED`, `ORIG_TINT`; Task 5 `eyeFrames`, `eyeToUv`, `lidStations`, `browGapAt`, `STATION_XS`, gates; `faceWidthIso`, `yawAttenuation` (`reshape.ts`); `hexToRgb` (`gl.ts:239`).
+- Consumes: `RenderFace` (RM §4.1: `face`, `weight`, `person`, `protect`), `Rect` (RM §3.2); Task 1 `shadeColor`, `MAKEUP_FIXED`, `ORIG_TINT`; Task 5 `eyeFrames`, `eyeToUv`, `lidStations`, `browGapAt`, `STATION_XS`, gates; `faceWidthIso`, `yawAttenuation` (`reshape.ts`); `hexToRgb` (`gl.ts:247`).
 - Produces:
   - `type MakeupLayer = 'contour' | 'highlight' | 'brow' | 'shadow' | 'aegyoLight' | 'aegyoShade' | 'lens' | 'liner' | 'lashes'`
   - `LAYER_ORDER: readonly MakeupLayer[]` (that order); `LAYER_MODE: Readonly<Record<MakeupLayer, 0 | 1 | 2>>` (0 multiply, 1 screen, 2 over)
@@ -4411,7 +4469,7 @@ EOF
 **Files:**
 - Modify: `scripts/gen-makeup.mjs` (generator + `main()` writes the PNG)
 - Create: `public/makeup/own/lashes.png` (generated, committed)
-- Modify: `src/engine/gl/gl.ts` (`loadImageTexture` options; its doc comment and body are `gl.ts:139-149` at `892ea61`; steps 1 and 3 append to the file below it)
+- Modify: `src/engine/gl/gl.ts` (`loadImageTexture` options; its doc comment and body are `gl.ts:147-157` at the step base)
 - Modify: `LICENSES/NOTICE.txt:48` (the "Original to this project" line, as step 2 left it)
 - Test: `tests/harness/t5/assets.test.mjs`
 
@@ -4597,7 +4655,7 @@ Expected: PASS (the new describe and every existing T5 asset test).
 
 - [ ] **Step 6: The loader options**
 
-`loadImageTexture` with its doc comment (`src/engine/gl/gl.ts:139-149` at `892ea61`) becomes:
+`loadImageTexture` with its doc comment (`src/engine/gl/gl.ts:147-157`) becomes:
 
 ```ts
 /**
@@ -4663,15 +4721,15 @@ Wires Tasks 8–10 into P1 (S5 §4.6, §4.10, §3.6): the GL pass that draws the
 
 **Files:**
 - Modify: `src/engine/passes/makeupProc.ts` (add `createProcMakeupPass`)
-- Modify: `src/engine/passes/makeup.ts:113-238` (CRLF; after step 1's copy / per-face mesh split and step 3's `uWin`)
-- Modify: `src/engine/pipeline.ts:53-112, 320-332, 393-399, 480-490` (CRLF; after steps 1–4)
-- Modify: `src/engine/index.ts:174-231` (CRLF; `job()`, the `Engine` object, the overlay call)
-- Modify: `src/types.ts:303-328` (CRLF; `Engine.procMakeupFailed`), `src/app/testFakes.ts:121-150` (CRLF; fake engine)
+- Modify: `src/engine/passes/makeup.ts:119-268` (CRLF; after step 1's copy / per-face mesh split and step 3's `win`: the `MakeupPass` interface `:119-135`, `createMakeupPass` `:145`, the `ready` block `:194-204`, `drawFaces` `:206-248`, `dispose` `:256-266`)
+- Modify: `src/engine/pipeline.ts` (CRLF; after steps 1–4: `FrameJob` `:84-129`, `PassPlanInput` `:139-157`, `planPasses` `:175-187`, `planFrame` `:189-211`, the `Pipeline` interface `:232-260`, `getMakeup` `:443-455`, `run`'s P1 lines `:486-491` and `:550-557`, `preloadMakeup` `:648-653`, `drawOverlay` `:685-689`)
+- Modify: `src/engine/index.ts` (CRLF; `job()` `:307-372`, the `Engine` object `:374-415`, the overlay call `:411`)
+- Modify: `src/types.ts:549-590` (CRLF; `Engine.procMakeupFailed`), `src/app/testFakes.ts:148-170` (CRLF; the object `fakeEngine` builds), `tests/harness/t7/fakes.ts:94-116` (LF; the harness's `class FakeEngine implements Engine`)
 - Modify: `src/engine/passes/overlay.ts`
 - Test: `src/engine/pipeline.test.ts`, `src/engine/passes/overlay.test.ts` (new)
 
 **Interfaces:**
-- Consumes: Tasks 8–10 (`buildMakeupGeometry`, `procMakeupWanted`, `geometryVertexCount`, `oAspectOf`, `LAYER_ORDER`, `LAYER_MODE`, `FLOATS_PER_VERTEX`, `MAX_PMAKEUP_VERTS_PER_FACE`, `PMAKEUP_VS/FS`, `loadImageTexture(…, {r8, mipmap})`); step 1's `MAX_RENDER_FACES` (`src/config/limits.ts`), `RenderInput.faces`, `job()`'s `const listed = input.faces.slice(0, MAX_RENDER_FACES);`, `PassPlanInput.anyFace` (S1 E2), the multi-face makeup method `MakeupPass.drawFaces(src, dst, faces: readonly { face: Face; u: MakeupUniforms }[])` (the one-face `draw` stays) and the pipeline's P1 lines `const meshes = …; if (meshes.length) getMakeup();` … `makeup.drawFaces(base, a, meshes); … passes.push('makeup');` (step-1 plan Task 18), the per-face overlay call `pipeline.drawOverlay(f.face, options.mirror)` (S1 E6); step 3's window argument `win: readonly [number, number, number, number] = [0, 0, 1, 1]` of the makeup draw (`uWin`, S3 §4.1); step 4's choice of P1 input and output buffers (S4 §4.1 ping-pong).
+- Consumes: Tasks 8–10 (`buildMakeupGeometry`, `procMakeupWanted`, `geometryVertexCount`, `oAspectOf`, `LAYER_ORDER`, `LAYER_MODE`, `FLOATS_PER_VERTEX`, `MAX_PMAKEUP_VERTS_PER_FACE`, `PMAKEUP_VS/FS`, `loadImageTexture(…, {r8, mipmap})`); step 1's `MAX_RENDER_FACES` (`src/config/limits.ts`), `RenderInput.faces`, `job()`'s `const listed = input.faces.slice(0, MAX_RENDER_FACES);`, `PassPlanInput.anyFace` (S1 E2), the multi-face makeup method `MakeupPass.drawFaces(src, dst, faces: readonly { face: Face; u: MakeupUniforms }[])` (the one-face `draw` stays) and the pipeline's P1 lines `const meshes = …; if (meshes.length) getMakeup();` … `makeup.drawFaces(base, a, meshes, job.win); … passes.push('makeup');` (step-1 plan Task 18, step 3's `win`), `run`'s plan call `const plan = planFrame(job, makeupReady, body !== null);` (`planFrame(job, makeupReady, bodyOn)` builds the `PassPlanInput`; `planPasses` is never called directly), the per-face overlay call `pipeline.drawOverlay(f.face, options.mirror)` (S1 E6); step 3's window argument `win: readonly [number, number, number, number] = [0, 0, 1, 1]` of the makeup draw (`uWin`, S3 §4.1); step 4's choice of P1 input and output buffers (S4 §4.1 ping-pong).
 - Produces:
   - `makeupProc.ts`: `interface ProcMakeupPass { draw(target: Framebuffer, geom: MakeupGeometry, src: Texture, lashes: Texture | null, win?: readonly [number, number, number, number]): MakeupLayer[]; dispose(): void }`, `createProcMakeupPass(gl: GL): ProcMakeupPass`, `LASHES_UNIT = 1`
   - `MakeupPass`: `ready` never rejects (settles when the GPUPixel textures and `lashes.png` have each loaded or failed); `meshReady: boolean`; `drawFaces(src, dst, faces, proc: MakeupGeometry | null, win?)` returns the procedural `MakeupLayer[]` drawn; `ensureProc(): boolean`; `procStatus(): 'unknown' | 'ok' | 'failed'`; `createMakeupPass(gl, assetBase = '/makeup/gp/', lashesUrl = '/makeup/own/lashes.png')`
@@ -4845,7 +4903,7 @@ export function createProcMakeupPass(gl: GL): ProcMakeupPass {
   procStatus(): 'unknown' | 'ok' | 'failed';
 ```
 
-In `createMakeupPass(gl, assetBase = '/makeup/gp/', lashesUrl = '/makeup/own/lashes.png')`, replace the `ready` block (`makeup.ts:178-188`) with:
+In `createMakeupPass(gl, assetBase = '/makeup/gp/', lashesUrl = '/makeup/own/lashes.png')`, replace the `ready` block (`makeup.ts:194-204`, from `let tex` to the end of the `ready` promise) with:
 
 ```ts
   let tex: MakeupTextures | null = null;
@@ -4914,13 +4972,15 @@ In the returned object: add `get meshReady() { return meshReady; }`, `ensureProc
   procReady: boolean;
 ```
 
-`planPasses`'s makeup rule becomes (keep step 1's face test, named `anyFace` in S1 E2):
+`planPasses`'s makeup rule becomes (keep step 1's face test: `planPasses` reads it as `const faceOn = i.anyFace;`, S1 E2):
 
 ```ts
-    makeup: i.anyFace && ((i.makeupActive && i.makeupReady) || (i.procActive && i.procReady)),
+    makeup: faceOn && ((i.makeupActive && i.makeupReady) || (i.procActive && i.procReady)),
 ```
 
-`getMakeup()` (`pipeline.ts:320-332`):
+`run` plans through step 1's pure `planFrame(job, makeupReady, bodyOn)` (`pipeline.ts:189-211`, also called by `pipeline.test.ts` and `src/app/faceTracks.test.ts`), which builds the `PassPlanInput`: give it a fourth parameter `proc: { active: boolean; ready: boolean } = { active: false, ready: false }` and pass `procActive: proc.active, procReady: proc.ready` to `planPasses`, so its existing callers keep compiling and planning as before.
+
+`getMakeup()` (`pipeline.ts:443-455`):
 
 ```ts
   function getMakeup(): MakeupPass {
@@ -4944,7 +5004,7 @@ In the returned object: add `get meshReady() { return meshReady; }`, `ensureProc
       const procReady = proc !== null && makeup !== null && makeup.ensureProc();
 ```
 
-(replacing step 1's `if (meshes.length) getMakeup();`), and pass `procActive: proc !== null, procReady` to `planPasses`. At the P1 call (`makeup.drawFaces(…)` as steps 1, 3 and 4 left it: P1's input, P1's target, `meshes`, the window), insert the argument `procReady ? proc : null` right after `meshes`, keep its result as `const layers`, and replace the `passes.push('makeup')` after it with:
+(replacing step 1's `if (meshes.length) getMakeup();`, `pipeline.ts:489`), and plan with `const plan = planFrame(job, makeupReady, body !== null, { active: proc !== null, ready: procReady });`. At the P1 call (`makeup.drawFaces(base, a, meshes, job.win)` as steps 1, 3 and 4 left it, `pipeline.ts:553`: P1's input, P1's target, `meshes`, the window), insert the argument `procReady ? proc : null` right after `meshes`, keep its result as `const layers`, and replace the `passes.push('makeup')` after it with:
 
 ```ts
         passes.push('makeup', ...layers.map((l) => `mk.${l}`));
@@ -4979,7 +5039,7 @@ and pass `input.width / input.height` as the overlay's aspect where step 1 calls
   readonly procMakeupFailed: boolean;
 ```
 
-`src/app/testFakes.ts` (CRLF): add `procMakeupFailed: false,` to the object `fakeEngine` builds.
+`src/app/testFakes.ts` (CRLF): add `procMakeupFailed: false,` to the object `fakeEngine` builds (`:148-170`; `FakeEngine extends Engine` inherits the field). `tests/harness/t7/fakes.ts` (LF) has its own `class FakeEngine implements Engine`: add `readonly procMakeupFailed = false;` next to its `readonly adjustUnavailable = false;` (`:116`).
 
 - [ ] **Step 6: The debug overlay**
 
@@ -5036,7 +5096,7 @@ Expected: PASS. With every procedural item neutral, `procMakeupWanted` is false,
 
 ```bash
 file src/engine/passes/makeup.ts src/engine/pipeline.ts src/engine/index.ts src/types.ts src/app/testFakes.ts src/engine/passes/overlay.ts
-git add src/engine/passes/makeupProc.ts src/engine/passes/makeup.ts src/engine/pipeline.ts src/engine/pipeline.test.ts src/engine/index.ts src/types.ts src/app/testFakes.ts src/engine/passes/overlay.ts src/engine/passes/overlay.test.ts
+git add src/engine/passes/makeupProc.ts src/engine/passes/makeup.ts src/engine/pipeline.ts src/engine/pipeline.test.ts src/engine/index.ts src/types.ts src/app/testFakes.ts tests/harness/t7/fakes.ts src/engine/passes/overlay.ts src/engine/passes/overlay.test.ts
 git commit -F- <<'EOF'
 v0.4 step 5: procedural makeup layers in P1
 
@@ -5646,15 +5706,15 @@ EOF
 The panel model of S5 §2.1–2.2 on top of step 1's lens-based `panelModel.ts`: dividers at the five group starts, the 左右分開 switch item at the end, 「左右」 badges while it is on, has-value dots over both sides, and a slider binding with a 左｜右 side.
 
 **Files:**
-- Modify: `src/ui/panelModel.ts` (CRLF; after steps 1–4: `PanelSelection`, `INITIAL_SELECTION`, `ItemAction`, `SliderBinding`, the `'shape'` cases of `itemsFor` / `sliderFor` / `tabHasValue`, `activate`)
+- Modify: `src/ui/panelModel.ts` (CRLF; after steps 1–4: `PanelSelection` `:43-53`, `INITIAL_SELECTION` `:55-64`, `ItemAction` `:299-315`, `SliderView` `:909-929` (what `SliderRow` reads; `SliderBinding` `:931-937` extends it), the `'shape'` cases of `itemsFor` (`:747-768`) / `sliderFor` (`:983-991`) / `tabHasValue` (`:1078-1082`), `activate` `:828-906`)
 - Test: `src/ui/panelModel.test.ts`
 
 **Interfaces:**
-- Consumes: Task 4 lens (`get(id, side)`, `set(id, v, side)`, `split()`, `setSplit(on, side)`); step 1's `PanelItem.badge?: string` (S1 A9) and step 2's `PanelItem.divider?: 'before'` (S2 §3.4); step 1's lens-based `itemsFor(lens, sel, ctx)`, `sliderFor(lens, sel, ctx)`, `tabHasValue(lens, tab, ctx)`, `activate(item, lens, sel)` with its local `done(next, nextSel?, notice?)` helper (today `panelModel.ts:402-407`, `next` now an `EditState`); step 1's `SliderBinding { key; param: ParamId | null; label; bidirectional; value; mixed: boolean; defaultValue; apply(lens, v): EditState }` (step-1 plan Task 10); `hasValue`, `paramDef`, `paramsInGroup` (`params.ts`).
+- Consumes: Task 4 lens (`get(id, side)`, `set(id, v, side)`, `split()`, `setSplit(on, side)`); step 1's `PanelItem.badge?: string` (S1 A9) and step 2's `PanelItem.divider?: 'before'` (S2 §3.4); step 1's lens-based `itemsFor(lens, sel, ctx)`, `sliderFor(lens, sel, ctx)`, `tabHasValue(lens, tab, ctx)`, `activate(item, lens, sel)` with its local `done(next, nextSel?, notice?)` helper (today `panelModel.ts:831-836`, `next` now an `EditState`); step 1's `SliderBinding { key; param: ParamId | null; label; bidirectional; value; mixed: boolean; defaultValue; apply(lens, v): EditState }` (step-1 plan Task 10); `hasValue`, `paramDef`, `paramsInGroup` (`params.ts`).
 - Produces:
   - `PanelSelection.side: 'L' | 'R'` (`INITIAL_SELECTION.side = 'L'`)
   - `ItemAction` += `{ type: 'split' }`
-  - `SliderBinding.sides?: { active: 'L' | 'R'; other: number; select(side: 'L' | 'R'): PanelSelection }`
+  - `SliderView.sides?: { active: 'L' | 'R'; other: number; select(side: 'L' | 'R'): PanelSelection }` (on `SliderView`, which `SliderRow` takes as its `binding`, like step 4's `ends`; every `SliderBinding` has it, since `SliderBinding extends SliderView`)
   - `SHAPE_DIVIDERS: ReadonlySet<ParamId>`, `SPLIT_BADGE = '左右'`, `SPLIT_ON_NOTICE`, `SPLIT_OFF_NOTICE`
   - `decorateShapeItems(items: PanelItem[], lens: Lens): PanelItem[]` (the 15 def items in, plus the split item out)
   - `shapeHasValue(lens: Lens): boolean`
@@ -5664,7 +5724,7 @@ The panel model of S5 §2.1–2.2 on top of step 1's lens-based `panelModel.ts`:
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `src/ui/panelModel.test.ts` (imports: `defaultPhoto, naturalPerson, neutralPerson` from `../edit/state`; `lensFor` from `../edit/lens`; `paramsInGroup` from `../engine/params`; the new names from `./panelModel`; types `EditState`, `PersonParams`, `PanelItem`, `SliderBinding`):
+Append to `src/ui/panelModel.test.ts`, merging the imports into its existing lines (it already imports `lensFor` from `../edit/lens`, `defaultPhoto` and `neutralPerson` from `../edit/state`, `paramsInGroup` from `../engine/params` and the `EditState` type): add `naturalPerson` to the `../edit/state` import, the new names and the types `PanelItem`, `SliderBinding` to the `./panelModel` import, and `PersonParams` to the `../types` type import:
 
 ```ts
 const E5 = (f0: PersonParams = naturalPerson()): EditState => ({ v: 2, photo: defaultPhoto(), persons: { f0 }, template: neutralPerson(), primaryInit: null });
@@ -5785,7 +5845,7 @@ Expected: FAIL — `decorateShapeItems` is not exported.
 // ItemAction
   /** 美型: toggle 左右分開 */
   | { type: 'split' }
-// SliderBinding
+// SliderView (SliderRow reads it; SliderBinding extends it)
   /** present for a split item while 左右分開 is on: the on-screen side being edited, the other side's value */
   sides?: { active: 'L' | 'R'; other: number; select(side: 'L' | 'R'): PanelSelection };
 ```
@@ -5871,16 +5931,16 @@ export function splitJointNotice(item: PanelItem, lens: Lens, sel: PanelSelectio
 
 Wire them into step 1's functions:
 - `itemsFor`: step 1 serves 美膚 and 美型 from one shared `case 'skin': case 'shape':` that returns `[RESET_ITEM(), …paramsInGroup(sel.tab).map(…)]` (step 4 extends its 美膚 side). Keep that case shared and step 1's ⊘ 原圖 item first; only for 美型 pass the per-def items through `decorateShapeItems(items, lens)`, which returns them decorated and followed by the 左右分開 switch, e.g. `const defs = paramsInGroup(sel.tab).map(…); … sel.tab === 'shape' ? decorateShapeItems(defs, lens) : defs …`. Step 6 later appends 推臉筆 after the switch (step-6 plan: "after step 5's 左右分開").
-- `sliderFor`: in the shared `'skin'` / `'shape'` case (step 4 computes `const id = sel.tab === 'skin' ? sel.skin : sel.shape`), wrap the binding `b` it returns for a param: `return withSides(b, lens, sel, id);` (`withSides` returns `b` itself for a non-split id, so 美膚 is unaffected).
-- `tabHasValue`, case `'shape'`: `return shapeHasValue(lens);`
+- `sliderFor`: in the shared `'skin'` / `'shape'` case (landed: `const id = sel[sel.tab];`, the 祛痘 / tone / `usable` early returns, `const b = decorate(paramBinding(lens, id), lens, photoLike(lens, id));`, then `return id === 'tone.warmth' ? { ...b, ends: WARM_ENDS } : b;`), wrap the binding of that last line: `return id === 'tone.warmth' ? { ...b, ends: WARM_ENDS } : withSides(b, lens, sel, id);` (`withSides` returns `b` itself for a non-split id, so 美膚 is unaffected; it keeps `decorate`'s key prefix and `aria`).
+- `tabHasValue`: step 4 serves `'skin'`, `'shape'` and `'makeup'` from one shared case (`spotsOnTab` for 美膚, then `lens.groupHasValue(tab)`); add `if (tab === 'shape') return shapeHasValue(lens);` at its head.
 - `activate`: `case 'split': { const r = splitToggle(lens, sel); return done(r.edit, r.sel, r.notice); }` (a toggle always changes the EditState, so it is one undo step; it never changes `sel.shape`).
 
-Imports: `EditState` type; `Lens` type from `../edit/lens`.
+Imports: none new (`panelModel.ts` already imports the `EditState` type and `type Lens` from `../edit/lens`).
 
 - [ ] **Step 4: Run the tests**
 
 Run: `npx vitest run src/ui && npm run typecheck`
-Expected: PASS — the new describes and every existing panel test. One mechanical port: the strip now ends with the 左右分開 switch, so the 美型 key list of the test "skin / shape strips start with ⊘ 原圖 then every param of the group" (`panelModel.test.ts:45-51` at `892ea61`, as steps 1 and 4 ported it: `expect(items.slice(1).map((i) => i.key)).toEqual(paramsInGroup(tab).map((d) => d.id))`) gains `'split'` at the end for `tab === 'shape'` (e.g. `[...paramsInGroup(tab).map((d) => d.id), ...(tab === 'shape' ? ['split'] : [])]`); any other exact length or key list of the 美型 strip in step 1's tests is ported the same way.
+Expected: PASS — the new describes and every existing panel test. One mechanical port: the strip now ends with the 左右分開 switch, so the 美型 key list of the test "skin / shape strips start with ⊘ 原圖 then every param of the group" (`panelModel.test.ts:77-83`, as steps 1 and 4 ported it: `expect(items.slice(1).map((i) => i.key)).toEqual(paramsInGroup(tab).map((d) => d.id))`) gains `'split'` at the end for `tab === 'shape'` (e.g. `[...paramsInGroup(tab).map((d) => d.id), ...(tab === 'shape' ? ['split'] : [])]`); any other exact length or key list of the 美型 strip in step 1's tests is ported the same way.
 
 - [ ] **Step 5: Commit**
 
@@ -5903,8 +5963,8 @@ EOF
 The panel model of S5 §2.3–2.4: ten parts; level 1 (卸妝 │ the ten part tiles) and level 2 (無 · (原色) · shades, or 無 · 自然) sharing one row; the leading part tile; the liner's effective shade; the pick defaults; and the three strip notes.
 
 **Files:**
-- Modify: `src/ui/panelModel.ts` (CRLF; `MAKEUP_PARTS`, `PanelSelection`, `ItemAction`, `ItemVisual`, the `'makeup'` cases of `itemsFor` / `sliderFor`, `activate`, the panel-local `makeupKey`, step 2's `partButtons`)
-- Test: `src/ui/panelModel.test.ts`; `src/ui/panelModel.adjust.test.ts` (step 2; its one 美妝 `partButtons` assertion is ported)
+- Modify: `src/ui/panelModel.ts` (CRLF; `MAKEUP_PARTS` `:31-34`, `PanelSelection`, `ItemAction`, `ItemVisual` `:291-297`, the `'makeup'` cases of `itemsFor` (`:782-803`) / `sliderFor` (`:1002-1009`), `activate`, the panel-local `makeupKey` `:356-358` and step 1's `partHasValue` `:371-375`, step 2's `partButtons` `:682-688`)
+- Test: `src/ui/panelModel.test.ts`; `src/ui/panelModel.adjust.test.ts` (step 2; its one 美妝 `partButtons` assertion is ported); `src/ui/components/BeautyPanel.test.tsx` (step 2's 「美妝 keeps its 口紅／腮紅 row」 case, `:252-256`, is ported: the row is gone)
 
 (The lens already reads every part's value through `MAKEUP_PARAM` since Task 4.)
 
@@ -5922,7 +5982,7 @@ The panel model of S5 §2.3–2.4: ten parts; level 1 (卸妝 │ the ten part t
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `src/ui/panelModel.test.ts` (reusing Task 13's `E5` / `L5`; imports: `emptyShades` from `../edit/state`; `SHADES`, `MAKEUP_PICK_DEFAULT` from `../engine/params`; the new names from `./panelModel`):
+Append to `src/ui/panelModel.test.ts` (reusing Task 13's `E5` / `L5`; imports merged into the existing lines: `emptyShades` into the `../edit/state` import, `SHADES` into the `../engine/params` import, which already has `MAKEUP_PICK_DEFAULT`, the new names into the `./panelModel` import, which already has `type PanelSelection`):
 
 ```ts
 const withMakeup = (values: Record<string, number>, shades: Partial<PersonParams['shades']> = {}): PersonParams => ({
@@ -6049,7 +6109,7 @@ Expected: FAIL — `makeupShadeItems` is not exported.
 
 - [ ] **Step 3: Implement**
 
-`src/ui/panelModel.ts` (CRLF), replacing the two-entry `MAKEUP_PARTS` (`panelModel.ts:36-39`):
+`src/ui/panelModel.ts` (CRLF), replacing the two-entry `MAKEUP_PARTS` (`panelModel.ts:31-34`):
 
 ```ts
 export interface MakeupPartDef {
@@ -6094,7 +6154,7 @@ export function makeupPartDef(id: MakeupPart): MakeupPartDef {
   | { type: 'makeupOn'; part: MakeupPart }
 ```
 
-Add (remove `makeupKey` and `shadeOf`, `panelModel.ts:241-247`, which only knew lip and blush):
+Add (and remove the panel-local `makeupKey`, `panelModel.ts:356-358`, which only knew lip and blush, once its two users are ported below: `partHasValue` and `sliderFor`; the landed code has no `shadeOf`):
 
 ```ts
 /** the shade the strip treats as current: 眼線 null reads as its first shade, 黑 (S5 §2.3) */
@@ -6225,23 +6285,24 @@ export function makeupNote(sel: PanelSelection, i: MakeupNoteInput): string | nu
 
 Wire them in:
 - `itemsFor`, case `'makeup'`: replace step 1's body (with Task 1's `isShadePart` guard) by `return sel.makeupView === 'parts' ? makeupPartItems(lens, sel) : makeupShadeItems(lens, sel.makeupPart);`
-- `sliderFor`, case `'makeup'`: keep step 1's binding and key scheme — `const p = makeupPartDef(sel.makeupPart); const b = paramBinding(lens, p.param); return { ...b, label: p.label, defaultValue: MAKEUP_PICK_DEFAULT[sel.makeupPart] };` in place of step 1's `makeupKey(sel.makeupPart)` and its lip / blush label; it shows on both levels (never unmounted mid-drag, `panelModel.ts:531-542` at `892ea61`). Then delete the panel-local `function makeupKey` (no other user is left; `noUnusedLocals`).
-- `activate` (step 1's `const edit = lens.edit;` and `done(next = edit, nextSel = sel, notice?)`), right after its disabled-item check: `const m = makeupAction(a, lens, sel); if (m) return done(m.edit ?? edit, m.sel);`, and delete step 1's makeup branch of `'reset'` (with Task 1's guard) and its `'shade'` case (both are handled above).
+- `sliderFor`, case `'makeup'`: keep step 1's binding, its `usable` gate, its `decorate` and its key scheme — `const p = makeupPartDef(sel.makeupPart); if (!usable(lens, p.param)) return null; const b = paramBinding(lens, p.param); return decorate({ ...b, label: p.label, defaultValue: MAKEUP_PICK_DEFAULT[sel.makeupPart] }, lens, false);` in place of step 1's `makeupKey(sel.makeupPart)` and its lip / blush label; it shows on both levels (never unmounted mid-drag, `panelModel.ts:1002-1009`).
+- step 1's `partHasValue(lens, part)` (BeautyPanel's part-row callback and `panelModel.test.ts:706-708` still call it): `makeupKey(part)` becomes `MAKEUP_PARAM[part]`, and Task 1's guard `if (!isShadePart(part)) return false;` becomes the dot of a part without shades: `if (lens.sel.kind !== 'all') return isShadePart(part) ? lens.shade(part).on : lens.get(MAKEUP_PARAM[part]).value > 0.01;`. Then delete the panel-local `function makeupKey` (no other user is left; `noUnusedLocals`).
+- `activate` (step 1's `const edit = lens.edit;` and `done(next = edit, nextSel = sel, notice?)`), right after its disabled-item check: `const m = makeupAction(a, lens, sel); if (m) return done(m.edit ?? edit, m.sel);`, and delete step 1's makeup branch of `'reset'` (with Task 1's guard) and its `'shade'` case (both are handled above). `activate` returns `ActivateResult` from an exhaustive `switch (a.type)`, so keep it exhaustive for TypeScript: add `case 'shade': case 'part': case 'parts': case 'makeupReset': case 'makeupOn': return done();` (`makeupAction` has already answered every one of them).
 - `tabHasValue`, case `'makeup'`: unchanged (`paramsInGroup('makeup')` now holds the ten values).
-- Step 2's `partButtons(sel, state)`: delete its `if (sel.tab === 'makeup') return MAKEUP_PARTS.map(…);` line, so it returns `null` on 美妝 (the leading tile replaces the part row; the 一鍵 row is unchanged). In step 2's `src/ui/panelModel.adjust.test.ts`, the assertion `expect(partButtons(sel({ tab: 'makeup' }), { makeupOn: (p) => p === 'blush', look: null })!.map((p) => p.hasValue)).toEqual([false, true]);` becomes `expect(partButtons(sel({ tab: 'makeup' }), { makeupOn: (p) => p === 'blush', look: null })).toBeNull();` — the one intended change of a step-2 assertion (S5 §2.3 replaces the part row). `selectPart`'s 美妝 branch stays (harmless).
+- Step 2's `partButtons(sel, state)`: delete its `if (sel.tab === 'makeup') return MAKEUP_PARTS.map(…);` line, so it returns `null` on 美妝 (the leading tile replaces the part row; the 一鍵 row is unchanged). In step 2's `src/ui/panelModel.adjust.test.ts`, the assertion `expect(partButtons(sel({ tab: 'makeup' }), { makeupOn: (p) => p === 'blush', look: null })!.map((p) => p.hasValue)).toEqual([false, true]);` becomes `expect(partButtons(sel({ tab: 'makeup' }), { makeupOn: (p) => p === 'blush', look: null })).toBeNull();` — the one intended change of a step-2 assertion (S5 §2.3 replaces the part row). `selectPart`'s 美妝 branch stays (harmless). In `src/ui/components/BeautyPanel.test.tsx` (LF), step 2's case 「美妝 keeps its 口紅／腮紅 row (icons lip / blush)」 (`:252-256`) loses its row: until Task 15 adds the lead tile the strip starts with level 2's items, so it becomes 「美妝 has no part row」 with `expect(sequence(strip).slice(0, 2)).toEqual(['無', '原色']);` (Task 15 ports it once more).
 
-Imports in `panelModel.ts`: `isShadePart`, `MAKEUP_PICK_DEFAULT`, `SHADE_PARTS`, `SHADES`, `shadeColor` from `../engine/params`; `ShadePart`, `EditState` types. Remove the now unused `LIP_SHADES` / `BLUSH_SHADES` imports.
+Imports in `panelModel.ts`: `MAKEUP_PARAM`, `SHADE_PARTS`, `SHADES`, `shadeColor` from `../engine/params` (`isShadePart` since Task 1; `MAKEUP_PICK_DEFAULT` already); the `ShadePart` type since Task 1, `EditState` already. Remove the now unused `LIP_SHADES` / `BLUSH_SHADES` imports.
 
 - [ ] **Step 4: Run the tests**
 
 Run: `npx vitest run src/ui src/edit && npm run typecheck`
-Expected: PASS. The existing makeup tests (`panelModel.test.ts:70-73` level-2 keys, "after picking a shade exactly that shade is selected", "tapping the already-selected makeup 無 is a no-op") keep their assertions; the ported `partButtons` assertion passes.
+Expected: PASS. The existing makeup tests (`panelModel.test.ts:103-107` level-2 keys, "after picking a shade exactly that shade is selected", "tapping the already-selected makeup 無 is a no-op") keep their assertions; the ported `partButtons` assertion passes.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 file src/ui/panelModel.ts
-git add src/ui/panelModel.ts src/ui/panelModel.test.ts src/ui/panelModel.adjust.test.ts
+git add src/ui/panelModel.ts src/ui/panelModel.test.ts src/ui/panelModel.adjust.test.ts src/ui/components/BeautyPanel.test.tsx
 git commit -F- <<'EOF'
 v0.4 step 5: 美妝 two-level strip model, 卸妝 and 自然
 
@@ -6259,17 +6320,17 @@ EOF
 The Preact side of Tasks 13–14 (S5 §2.1–2.4): the 美妝 leading part tile with its `‹` and first-run accent dot, level-1 swatches, the strip key per level and part, the 美妝 note, the once-per-session 「{label}左右一起調整」 toast, and the slider's 左｜右 segmented control with the other side's caption.
 
 **Files:**
-- Modify: `src/ui/components/BeautyPanel.tsx` (CRLF; after steps 1–4)
-- Modify: `src/ui/components/Slider.tsx` (CRLF; `:41-47` props, `:143-181` render)
-- Modify: `src/ui/theme.css` (CRLF; after `.item.switchable.on .item-switch::after`, and after `.slider-value`)
+- Modify: `src/ui/components/BeautyPanel.tsx` (CRLF; after steps 1–4: the strip key `:75-76`, `tapItem` `:109-127`, the strip head `:143-178`, the item buttons `:191-219`, `ItemVisual` `:286-293`)
+- Modify: `src/ui/components/Slider.tsx` (CRLF; `:66-76` props, `:180-230` render)
+- Modify: `src/ui/theme.css` (CRLF; after `.item.switchable.on .item-switch::after` (`:543-546`), and after `.slider-value` (`:748-751`))
 - Modify: `src/store/settings.ts` (seen flag)
-- Test: `src/store/settings.test.ts`, `src/ui/components/Slider.test.ts` (step 4 created it with its `valueText` test)
+- Test: `src/store/settings.test.ts`, `src/ui/components/Slider.test.tsx` (step 1's file; step 4 added its `valueText` test to it); `src/ui/components/BeautyPanel.test.tsx` (Task 14's port of the 美妝 row case becomes the lead-tile case)
 
 **Interfaces:**
-- Consumes: Tasks 13–14 (`makeupLeadItem`, `makeupNote` result passed in, `splitJointNotice`, `SliderBinding.sides`, `ItemVisual.mini`, `PanelSelection.makeupView`); step 1's `BeautyPanel` props (the lens and selection it receives, `onSel`), its slider aria-label composition (S1 §2.4 「{label}，人物 {n}」); `formatDisplay` (`Slider.tsx:19`); `toast`, `haptic`; `readJson` / `writeJson` (`settings.ts:67-82`).
+- Consumes: Tasks 13–14 (`makeupLeadItem`, `makeupNote` result passed in, `splitJointNotice`, `SliderView.sides`, `ItemVisual.mini`, `PanelSelection.makeupView`); step 1's `BeautyPanel` props (the lens and selection it receives, `onSel`), its slider aria-label composition (S1 §2.4 「{label}，人物 {n}」); `formatDisplay` (`Slider.tsx:27`); `toast`, `haptic`; `readJson` / `writeJson` (`settings.ts:101-116`).
 - Produces:
   - `settings.ts`: `SEEN_MAKEUP_PARTS_KEY = 'meiyan.seen.makeupParts.v1'`, `loadMakeupPartsSeen(): boolean`, `saveMakeupPartsSeen(): void`
-  - `Slider.tsx`: `sideCaption(b: SliderBinding): string | null`, `sliderAriaLabel(b: SliderBinding): string`; `SliderRow` prop `onSel?(sel: PanelSelection): void`
+  - `Slider.tsx`: `sideCaption(b: SliderView): string | null`, `sliderAriaLabel(b: SliderView): string` (a `SliderBinding` is a `SliderView`); `SliderRow` prop `onSel?(sel: PanelSelection): void`
   - `BeautyPanel` prop `makeupNote?: string | null`
 
 - [ ] **Step 1: Write the failing tests**
@@ -6293,7 +6354,7 @@ describe('美妝 part-list seen flag (face-detail spec §2.3)', () => {
 });
 ```
 
-Append to `src/ui/components/Slider.test.ts` (step 4 created it with `import { describe, expect, it } from 'vitest';` and `import { valueText } from './Slider';`: add `sideCaption, sliderAriaLabel` to that `./Slider` import and the line `import type { SliderBinding } from '../panelModel';`; the three import lines below are what the file then holds, not lines to add twice):
+Append to `src/ui/components/Slider.test.tsx` (it already imports `afterAll, beforeAll, describe, expect, it` from `vitest`, `type SliderBinding, SliderView` from `../panelModel` and `SliderRow, valueText` from `./Slider`: add `sideCaption, sliderAriaLabel` to that `./Slider` import; the three import lines at the top of the block below only show the names the new cases use, they are not lines to add):
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -6328,7 +6389,7 @@ describe('左｜右 slider helpers (face-detail spec §2.2)', () => {
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `npx vitest run src/store/settings.test.ts src/ui/components/Slider.test.ts`
+Run: `npx vitest run src/store/settings.test.ts src/ui/components/Slider.test.tsx`
 Expected: FAIL — `loadMakeupPartsSeen` / `sideCaption` not exported.
 
 - [ ] **Step 3: Implement the store flag and the slider**
@@ -6354,18 +6415,24 @@ export function saveMakeupPartsSeen(): void {
 
 ```ts
 /** under a split item's slider: the other on-screen side's value, e.g. 「右 +12」 or 「左 30」 (S5 §2.2) */
-export function sideCaption(b: SliderBinding): string | null {
+export function sideCaption(b: SliderView): string | null {
   if (!b.sides) return null;
   return `${b.sides.active === 'L' ? '右' : '左'} ${formatDisplay(b.bidirectional, b.sides.other)}`;
 }
 
-/** the item name stays in the accessible name while a side is chosen: 「瘦臉（左）」 */
-export function sliderAriaLabel(b: SliderBinding): string {
-  return b.sides ? `${b.label}（${b.sides.active === 'L' ? '左' : '右'}）` : b.label;
+/**
+ * the slider's accessible name: step 1's `aria` (「{label}，人物 {n}」 / 「{label}，全部」, set by decorate with ≥ 2 persons) or the
+ * label, with the chosen side right after the item name while a side is chosen: 「瘦臉（左）」, 「瘦臉（左），人物 2」
+ */
+export function sliderAriaLabel(b: SliderView): string {
+  const base = b.aria ?? b.label;
+  if (!b.sides) return base;
+  const side = `（${b.sides.active === 'L' ? '左' : '右'}）`;
+  return base.startsWith(b.label) ? `${b.label}${side}${base.slice(b.label.length)}` : `${base}${side}`;
 }
 ```
 
-`Props` gains `/** 左｜右 chips: a side change is a selection change (view state, never an undo step) */ onSel?(sel: PanelSelection): void;` (import the `PanelSelection` type). In the render, replace `<span class="slider-label">{binding.label}</span>` with:
+`Props` gains `/** 左｜右 chips: a side change is a selection change (view state, never an undo step) */ onSel?(sel: PanelSelection): void;` (add `PanelSelection` to the `import type { SliderScale, SliderView } from '../panelModel'` line, and `onSel` to `SliderRow`'s destructured props). In the render, replace step 1's label span (`Slider.tsx:183-186`: `<span class="slider-label">{binding.label}{binding.mixed && <small class="slider-mixed">各人不同</small>}</span>`) with the block below, whose `: (…)` branch is that span unchanged, and keep the 「各人不同」 marker in the chips branch too (add `{binding.mixed && <small class="slider-mixed">各人不同</small>}` right after the chips' `</div>`, inside a fragment: under 全部 `mixed` compares the chosen side, S5 §3.4):
 
 ```tsx
       {binding.sides ? (
@@ -6384,11 +6451,14 @@ export function sliderAriaLabel(b: SliderBinding): string {
           ))}
         </div>
       ) : (
-        <span class="slider-label">{binding.label}</span>
+        <span class="slider-label">
+          {binding.label}
+          {binding.mixed && <small class="slider-mixed">各人不同</small>}
+        </span>
       )}
 ```
 
-use `sliderAriaLabel(binding)` wherever the slider's `aria-label` takes `binding.label` (keep step 1's 「，人物 {n}」 / 「，整張照片」 suffix after it), and add inside the `.slider` element, after `.slider-track`:
+the slider's `aria-label={binding.aria ?? binding.label}` (`Slider.tsx:191`) becomes `aria-label={sliderAriaLabel(binding)}` (it keeps step 1's 「，人物 {n}」 / 「，全部」 suffix after the side), and add inside the `.slider` element, after `.slider-track` and step 4's `.slider-ends` block:
 
 ```tsx
         {binding.sides && <span class="side-caption num">{sideCaption(binding)}</span>}
@@ -6478,8 +6548,8 @@ and after `.item.switchable.on .item-switch::after { … }`:
 
 1. Props gain `/** the 美妝 level-2 note (face-detail spec §2.4); never dims the strip or blocks the slider */ makeupNote?: string | null;`.
 2. Module level: `let jointToastShown = false;` (the 「{label}左右一起調整」 toast shows once per session).
-3. The strip key (`BeautyPanel.tsx:47`, as step 2 left it): the 美妝 case becomes `` `makeup.${sel.makeupView}.${sel.makeupPart}` `` (today `` `makeup.${sel.makeupPart}` ``) and every other tab keeps its key, so switching level or part scrolls the strip back to its start.
-4. Seen flag: `const [seen, setSeen] = useState(loadMakeupPartsSeen);` (import from `../../store/settings`).
+3. The strip key (`BeautyPanel.tsx:75-76`, as step 2 left it): the 美妝 case becomes `` `makeup.${sel.makeupView}.${sel.makeupPart}` `` (today `` `makeup.${sel.makeupPart}` ``) and every other tab keeps its key, so switching level or part scrolls the strip back to its start.
+4. Seen flag: `const [seen, setSeen] = useState(loadMakeupPartsSeen);` (import `loadMakeupPartsSeen`, `saveMakeupPartsSeen` from `../../store/settings`; add `useState` to the `preact/hooks` import, which has only `useLayoutEffect, useRef`).
 5. In `tapItem`, before activating: `const joint = splitJointNotice(item, lens, sel); if (joint && !jointToastShown) { jointToastShown = true; toast(joint, 2600); }`; and for the lead tile (action `parts`): `if (!seen) { saveMakeupPartsSeen(); setSeen(true); }`.
 6. At the head of the strip (where the face note and the 美體 note render), on 美妝 level 2:
 
@@ -6532,7 +6602,12 @@ function LeadTile({ item, seen, onTap }: { item: PanelItem; seen: boolean; onTap
     );
 ```
 
-Haptics: `parts`, `part`, `makeupReset`, `makeupOn` and `split` are taps like `preset` / `reset` (add them to the `haptic()` list in `tapItem`).
+Haptics: `parts`, `part`, `makeupReset`, `makeupOn` and `split` are taps like `preset` / `reset` (add them to the `haptic()` list in `tapItem`, `BeautyPanel.tsx:124`).
+
+9. The item button's `aria-description` (`BeautyPanel.tsx:200`) is step 1's `item.disabled ? (item.reason ?? undefined) : item.badge ? '整張照片' : undefined`, written when 「整張」 was the only badge; with the 「左右」 badge it would announce 整張照片 on the six split items. Make it `item.disabled ? (item.reason ?? undefined) : item.badge === SPLIT_BADGE ? '左右分開' : item.badge ? '整張照片' : undefined`.
+10. Imports: `makeupLeadItem`, `splitJointNotice`, `SPLIT_BADGE` merged into the `../panelModel` import.
+
+`src/ui/components/BeautyPanel.test.tsx` (LF): Task 14's 「美妝 has no part row」 case now meets the lead tile; make it 「美妝 leads with the active part's tile (icon lip)」: `expect(sequence(strip).slice(0, 3)).toEqual(['口紅', '│', '無']);`, `expect(shape(button(strip, '口紅').find('item-tile')!.elements[0])).toBe(iconShape('lip'));` and `expect(button(strip, '口紅').attrs['aria-label']).toBe('切換部位（目前：口紅）');`.
 
 - [ ] **Step 5: Run the tests, typecheck, build**
 
@@ -6543,7 +6618,7 @@ Expected: PASS; the production build succeeds.
 
 ```bash
 file src/ui/components/BeautyPanel.tsx src/ui/components/Slider.tsx src/ui/theme.css src/store/settings.ts
-git add src/ui/components/BeautyPanel.tsx src/ui/components/Slider.tsx src/ui/components/Slider.test.ts src/ui/theme.css src/store/settings.ts src/store/settings.test.ts
+git add src/ui/components/BeautyPanel.tsx src/ui/components/BeautyPanel.test.tsx src/ui/components/Slider.tsx src/ui/components/Slider.test.tsx src/ui/theme.css src/store/settings.ts src/store/settings.test.ts
 git commit -F- <<'EOF'
 v0.4 step 5: two-level 美妝 strip and 左｜右 slider components
 
@@ -6561,13 +6636,13 @@ Connects the model to the editor and the camera (S5 §2.2, §2.4, §2.5, §3.4):
 
 **Files:**
 - Modify: `src/edit/sides.ts` (`handOverLook`, `cameraScreenSwap`), `src/edit/sides.test.ts`
-- Modify: `src/ui/state.ts:17-25` (CRLF; `Shot.mirrored`)
-- Modify: `src/ui/screens/Camera.tsx` (CRLF; `:205-218` capture, the lens persons, `SliderRow`, `BeautyPanel`)
-- Modify: `src/ui/screens/Review.tsx:84-92` (CRLF; 編輯 hand-over)
-- Modify: `src/ui/screens/Editor.tsx` (LF; the lens persons, the notes, `SliderRow`, `BeautyPanel`; `:789-797, 863-876` at `892ea61`)
+- Modify: `src/ui/state.ts:20-31` (CRLF; `Shot.mirrored`)
+- Modify: `src/ui/screens/Camera.tsx` (CRLF; `captureFrom` `:203-244` (the mirror flag `:228`, the shot `:243`), the lens persons (`lensOf` `:73`), `SliderRow` `:432`, `BeautyPanel` `:458`)
+- Modify: `src/ui/screens/Review.tsx:87-95` (CRLF; 編輯 hand-over, the `go(…)` line `:94`)
+- Modify: `src/ui/screens/Editor.tsx` (LF; the lens persons (`infos` `:164`, `sessionFaces` `:332`, `lensOf` `:374`), the notes (`faceNote` `:1601-1609`), `SliderRow` `:1752-1757`, `BeautyPanel` `:1759-1771`)
 
 **Interfaces:**
-- Consumes: Task 3 `mirrorSides`, `screenLeftIsGpLeft`; Task 4 `PersonInfo.screenSwap`; Task 5 `eyeNoteInfo`; Task 11 `Engine.procMakeupFailed`; Task 14 `makeupNote`; Task 15 `SliderRow` `onSel`, `BeautyPanel` `makeupNote`; step 1's `CameraLook`, `Shot.look` / `Shot.faceSeed`, `cameraShotEdit(look, seed)` (`src/edit/migrate.ts`), `freshSource(bitmap, edit, returnTo, faceSeed?)` (`src/ui/flows.ts`), Review's `edit()` (`go({ name: 'editor', source: freshSource(shot.original, cameraShotEdit(shot.look, …), 'camera', …) })`), the camera lens `lensOf = (l) => lensFor(cameraEdit(l), { kind: 'person', id: LIVE }, LIVE_PERSONS, LIVE)` with `LIVE_PERSONS = [{ id: 'live', face: true, body: false }]` (`src/edit/lens.ts`), the Editor's per-photo person selection, `personInfos(cache: DetectionCache | null): PersonInfo[]` (`src/detect/cache.ts`; `DetectionCache.persons: PersonInfoCached { id; face: string | null /* face id */; body }`) and the session's `faces: SessionFace[]` (`{ id, face, box, lm }`); in `Camera.tsx` the `snap` state (`snap.facing`) and `bundle?.engine`; in `Editor.tsx` `bound?.engine` and `session = bound.s`; step 3's `oToV(edit.photo.geometry, oSize)` and `apply` (`src/geometry/view.ts`).
+- Consumes: Task 3 `mirrorSides`, `screenLeftIsGpLeft`; Task 4 `PersonInfo.screenSwap`; Task 5 `eyeNoteInfo`; Task 11 `Engine.procMakeupFailed`; Task 14 `makeupNote`; Task 15 `SliderRow` `onSel`, `BeautyPanel` `makeupNote`; step 1's `CameraLook`, `Shot.look` / `Shot.faceSeed`, `cameraShotEdit(look, seed)` (`src/edit/migrate.ts`), `freshSource(bitmap, edit, returnTo, faceSeed?)` (`src/ui/flows.ts`), Review's `edit()` (`go({ name: 'editor', source: freshSource(shot.original, cameraShotEdit(shot.look, …), 'camera', …) })`), the camera lens `lensOf = (l) => lensFor(cameraEdit(l), { kind: 'person', id: LIVE }, LIVE_PERSONS, LIVE)` with `LIVE_PERSONS = [{ id: 'live', face: true, body: false }]` (`src/edit/lens.ts`), the Editor's per-photo person selection, `personInfos(cache: DetectionCache | null): PersonInfo[]` (`src/detect/cache.ts`; `DetectionCache.persons: PersonInfoCached { id; face: string | null /* face id */; body }`) and the session's `faces: SessionFace[]` (`{ id, face, box, lm }`); in `Camera.tsx` the `snap` state (`snap.facing`) and `bundle?.engine`; in `Editor.tsx` (as landed) the cache `detect` (`useState<DetectionCache | null>`, `:155`), `const infos = useMemo(() => personInfos(detect), [detect])` (`:164`), the selection `selected: Selection` (`:172`; there is no `personSel`), `bound?.engine` and `session = bound.s` (`:305`), `g = edit.photo.geometry` (`:309`), the O size `photo` (`{ width, height }` of the working bitmap, `:286`), `sessionFaces: readonly SessionFace[] | null` (`:332`), `lensOf = (e) => lensFor(e, selected, infos, primary, { available })` (`:374`), and a local `view` (`:1611`, the V size) that a new name must not shadow; step 3's `oToV(g, oSize)` and `apply` (`src/geometry/view.ts`).
 - Produces: `sides.ts`: `handOverLook(look: CameraLook, mirrored: boolean): CameraLook`, `cameraScreenSwap(facing: Facing): boolean`; `Shot.mirrored: boolean`.
 
 - [ ] **Step 1: Write the failing test**
@@ -6611,7 +6686,7 @@ export function handOverLook(look: CameraLook, mirrored: boolean): CameraLook {
 }
 
 /**
- * The camera detects on the unmirrored frame and shows the front camera mirrored (live.ts:124), so an upright face's
+ * The camera detects on the unmirrored frame and shows the front camera mirrored (live.ts:160), so an upright face's
  * GPUPixel-left half shows on the right exactly when facing === 'user' (S5 §3.4: toScreen is x → 1 − x there).
  */
 export function cameraScreenSwap(facing: Facing): boolean {
@@ -6629,9 +6704,9 @@ export function cameraScreenSwap(facing: Facing): boolean {
 ```
 
 `src/ui/screens/Camera.tsx` (CRLF):
-- In `captureFrom`, the shot gets `mirrored: mirror` (the value computed at `Camera.tsx:205`, before the await).
+- In `captureFrom`, the shot gets `mirrored: mirror` (the value computed at `Camera.tsx:228`, before the await; the shot object is built at `:243`).
 - Step 1's camera lens passes `LIVE_PERSONS`; pass the live person with its screen side instead: `const livePersons: PersonInfo[] = [{ ...LIVE_PERSONS[0], screenSwap: cameraScreenSwap(snap?.facing ?? 'user') }];` (computed in the render body) and `lensFor(cameraEdit(l), { kind: 'person', id: LIVE }, livePersons, LIVE)` in `lensOf`, so a front ↔ back flip re-maps the chips on the next render (S5 §7).
-- `<SliderRow float … onSel={setSel} />` so the side chips work in the floating slider row; taps on them never toggle the panel collapse, because `onStageClick` already ignores `.slider-row` (`Camera.tsx:261`).
+- `<SliderRow float … onSel={setSel} />` so the side chips work in the floating slider row; taps on them never toggle the panel collapse, because `onStageClick` already ignores `.slider-row` (`Camera.tsx:287`).
 - `<BeautyPanel … makeupNote={makeupNote(sel, { lensClosed: false, lashesClosed: false, lashesSmall: false, procFailed: !!bundle?.engine.procMakeupFailed })} />` — the camera shows no closed-eye or small-face note, they change every frame (S5 §2.5).
 - Imports: `cameraScreenSwap` from `../../edit/sides`; `makeupNote` from `../panelModel`; the `PersonInfo` type from `../../edit/lens` (next to step 1's `lensFor, LIVE_PERSONS` import).
 
@@ -6644,36 +6719,36 @@ export function cameraScreenSwap(facing: Facing): boolean {
 (every other argument stays as steps 1 and 3 left it). Import `handOverLook` from `../../edit/sides`.
 
 `src/ui/screens/Editor.tsx`:
-- Where step 1 builds the `PersonInfo[]` it passes to `lensFor` (`personInfos(cache)`), add each person's screen side through the current view:
+- After `sessionFaces` (`:332`) and before `lensOf` (`:374`), add each person's screen side through the current view, then pass `lensPersons` instead of `infos` in `lensOf` (the one place `infos` reaches `lensFor`; `infos` keeps its other users):
 
 ```ts
   // 左／右 follow the screen per face (S5 §2.2): through the view, so 翻轉 and 旋轉 move the labels, never the values
-  const view = oToV(edit.photo.geometry, oSize);
-  const toScreen = (p: [number, number]): [number, number] => apply(view, p);
+  const oView = oToV(g, photo);
+  const toScreen = (p: [number, number]): [number, number] => apply(oView, p);
   /** the adapted Face of a person (its cache face id → the session face), or null for a body-only person */
   const faceOfPerson = (pid: PersonId): Face | null => {
-    const fid = cache?.persons.find((c) => c.id === pid)?.face ?? null;
-    return (fid !== null && session?.faces.find((f) => f.id === fid)?.face) || null;
+    const fid = detect?.persons.find((c) => c.id === pid)?.face ?? null;
+    return (fid !== null && sessionFaces?.find((f) => f.id === fid)?.face) || null;
   };
-  const lensPersons: PersonInfo[] = personInfos(cache).map((p) => {
+  const lensPersons: PersonInfo[] = infos.map((p) => {
     const face = faceOfPerson(p.id);
     return face ? { ...p, screenSwap: !screenLeftIsGpLeft(face, toScreen) } : p;
   });
 ```
 
-(`cache` is the editor's `DetectionCache | null` that step 1 passes to `personInfos`, `session` its `StillSession`, and `oSize` the O size `{ width, height }` step 3's editor code already passes to `oToV`; use those variables under the names step 1 and step 3 gave them, and pass `lensPersons` wherever step 1 passed `personInfos(cache)` to `lensFor`.)
-- The 美妝 note, next to the `faceNote` computation (`Editor.tsx:789-797` at `892ea61`):
+(`detect` is the editor's `DetectionCache | null`, `infos` its `personInfos(detect)`, `sessionFaces` the session's faces kept across an engine recovery, `g` the photo's geometry and `photo` the O size; the matrix is named `oView` because the component already has a `view`, `:1611`.)
+- The 美妝 note, next to the `faceNote` computation (`Editor.tsx:1601-1609`):
 
 ```ts
   // S5 §2.4: closed eyes and small faces only for one selected person (not under 全部); the program failure always
-  const selFace = personSel.kind === 'person' ? faceOfPerson(personSel.id) : null;
-  const eyes = selFace ? eyeNoteInfo(selFace, oSize.width / oSize.height) : { lensClosed: false, lashesClosed: false, lashesSmall: false };
+  const selFace = selected.kind === 'person' ? faceOfPerson(selected.id) : null;
+  const eyes = selFace ? eyeNoteInfo(selFace, photo.width / photo.height) : { lensClosed: false, lashesClosed: false, lashesSmall: false };
   const mkNote = makeupNote(sel, { ...eyes, procFailed: !!bound?.engine.procMakeupFailed });
 ```
 
-where `personSel` is step 1's per-photo `Selection` state.
+where `selected` is the editor's resolved person selection (`:172`; with one person it is that person).
 - `<SliderRow … onSel={setSel} />` and `<BeautyPanel … makeupNote={mkNote} />`.
-- Imports: `apply`, `oToV` from `../../geometry/view` (merged into step 3's import); `screenLeftIsGpLeft` from `../../edit/sides`; `eyeNoteInfo` from `../../engine/passes/eyeFrame`; `makeupNote` from `../panelModel`; the `Face`, `PersonId` and `PersonInfo` types where not already imported.
+- Imports: `oToV` merged into the `../../geometry/view` import (`:48`, which already has `apply`); `screenLeftIsGpLeft` from `../../edit/sides`; `eyeNoteInfo` from `../../engine/passes/eyeFrame`; `makeupNote` merged into the `../panelModel` import; `type PersonInfo` merged into `import { lensFor } from '../../edit/lens'` (`:39`); `Face` merged into the `../../types` type import (`:37`, which already has `PersonId`).
 
 - [ ] **Step 5: Run the unit suite, typecheck and the app e2e that touch these screens**
 
@@ -6704,12 +6779,12 @@ S5 §8.3 items 5, 6 and 7 on the production build: 左右分開 on `sample_face.
 - Modify: `tests/e2e/shape-makeup.spec.ts`
 
 **Interfaces:**
-- Consumes: everything above through the UI; the e2e helpers in `tests/e2e/fixtures.ts`: `SAMPLE_FACE` (v0.3), step 1's `GROUP_FACES`, `importFixture(page, path)`, `selectPerson(page, n | '全部')` (steps 3 and 4 use it too), `regionDiff(a, b, r: Rect /* fractions of the image */): { inside: number /* mean |a − b| inside */; outsideMax: number }`, `debugState` with `faces`, `boxes` (V-normalized `{ id, x, y, w, h }`, equal to the O boxes at identity geometry, in cache order, not screen order), `detectCalls`; step 3's `closeFallback(page)` and its `exportFile` flow (the `.topbar .pill` 儲存 pill, the 「分享」 second tap of a slow export, S3 §4.6), 裁切 tab with 翻轉, `Prefs.exportFormat` / `exportSize` (`'png'`, `'standard'`); `mad` (pixel `Rect`), `decodeDataUrl`, `dragSlider`, `grab` (`fixtures.ts`); `adapt` (`src/tracking/adapter111.ts`) for the fixture's contour points; step 1's `tests/fixtures/group_faces.png` (B mirrored at x 0.55, RM §8.3).
+- Consumes: everything above through the UI; the e2e helpers in `tests/e2e/fixtures.ts`: `SAMPLE_FACE` (v0.3), step 1's `GROUP_FACES`, `importFixture(page, path)`, `selectPerson(page, n: number)` (`n = 0` is 全部; steps 3 and 4 use it too), `regionDiff(a, b, r: Rect /* fractions of the image */): { inside: number /* mean |a − b| inside */; outsideMax: number }`, `debugState` with `faces`, `boxes` (V-normalized `{ id, x, y, w, h }`, equal to the O boxes at identity geometry, in cache order, not screen order), `detectCalls`; step 3's `closeFallback(page)` and its `exportFile` flow (the `.topbar .pill` 儲存 pill, the 「分享」 second tap of a slow export, S3 §4.6), 裁切 tab with 翻轉, `Prefs.exportFormat` / `exportSize` (`'png'`, `'standard'`); `mad` (pixel `Rect`), `decodeDataUrl`, `dragSlider`, `grab` (`fixtures.ts`); `adapt` (`src/tracking/adapter111.ts`) for the fixture's contour points; step 1's `tests/fixtures/group_faces.png` (B mirrored at x 0.55, RM §8.3).
 - Produces: e2e coverage only.
 
 - [ ] **Step 1: Write the tests**
 
-Append to `tests/e2e/shape-makeup.spec.ts`, merging the imports into its existing lines (Task 12 already has `decodeDataUrl, expect, test, type Pixels` from `./fixtures`, `mkdirSync, writeFileSync` from `node:fs` and `resolve` from `node:path`): add `closeFallback, debugState, dragSlider, grab, GROUP_FACES, importFixture, mad, regionDiff, SAMPLE_FACE, selectPerson, type Rect` to the `./fixtures` import, `readFileSync` to the `node:fs` import, and the lines `import type { Page } from '@playwright/test';` and `import { adapt } from '../../src/tracking/adapter111';`. Step 3's `exportFile(page)` returns only the size and type of the export, so this file reads the pixels with its own `exportPng`, which follows the same flow:
+Append to `tests/e2e/shape-makeup.spec.ts`, merging the imports into its existing lines (Task 12 already has `decodeDataUrl, expect, test, type Pixels` from `./fixtures`, `mkdirSync, writeFileSync` from `node:fs` and `resolve` from `node:path`): add `closeFallback, debugState, dragSlider, grab, GROUP_FACES, importFixture, mad, regionDiff, SAMPLE_FACE, selectPerson, type Rect` to the `./fixtures` import, `readFileSync` to the `node:fs` import, and the lines `import type { Page } from '@playwright/test';` and `import { adapt } from '../../src/tracking/adapter111';`. Step 3's `exportFile(page)` returns only the size and type of the export, so this file reads the pixels with its own `exportPng`, which follows the same flow and reads the image back through a canvas as step 2's `exportPixels` (`tests/e2e/adjust.spec.ts:92-107`) does (the CSP `connect-src 'self'` blocks a `fetch()` of the fallback's `blob:` URL, `fixtures.ts:341-342`):
 
 ```ts
 /** lossless exports, at the working size, so pixel regions compare exactly */
@@ -6727,13 +6802,12 @@ async function exportPng(page: Page): Promise<Pixels> {
   await expect(fallback).toBeVisible({ timeout: 30_000 });
   const img = fallback.getByRole('img', { name: '編輯結果' });
   await expect.poll(() => img.evaluate((i: HTMLImageElement) => i.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
-  const url = await img.evaluate(async (i: HTMLImageElement) => {
-    const blob = await (await fetch(i.src)).blob();
-    return await new Promise<string>((res) => {
-      const r = new FileReader();
-      r.onload = () => res(String(r.result));
-      r.readAsDataURL(blob);
-    });
+  const url = await img.evaluate((i: HTMLImageElement) => {
+    const c = document.createElement('canvas');
+    c.width = i.naturalWidth;
+    c.height = i.naturalHeight;
+    c.getContext('2d')!.drawImage(i, 0, 0);
+    return c.toDataURL('image/png');
   });
   await closeFallback(page);
   return decodeDataUrl(url);
@@ -6829,7 +6903,7 @@ test('per person: 眼影 on person 2 only, 眉毛 under 全部 on everyone; reop
   expect(onB.outsideMax, '眼影 on person 2 changes nothing outside face B').toBeLessThanOrEqual(2);
   expect(onB.inside).toBeGreaterThan(0.2);
 
-  await selectPerson(page, '全部');
+  await selectPerson(page, 0); // 全部
   await tab(page, '美妝');
   await page.getByRole('button', { name: /^切換部位（目前：/ }).click();
   await option(page, '眉毛');
@@ -6937,7 +7011,7 @@ test('美妝 and 左右分開 in the camera (S5 §2.5, §8.3 item 7)', async ({ 
 - [ ] **Step 2: Run them against the build**
 
 Run: `npm run build && npx playwright test tests/e2e/shape-makeup.spec.ts`
-Expected: PASS — the five app tests plus Tasks 7 and 12's engine tests (the `@sheet` case is skipped without `SHEET=1`). If one of step 1's helpers or step 3's export helper has a different name in `fixtures.ts`, call the landed one; the assertions stay.
+Expected: PASS — the five app tests plus Tasks 7 and 12's engine tests (the `@sheet` case is skipped without `SHEET=1`). The helpers above are the landed `fixtures.ts` names (checked at the step base); the assertions stay.
 
 - [ ] **Step 3: Run the e2e suites the new UI touches**
 
@@ -7147,7 +7221,7 @@ export async function runFaceDetailRows(engine: Engine, bitmap: ImageBitmap, fac
 }
 ```
 
-`src/bench/main.ts` (CRLF): keep the still photo's bitmap (`let stillBitmap: ImageBitmap | null = null;`, set in `runStill` after `importPhoto`, closed with the session), add `const faceDetailRows: string[] = [];` and a button next to 靜態圖片測試:
+`src/bench/main.ts` (CRLF): keep the still photo's bitmap (`let stillBitmap: ImageBitmap | null = null;` next to `let still` (`:115`), set in `runStill` (`:491-519`) after `importPhoto`, and set back to null where `stillTest`'s second tap disposes the session, `:478-479`: the session's `dispose()` closes the bitmap itself), add `const faceDetailRows: string[] = [];` and a button next to 靜態圖片測試 (`stillBtn`, `:237`):
 
 ```ts
 const faceDetailBtn = button('臉型細項＋美妝', () => void runFaceDetail());
@@ -7173,7 +7247,7 @@ async function runFaceDetail(): Promise<void> {
 }
 ```
 
-(append the button to the row that holds `stillBtn`; `still.faces[0].face` is step 1's `SessionFace`.) In `copyResults`, append the rows: `const text = formatReport(reportMeta(), samples, bodyRows) + (faceDetailRows.length ? '\n\n[step 5]\n' + faceDetailRows.join('\n') : '');`.
+(append the button to the row that holds `stillBtn`, `:281`; `still.faces[0].face` is step 1's `SessionFace`.) In `copyResults` (`:879-882`), whose text steps 1–4 grew to `formatReport(reportMeta(), samples, bodyRows) + multiText + exportText + (toneReport ? … : '')`, append the rows at the end: `… + (faceDetailRows.length ? '\n\n[step 5]\n' + faceDetailRows.join('\n') : '')`.
 
 `tests/e2e/camera-group.spec.ts` (step 1; the `chromium-group` project feeds `group.y4m`), row 4:
 
@@ -7185,6 +7259,8 @@ test('bench: live fps with three faces and every 美妝 part on (S5 §6.2 row 4)
   await page.getByRole('button', { name: /拍攝/ }).click();
   await page.getByRole('button', { name: '點擊開啟相機' }).click();
   await expect.poll(async () => (await debugState(page)).faces, { timeout: 90_000 }).toBe(3);
+  // as the spec's own 全部套用 case does (camera-group.spec.ts:73): the chip waits for ChipGate's debounce
+  await page.addStyleTag({ content: '.all-chip { display: inline-flex !important; }' });
   await page.getByRole('button', { name: '全部套用' }).click();
   await page.getByRole('tab', { name: '美妝', exact: true }).click();
   for (const [part, first] of [['眉毛', '自然黑'], ['眼影', '大地'], ['眼線', '黑'], ['睫毛', '自然'], ['臥蠶', '自然'], ['修容', '自然'], ['高光', '自然'], ['美瞳', '冰藍']] as const) {
@@ -7229,12 +7305,12 @@ Everything green on a clean tree, plus the equivalence checks the roadmap asks o
 - Consumes: Tasks 1–18; step 1's `tests/e2e/parity.spec.ts` and `src/engine/passes/reshapeCpuV03.ts`; the full Playwright suite including step 1's `chromium-group` project.
 - Produces: the step-5 hand-off note (in the final message to the user, not a file).
 
-Every command below that needs the base of step 5 computes it itself (the shell keeps no variables between commands): `BASE="$(git log --format=%H --grep='^v0.4 step 5' --reverse | head -1)~1"`, the parent of the first step-5 commit.
+Every command below that needs the base of step 5 computes it itself (the shell keeps no variables between commands): `BASE="$(git log --format=%H --grep='^v0.4 step 5' --reverse | head -1)~1"`, the parent of the first step-5 commit. The first one is `v0.4 step 5: reconcile plan` (it changes only this plan), so `BASE` is the step base `3aebedf`.
 
 - [ ] **Step 1: Clean tree and the base of step 5**
 
 Run: `git status --short && BASE="$(git log --format=%H --grep='^v0.4 step 5' --reverse | head -1)~1" && git log --oneline "$BASE"..HEAD | cat`
-Expected: no uncommitted changes; 18 local `v0.4 step 5: …` commits on `feat/meiyan-pwa` (one per task, plus any fix-ups).
+Expected: no uncommitted changes; on `feat/meiyan-pwa`, the `v0.4 step 5: reconcile plan` commit, then one local `v0.4 step 5 task <N>: …` commit per task 1–18 (plus any `v0.4 step 5 task <N> fix: …` commits).
 
 - [ ] **Step 2: Typecheck**
 
@@ -7262,7 +7338,7 @@ Expected: every project and spec passes, among them `shape-makeup.spec.ts` (2 ×
 2. New items neutral and 左右分開 off ⇒ the reshape map is bit-identical (S5 §1.2): `npx vitest run src/engine/passes/reshapeCpu.test.ts -t "bit-identical"` — Expected: PASS.
 3. No procedural geometry while every procedural item is neutral (so P1 and every makeup pixel are as in step 4): `npx vitest run src/engine/passes/makeupProc.test.ts -t "empty with every part at 0"` — Expected: PASS.
 4. Existing assertions kept (RM §1.1): `BASE="$(git log --format=%H --grep='^v0.4 step 5' --reverse | head -1)~1"; git diff "$BASE"..HEAD -U0 -- '*.test.ts' '*.test.tsx' '*.test.mjs' '*.spec.ts' | grep '^-[^-]'`
-   Expected: only the mechanical ports this plan names — the schema tables in `params.test.ts` (count 44 → 58, `BIDIRECTIONAL`, the defaults rows, `paramsInGroup('makeup')`) and step 1's scope-table row (Task 1); the 美型 strip key list in `panelModel.test.ts` (Task 13); step 2's `partButtons` 美妝 assertion in `panelModel.adjust.test.ts` (Task 14); the `RESHAPE_FS` pin value in `reshapeCpu.test.ts`, step 1's fold-sweep `settings` line and its timeout (Task 7); step 3's `displacementBound` fuzz line gaining a random `right` in `reshape.test.ts` (Task 7); step 3's case-name list in `export.spec.ts` (Task 12); the `Face` literals gaining `...blankEyes()` (Task 2); `base` in `pipeline.test.ts` gaining `procActive` / `procReady` (Task 11); the `lm` type of `reshapeCpu.test.ts` gaining `mirrored` (Task 7). Any other removed assertion is a regression: restore it.
+   Expected: only the mechanical ports this plan names — the schema tables in `params.test.ts` (count 44 → 58, `BIDIRECTIONAL`, the defaults rows, `paramsInGroup('makeup')`) and its `MAKEUP_PICK_DEFAULT` `toEqual` → `toMatchObject` line, step 1's scope-table row and its `shape.` count, the four exact shade assertions in `state.test.ts` / `legacy.test.ts` (Task 1); the 美型 strip key list in `panelModel.test.ts` (Task 13); step 2's `partButtons` 美妝 assertion in `panelModel.adjust.test.ts` and its 「美妝 keeps its 口紅／腮紅 row」 case in `BeautyPanel.test.tsx` (Tasks 14 and 15); the `RESHAPE_FS` pin value in `reshapeCpu.test.ts`, step 1's fold-sweep `settings` line and its timeout (Task 7); step 3's `displacementBound` fuzz line gaining a random `right` in `reshape.test.ts` (Task 7); step 3's case-name list in `export.spec.ts` (Task 12); the `Face` literals gaining `...blankEyes()` (Task 2); the two `ReshapeUniforms` literals of `pipeline.test.ts` gaining the new keys (Task 6); `base` in `pipeline.test.ts` gaining `procActive` / `procReady` (Task 11); the `lm` type of `reshapeCpu.test.ts` gaining `mirrored` (Task 7); and import declarations that gained names. Any other removed assertion is a regression: restore it.
 5. Storage untouched (RM §5, S5 §5): `BASE="$(git log --format=%H --grep='^v0.4 step 5' --reverse | head -1)~1"; git diff "$BASE"..HEAD --stat -- src/store/history.ts; git diff "$BASE"..HEAD | grep -o "meiyan\.[A-Za-z.]*v[0-9]" | sort -u` — Expected: no `--stat` line (history.ts unchanged), then `meiyan.prefs.v1` (the e2e init script only) and `meiyan.seen.makeupParts.v1`; no other key.
 6. Version unchanged, nothing pushed: `node -p "require('./package.json').version"` — Expected: `0.3.0`. `git status -sb | head -1` — the branch is ahead of its upstream by the local commits; do not push.
 7. Line endings: `BASE="$(git log --format=%H --grep='^v0.4 step 5' --reverse | head -1)~1"; git diff --name-only "$BASE"..HEAD | xargs file | grep "CRLF, LF"` — Expected: no output (no mixed file). Then `file src/types.ts src/ui/panelModel.ts src/ui/components/BeautyPanel.tsx src/ui/components/Slider.tsx src/ui/icons.tsx src/ui/state.ts src/ui/theme.css src/ui/screens/Camera.tsx src/ui/screens/Review.tsx src/engine/passes/makeup.ts src/engine/passes/reshape.test.ts src/engine/pipeline.ts src/engine/index.ts src/bench/main.ts src/app/testFakes.ts tests/harness/t2/main.ts | grep -v "with CRLF line terminators"` — Expected: no output (every CRLF working copy of the Global Constraints is still CRLF throughout).

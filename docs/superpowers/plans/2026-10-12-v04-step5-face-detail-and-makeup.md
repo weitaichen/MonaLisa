@@ -1518,7 +1518,7 @@ Pure geometry every eye item is built on (S5 §4.7, §4.9): eye-local coordinate
   - `eyeNoteInfo(face: Face, aspect: number): { lensClosed: boolean; lashesClosed: boolean; lashesSmall: boolean }`
 - Produces (`syntheticFaces.ts`): `closeEye(face: Face, eye: 0 | 1): Face`, `mirrorFaceX(face: Face): Face`, `scaleFace(face: Face, s: number, centre: V2): Face`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/engine/passes/eyeFrame.test.ts` (the pinned numbers were measured on `landmarks_sample_face.json` with this exact construction):
 
@@ -1678,12 +1678,12 @@ describe('closed, mirrored and tiny faces (face-detail spec §4.9, §8.1)', () =
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run src/engine/passes/eyeFrame.test.ts`
 Expected: FAIL — `Failed to resolve import "./eyeFrame"`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/engine/passes/syntheticFaces.ts`:
 
@@ -2012,12 +2012,12 @@ export function lidStations(f: EyeFrame, lid: 'upper' | 'lower', xs: readonly nu
 }
 ```
 
-- [ ] **Step 4: Run the test**
+- [x] **Step 4: Run the test**
 
 Run: `npx vitest run src/engine/passes/eyeFrame.test.ts && npm run typecheck`
 Expected: PASS (12 tests); no type errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/engine/passes/eyeFrame.ts src/engine/passes/eyeFrame.test.ts src/engine/passes/syntheticFaces.ts

@@ -782,6 +782,10 @@ export function makeupAction(a: ItemAction, lens: Lens, sel: PanelSelection): { 
     case 'part':
       return { edit: null, sel: sel.makeupPart === a.part && sel.makeupView === 'shades' ? sel : { ...sel, makeupPart: a.part, makeupView: 'shades' } };
     case 'makeupReset': {
+      // a photo with no face: the strip is dimmed and values stay untouched (BeautyPanel), so the tap is a no-op like
+      // ⊘ and 左右分開. targets() is [] for 美妝 there while faceTargets() is [primary], so resetGroup('makeup') would
+      // clear only the primary's shades, keep its values, and give every later tap one more empty undo step
+      if (lens.noFace) return { edit: null, sel };
       const anyOn =
         MAKEUP_PARTS.some((p) => {
           const g = lens.get(p.param);

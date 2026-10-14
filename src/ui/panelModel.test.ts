@@ -1209,6 +1209,28 @@ describe('美妝 actions (face-detail spec §2.3)', () => {
     expect([out.values['makeup.lip'], out.values['makeup.lens']]).toEqual([0, 0]);
   });
 
+  it('a photo with no face: 卸妝 on the dimmed strip changes nothing and is no undo step, like ⊘ and 左右分開', () => {
+    const e: EditState = { v: 2, photo: defaultPhoto(), persons: { p0: withMakeup({ 'makeup.lip': 0.3 }, { lip: 'bean' }) }, template: neutralPerson(), primaryInit: null };
+    const s = S14({ makeupView: 'parts' });
+    for (const at of [{ kind: 'person', id: 'p0' }, { kind: 'all' }] as const) {
+      const l = lensFor(e, at, [{ id: 'p0', face: false, body: false }], 'p0');
+      expect(l.noFace).toBe(true);
+      expect(makeupAction({ type: 'makeupReset' }, l, s)?.edit, at.kind).toBeNull();
+      const r = activate(byKey(itemsFor(l, s), 'makeupReset'), l, s);
+      expect(r.changed, at.kind).toBe(false);
+      expect(r.edit, at.kind).toBe(e);
+      expect(r.sel, at.kind).toBe(s);
+    }
+    // the reach path: 一鍵 › 氣色 writes lip / blush with their shades onto the primary (applyPreset uses faceTargets());
+    // 卸妝 leaves them, values and shades alike, for when a face is back
+    const l = lensFor(e, { kind: 'all' }, [{ id: 'p0', face: false, body: false }], 'p0');
+    const glow = l.applyPreset('glow', 1);
+    const g = lensFor(glow, { kind: 'all' }, [{ id: 'p0', face: false, body: false }], 'p0');
+    expect(g.get('makeup.lip').value).toBeGreaterThan(0.01);
+    expect(g.shade('lip').shade).not.toBeNull();
+    expect(makeupAction({ type: 'makeupReset' }, g, s)?.edit).toBeNull();
+  });
+
   it('無 clears the active part only; a no-op when it is already off', () => {
     const lens = L5(E5(withMakeup({ 'makeup.liner': 0.6, 'makeup.brow': 0.4 }, { liner: 'navy' })));
     const out = makeupAction({ type: 'reset' }, lens, S14({ makeupPart: 'liner' }))!.edit!.persons.f0;

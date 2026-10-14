@@ -5825,6 +5825,8 @@ EOF
 
 **Landed deviations:** (1) The shared console guard of `tests/e2e/fixtures.ts` fails every test on a `console.error`, and the makeup pass logs `[engine] lashes.png failed to load; 睫毛 disabled` by design. So the lashes case takes `guard`, polls until that line was logged (the failure path ran) and then drops it, and the browser's own "Failed to load resource" line, from `guard.consoleErrors`; the guard still checks every other line and the requests. (2) `step 5 quarter 1 + flip` measures 2/255 at one interior pixel (B, 44 px from the nearest tile edge on SwiftShader). That is the 膠片 lift of a 1-LSB fp32 flip that `export.spec.ts` already documents for `θ 12° + crop`: the case is ≤ 1/255 with the look off, and also with only the makeup or only the warps on. Its bound is 2/255, like the `601` and `θ` cases; `step 5 identity` and `step 5 θ 12° + crop` keep 1/255. Against a neutral person, the three step-5 cases change about 27 000 px by more than 8/255, so they are not vacuous.
 
+Landed as `e338242`, which carries a stale step-2 subject (`v0.4 step 2 task 12: Panel model for the 調節 tab and 一鍵 › 美顏／質感`, a leftover message file in the scratchpad, as with `0692964` and `a9b761f`). Its content is this task's five test files and its ticks. The `v0.4 step 5 task 12 fix:` commit on top of it records this note, and no commit was amended.
+
 ### Task 13: 美型 strip: group dividers, 左右分開 switch, badges and the side slider
 
 The panel model of S5 §2.1–2.2 on top of step 1's lens-based `panelModel.ts`: dividers at the five group starts, the 左右分開 switch item at the end, 「左右」 badges while it is on, has-value dots over both sides, and a slider binding with a 左｜右 side.
@@ -7434,7 +7436,7 @@ Every command below that needs the base of step 5 computes it itself (the shell 
 - [ ] **Step 1: Clean tree and the base of step 5**
 
 Run: `git status --short && BASE="$(git log --format=%H --grep='^v0.4 step 5' --reverse | head -1)~1" && git log --oneline "$BASE"..HEAD | cat`
-Expected: no uncommitted changes; on `feat/meiyan-pwa`, the `v0.4 step 5: reconcile plan` commit (on top of `db1f468`), then one local `v0.4 step 5 task <N>: …` commit per task 1–18 (plus any `v0.4 step 5 task <N> fix: …` commits). Task 5's code is `0692964` under a stale step-2 subject; its `v0.4 step 5 task 5 fix:` commit records that (see Task 5). Task 9's code is `a9b761f`, also under a stale step-2 subject; its `v0.4 step 5 task 9 fix:` commit records that (see Task 9).
+Expected: no uncommitted changes; on `feat/meiyan-pwa`, the `v0.4 step 5: reconcile plan` commit (on top of `db1f468`), then one local `v0.4 step 5 task <N>: …` commit per task 1–18 (plus any `v0.4 step 5 task <N> fix: …` commits). Task 5's code is `0692964` under a stale step-2 subject; its `v0.4 step 5 task 5 fix:` commit records that (see Task 5). Task 9's code is `a9b761f`, also under a stale step-2 subject; its `v0.4 step 5 task 9 fix:` commit records that (see Task 9). Task 12's code is `e338242`, also under a stale step-2 subject; its `v0.4 step 5 task 12 fix:` commit records that (see Task 12).
 
 - [ ] **Step 2: Typecheck**
 

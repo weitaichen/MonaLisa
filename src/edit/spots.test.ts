@@ -165,6 +165,27 @@ describe('regionAt / spotRadius / ownerAt (skin-cleanup spec §2.3, §3.3)', () 
     expect(spotRadius([0.5, 0.5], 'L', [{ id: 'f0', face: { ...FACE, pts111: FACE.pts111.map((v, i) => (i % 2 ? v : v * 3 - 1)) } }], WORK)).toBeLessThanOrEqual(0.04);
   });
 
+  it('in a group photo the padded box and the median pick between faces of different widths (§2.3)', () => {
+    const fwShort = 0.5888;
+    // a second face at 0.3 × the size, in the lower right: oval x 0.738–0.924, y 0.734–0.878; its box ×1.5 is x 0.692–0.970,
+    // y 0.698–0.914, while the big face's box ×1.5 is x 0.039–0.967, y 0.060–0.782
+    const m = (a: Float32Array) => a.map((v) => v * 0.3 + 0.68);
+    const small: Face = { ...FACE, pts111: m(FACE.pts111), ext: m(FACE.ext), oval: m(FACE.oval) };
+    const faces: SpotFace[] = [{ id: 'f0', face: FACE }, { id: 'f1', face: small }];
+    const xs = Array.from({ length: small.oval.length / 2 }, (_, i) => small.oval[i * 2]);
+    const ys = Array.from({ length: small.oval.length / 2 }, (_, i) => small.oval[i * 2 + 1]);
+    const right: V2 = [Math.max(...xs) + 0.02, (Math.min(...ys) + Math.max(...ys)) / 2];
+    // just outside the big oval, inside only its grown box: the big face, not the median
+    expect(spotRadius([P(0)[0] - 0.02, P(0)[1]], 'S', faces, WORK)).toBeCloseTo(SPOT_K.S * fwShort, 3);
+    // just right of the small oval, inside only its grown box (a box ×1.0 would miss it): the small face
+    expect(spotRadius(right, 'L', faces, WORK)).toBeCloseTo(SPOT_K.L * 0.3 * fwShort, 3);
+    // inside both grown boxes, nearer the small face's centre, in either face order: the nearest face
+    expect(spotRadius([0.7, 0.72], 'L', faces, WORK)).toBeCloseTo(SPOT_K.L * 0.3 * fwShort, 3);
+    expect(spotRadius([0.7, 0.72], 'L', [...faces].reverse(), WORK)).toBeCloseTo(SPOT_K.L * 0.3 * fwShort, 3);
+    // outside every grown box: the median of the two widths
+    expect(spotRadius([0.02, 0.98], 'L', faces, WORK)).toBeCloseTo((SPOT_K.L * (fwShort + 0.3 * fwShort)) / 2, 3);
+  });
+
   it('owner: the face region first, else the highest body mask ≥ 0.5 (the smaller mask on a tie), else null', () => {
     const mask = (fill: (x: number, y: number) => number) => {
       const data = new Uint8Array(64 * 96);

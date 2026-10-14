@@ -216,24 +216,30 @@ export interface Station {
 }
 
 /**
- * The lid sampled at ascending `xs` (x < 0 extends past the outer corner along the end segment, S5 §4.7 overhang),
- * with normals from central differences over the samples, pointing up (upper lid) or down (lower lid).
+ * The lid sampled at ascending `xs`, with normals pointing up (upper lid) or down (lower lid). Samples at x ≥ 0 lie on
+ * the lid, with normals from central differences over those samples only. Samples at x < 0 are the S5 §4.7 overhang:
+ * they continue from the outer corner along the corner line (y = the lid's y at x = 0) and carry the normal of the
+ * first sample at x ≥ 0, so the overhang never changes the lid stations and a ribbon over it cannot fold at the corner.
+ * (Extending the end chord instead ran the upper overhang down toward the cheek: the dense contour's first chord is
+ * short and steep.)
  */
 export function lidStations(f: EyeFrame, lid: 'upper' | 'lower', xs: readonly number[]): Station[] {
   const pts = lid === 'upper' ? f.upperPts : f.lowerPts;
-  const ys = xs.map((x) => polyY(pts, x));
-  return xs.map((x, i) => {
-    const a = Math.max(0, i - 1);
+  const y0 = polyY(pts, 0);
+  const ys = xs.map((x) => (x < 0 ? y0 : polyY(pts, x)));
+  const lo = Math.max(0, xs.findIndex((x) => x >= 0));
+  const normal = (i: number): V2 => {
+    const a = Math.max(lo, i - 1);
     const b = Math.min(xs.length - 1, i + 1);
     const tx = xs[b] - xs[a];
     const ty = ys[b] - ys[a];
     const l = Math.hypot(tx, ty) || 1e-12;
-    let nx = ty / l;
-    let ny = -tx / l;
-    if ((lid === 'upper' && ny > 0) || (lid === 'lower' && ny < 0)) {
-      nx = -nx;
-      ny = -ny;
-    }
+    const nx = ty / l;
+    const ny = -tx / l;
+    return (lid === 'upper' && ny > 0) || (lid === 'lower' && ny < 0) ? [-nx, -ny] : [nx, ny];
+  };
+  return xs.map((x, i) => {
+    const [nx, ny] = normal(Math.max(lo, i));
     return { x, y: ys[i], nx, ny };
   });
 }

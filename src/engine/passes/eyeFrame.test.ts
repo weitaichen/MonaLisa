@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { prepareFaces } from '../../detect/faces';
 import { adapt } from '../../tracking/adapter111';
 import {
+  browGapAt,
+  type EyeFrame,
   eyeFrames,
   eyeNoteInfo,
   eyeToUv,
@@ -11,6 +14,7 @@ import {
   LID_STATIONS,
   lidStations,
   polyY,
+  type Station,
   STATION_XS,
 } from './eyeFrame';
 import { closeEye, mirrorFaceX, scaleFace } from './syntheticFaces';
@@ -19,11 +23,15 @@ const lm = JSON.parse(readFileSync(new URL('../../../tests/fixtures/landmarks_sa
   width: number;
   height: number;
   points: number[];
+  mirrored: number[];
 };
 const aspect = lm.width / lm.height;
 const face = adapt({ points: new Float32Array(lm.points) }, lm.width, lm.height);
 const frames = eyeFrames(face, aspect);
 const P = (i: number): [number, number] => [face.pts111[i * 2], face.pts111[i * 2 + 1]];
+// the step-5 makeup's station sets (眼影 upper piece and 睫毛; 眼影 lower accent)
+const UPPER_XS = [-0.22, -0.14, -0.07, ...STATION_XS];
+const LOWER_ACCENT_XS = [-0.15, -0.075, ...STATION_XS.filter((x) => x <= 0.5), 0.55];
 
 describe('eyeFrames on the fixture face (face-detail spec §4.7)', () => {
   it('every Face.lids point lies on its lid polyline (eye units)', () => {
@@ -90,15 +98,107 @@ describe('eyeFrames on the fixture face (face-detail spec §4.7)', () => {
     }
   });
 
-  it('lid stations: normals point away from the aperture, overhang extends the end segment', () => {
+  it('lid stations: unit normals pointing away from the aperture', () => {
     for (const f of frames) {
-      const up = lidStations(f, 'upper', [-0.22, -0.07, ...STATION_XS]);
-      const lo = lidStations(f, 'lower', STATION_XS);
+      const up = lidStations(f, 'upper', UPPER_XS);
+      const lo = lidStations(f, 'lower', LOWER_ACCENT_XS);
       for (const s of up) expect(s.ny).toBeLessThan(0);
       for (const s of lo) expect(s.ny).toBeGreaterThan(0);
       for (const s of [...up, ...lo]) expect(Math.hypot(s.nx, s.ny)).toBeCloseTo(1, 9);
-      const slope = (f.upperPts[3] - f.upperPts[1]) / (f.upperPts[2] - f.upperPts[0]);
-      expect(up[0].y).toBeCloseTo(f.upperPts[1] + (-0.22 - f.upperPts[0]) * slope, 9);
+    }
+  });
+});
+
+/** the fixture face, its recorded mirrored landmarks and the three edit faces of group_faces.png */
+function fixtureEyes(): { name: string; f: EyeFrame; eye: number }[] {
+  const g = JSON.parse(readFileSync(new URL('../../../tests/fixtures/group_faces.landmarks.json', import.meta.url), 'utf8')) as {
+    width: number;
+    height: number;
+    faces: number[][];
+  };
+  const group = prepareFaces(g.faces.map((p) => ({ points: new Float32Array(p) })), g.width, g.height).faces;
+  if (group.length !== 3) throw new Error(`group_faces.png gave ${group.length} edit faces, expected 3`);
+  const mirrored = adapt({ points: new Float32Array(lm.mirrored) }, lm.width, lm.height);
+  const faces: [string, readonly EyeFrame[]][] = [
+    ['sample', eyeFrames(face, aspect)],
+    ['mirrored', eyeFrames(mirrored, aspect)],
+    ...group.map((p, i): [string, readonly EyeFrame[]] => [`group ${i}`, eyeFrames(p.face, g.width / g.height)]),
+  ];
+  return faces.flatMap(([name, fs]) => fs.map((f, eye) => ({ name, f, eye })));
+}
+
+/** quads of the ribbon d ∈ [d0, d1] along the station normals whose two strip triangles do not keep the lid's winding */
+function foldedQuads(sts: readonly Station[], lid: 'upper' | 'lower', d0: number, d1: number | ((s: Station) => number)): number[] {
+  const top = typeof d1 === 'number' ? () => d1 : d1;
+  const P = sts.map((s): [number, number] => [s.x + s.nx * d0, s.y + s.ny * d0]);
+  const Q = sts.map((s): [number, number] => [s.x + s.nx * top(s), s.y + s.ny * top(s)]);
+  const cross = (a: [number, number], b: [number, number], c: [number, number]) =>
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const sign = lid === 'upper' ? -1 : 1;
+  const out: number[] = [];
+  for (let i = 0; i + 1 < sts.length; i++) {
+    if (sign * cross(P[i], P[i + 1], Q[i]) <= 0 || sign * cross(P[i + 1], Q[i + 1], Q[i]) <= 0) out.push(sts[i].x);
+  }
+  return out;
+}
+
+describe('the outer-corner overhang (face-detail spec §4.7)', () => {
+  const eyes = fixtureEyes();
+
+  it('continues along the corner line: never below it for the upper lid, never above it for the lower lid', () => {
+    for (const { f } of eyes) {
+      // the lid's corner point is the frame origin
+      expect(Math.abs(f.upperPts[1])).toBeLessThan(1e-6);
+      expect(Math.abs(f.lowerPts[1])).toBeLessThan(1e-6);
+      for (const s of lidStations(f, 'upper', UPPER_XS).filter((s) => s.x < 0)) {
+        expect(s.y).toBeLessThanOrEqual(1e-9);
+        expect(Math.abs(s.y - f.upperPts[1])).toBeLessThan(1e-9);
+      }
+      for (const s of lidStations(f, 'lower', LOWER_ACCENT_XS).filter((s) => s.x < 0)) {
+        expect(s.y).toBeGreaterThanOrEqual(-1e-9);
+        expect(Math.abs(s.y - f.lowerPts[1])).toBeLessThan(1e-9);
+      }
+      // the two overhangs do not cross
+      const xs = [-0.15, -0.075, 0];
+      const up = lidStations(f, 'upper', xs);
+      const lo = lidStations(f, 'lower', xs);
+      xs.forEach((_, i) => expect(lo[i].y - up[i].y).toBeGreaterThanOrEqual(-1e-9));
+    }
+  });
+
+  it('is the same on both eyes of a face (upper y at x = −0.22 within 0.05)', () => {
+    for (let i = 0; i < eyes.length; i += 2) {
+      const [l, r] = [eyes[i].f, eyes[i + 1].f].map((f) => lidStations(f, 'upper', UPPER_XS)[0].y);
+      expect(Math.abs(l - r)).toBeLessThan(0.05);
+    }
+  });
+
+  it('leaves the lid stations alone and gives the overhang the corner normal', () => {
+    for (const { f } of eyes) {
+      for (const [lid, xs] of [
+        ['upper', UPPER_XS],
+        ['lower', LOWER_ACCENT_XS],
+      ] as const) {
+        const all = lidStations(f, lid, xs);
+        const on = xs.filter((x) => x >= 0);
+        expect(all.filter((s) => s.x >= 0)).toEqual(lidStations(f, lid, on));
+        const corner = all.find((s) => s.x === 0)!;
+        for (const s of all.filter((s) => s.x < 0)) expect([s.nx, s.ny]).toEqual([corner.nx, corner.ny]);
+      }
+    }
+  });
+
+  it('no 眼影, 睫毛 or lower-accent ribbon folds over the stations, up to the largest heights', () => {
+    for (const { name, f, eye } of eyes) {
+      const up = lidStations(f, 'upper', UPPER_XS);
+      const lo = lidStations(f, 'lower', LOWER_ACCENT_XS);
+      // 睫毛 d ∈ [0, Lh ≤ 0.20]; 眼影 upper d ∈ [−0.02, H] with H = 0.65·max(browGap, 0.25) (S5 §4.8), and any H ≤ 0.8;
+      // lower accent d ∈ [−0.03, 0.10]
+      const H = (s: Station) => 0.65 * Math.max(browGapAt(f, s.x, s.y), 0.25);
+      expect({ name, eye, folds: foldedQuads(up, 'upper', 0, 0.2) }).toEqual({ name, eye, folds: [] });
+      expect({ name, eye, folds: foldedQuads(up, 'upper', -0.02, H) }).toEqual({ name, eye, folds: [] });
+      expect({ name, eye, folds: foldedQuads(up, 'upper', -0.02, 0.8) }).toEqual({ name, eye, folds: [] });
+      expect({ name, eye, folds: foldedQuads(lo, 'lower', -0.03, 0.1) }).toEqual({ name, eye, folds: [] });
     }
   });
 });

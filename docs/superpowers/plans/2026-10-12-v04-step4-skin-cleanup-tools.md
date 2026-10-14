@@ -7861,6 +7861,8 @@ git commit -m "v0.4 step 4 (19/20): 膚質 bench rows" -m "Co-Authored-By: Claud
 
 ### Task 20: Step gate — full suite and the v0.3-equivalence checks
 
+> **Task 20 as built — green, with two recorded exceptions.** Run at `9e4c493` with base `d6a6e52` (`.superpowers/step4-base.txt`, the reconcile commit on top of step 3's `905c34f`). Typecheck is clean. `npm test` gives 99 files and 1668 tests passed, the twelve named files included (189 tests). `npm run build` succeeds with no warning. `npm run test:e2e` gives 91 passed in 19 files (13.8 min), 0 failed or skipped. `parity.spec.ts` reads max 0/255 and mean 0.0000/255 in all five cases. The `toneJob` "neutral tone and no spots" case passes, and `tone-engine.spec.ts` asserts that the neutral frame runs none of `heal`, `toneField`, `retouch`. The composite / reshape `git diff --stat` prints nothing. Step 5 lists only planned removals: the `params.test.ts` count, `GROUPS` and the bidirectional case title; the `live` case in `state.test.ts`; the `values:` line in `legacy.test.ts`; and import declarations that gained names (`legacy`, `exportPlan`, `BeautyPanel`, `Slider`, `panelModel`). The 442 files that existed at the base keep their working-tree endings, compared by the tab-separated path because 16 paths hold spaces. The 36 new files are LF. The version is `0.3.0`, the tree is clean, and the branch is 136 commits ahead of `origin/feat/meiyan-pwa`, with no step-4 commit on the remote. **Exception 1:** Step 4's last command prints two existing specs. Both changes are recorded deviations, not regressions. `editor.spec.ts` (Task 16) now expects the six 膚質 items disabled in a photo with no face (S §1.2). `bench.spec.ts` (Task 19 fix) only adds an assertion that `.panel .note` stays unique. **Exception 2:** Task 11's open decision (fixture (a) / spec (b) / accept 0 (c)) for 法令紋 and 白牙 is still unrecorded, so those two keep the "no regression" GPU bound and Task 16's lowered `minInside`. The user has to make that choice. Four step-4 code commits carry another step's message (`3e11ebe`, `9220b27`, `2f002e6`, `da814c2`), and each one has a `task <N> fix: the message of …` commit.
+
 **Files:**
 - No source change expected. A fix found here goes into the task that owns the code, with its own test, and this gate runs again from Step 1.
 
@@ -7868,22 +7870,22 @@ git commit -m "v0.4 step 4 (19/20): 膚質 bench rows" -m "Co-Authored-By: Claud
 - Consumes: everything above; `.superpowers/step4-base.txt` and `.superpowers/step4-eol-before.txt` from Task 1.
 - Produces: a green step 4 on `feat/meiyan-pwa`, version still 0.3.0, nothing pushed.
 
-- [ ] **Step 1: Typecheck and unit tests**
+- [x] **Step 1: Typecheck and unit tests**
 
 Run: `npm run typecheck && npm test`
 Expected: typecheck prints nothing; Vitest ends with every file passed (including `toneGeometry`, `toneCpu`, `toneCalibration`, `healCpu`, `toneJob`, `spots`, `patch`, `zoomPan`, `panelModel`, `exportPlan`, `toneBench`, `tests/unit/toneFixture`).
 
-- [ ] **Step 2: Production build**
+- [x] **Step 2: Production build**
 
 Run: `npm run build`
 Expected: `tsc` and `vite build` succeed.
 
-- [ ] **Step 3: The whole e2e suite**
+- [x] **Step 3: The whole e2e suite**
 
 Run: `npm run test:e2e`
 Expected: every spec passes — the existing ones unchanged (`editor`, `engine`, `reshape`, `faceProtect`, `body`, `camera`, `home`, `settings`, `update`, `bench`, and steps 1–3's `parity`, `persons`, `camera-group` (its own `chromium-group` project), `adjust`, `composite`, `crop`, `export`), plus `tone-engine.spec.ts` and `tone.spec.ts`.
 
-- [ ] **Step 4: v0.3 equivalence (C §1.1, S §4.1)**
+- [x] **Step 4: v0.3 equivalence (C §1.1, S §4.1)**
 
 Run:
 ```bash
@@ -7899,7 +7901,7 @@ Expected:
 - the `git diff --stat` prints nothing: `COMPOSITE_FS` (both variants) and `RESHAPE_FS` and its port are untouched by step 4;
 - the last command prints nothing: no existing e2e spec changed.
 
-- [ ] **Step 5: Unit-test assertions changed only where planned**
+- [x] **Step 5: Unit-test assertions changed only where planned**
 
 Run:
 ```bash
@@ -7907,7 +7909,7 @@ git diff "$(cat .superpowers/step4-base.txt)" -U0 -- 'src/**/*.test.ts' 'src/**/
 ```
 Expected: the removed lines are only the ones this plan changes on purpose — the `PARAM_DEFS` count, `GROUPS`, `BIDIRECTIONAL` and defaults table in `params.test.ts` (Task 1), step 1's scope-table person list and its `live` case in `state.test.ts` (Task 1), the 500-random round trip's `values:` line in `legacy.test.ts` (Task 3), import declarations that gained names (`legacy.test.ts`, `pipeline.test.ts`, `Slider.test.tsx`, `exportPlan.test.ts`, …), and — only if step 1's 美膚 strip test lists the whole strip with an editor context — that expected list (Task 16). Anything else is a regression to fix in its task.
 
-- [ ] **Step 6: Line endings, version, nothing pushed**
+- [x] **Step 6: Line endings, version, nothing pushed**
 
 Run:
 ```bash
@@ -7925,7 +7927,7 @@ Expected:
 - the log lists the step-4 task commits (`v0.4 step 4 task 1` … `task 19`, plus any `task <N> fix` commits; the base file holds the reconcile commit, so it is not listed);
 - the branch line shows only local commits ahead (if the branch tracks a remote) — nothing was pushed.
 
-- [ ] **Step 7: Record the gate**
+- [x] **Step 7: Record the gate**
 
 ```bash
 git commit --allow-empty -m "v0.4 step 4 (20/20): step gate — typecheck, unit, build, full e2e, parity, pins, line endings" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"

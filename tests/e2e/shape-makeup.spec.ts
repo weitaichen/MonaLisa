@@ -58,8 +58,10 @@ test('each part changes only its region; 美瞳 stays in iris ∩ aperture and k
     expect(inside, part).toBeGreaterThan(8);
     for (const l of p.layers) expect(p.passes, part).toContain(`mk.${l}`);
   }
-  // 美瞳: every changed pixel inside the iris disc × 1.12 and within 2 px of the aperture strip; catchlight unchanged
-  const lens = decodeDataUrl(r.parts.lens.png);
+  // 美瞳, on the source with a painted catchlight disc per iris (sample_face.png has no pixel above Y 0.88): every
+  // changed pixel inside the iris disc × 1.12 and within 2 px of the aperture strip; every pixel with Y > 0.88 unchanged
+  const litBase = decodeDataUrl(r.catchlight.base);
+  const lens = decodeDataUrl(r.catchlight.lens);
   const inPoly = (poly: number[][], x: number, y: number) => {
     let c = false;
     for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
@@ -76,18 +78,35 @@ test('each part changes only its region; 美瞳 stays in iris ∩ aperture and k
       const t = Math.max(0, Math.min(1, ((x - a[0]) * (b[0] - a[0]) + (y - a[1]) * (b[1] - a[1])) / ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 || 1)));
       return Math.hypot(a[0] + (b[0] - a[0]) * t - x, a[1] + (b[1] - a[1]) * t - y) <= tol;
     });
+  // where 美瞳 draws at full strength but for catchl: the annulus 0.4–1 r, inside the aperture
+  const inLensAnnulus = (x: number, y: number) =>
+    r.eyes.some((e) => {
+      const rho = Math.hypot(x - e.c[0], y - e.c[1]) / e.r;
+      return rho >= 0.4 && rho <= 1 && inPoly(e.strip, x, y);
+    });
   let changed = 0;
+  let catchPx = 0;
+  let catchInLens = 0;
+  let catchWorst = 0;
   for (let y = 0; y < r.height; y++)
     for (let x = 0; x < r.width; x++) {
       const i = (y * r.width + x) * 4;
-      const d = maxDiff(lens, base, i);
-      const Y = (0.2126 * base.data[i] + 0.7152 * base.data[i + 1] + 0.0722 * base.data[i + 2]) / 255;
-      if (Y > 0.88) expect(d, `catchlight ${x},${y}`).toBeLessThanOrEqual(2);
+      const d = maxDiff(lens, litBase, i);
+      const Y = (0.2126 * litBase.data[i] + 0.7152 * litBase.data[i + 1] + 0.0722 * litBase.data[i + 2]) / 255;
+      if (Y > 0.88) {
+        catchPx++;
+        catchWorst = Math.max(catchWorst, d);
+        if (inLensAnnulus(x + 0.5, y + 0.5)) catchInLens++;
+        expect(d, `catchlight ${x},${y}`).toBeLessThanOrEqual(2);
+      }
       if (d <= 2) continue;
       changed++;
       const ok = r.eyes.some((e) => Math.hypot(x + 0.5 - e.c[0], y + 0.5 - e.c[1]) <= 1.12 * e.r && nearPoly(e.strip, x + 0.5, y + 0.5, 2));
       expect(ok, `美瞳 pixel ${x},${y}`).toBe(true);
     }
+  console.log(`美瞳: ${changed} px changed; ${catchPx} catchlight px (${catchInLens} in the annulus ∩ aperture), worst ${catchWorst}/255`);
+  expect(catchPx, 'the painted catchlight reaches Y > 0.88').toBeGreaterThan(50);
+  expect(catchInLens, 'the catchlight lies where 美瞳 draws').toBeGreaterThan(30);
   expect(changed).toBeGreaterThan(100);
 });
 
@@ -128,11 +147,18 @@ test('procedural makeup survives a lost and restored WebGL context (S5 §7; Revi
   await page.waitForFunction(() => typeof window.runMakeupContextLoss === 'function');
   const r = await page.evaluate(() => window.runMakeupContextLoss!());
   expect(r.restored, 'the engine left the lost state').toBe(true);
-  const a = decodeDataUrl(r.before);
-  const b = decodeDataUrl(r.after);
-  let m = 0;
-  for (let i = 0; i < a.data.length; i += 4) m = Math.max(m, maxDiff(a, b, i));
-  expect(m).toBeLessThanOrEqual(1);
+  const worst = (a: Pixels, b: Pixels) => {
+    let m = 0;
+    for (let i = 0; i < a.data.length; i += 4) m = Math.max(m, maxDiff(a, b, i));
+    return m;
+  };
+  const before = decodeDataUrl(r.before);
+  // 眼影 + 睫毛: the PMAKEUP program, its VBO and the lashes texture all come back; 睫毛 itself draws (not vacuous)
+  const lashes = worst(before, decodeDataUrl(r.noLashes));
+  const restore = worst(before, decodeDataUrl(r.after));
+  console.log(`context loss: 睫毛 changes ${lashes}/255; before vs after ${restore}/255`);
+  expect(lashes, '睫毛 draws before the loss').toBeGreaterThan(8);
+  expect(restore).toBeLessThanOrEqual(1);
 });
 
 test('contact sheet @sheet', async ({ page }) => {

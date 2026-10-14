@@ -42,6 +42,8 @@ export interface MakeupRegions {
   parts: Record<string, { png: string; boxes: [number, number, number, number][]; layers: MakeupLayer[]; passes: string[] }>;
   /** per eye: iris centre / radius and the aperture strip polygon, px */
   eyes: { c: [number, number]; r: number; strip: number[][] }[];
+  /** 原圖 and 美瞳 on sample_face.png with a white catchlight disc painted in each iris (S5 §8.3 item 3) */
+  catchlight: { base: string; lens: string };
 }
 
 declare global {
@@ -50,7 +52,7 @@ declare global {
     runMakeupRegions?: () => Promise<MakeupRegions>;
     runMakeupBlink?: () => Promise<Record<string, string>>;
     runMakeupLashesFail?: () => Promise<{ settled: boolean; meshReady: boolean; compiled: boolean; layers: string[] }>;
-    runMakeupContextLoss?: () => Promise<{ before: string; after: string; restored: boolean }>;
+    runMakeupContextLoss?: () => Promise<{ before: string; after: string; noLashes: string; restored: boolean }>;
     runMakeupSheet?: () => Promise<{ name: string; png: string }[]>;
   }
 }
@@ -223,8 +225,8 @@ async function setup() {
   await engine.ready;
   const face = adapt({ points: new Float32Array(landmarks.points) }, bitmap.width, bitmap.height);
   const photo = neutralPhoto();
-  const input = (person: PersonParams, f: Face = face): RenderInput => ({
-    source: bitmap,
+  const input = (person: PersonParams, f: Face = face, source: TexImageSource = bitmap): RenderInput => ({
+    source,
     width: bitmap.width,
     height: bitmap.height,
     faces: [{ face: f, weight: 1, person, protect: null }],
@@ -238,7 +240,8 @@ async function setup() {
     c.getContext('2d')!.putImageData(img, 0, 0);
     return c.toDataURL('image/png');
   };
-  const render = (person: PersonParams, f: Face = face) => png(engine.renderToImageData(input(person, f), { mirror: false }));
+  const render = (person: PersonParams, f: Face = face, source: TexImageSource = bitmap) =>
+    png(engine.renderToImageData(input(person, f, source), { mirror: false }));
   return { bitmap, canvas, engine, face, input, png, photo, render };
 }
 
@@ -247,7 +250,7 @@ window.runMakeupRegions = async () => {
   const W = bitmap.width;
   const H = bitmap.height;
   const aspect = W / H;
-  const out: MakeupRegions = { width: W, height: H, base: render(neutralPerson()), parts: {}, eyes: [] };
+  const out: MakeupRegions = { width: W, height: H, base: render(neutralPerson()), parts: {}, eyes: [], catchlight: { base: '', lens: '' } };
   for (const part of PARTS) {
     const person = partOn(part);
     const g = buildMakeupGeometry([{ face, weight: 1, person, protect: null }], aspect);
@@ -278,6 +281,20 @@ window.runMakeupRegions = async () => {
       strip: [...upper, ...lower].map(([x, y]) => [x * W, y * H]),
     });
   }
+  // a known catchlight: no pixel of the sample_face.png render reaches Y 0.81, so the spec's Y > 0.88 check never fires
+  // on the raw image. A white disc up-left in each iris (mostly inside the 美瞳 annulus and the aperture) gives one.
+  const lit = new OffscreenCanvas(W, H);
+  const ctx = lit.getContext('2d')!;
+  ctx.drawImage(bitmap, 0, 0);
+  ctx.fillStyle = '#fff';
+  for (const e of out.eyes) {
+    ctx.beginPath();
+    ctx.arc(e.c[0] - 0.3 * e.r, e.c[1] - 0.3 * e.r, 0.22 * e.r, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+  const litBitmap = lit.transferToImageBitmap();
+  out.catchlight = { base: render(neutralPerson(), face, litBitmap), lens: render(partOn('lens'), face, litBitmap) };
+  litBitmap.close();
   engine.dispose();
   bitmap.close();
   return out;
@@ -317,10 +334,16 @@ window.runMakeupLashesFail = async () => {
   return { settled, meshReady, compiled, layers };
 };
 
-/** 眼影 rendered, the display context lost and restored (iOS backgrounding), rendered again: the same pixels */
+/**
+ * 眼影 + 睫毛 rendered, the display context lost and restored (iOS backgrounding), rendered again: the same pixels.
+ * 睫毛 reads the lashes texture, which the restore must reload with the PMAKEUP program and its VBO (Review Focus 2);
+ * `noLashes` (眼影 alone, before the loss) shows that 睫毛 draws, so a restore without it cannot match `before`.
+ */
 window.runMakeupContextLoss = async () => {
   const { bitmap, canvas, engine, render } = await setup();
-  const person = partOn('eyeshadow');
+  const shadow = partOn('eyeshadow');
+  const person: PersonParams = { ...shadow, values: { ...shadow.values, [MAKEUP_PARAM.lashes]: 1 } };
+  const noLashes = render(shadow);
   const before = render(person);
   const ext = canvas.getContext('webgl2')?.getExtension('WEBGL_lose_context');
   if (!ext) throw new Error('WEBGL_lose_context missing');
@@ -336,7 +359,7 @@ window.runMakeupContextLoss = async () => {
   const restored = !engine.lost;
   engine.dispose();
   bitmap.close();
-  return { before, after, restored };
+  return { before, after, noLashes, restored };
 };
 
 window.runMakeupSheet = async () => {

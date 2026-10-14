@@ -5755,7 +5755,7 @@ git commit -m "v0.4 step 4 (14/20): heal pass P0b on the GPU" -m "Co-Authored-By
   ```
   With `spotTap` set (祛痘 mode, S §2.3): a one-finger tap that moved ≤ 8 px fires `spotTap(uv, layer)` on pointer-up, never on `pointercancel`, never waits for a double tap, and double-tap-to-fit is off; `onTap` is not called. Pinch and one-finger pan while zoomed work as before.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/ui/screens/zoomPan.test.ts`:
 ```ts
@@ -5796,12 +5796,12 @@ describe('tapOutcome (skin-cleanup spec §2.3)', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [x] **Step 2: Run it to see it fail**
 
 Run: `npx vitest run src/ui/screens/zoomPan.test.ts`
 Expected: FAIL — `tapOutcome is not a function`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/ui/screens/zoomPan.ts` (CRLF), below `pinchView` (line 31), add:
 ```ts
@@ -5897,14 +5897,14 @@ Then, inside `useZoomPan`'s effect (step 1 already reads `opts` through `optsRef
 ```
 Register `end` for both `pointerup` and `pointercancel`, in place of `up` (`zoomPan.ts:129-139`, the removals too). Keep everything else step 1 and step 3 put in the hook (`--zs` in `apply`, `optsRef`, the `[enabled]` dependency, the `resetWhen` effect).
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/ui/screens/zoomPan.test.ts && npm run typecheck`
 Expected: PASS.
 Run: `npm run build && npx playwright test tests/e2e/editor.spec.ts tests/e2e/persons.spec.ts`
 Expected: pass — double-tap-to-fit, pinch, pan and the person taps behave as before.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/ui/screens/zoomPan.ts src/ui/screens/zoomPan.test.ts

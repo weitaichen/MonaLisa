@@ -148,6 +148,66 @@ describe('zoomPan reset (裁切 opens, S §2.1)', () => {
     r.show(true, { resetWhen: false });
     expect(r.style.transform).toContain('scale(2)');
   });
+
+  describe('the hook taps (step 1 view taps; skin-cleanup spec §2.3 spotTap)', () => {
+    /** a ×2 pinch about the centre, so a fit-to-view shows as an empty transform */
+    const zoomIn = (r: ReturnType<typeof rig>) => {
+      r.fire('pointerdown', 1, 40, 50);
+      r.fire('pointerdown', 2, 60, 50);
+      r.fire('pointermove', 2, 80, 50);
+      r.fire('pointerup', 2, 80, 50);
+      r.fire('pointerup', 1, 40, 50);
+    };
+    const tap = (r: ReturnType<typeof rig>, end = 'pointerup') => {
+      r.fire('pointerdown', 1, 50, 50);
+      r.fire(end, 1, 50, 50);
+    };
+
+    it('view: a quick double tap calls onTap twice and fits; a pinch is no tap', () => {
+      const r = rig();
+      const taps: [number, number][] = [];
+      r.show(true, { onTap: (uv) => taps.push(uv) });
+      zoomIn(r);
+      expect(taps).toEqual([]);
+      tap(r);
+      tap(r);
+      expect(taps).toEqual([[0.5, 0.5], [0.5, 0.5]]);
+      expect(r.style.transform).toBe('');
+    });
+
+    it('view: a pointercancel calls no onTap but still counts toward the double tap', () => {
+      const r = rig();
+      const taps: [number, number][] = [];
+      r.show(true, { onTap: (uv) => taps.push(uv) });
+      zoomIn(r);
+      tap(r, 'pointercancel');
+      expect(taps).toEqual([]);
+      tap(r);
+      expect(taps).toEqual([[0.5, 0.5]]);
+      expect(r.style.transform).toBe('');
+    });
+
+    it('spot: a quick double tap is two spotTaps with the layer rect, no onTap and no fit (Review Focus 2)', () => {
+      const r = rig();
+      const spots: [number, number][] = [];
+      const views: number[] = [];
+      r.show(true, { onTap: (uv) => views.push(uv[0]), spotTap: (uv, rect) => spots.push([uv[0], rect.width]) });
+      zoomIn(r);
+      tap(r);
+      tap(r);
+      expect(spots).toEqual([[0.5, 100], [0.5, 100]]);
+      expect(views).toEqual([]);
+      expect(r.style.transform).toContain('scale(2)');
+    });
+
+    it('spot: a pointercancel adds no spot', () => {
+      const r = rig();
+      const spots: [number, number][] = [];
+      r.show(true, { spotTap: (uv) => spots.push(uv) });
+      tap(r, 'pointercancel');
+      expect(spots).toEqual([]);
+    });
+  });
 });
 
 describe('engine progress text', () => {

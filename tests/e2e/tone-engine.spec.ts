@@ -95,7 +95,7 @@ test('tone field + retouch: the GPU equals toneCpu (max 2/255, mean 0.25/255) on
   for (const lv of r.levels) {
     const R = imgOf(r.qw, r.qh, lv.R);
     const Q = imgOf(r.qw, r.qh, lv.Q);
-    const cpu = toRgba8(retouchCpu(base, toneFieldCpu(base, Q, R, r.sigmaLowPx, true), R, true, IDENTITY_WIN, lv.mouths));
+    const cpu = toRgba8(retouchCpu(base, toneFieldCpu(base, Q, R, r.sigmaLowPx, true, lv.folds), R, true, IDENTITY_WIN, lv.mouths));
     const gpu = bytes(lv.out);
     for (const [name, [cx, cy]] of crops) {
       let max = 0;
@@ -126,7 +126,7 @@ test('tone engine: each tool changes only its region (⅔ of the calibrated targ
   })();
   const base = decodeDataUrl(r.png.base);
   for (const tool of Object.keys(TOOL_VALUES) as ToolName[]) {
-    // a zero target (法令紋, 白牙 after Task 9) asks for no regression within a 0.5/255 bias, never a bare ⅔·0 (toolChecks)
+    // ⅔ of each calibrated target (a zero target would ask for no regression within a 0.5/255 bias, never a bare ⅔·0; toolChecks)
     const checks = toolChecks(tool, decodeDataUrl(r.png[tool]), base, orig, fx, FACE, 2 / 3);
     console.log(`${tool}: ${checks.map((c) => `${c.ok ? '' : '✗ '}${c.name} ${c.value.toFixed(4)} (${c.bound})`).join(' · ')}`);
     expect(checks.filter((c) => !c.ok).map((c) => `${c.name} = ${c.value.toFixed(4)} (${c.bound})`), tool).toEqual([]);

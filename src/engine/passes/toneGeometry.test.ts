@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { adapt } from '../../tracking/adapter111';
 import type { Face } from '../../types';
+import { rasterizeTone } from '../toneRaster.node';
 import {
   centroid,
   crescentGeometry,
@@ -11,6 +12,8 @@ import {
   eyeOpen,
   faceFrame,
   farSide,
+  foldChords,
+  IDENTITY_WIN,
   isoPt,
   mouthGeometry,
   mouthGuards,
@@ -18,6 +21,7 @@ import {
   nasolabialGeometry,
   NEUTRAL_TONE,
   Q_CLEAR,
+  R_CLEAR,
   resampleChain,
   sideFade,
   smoothstep,
@@ -177,6 +181,36 @@ describe('crescents and nasolabial bands', () => {
         expect(p[1]).toBeGreaterThanOrEqual(Math.min(pa[1], pb[1]) - 0.1 * fw);
         expect(p[1]).toBeLessThanOrEqual(Math.max(pa[1], pb[1]) + 0.1 * fw);
       }
+    }
+  });
+
+  it('a nasolabial band is at full strength over its inner half (±h/2) and falls to 0 at ±h (S §4.2)', () => {
+    // the fold reference lifts only a valley across the band, so the band need not guess the fold line: a fold 0.3 h
+    // off the centre row keeps the full strength
+    const W = 1000;
+    const H = Math.round(W / ASPECT);
+    const r = rasterizeTone(toneDrawsR([{ face: FACE, values: { ...NEUTRAL_TONE, nasolabial: 1 }, weight: 1, cap: null }], ASPECT), W, H, IDENTITY_WIN, R_CLEAR);
+    const f = faceFrame(FACE, ASPECT);
+    for (const [side, i0, i1, o] of [['L', 82, 84, -1], ['R', 83, 90, 1]] as const) {
+      const at = (i: number, a: number, y: number): V2 => {
+        const p = isoPt(FACE, i, ASPECT);
+        return [p[0] + o * f.xhat[0] * a * f.fw + f.yhat[0] * y * f.fw, p[1] + o * f.xhat[1] * a * f.fw + f.yhat[1] * y * f.fw];
+      };
+      const S = at(i0, 0.04, -0.01);
+      const E = at(i1, 0.06, 0.05);
+      const C: V2 = [(S[0] + E[0]) / 2 + o * f.xhat[0] * 0.035 * f.fw, (S[1] + E[1]) / 2 + o * f.xhat[1] * 0.035 * f.fw];
+      // t = ½: the curve's point and its normal (the tangent there is E − S), h = 0.035 fw
+      const p: V2 = [(S[0] + 2 * C[0] + E[0]) / 4, (S[1] + 2 * C[1] + E[1]) / 4];
+      const l = dist(S, E);
+      const n: V2 = [-(E[1] - S[1]) / l, (E[0] - S[0]) / l];
+      const h = 0.035 * f.fw;
+      const g = (s: number) => {
+        const q: V2 = [p[0] + n[0] * s * h, p[1] + n[1] * s * h];
+        return r[(Math.floor(q[1] * W) * W + Math.floor(q[0] * W)) * 4 + 1];
+      };
+      for (const s of [0, 0.3, -0.3, 0.45, -0.45]) expect(g(s), `${side} ${s}`).toBe(1);
+      for (const s of [0.75, -0.75]) expect(Math.abs(g(s) - 0.5), `${side} ${s}`).toBeLessThan(0.1);
+      for (const s of [1.1, -1.1]) expect(g(s), `${side} ${s}`).toBe(0);
     }
   });
 
@@ -445,6 +479,37 @@ describe('R and Q draw lists', () => {
     expect(mouthGuards([{ face: FACE, values: v, weight: 0, cap: null }], ASPECT).mouths).toEqual([]);
     const two = [...one(v), { face: shiftedFace(FACE, 0.3), values: v, weight: 1, cap: null }];
     expect(mouthGuards(two, ASPECT).mouths).toHaveLength(toneDrawsR(two, ASPECT).filter((d) => d.str[2] > 0).length);
+  });
+
+  it("法令紋's fold reference lists exactly the bands R draws: each band's chord S → E (iso, S §4.2)", () => {
+    const v = { ...NEUTRAL_TONE, nasolabial: 0.6 };
+    const g = foldChords(one(v), ASPECT);
+    const f = faceFrame(FACE, ASPECT);
+    const at = (i: number, o: number, y: number): V2 => {
+      const p = isoPt(FACE, i, ASPECT);
+      const s = o * f.fw;
+      return [p[0] + f.xhat[0] * s + f.yhat[0] * y * f.fw, p[1] + f.xhat[1] * s + f.yhat[1] * y * f.fw];
+    };
+    // image-left o = −x̂, image-right o = +x̂; S = P(82|83) + 0.04 fw·o − 0.01 fw·ŷ, E = P(84|90) + 0.06 fw·o + 0.05 fw·ŷ
+    const want = [
+      { s: at(82, -0.04, -0.01), e: at(84, -0.06, 0.05) },
+      { s: at(83, 0.04, -0.01), e: at(90, 0.06, 0.05) },
+    ];
+    expect(g.chords).toHaveLength(2);
+    g.chords.forEach((c, k) => {
+      for (const [a, b] of [[c.s, want[k].s], [c.e, want[k].e]]) {
+        expect(a[0]).toBeCloseTo(b[0], 12);
+        expect(a[1]).toBeCloseTo(b[1], 12);
+      }
+    });
+    // 法令紋 0, a weightless face or a fully faded far side: no R.G region, so no chord either
+    expect(foldChords(one({ ...NEUTRAL_TONE, even: 1, darkCircle: 1 }), ASPECT).chords).toEqual([]);
+    expect(foldChords([{ face: FACE, values: v, weight: 0, cap: null }], ASPECT).chords).toEqual([]);
+    const turned = { ...FACE, yaw: -0.6 };
+    expect(foldChords(one(v, turned), ASPECT).chords).toHaveLength(toneDrawsR(one(v, turned), ASPECT).filter((d) => d.str[1] > 0).length);
+    expect(foldChords(one(v, turned), ASPECT).chords).toHaveLength(1);
+    const two = [...one(v), { face: shiftedFace(FACE, 0.3), values: v, weight: 1, cap: null }];
+    expect(foldChords(two, ASPECT).chords).toHaveLength(toneDrawsR(two, ASPECT).filter((d) => d.str[1] > 0).length);
   });
 
   it('膚色: a warm face draws MAX, then MIN holes into B around TONE_ZERO; a cool face the opposite', () => {

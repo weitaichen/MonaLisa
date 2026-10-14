@@ -403,7 +403,7 @@ export function createPipeline(gl: GL): Pipeline {
     toneField ??= createToneFieldPass(gl);
     const q = fb('Q', maskBufferSize(tj.work));
     toneMask.draw(q, tj.drawsQ, IDENTITY_WIN, Q_CLEAR);
-    toneTex = toneField.build(base0, tj.work, q.tex, rTex, tj.sigmaLowPx, tj.fieldOn, (name, size) => fb(name, size));
+    toneTex = toneField.build(base0, tj.work, q.tex, rTex, tj.sigmaLowPx, tj.fieldOn, (name, size) => fb(name, size), tj.folds);
     toneKey = tj.key;
     return toneTex;
   }

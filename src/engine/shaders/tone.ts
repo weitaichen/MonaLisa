@@ -8,7 +8,8 @@ import { TONE_ZERO } from '../passes/toneGeometry';
  * toneCalibration.test.ts (plan Task 9): from the spec's starting values, 勻膚 even.chroma ×1.2, 膚色 warm and cool ×1.2,
  * 亮眼 eye.detint ×2 and eye.clarity ×1.1; the two gains above 1 act through an effective factor capped at 1, so they
  * steepen the region ramp but never push past neutral (step 4 follow-up). 白牙's tooth gate and lip guard are plan
- * Task 11's decision (b). Every other entry is the spec's (S §4.3–4.4).
+ * Task 11's decision (b). 法令紋 reads a fold-relative reference, and its lift is ×1.5 (step 4 follow-up). Every other
+ * entry is the spec's (S §4.3–4.4).
  */
 export const TONE = {
   /** conf = smoothstep(conf0, conf1, L.a): how much skin the low-pass reference saw */
@@ -20,7 +21,13 @@ export const TONE = {
   /** chroma: the effective factor min(1, chroma · weight) never inverts bC (a gain above 1 only steepens the ramp) */
   even: { chroma: 1.08, lift: 0.45 },
   darkCircle: { lift: 0.85, chroma: 0.7 },
-  nasolabial: { lift: 0.8, chroma: 0.3 },
+  /**
+   * 法令紋 lifts the valley depth across its band, not the mid band against L: a fold often lies on a convex cheek
+   * highlight that L, at σ_low, reads as brighter than its surroundings. The depth is the 8 × 8 box of base0 at the
+   * texel (D8's footprint) minus the mean of the two boxes `reach`·σ_mid away along the band chord's normal; at the
+   * mid-band scale (Mn8) a soft fold on a steep flank makes no minimum at all (S §4.3).
+   */
+  nasolabial: { lift: 1.2, chroma: 0.3, reach: 2 },
   /** 膚色 RGB gains per unit of s: warm (s > 0) and cool (s < 0) */
   warm: [0.072, 0.024, -0.084],
   cool: [-0.036, -0.024, 0.084],
@@ -50,6 +57,9 @@ export const TONE = {
     clamp: 0.12,
   },
 } as const;
+
+/** the fold reference's band list holds this many chords: two per face the engine renders */
+export const MAX_FOLDS = 2 * MAX_RENDER_FACES;
 
 /** σ_mid = 0.0141·SE: the effective σ of the P3/P4 sparse mean (uniforms.ts:42-61), so 勻膚's mid band is 磨皮's */
 export const sigmaMid = (se: number): number => 0.0141 * se;
@@ -167,7 +177,11 @@ void main() {
   outColor = s / float(uK * uK);
 }`;
 
-/** Δ8 = ZERO + 2·clamp(Δ): 勻膚, 黑眼圈, 法令紋 on the mid band, then 膚色 (S §4.3) */
+/**
+ * Δ8 = ZERO + 2·clamp(Δ): 勻膚 and 黑眼圈 on the mid band, 法令紋 on the valley depth across its band, then 膚色 (S §4.3).
+ * 法令紋 reads base0 (uBase, working px) and the band chords (uFold: S.xy, E.xy in working px, uFolds of them); with
+ * none listed it does nothing (foldBand in toneCpu.ts).
+ */
 export const TONE_FIELD_FS = /* glsl */ `#version 300 es
 precision highp float;
 ${COMMON}
@@ -175,8 +189,19 @@ uniform sampler2D uMn8;
 uniform sampler2D uL;
 uniform sampler2D uQ;
 uniform sampler2D uR;
+uniform sampler2D uBase;
+uniform vec2 uBaseSize;
+uniform int uFolds;
+uniform vec4 uFold[${MAX_FOLDS}];
+uniform float uFoldK;
 out vec4 outColor;
 float box(float x, float lo, float hi, float e) { return smoothstep(lo - e, lo, x) * (1.0 - smoothstep(hi, hi + e, x)); }
+vec3 box8(vec2 c) {
+  vec3 s = vec3(0.0);
+  for (int b = 0; b < 4; b++)
+    for (int a = 0; a < 4; a++) s += texture(uBase, (c + vec2(float(2 * a - 3), float(2 * b - 3))) / uBaseSize).rgb;
+  return s / 16.0;
+}
 float skinGate(vec3 c) {
   vec3 y = toYcc(c);
   return box(y.y, ${g(T.skinCb[0])}, ${g(T.skinCb[1])}, ${g(T.skinSoft)}) * box(y.z, ${g(T.skinCr[0])}, ${g(T.skinCr[1])}, ${g(T.skinSoft)});
@@ -197,8 +222,27 @@ void main() {
   vec4 r = texture(uR, uv);
   float wE = q.r * conf * gE;
   vec3 d = -min(1.0, ${g(T.even.chroma)} * wE) * bC + ${g(T.even.lift)} * wE * lift
-         + r.r * conf * gD * (${g(T.darkCircle.lift)} * lift - ${g(T.darkCircle.chroma)} * bC)
-         + r.g * conf * gD * (${g(T.nasolabial.lift)} * lift - ${g(T.nasolabial.chroma)} * bC);
+         + r.r * conf * gD * (${g(T.darkCircle.lift)} * lift - ${g(T.darkCircle.chroma)} * bC);
+  if (r.g > 0.0 && uFolds > 0) {
+    vec2 c = (vec2(p) + 0.5) * 8.0;
+    float best = 1e30;
+    vec2 n = vec2(0.0);
+    for (int f = 0; f < ${MAX_FOLDS}; f++) {
+      if (f >= uFolds) break;
+      vec2 a = uFold[f].xy;
+      vec2 ab = uFold[f].zw - a;
+      float t = clamp(dot(c - a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+      float dist = length(c - a - t * ab);
+      if (dist < best) {
+        best = dist;
+        n = vec2(-ab.y, ab.x) / max(length(ab), 1e-6);
+      }
+    }
+    vec3 bn = box8(c) - 0.5 * (box8(c + uFoldK * n) + box8(c - uFoldK * n));
+    float bnY = dot(bn, L709);
+    float gN = 1.0 - smoothstep(${g(T.darkGuard[0])}, ${g(T.darkGuard[1])}, -bnY);
+    d += r.g * conf * gN * (${g(T.nasolabial.lift)} * -min(bnY, 0.0) - ${g(T.nasolabial.chroma)} * (bn - vec3(bnY)));
+  }
   float s = clamp(2.0 * (q.b - ZERO), -1.0, 1.0);
   if (abs(s) > 0.5 / 255.0) {
     vec3 c0 = m + d;

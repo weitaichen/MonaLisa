@@ -158,21 +158,30 @@ export function crescentGeometry(face: Face, side: Side, aspect: number): Float3
   return t.uv(aspect);
 }
 
-/**
- * 法令紋 band (R.G), per side with o = −x̂ (image-left) or +x̂: S = P(82|83) + 0.04fw·o − 0.01fw·ŷ,
- * E = P(84|90) + 0.06fw·o + 0.05fw·ŷ, control C = (S + E)/2 + 0.035fw·o; a quadratic Bézier with 9 samples, half-width
- * h(t) = 0.035fw·(0.6 + 0.4 sin πt), rows −h (0), centre (1 × smoothstep over the first and last 15 %), +h (0).
- */
-export function nasolabialGeometry(face: Face, side: Side, aspect: number): Float32Array {
+/** the 法令紋 band's curve (iso): S = P(82|83) + 0.04fw·o − 0.01fw·ŷ, E = P(84|90) + 0.06fw·o + 0.05fw·ŷ, C = (S + E)/2 + 0.035fw·o */
+function nasolabialCurve(face: Face, side: Side, aspect: number): { S: V2; C: V2; E: V2; fw: number } {
   const f = faceFrame(face, aspect);
   const P = (i: number) => isoPt(face, i, aspect);
   const o: V2 = side === 'L' ? mul(f.xhat, -1) : f.xhat;
   const [ia, ib] = side === 'L' ? [82, 84] : [83, 90];
   const S = add(add(P(ia), mul(o, 0.04 * f.fw)), mul(f.yhat, -0.01 * f.fw));
   const E = add(add(P(ib), mul(o, 0.06 * f.fw)), mul(f.yhat, 0.05 * f.fw));
-  const C = add(mul(add(S, E), 0.5), mul(o, 0.035 * f.fw));
+  return { S, C: add(mul(add(S, E), 0.5), mul(o, 0.035 * f.fw)), E, fw: f.fw };
+}
+
+/**
+ * 法令紋 band (R.G), per side with o = −x̂ (image-left) or +x̂: S = P(82|83) + 0.04fw·o − 0.01fw·ŷ,
+ * E = P(84|90) + 0.06fw·o + 0.05fw·ŷ, control C = (S + E)/2 + 0.035fw·o; a quadratic Bézier with 9 samples, half-width
+ * h(t) = 0.035fw·(0.6 + 0.4 sin πt), rows −h (0), −h/2, centre and +h/2 (1 × smoothstep over the first and last 15 %),
+ * +h (0). Full strength over the inner half: the field's fold reference lifts only a valley across the band (S §4.3),
+ * so the band marks where a fold may lie and need not guess its line.
+ */
+export function nasolabialGeometry(face: Face, side: Side, aspect: number): Float32Array {
+  const { S, C, E, fw } = nasolabialCurve(face, side, aspect);
   const lo: V2[] = [];
+  const inLo: V2[] = [];
   const mid: V2[] = [];
+  const inHi: V2[] = [];
   const hi: V2[] = [];
   const val: number[] = [];
   for (let i = 0; i <= 8; i++) {
@@ -183,16 +192,20 @@ export function nasolabialGeometry(face: Face, side: Side, aspect: number): Floa
     // turned the opposite way on the image-right side, so the +h row is o's row on both sides and a mirrored face
     // gives the mirrored triangle list (the same quad diagonals), not just the mirrored outline
     const n = unit(side === 'L' ? [-tan[1], tan[0]] : [tan[1], -tan[0]]);
-    const h = 0.035 * f.fw * (0.6 + 0.4 * Math.sin(Math.PI * t));
+    const h = 0.035 * fw * (0.6 + 0.4 * Math.sin(Math.PI * t));
     lo.push(add(p, mul(n, -h)));
+    inLo.push(add(p, mul(n, -h / 2)));
     mid.push(p);
+    inHi.push(add(p, mul(n, h / 2)));
     hi.push(add(p, mul(n, h)));
     val.push(smoothstep(0, 0.15, t) * (1 - smoothstep(0.85, 1, t)));
   }
   const tr = new Tris();
   for (let i = 0; i < 8; i++) {
-    tr.quad(lo[i], 0, lo[i + 1], 0, mid[i + 1], val[i + 1], mid[i], val[i]);
-    tr.quad(mid[i], val[i], mid[i + 1], val[i + 1], hi[i + 1], 0, hi[i], 0);
+    tr.quad(lo[i], 0, lo[i + 1], 0, inLo[i + 1], val[i + 1], inLo[i], val[i]);
+    tr.quad(inLo[i], val[i], inLo[i + 1], val[i + 1], mid[i + 1], val[i + 1], mid[i], val[i]);
+    tr.quad(mid[i], val[i], mid[i + 1], val[i + 1], inHi[i + 1], val[i + 1], inHi[i], val[i]);
+    tr.quad(inHi[i], val[i], inHi[i + 1], val[i + 1], hi[i + 1], 0, hi[i], 0);
   }
   return tr.uv(aspect);
 }
@@ -394,6 +407,34 @@ export interface MouthGuards {
   mouths: readonly MouthGuard[];
 }
 export const NO_MOUTHS: MouthGuards = { aspect: 1, mouths: [] };
+
+/**
+ * One 法令紋 band as the tone field's fold reference reads it (S §4.3): its chord S → E (iso; nasolabialCurve). The
+ * field measures the valley depth across the band, along the chord's normal; a texel takes the nearest listed chord.
+ */
+export interface FoldChord {
+  s: V2;
+  e: V2;
+}
+export interface FoldChords {
+  chords: readonly FoldChord[];
+}
+/** no band listed: the field's 法令紋 term does nothing, whatever R.G says (as 白牙 with no lip guard) */
+export const NO_FOLDS: FoldChords = { chords: [] };
+
+/** the bands toneDrawsR gives a 法令紋 region (a strength above 0), in its order: face by face, image-left then image-right */
+export function foldChords(faces: readonly ToneFaceInput[], aspect: number): FoldChords {
+  const chords: FoldChord[] = [];
+  for (const { face, values: v, weight } of faces) {
+    const w = weight > 0 ? Math.min(1, weight) : 0;
+    for (const side of SIDES) {
+      if (!(w * v.nasolabial * sideFade(face, side) > 0)) continue;
+      const { S, E } = nasolabialCurve(face, side, aspect);
+      chords.push({ s: S, e: E });
+    }
+  }
+  return { chords };
+}
 
 /** the faces toneDrawsR gives a 白牙 region (a strength above 0), in list order */
 export function mouthGuards(faces: readonly ToneFaceInput[], aspect: number): MouthGuards {

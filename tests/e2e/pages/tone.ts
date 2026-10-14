@@ -12,7 +12,7 @@ import { neutralValue, paramDef } from '../../../src/engine/params';
 import { createHealPass } from '../../../src/engine/passes/heal';
 import { createRetouchPass, createToneFieldPass } from '../../../src/engine/passes/toneField';
 import { createToneMaskPass } from '../../../src/engine/passes/toneMask';
-import { faceFrame, IDENTITY_WIN, mouthGuards, NEUTRAL_TONE, Q_CLEAR, R_CLEAR, toneDrawsQ, toneDrawsR, type MouthGuards, type ToneDraw, type ToneFaceInput, type ToneValues } from '../../../src/engine/passes/toneGeometry';
+import { faceFrame, foldChords, IDENTITY_WIN, mouthGuards, NEUTRAL_TONE, NO_FOLDS, Q_CLEAR, R_CLEAR, toneDrawsQ, toneDrawsR, type FoldChords, type MouthGuards, type ToneDraw, type ToneFaceInput, type ToneValues } from '../../../src/engine/passes/toneGeometry';
 import { sigmaLow } from '../../../src/engine/shaders/tone';
 import { spotWindowGrowth } from '../../../src/media/exportPlan';
 import { adapt } from '../../../src/tracking/adapter111';
@@ -104,8 +104,8 @@ export interface ToneFieldRun {
   qh: number;
   sigmaLowPx: number;
   err: number;
-  /** each level's 白牙 lip guard as the retouch got it (retouchCpu takes the same) */
-  levels: { level: number; R: string; Q: string; out: string; mouths: MouthGuards }[];
+  /** each level's 白牙 lip guard as the retouch got it, and 法令紋's band chords as the field got them (the CPU takes the same) */
+  levels: { level: number; R: string; Q: string; out: string; mouths: MouthGuards; folds: FoldChords }[];
 }
 
 declare global {
@@ -170,10 +170,11 @@ window.runToneField = async () => {
     const v: ToneValues = { even: level, warmth: 0.5 + level / 2, darkCircle: level, nasolabial: level, teeth: level, eyeBright: level };
     masks.draw(r, toneDrawsR(oneFace(v), ASPECT), IDENTITY_WIN, R_CLEAR);
     masks.draw(q, toneDrawsQ(oneFace(v), ASPECT), IDENTITY_WIN, Q_CLEAR);
-    const t = field.build(src, { width: W, height: H }, q.tex, r.tex, sl, true, fbFor);
+    const folds = foldChords(oneFace(v), ASPECT);
+    const t = field.build(src, { width: W, height: H }, q.tex, r.tex, sl, true, fbFor, folds);
     const mouths = mouthGuards(oneFace(v), ASPECT);
     retouch.draw(src, out, t.delta8, t.mn8, r.tex, IDENTITY_WIN, true, mouths);
-    levels.push({ level, R: b64(readFb(gl, r)), Q: b64(readFb(gl, q)), out: b64(readFb(gl, out)), mouths });
+    levels.push({ level, R: b64(readFb(gl, r)), Q: b64(readFb(gl, q)), out: b64(readFb(gl, out)), mouths, folds });
   }
   const err = gl.getError();
   masks.dispose();
@@ -297,7 +298,7 @@ window.runToneRetouch = () => {
   };
   masks.draw(r, [whole], IDENTITY_WIN, R_CLEAR);
   masks.draw(q, [], IDENTITY_WIN, Q_CLEAR);
-  const t = field.build(src, { width: w, height: h }, q.tex, r.tex, 0, false, fbFor);
+  const t = field.build(src, { width: w, height: h }, q.tex, r.tex, 0, false, fbFor, NO_FOLDS);
   retouch.draw(src, out, t.delta8, t.mn8, r.tex, IDENTITY_WIN, false, SWEEP_MOUTHS);
   const withMn = b64(readFb(gl, out));
   retouch.draw(src, out, null, null, r.tex, IDENTITY_WIN, false, SWEEP_MOUTHS);

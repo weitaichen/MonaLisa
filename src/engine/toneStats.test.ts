@@ -9,7 +9,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { adapt } from '../tracking/adapter111';
 import type { Face } from '../types';
 import { faceFrame } from './passes/toneGeometry';
-import { toolChecks, type Rgba8, type ToneFixture } from './toneStats.node';
+import { TARGETS, toolChecks, type Rgba8, type ToneFixture } from './toneStats.node';
 
 const root = resolve(import.meta.dirname, '../..');
 let fix: Rgba8;
@@ -61,6 +61,17 @@ describe('toolChecks: the 白牙 region', () => {
 
 describe('toolChecks: a zero target on the GPU', () => {
   const recoveryChecks = (tool: 'nasolabial' | 'teeth', out: Rgba8, scale: number) => toolChecks(tool, out, fix, orig, fx, face, scale).filter((c) => c.name.includes('recovery'));
+  // no TARGETS entry is 0 since 法令紋's fold reference (step 4 follow-up); the rule stays for a calibration that falls
+  // back to 0 (plan Task 9), so these cases zero an entry for their duration
+  const zeroed = <T>(tool: 'nasolabial' | 'teeth', f: () => T): T => {
+    const saved = TARGETS[tool];
+    TARGETS[tool] = 0;
+    try {
+      return f();
+    } finally {
+      TARGETS[tool] = saved;
+    }
+  };
   const bound = (b: string) => Number(b.replace('≥', '').trim());
   /** fix with every channel of the given defect pixels moved by k (8-bit) */
   const shifted = (kind: 'fold' | 'teeth', k: number): Rgba8 => {
@@ -71,7 +82,7 @@ describe('toolChecks: a zero target on the GPU', () => {
   };
 
   it('asks only that the tool does not regress the defect, tolerating a 0.5/255 bias in the mean (never a bare ⅔·0 = "≥ 0")', () => {
-    const folds = recoveryChecks('nasolabial', fix, 2 / 3);
+    const folds = zeroed('nasolabial', () => recoveryChecks('nasolabial', fix, 2 / 3));
     expect(folds.map((c) => c.name)).toEqual(['foldL Y recovery (core) (no regression)', 'foldR Y recovery (core) (no regression)']);
     // 0.5/255 over the defect's own shift: foldL 19.5/255, foldR 12.8/255
     expect(bound(folds[0].bound)).toBeCloseTo(-0.026, 2);
@@ -80,17 +91,23 @@ describe('toolChecks: a zero target on the GPU', () => {
   });
 
   it('fails a tool that deepens the defect by 2/255', () => {
-    expect(recoveryChecks('nasolabial', shifted('fold', -2), 2 / 3).map((c) => c.ok)).toEqual([false, false]);
+    expect(zeroed('nasolabial', () => recoveryChecks('nasolabial', shifted('fold', -2), 2 / 3)).map((c) => c.ok)).toEqual([false, false]);
     // the teeth defect is Cb − 0.05: more yellow is Cb lower, i.e. less blue
     const data = Uint8ClampedArray.from(fix.data);
     for (const d of fx.defects.filter((e) => e.kind === 'teeth')) for (const [x, y] of d.pixels) data[(y * fix.width + x) * 4 + 2] -= 4;
-    expect(recoveryChecks('teeth', { width: fix.width, height: fix.height, data }, 2 / 3).map((c) => c.ok)).toEqual([false]);
+    expect(zeroed('teeth', () => recoveryChecks('teeth', { width: fix.width, height: fix.height, data }, 2 / 3)).map((c) => c.ok)).toEqual([false]);
   });
 
-  it('leaves the CPU calibration (scale 1) and every non-zero target as they were', () => {
-    expect(recoveryChecks('nasolabial', fix, 1).map((c) => [c.name, c.bound])).toEqual([
-      ['foldL Y recovery (core)', '≥ 0.000'],
-      ['foldR Y recovery (core)', '≥ 0.000'],
+  it('every tool has a real target: a fixture the tool left untouched (a deleted tool) fails its recovery checks on the CPU and on the GPU', () => {
+    expect(Object.values(TARGETS).every((t) => t > 0)).toBe(true);
+    // 法令紋 has its spec target since the fold reference (S §4.3): 0.5 on the CPU, ⅔ · 0.5 on the GPU
+    expect(recoveryChecks('nasolabial', fix, 1).map((c) => [c.name, c.bound, c.ok])).toEqual([
+      ['foldL Y recovery (core)', '≥ 0.500', false],
+      ['foldR Y recovery (core)', '≥ 0.500', false],
+    ]);
+    expect(recoveryChecks('nasolabial', fix, 2 / 3).map((c) => [c.name, c.bound, c.ok])).toEqual([
+      ['foldL Y recovery (core)', '≥ 0.333', false],
+      ['foldR Y recovery (core)', '≥ 0.333', false],
     ]);
     const dark = toolChecks('darkCircle', fix, fix, orig, fx, face, 2 / 3).filter((c) => c.name.includes('recovery'));
     expect(dark.map((c) => c.bound)).toEqual(['≥ 0.300', '≥ 0.300']);

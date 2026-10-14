@@ -1,7 +1,7 @@
 // Frame inputs of the 膚質 passes (skin-cleanup spec §4.1, §4.3): which of P0b / P0c / P0d run, their region draw lists,
 // and the tone-field cache key. Pure.
 import type { Face, ParamId, Spot } from '../types';
-import { faceFrame, fieldActive, mouthGuards, NO_MOUTHS, toneActive, toneDrawsQ, toneDrawsR, toneValuesOf, type MouthGuards, type ToneCap, type ToneDraw } from './passes/toneGeometry';
+import { faceFrame, fieldActive, foldChords, mouthGuards, NO_FOLDS, NO_MOUTHS, toneActive, toneDrawsQ, toneDrawsR, toneValuesOf, type FoldChords, type MouthGuards, type ToneCap, type ToneDraw } from './passes/toneGeometry';
 import { sigmaLow } from './shaders/tone';
 import type { Size } from './uniforms';
 
@@ -18,6 +18,8 @@ export interface ToneJob {
   drawsQ: readonly ToneDraw[];
   /** 白牙's lip guard for the retouch: the faces whose 白牙 region R draws (S §4.4) */
   mouths: MouthGuards;
+  /** 法令紋's band chords for the field's fold reference: the bands R draws, when the field runs (S §4.3) */
+  folds: FoldChords;
   /** 勻膚, 膚色, 黑眼圈 or 法令紋 on some face: L and Δ8 are built */
   fieldOn: boolean;
   /** the field runs at all (fieldOn, or 亮眼, which needs Mn8 only) */
@@ -72,6 +74,7 @@ export function buildToneJob(i: { faces: readonly ToneJobFace[]; spots: readonly
     drawsR: retouchOn ? toneDrawsR(inputs, i.aspect) : [],
     drawsQ: fieldOn ? toneDrawsQ(inputs, i.aspect) : [],
     mouths: retouchOn ? mouthGuards(inputs, i.aspect) : NO_MOUTHS,
+    folds: fieldOn ? foldChords(inputs, i.aspect) : NO_FOLDS,
     fieldOn,
     mn8On,
     retouchOn,

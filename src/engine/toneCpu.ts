@@ -2,8 +2,8 @@
 // ./shaders/tone.ts, with the 8-bit rounding every RGBA8 target applies after each stage. Pure, no GL. toneCpu.test.ts pins
 // the shader text by hash; tests/e2e/tone-engine.spec.ts compares the GPU with this port.
 // Y in the field is Rec. 709 luma; the retouch (白牙, 亮眼) works in JPEG full-range YCbCr (S §4.4).
-import { IDENTITY_WIN, NO_MOUTHS, smoothstep, TONE_ZERO, type MouthGuards, type Win } from './passes/toneGeometry';
-import { gaussWeights, lFactor, MAX_MOUTHS, sigmaMid, TONE } from './shaders/tone';
+import { IDENTITY_WIN, NO_FOLDS, NO_MOUTHS, smoothstep, TONE_ZERO, type FoldChords, type MouthGuards, type Win } from './passes/toneGeometry';
+import { gaussWeights, lFactor, MAX_FOLDS, MAX_MOUTHS, sigmaMid, TONE } from './shaders/tone';
 
 /** RGBA, 0..1, row 0 = image top */
 export interface Img {
@@ -162,23 +162,76 @@ export function bandOf(m: ArrayLike<number>, L: ArrayLike<number>): { conf: numb
   return { conf: smoothstep(TONE.conf[0], TONE.conf[1], L[3]), bY, bC: [b0 - bY, b1 - bY, b2 - bY] };
 }
 
-/** Δ of one ⅛ texel, unencoded (S §4.3) */
-export function deltaTexel(m: ArrayLike<number>, L: ArrayLike<number>, q: ArrayLike<number>, r: ArrayLike<number>, out: number[]): number[] {
+/** the 8 × 8 box of `base0` centred at (cx, cy) working px: D8's footprint, 16 bilinear taps (TONE_FIELD_FS box8) */
+export function box8(base0: Img, cx: number, cy: number, out: number[]): number[] {
+  const t = [0, 0, 0, 0];
+  out[0] = out[1] = out[2] = 0;
+  for (let b = 0; b < 4; b++)
+    for (let a = 0; a < 4; a++) {
+      sample(base0, (cx + 2 * a - 3) / base0.w, (cy + 2 * b - 3) / base0.h, t);
+      for (let c = 0; c < 3; c++) out[c] += t[c];
+    }
+  for (let c = 0; c < 3; c++) out[c] /= 16;
+  return out;
+}
+
+/** 法令紋's fold reference: base0 (working px), its band chords (S.x, S.y, E.x, E.y in working px) and the reach k (px) */
+export interface FoldRef {
+  base0: Img;
+  chords: readonly (readonly [number, number, number, number])[];
+  k: number;
+}
+
+/**
+ * 法令紋's valley depth at the ⅛ texel (i, j), RGB (S §4.3): the box of base0 at the texel centre minus the mean of the
+ * two boxes ±k along the normal of the nearest listed chord (the first on a tie). null when no chord is listed.
+ */
+export function foldBand(f: FoldRef, i: number, j: number, out: number[]): number[] | null {
+  const n = Math.min(MAX_FOLDS, f.chords.length);
+  if (n === 0) return null;
+  const cx = (i + 0.5) * 8;
+  const cy = (j + 0.5) * 8;
+  let best = 1e30;
+  let nx = 0;
+  let ny = 0;
+  for (let k = 0; k < n; k++) {
+    const [ax, ay, ex, ey] = f.chords[k];
+    const abx = ex - ax;
+    const aby = ey - ay;
+    const t = Math.min(1, Math.max(0, ((cx - ax) * abx + (cy - ay) * aby) / Math.max(abx * abx + aby * aby, 1e-6)));
+    const d = Math.hypot(cx - ax - t * abx, cy - ay - t * aby);
+    if (d < best) {
+      best = d;
+      const l = Math.max(Math.hypot(abx, aby), 1e-6);
+      nx = -aby / l;
+      ny = abx / l;
+    }
+  }
+  const c = box8(f.base0, cx, cy, [0, 0, 0]);
+  const p = box8(f.base0, cx + f.k * nx, cy + f.k * ny, [0, 0, 0]);
+  const m = box8(f.base0, cx - f.k * nx, cy - f.k * ny, [0, 0, 0]);
+  for (let k = 0; k < 3; k++) out[k] = c[k] - 0.5 * (p[k] + m[k]);
+  return out;
+}
+
+/** Δ of one ⅛ texel, unencoded (S §4.3); `fold` is 法令紋's valley depth there (foldBand), null for none */
+export function deltaTexel(m: ArrayLike<number>, L: ArrayLike<number>, q: ArrayLike<number>, r: ArrayLike<number>, out: number[], fold: ArrayLike<number> | null = null): number[] {
   const { conf, bY, bC } = bandOf(m, L);
   const lift = -Math.min(bY, 0);
   const gE = 1 - smoothstep(TONE.evenGuard[0], TONE.evenGuard[1], Math.abs(bY));
   const gD = 1 - smoothstep(TONE.darkGuard[0], TONE.darkGuard[1], -bY);
   const kE = q[0] * conf * gE;
   const kD = r[0] * conf * gD;
-  const kN = r[1] * conf * gD;
   // 勻膚's chroma factor is capped at 1: at full weight it cancels bC, never inverts it
   const cE = Math.min(1, TONE.even.chroma * kE);
   for (let c = 0; c < 3; c++) {
-    out[c] =
-      -cE * bC[c] +
-      TONE.even.lift * kE * lift +
-      kD * (TONE.darkCircle.lift * lift - TONE.darkCircle.chroma * bC[c]) +
-      kN * (TONE.nasolabial.lift * lift - TONE.nasolabial.chroma * bC[c]);
+    out[c] = -cE * bC[c] + TONE.even.lift * kE * lift + kD * (TONE.darkCircle.lift * lift - TONE.darkCircle.chroma * bC[c]);
+  }
+  // 法令紋: only what is darker than across its band is lifted, and darkness beyond darkGuard is left alone
+  if (r[1] > 0 && fold) {
+    const fY = LUMA709[0] * fold[0] + LUMA709[1] * fold[1] + LUMA709[2] * fold[2];
+    const kN = r[1] * conf * (1 - smoothstep(TONE.darkGuard[0], TONE.darkGuard[1], -fY));
+    for (let c = 0; c < 3; c++) out[c] += kN * (TONE.nasolabial.lift * -Math.min(fY, 0) - TONE.nasolabial.chroma * (fold[c] - fY));
   }
   const s = Math.min(1, Math.max(-1, 2 * (q[2] - TONE_ZERO)));
   if (Math.abs(s) > 0.5 / 255) {
@@ -195,14 +248,18 @@ export function deltaTexel(m: ArrayLike<number>, L: ArrayLike<number>, q: ArrayL
   return out;
 }
 
-/** Δ8: TONE_ZERO + 2·clamp(Δ, ±deltaMax) per ⅛ texel, from Mn8 (texel), L, Q and R (bilinear at the texel centre) */
-export function deltaField(mn8: Img, l: Img, q: Img, r: Img): Img {
+/**
+ * Δ8: TONE_ZERO + 2·clamp(Δ, ±deltaMax) per ⅛ texel, from Mn8 (texel), L, Q and R (bilinear at the texel centre), and
+ * 法令紋's fold reference where R.G > 0 (none: no 法令紋)
+ */
+export function deltaField(mn8: Img, l: Img, q: Img, r: Img, fold: FoldRef | null = null): Img {
   const o = makeImg(mn8.w, mn8.h);
   const m = [0, 0, 0, 0];
   const L = [0, 0, 0, 0];
   const qv = [0, 0, 0, 0];
   const rv = [0, 0, 0, 0];
   const d = [0, 0, 0];
+  const fb = [0, 0, 0];
   for (let j = 0; j < mn8.h; j++)
     for (let i = 0; i < mn8.w; i++) {
       const u = (i + 0.5) / mn8.w;
@@ -211,7 +268,7 @@ export function deltaField(mn8: Img, l: Img, q: Img, r: Img): Img {
       sample(l, u, v, L);
       sample(q, u, v, qv);
       sample(r, u, v, rv);
-      deltaTexel(m, L, qv, rv, d);
+      deltaTexel(m, L, qv, rv, d, rv[1] > 0 && fold ? foldBand(fold, i, j, fb) : null);
       const k = (j * mn8.w + i) * 4;
       for (let c = 0; c < 3; c++) o.d[k + c] = TONE_ZERO + 2 * Math.min(TONE.deltaMax, Math.max(-TONE.deltaMax, d[c]));
       o.d[k + 3] = 1;
@@ -225,15 +282,25 @@ export interface ToneFieldCpu {
   delta8: Img | null;
 }
 
-/** P0c from `base0` at working resolution; `fieldOn` false (亮眼 only) stops after Mn8 */
-export function toneFieldCpu(base0: Img, q: Img, r: Img, sigmaLowPx: number, fieldOn: boolean): ToneFieldCpu {
+/** 法令紋's fold reference on a working image: the chords (iso) in its px (iso × width), and k = reach·σ_mid */
+export function foldRefOf(base0: Img, folds: FoldChords): FoldRef {
+  const s = base0.w;
+  return {
+    base0,
+    chords: folds.chords.map((c) => [c.s[0] * s, c.s[1] * s, c.e[0] * s, c.e[1] * s] as const),
+    k: TONE.nasolabial.reach * sigmaMid(Math.min(base0.w, base0.h)),
+  };
+}
+
+/** P0c from `base0` at working resolution; `fieldOn` false (亮眼 only) stops after Mn8; `folds`: 法令紋's band chords */
+export function toneFieldCpu(base0: Img, q: Img, r: Img, sigmaLowPx: number, fieldOn: boolean, folds: FoldChords = NO_FOLDS): ToneFieldCpu {
   const wm = gaussWeights(sigmaMid(Math.min(base0.w, base0.h)) / 8);
   const mn8 = blurAxis(blurAxis(down8(base0), wm, 'h'), wm, 'v');
   if (!fieldOn) return { mn8, l: null, delta8: null };
   const fL = lFactor(sigmaLowPx);
   const wl = gaussWeights(sigmaLowPx / fL);
   const l = blurAxis(blurAxis(lBox(mn8, q, fL), wl, 'h'), wl, 'v');
-  return { mn8, l, delta8: deltaField(mn8, l, q, r) };
+  return { mn8, l, delta8: deltaField(mn8, l, q, r, foldRefOf(base0, folds)) };
 }
 
 /** 白牙 then 亮眼 on one pixel (S §4.4): `c` = base0 + Δ (in/out), `b0` = base0, `mn` = Mn8 at the pixel */

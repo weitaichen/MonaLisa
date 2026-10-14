@@ -328,7 +328,7 @@ P0   mask     ¼ O   M  (step 1, unchanged)
                     R  RGBA8: R 黑眼圈_k · G 法令紋_k · B 白牙_k · A 亮眼_k              [any tone item > 0]
                     Q  RGBA8: R 勻膚_k · G skin coverage · B 膚色 (0.5-offset) · A 0      [勻膚, 膚色, 黑眼圈 or 法令紋 > 0]
 P0b  heal     O     src → A: copy, ring pass (32 × N), instanced spot quads                [spots ≠ ∅]
-P0c  field    ⅛ O   base0 → Mn8 → L (1/16 or 1/32) → Δ8; cached by key                    [勻膚, 膚色, 黑眼圈 or 法令紋 > 0;
+P0c  field    ⅛ O   base0 → Mn8 → L (1/16 or 1/32) → Δ8 (法令紋 also reads base0); cached [勻膚, 膚色, 黑眼圈 or 法令紋 > 0;
                                                                                             亮眼 > 0 needs Mn8 only]
 P0d  retouch  O     base0 → next: c = base0 + Δ8; 白牙 (R.B); 亮眼 (R.A)                   [any tone item > 0]
 P1   makeup   …     reads the current base, writes the other full-size buffer
@@ -367,7 +367,7 @@ P3/P4 mean, P5 composite: unchanged by step 4
 | 勻膚 and skin coverage | Q.R = strength, Q.G = 1 | `buildMaskGeometry` (mask.ts:58-125): oval + 8 % fw ring, eye and mouth holes | As 磨皮 | — |
 | 膚色 | Q.B | Oval + a wide ring of width w_T, the same eye and mouth holes. w_T = 0.30 fw when the face has no cap (step 1 writes `cap_f = −1` in face-table texel 73 for a face without a neighbour; `cap_f = 0` is a real cap with zero influence); otherwise w_T = clamp(cap_f − r_oval, 0.08 fw, 0.30 fw), with r_oval the largest iso distance from the cap centre c_f to an oval point (C §4.3). The ring therefore stops about halfway to the next face. | Ring value 1 → 0 | — |
 | 黑眼圈 | R.R | Lower-lid chain, image-left 52·57·73·56·55, image-right 61·62·76·63·58 (adapter111.ts:22-32), resampled to 7 points by arc length, t = 0…1 | Rows along ŷ with τ = sin(πt): 0.06 eyeW (value 0), (0.06 + 0.12τ) eyeW (value τ), (0.06 + 0.40τ) eyeW (value 0). It tapers to nothing at the corners and leaves the lashes alone. | Far-side fade |
-| 法令紋 | R.G | Per side: S = P(82 or 83) + 0.04 fw·o − 0.01 fw·ŷ; E = P(84 or 90) + 0.06 fw·o + 0.05 fw·ŷ; control C = (S + E)/2 + 0.035 fw·o. A quadratic Bézier with 9 samples. | Half-width h(t) = 0.035 fw · (0.6 + 0.4 sin πt); rows −h (0), centre (1), +h (0); the centre row × smoothstep over the first and last 15 % | Far-side fade |
+| 法令紋 | R.G | Per side: S = P(82 or 83) + 0.04 fw·o − 0.01 fw·ŷ; E = P(84 or 90) + 0.06 fw·o + 0.05 fw·ŷ; control C = (S + E)/2 + 0.035 fw·o. A quadratic Bézier with 9 samples. | Half-width h(t) = 0.035 fw · (0.6 + 0.4 sin πt); rows −h (0), −h/2 (1), centre (1), +h/2 (1), +h (0): full strength over the inner half, since the fold reference of §4.3 lifts only a valley across the band, so the band marks where a fold may lie and need not guess its line (step 4 follow-up; the first band, a tent peaking on the centre row, left the fixture's fold cores at a mean R.G of 0.68 / 0.80); the inner rows × smoothstep over the first and last 15 % | Far-side fade |
 | 白牙 | R.B | Inner-lip polygon 96·97·98·99·100·101·102·103 (adapter111.ts:39-40) | Value 1 on the whole polygon (a fan from its centroid), falling to 0 over an outward ring of 0.04 mouthW. R.B carries the strength only: the lip guard of §4.4 decides the lip line at full resolution (the ¼-res fan, read bilinearly, reaches a few pixels onto the lip), and the colour gate of §4.4 keeps gums and tongue out. | × smoothstep(0.01, 0.03, mouthOpen), mouthOpen = \|P(98) − P(102)\| / mouthW |
 | 亮眼 | R.A | Eye rings 52·53·72·54·55·56·73·57 and 58·59·75·60·61·62·76·63 | Each ring point p_i is moved toward the eye centroid c: 0 at an inset of min(0.04 eyeW, 0.25 \|c − p_i\|), 1 at an inset of min(0.12 eyeW, 0.5 \|c − p_i\|), a fan of 1 inside. The lid skin stays out (its chroma would pass the iris gate of §4.4). | × smoothstep(0.12, 0.18, EAR) per eye, EAR = \|P(72) − P(73)\| / eyeW_L (right: P(75), P(76), eyeW_R); far-side fade |
 
@@ -402,7 +402,12 @@ gD   = 1 − smoothstep(0.20, 0.30, −bY)                           // 黑眼�
 wE   = Q.r · conf · gE
 Δ    = −min(1, 0.90 · wE) · bC + 0.45 · wE · lift                // 勻膚: the chroma factor never passes 1
      + R.r · conf · gD · ( 0.85 · lift − 0.70 · bC)              // 黑眼圈
-     + R.g · conf · gD · ( 0.80 · lift − 0.30 · bC)              // 法令紋
+// 法令紋 (step 4 follow-up): the valley depth across its band, not the mid band against L
+B(p) = the 8 × 8 box of base0 centred at p (D8's footprint, 16 bilinear taps)
+n    = the unit normal of the nearest listed band chord S → E     // §4.2's S and E; none listed: no 法令紋
+bN   = B(x) − (B(x + k·n) + B(x − k·n)) / 2,   k = 2 σ_mid
+bNY  = dot(bN, LUMA709);   gN = 1 − smoothstep(0.20, 0.30, −bNY)
+Δ   += R.g · conf · gN · (1.20 · −min(bNY, 0) − 0.30 · (bN − bNY))
 c0   = m + Δ;   s = 2 · (Q.b − 0.5)                              // 膚色, already × region ramp
 g    = s ≥ 0 ? 1 + s · (0.06, 0.02, −0.07) : 1 + |s| · (−0.03, −0.02, 0.07)
 c1   = c0 · g;   c1 *= Y(c0) / max(Y(c1), 1e-4)                  // brightness kept
@@ -411,7 +416,8 @@ c1   = c0 · g;   c1 *= Y(c0) / max(Y(c1), 1e-4)                  // brightness 
 
 - `skin(c)` is a soft box on Cb ∈ [0.302, 0.498] and Cr ∈ [0.522, 0.678] (8-bit 77–127 and 133–173, Chai & Ngan 1999) with 0.03 soft edges. It keeps 膚色 off hair, clothes and background inside the wide ring.
 - The tone tools do **not** use GPUPixel's skin ramp `p` (composite.ts:167). That ramp needs `I.r` above about 0.2–0.45, so it fades out on darker skin. The region masks and the guards above work for every skin tone.
-- **Why the result keeps texture:** Δ is built from Mn8 and L only, so it holds no detail finer than σ_mid. The high frequencies of `base0` pass through P0d untouched.
+- **Why 法令紋 has its own reference (step 4 follow-up).** A nasolabial fold often lies on a convex cheek highlight. L, at σ_low, averages that highlight with the darker cheek edge and mouth around it, so the fold reads as brighter than L and `lift = −min(bY, 0)` never sees it: on the fixture the fold cores keep a mean mid-band bY of +0.036 / +0.023, and 法令紋 recovered 0.002 / 0.013 of the fold (0.002 / 0.021 at lift ×2). A reference across the band fixes that, but not at the mid-band scale: on the fixture's image-left side the soft fold sits on a steep flank, Mn8 falls monotonically across it, and the ridge's own curvature at ±2–4 σ_mid is as large as the fold's (pairs of Mn8 values reached at most 0.19 there, at lift ×2). At D8's 8 × 8 box the fold is still sharp (σ about 12 px for the fixture's 11.8 px) while the ridge's curvature over ±k = 2 σ_mid stays small. The pair mean also leaves a linear slope exactly alone, and a convex ridge without a fold reads as no valley, so the term stays self-limiting. The chords come from `toneGeometry.foldChords` through `ToneJob.folds` and `ToneFieldPass.build(…, folds)` (uniforms `uFolds`, `uFold[12]` in working px, `uFoldK`, and base0 on unit 4; `toneCpu.foldBand` mirrors it). The gain 1.20 (×1.5 from 0.80) is calibrated in §8.2.
+- **Why the result keeps texture:** Δ is built from Mn8 and L, and 法令紋's from 8 × 8 box means of base0, so it holds no detail finer than an 8 px box (σ_mid for every tool but 法令紋). The high frequencies of `base0` pass through P0d untouched.
 - **Cache.** `toneKey` = the working image's identity (the `RenderInput.source` object of the preview, or `RenderInput.toneSource.source` in a tile, §4.6, plus its size) + the spots key (base0 includes the heal) + per face (id, fw, the four field values, a 亮眼-on flag) + σ_low. The engine re-uploads `source` on every render (index.ts:224), so the key uses the object, not the texture. An unchanged key reuses Mn8, L and Δ8. `DebugState.toneBuilds` counts rebuilds. A 瘦臉, 美體, 推臉筆, 調節 or 濾鏡 drag never rebuilds the field. The field targets are not shrunk by step 3's `releaseBuffers`; they are freed only on dispose or context loss.
 
 ### 4.4 Retouch (P0d, `RETOUCH_FS`)
@@ -556,7 +562,7 @@ The total is about 2.3 MB. C budgeted 1.6 MB for R and S, so step 4 adds 0.7 MB 
 | Selected person without a face | C §2.2 note; under 全部 the tone items write only the persons with faces |
 | Closed mouth / closed eyes | Gates fade 白牙 and 亮眼 to nothing; the §2.2 notes explain it |
 | Profile or strongly turned face | Far-side regions fade (§4.2) |
-| Glasses, hair over the face, beard | 勻膚's guard skips high-contrast features; 黑眼圈 and 法令紋 only lift darker-than-reference mid-band shading and skip extreme darkness. A thick frame inside the crescent can still turn slightly grey at 100 (§9). |
+| Glasses, hair over the face, beard | 勻膚's guard skips high-contrast features; 黑眼圈 only lifts darker-than-reference mid-band shading and 法令紋 only a valley across its band, and both skip extreme darkness. A thick frame inside the crescent can still turn slightly grey at 100 (§9). |
 | Heavy makeup | Tone runs before P1, so the app's own makeup is untouched. Makeup already in the photo is skin to the tools: 勻膚 may soften strong contour at 100. |
 | Tap on an eye or the open mouth | Refused with a toast (§2.3) |
 | Tap near the image border, or no clean donor | Fill mode (membrane only, smooth). Rare; at most a slightly flat disc. |
@@ -593,6 +599,7 @@ The total is about 2.3 MB. C budgeted 1.6 MB for R and S, so step 4 adds 0.7 MB 
   - 勻膚 at 1 removes ≥ 85 % of a synthetic mid-band chroma pattern, while `I − Mn` changes ≤ 1/255;
   - a mole (bY = −0.2) is untouched by 勻膚;
   - 黑眼圈 lifts only negative bY;
+  - 法令紋 lifts a soft fold on the flank of a convex ridge, where Mn8 makes no minimum, by ≥ 50 % at its core; leaves the ridge without the fold and a linear slope within 1/255; and does nothing without a listed band chord (step 4 follow-up);
   - 膚色 ±1 is symmetric in Cb, keeps Y within 1/255, and does nothing on green or blue pixels;
   - 白牙 neutralizes yellow-white pixels and leaves red (lip, gum) pixels unchanged;
   - 亮眼 detints the sclera, and its clarity respects the clamp;
@@ -644,11 +651,11 @@ The page follows `tests/e2e/pages/engine.ts`: it renders `sample_face_tone.png` 
 |---|---|---|---|---|
 | 勻膚 | 0.50 | 0.45 | blotch1 1.239, blotch2 0.496 | The chroma factor is capped at 1 (§4.4); no gain up to 2× gets blotch2 past 0.496, since about half of a σ 0.04 fw blotch lies in L's band |
 | 黑眼圈 | 0.60 | 0.45 | 0.963 / 0.475 | One more lift step breaks the left lash-line keep (plan Task 9) |
-| 法令紋 | 0.50 | 0 | 0.002 / 0.013 | **Not met.** The fold path on `sample_face.png` is a cheek highlight (mean bY at the fold cores +0.064 / +0.044); the field lifts only mid-band luma below L, so even the 28 px soft fold of §8.3 leaves bY at +0.036 / +0.023. 0.002 / 0.021 at lift ×2. The GPU asserts "no regression" (below) |
+| 法令紋 | 0.50 | 0.50 | 0.606 / 0.694 | Met since the fold reference of §4.3 and the band's full-strength inner half (§4.2), at `nasolabial.lift` ×1.5 (step 4 follow-up). Against L it was 0.002 / 0.013, since the fold path on `sample_face.png` is a cheek highlight. ×1.3 is the first 10 % step past 0.5 (0.526 / 0.604); ×1.5 also gives §8.4 case 1, which reads the union of the two fold boxes, a margin (CPU mean change there 0.514/255 at ×1.3, 0.588/255 at ×1.5) |
 | 白牙 | 0.45 | 0.45 | 0.879 | Met since the tooth gate and lip guard of §4.4 (plan Task 11 decision (b)) |
 | 亮眼 | 0.45 | 0.25 | 0.252 / 0.295 | The eye region's inset ramps leave the sclera near the lids at R.A < 1 (plan Task 9), and the detint cap of §4.4 |
 
-On the GPU a zero target is never asserted as a bare ⅔·0: the recovery must not fall by more than a 0.5/255 bias in the mean is worth (foldL −0.026, foldR −0.039).
+No target is 0 any more. Were a calibration to fall back to 0, the GPU would not assert a bare ⅔·0: the recovery would have to stay within what a 0.5/255 bias in the mean is worth (foldL −0.026, foldR −0.039; `toolChecks`).
 
 1. **GPU against CPU.**
    - P0c + P0d with every tool at 0.5 and at 1. `toneCpu` takes the R and Q targets read back from the GPU as input (rasterization is not ported; `toneGeometry.test.ts` covers the geometry) and runs D8, Mn8, L, Δ8 and the retouch with 8-bit quantization after every stage. On six 64 × 64 crops (cheek, both crescents, a band, the mouth, an eye) the GPU output equals the CPU output within max 2/255 and mean 0.25/255.
@@ -657,7 +664,7 @@ On the GPU a zero target is never asserted as a bare ⅔·0: the recovery must n
    - 勻膚: the blotches' Cr excess drops ≥ 33 %, the cheek's high-frequency energy changes ≤ 10 %, and the three blemishes keep ≥ 80 % of their contrast (勻膚 is not 祛痘);
    - 膚色 +50: mean cheek Cb falls ≥ 0.008; −50 raises it ≥ 0.008; Y stays within 1 %;
    - 黑眼圈: the crescent core's Y recovers ≥ 40 % of the synthetic darkening, and the lash line keeps ≥ 80 % of its contrast;
-   - 法令紋: the fold recovers ≥ 33 % (as built: no regression only, see the table above);
+   - 法令紋: the fold recovers ≥ 33 % (as built, step 4 follow-up: GPU 0.607 / 0.696);
    - 白牙: teeth Cb recovers ≥ 30 %, and lip pixels move ≤ 2/255 (as built: 0.879, 0/255);
    - 亮眼: sclera Cr deviation drops ≥ 30 %, and iris RMS detail rises ≥ 10 %;
    - for every tool, pixels outside its region move ≤ 1/255. The region is the oval grown by 0.10 fw for 勻膚, 黑眼圈 and 法令紋, by w_T + 0.02 fw for 膚色, and the eye or mouth polygon grown by 0.06 of its width for 亮眼 and 白牙.
@@ -687,7 +694,7 @@ On the GPU a zero target is never asserted as a bare ⅔·0: the recovery must n
 
 The app's canvas is read with `grab` and compared with `mad` (fixtures.ts:91, 104), the helpers `editor.spec.ts` uses. O positions from `sample_face_tone.json` are mapped to screen positions through the frame's fitted rectangle (no zoom). Exact pixel values are the harness's job (§8.2); these tests check the flows.
 
-1. **Each slider acts on its face area.** For each of the six sliders at 100: `mad` inside the face box > 0.5, and ≤ 0.2 in a 64 px square of background beside the head. As built (step 4 follow-up): inside 勻膚 2.27, 膚色 4.05, 黑眼圈 0.77, 白牙 1.83, 亮眼 1.06, all > 0.5, background 0.000. 法令紋 reads 0.02 and is asserted > 0.01 only, since it recovers about nothing on this fixture (§8.2 table).
+1. **Each slider acts on its face area.** For each of the six sliders at 100: `mad` inside the face box > 0.5, and ≤ 0.2 in a 64 px square of background beside the head. As built (step 4 follow-up): inside 勻膚 2.26, 膚色 3.92, 黑眼圈 0.77, 法令紋 0.58, 白牙 1.88, 亮眼 1.06, all > 0.5, background 0.000. 法令紋's area is the union of the two fold boxes, mostly mouth and philtrum, so its reading follows its recovery closely (0.02 against L, 0.47 at a tent-shaped band and lift ×1.8).
 2. **祛痘 removes a blemish, and undo restores it.** Tap dot 1: the screen-space Y standard deviation in its 1.2σ disc drops ≥ 50 %. ↶ restores the pre-tap screenshot (`mad` ≤ 0.2); ↷ heals again; `__meiyan.spots` reads 1. A drag of 20 px while zoomed adds no spot.
 3. **Snapping.** A tap 0.5 r away from dot 2 gives `lastSpot` within 0.15 r of the true centre.
 4. **Spots follow the geometry.** Set 瘦臉 100 and 大眼 100, find dot 3 on the screenshot (the darkest blob in its search window) and tap it: `lastSpot` is within 0.3 r of the dot's O position, and the blob is gone. Repeat after 裁切 › 旋轉 and 翻轉.
@@ -709,12 +716,12 @@ The app's canvas is read with `grab` and compared with `mad` (fixtures.ts:91, 10
 | Landmark regions miss on unusual faces (strong yaw, occlusion, glasses) | A crescent or band on the wrong skin | The far-side fade; self-limiting operations (only darker-than-reference is lifted; teeth and sclera gated by colour); the guards |
 | Over-flat, plastic skin at 100 | The 「假」 look 醒圖 is criticized for (XPR:118, 139) | High frequencies are never touched; gains capped (an effective factor above 1 never applies, §4.4); 50 is the natural point |
 | Teeth in shadow (common: the lips shade them) | 白牙 does nothing on real photos | The tooth gate passes Y ≥ 0.12 (first 0.28, which passed none of `sample_face.png`'s teeth); the full-resolution lip guard of §4.4 keeps the lips at 0/255 though they look like shadowed teeth. Cost: a strip of real teeth that the landmarks leave outside the inner-lip line stays as it was. Decided in plan Task 11 (b) (the user delegated the choice) |
-| A nasolabial fold that is not darker than the low-pass reference (a faint crease on a lit cheek) | 法令紋 does nothing there; on the fixture it recovers 0.002 / 0.013 against the 0.5 target (§8.2) | Open. Plan Task 11 chose (a), a realistic fixture fold (now a 28 px soft shadow), but the fold path on `sample_face.png` is a cheek highlight, so no self-limiting lift sees it: widths 14–40 px, the band's Bézier path, depth 0.20 and lift ×2 all stay below 0.08. Reaching 0.5 needs a different fixture face or placement, or a different 法令紋 lift (a scratch valley detector reached 0.53–0.67 on foldR but at most 0.19 on foldL, where the fold makes no mid-band minimum); the user decides |
+| A nasolabial fold that is not darker than the low-pass reference (a faint crease on a lit cheek) | Against L, 法令紋 did nothing there: on the fixture it recovered 0.002 / 0.013 against the 0.5 target | Decided (step 4 follow-up): 法令紋 lifts the valley depth across its band, from 8 × 8 boxes of base0 at ±2 σ_mid (§4.3), over a band at full strength across its inner half (§4.2). Fixture 0.606 / 0.694 (CPU), 0.607 / 0.696 (GPU). Left: a fold on a steeper ridge recovers less (a synthetic fold on a ridge of amplitude 0.20 reads 0.45, of 0.15 0.54); a dark spot inside the band (a mole, a freckle) is lifted too, as a valley in every direction (on `sample_face.png` at 100 the fold path moves by a mean 0.83/255; the largest change, 13/255, is a darker patch beside the image-left nose wing where the band starts, 154 pixels move ≥ 8/255) |
 | One σ_low per photo with faces of very different sizes | Weaker 黑眼圈 or 法令紋 on the smallest edited face | Chosen on the largest edited face; acceptable for v0.4 (§10) |
 | Heal looks flat in fill mode or on strong texture (hairline, brow edge) | A visible patch | Donor search penalizes texture mismatch; fill mode only at borders; refused in eyes and mouth |
 | The ping-pong refactor of A and B breaks makeup or capture | Wrong output buffer | Parity goldens; every existing engine e2e; `passes` assertions |
 | With a crop or rotation, the buffer P2 writes is re-sized twice per frame (§4.1) | Jank or memory churn on iPhone while 祛痘 or 膚質 is on | The tone + crop bench row; the `H` fallback (§6) |
-| The tone gains do not reach the calibration targets on the fixture without breaking a "keeps" bound | Weak 黑眼圈 or 勻膚 at 100 | 4c tunes the `TONE` table with `toneCpu` before any GPU work; the harness thresholds follow the tuned values (§8.2; as built 勻膚 0.45, 黑眼圈 0.45, 白牙 0.45, 亮眼 0.25, 法令紋 0 with a "no regression" GPU bound) |
+| The tone gains do not reach the calibration targets on the fixture without breaking a "keeps" bound | Weak 黑眼圈 or 勻膚 at 100 | 4c tunes the `TONE` table with `toneCpu` before any GPU work; the harness thresholds follow the tuned values (§8.2; as built 勻膚 0.45, 黑眼圈 0.45, 法令紋 0.50, 白牙 0.45, 亮眼 0.25) |
 | The CPU back-map drifts from the GPU P2 | Spots land off the finger after warps | Pinned by C §8.2 (≤ 0.05 px); app e2e case 4 (§8.4) |
 | Contract amendments A1–A6 drift from C again | Two specs disagree | Folded into C on 2026-10-12 (§0.2); the step-4 plan re-checks C before code |
 | iPhone cost of 100 spots | Slow drags | Budget row, then the fallback (§6) |

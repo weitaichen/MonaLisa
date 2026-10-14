@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { IDENTITY_WIN, TONE_ZERO } from './passes/toneGeometry';
+import { IDENTITY_WIN, NO_FOLDS, TONE_ZERO, type FoldChords } from './passes/toneGeometry';
 import { shaderHash } from './shaderHash';
 import { gaussWeights, lFactor, RETOUCH_FS, sigmaLow, sigmaMid, TONE, TONE_BLUR_FS, TONE_DOWN8_FS, TONE_FIELD_FS, TONE_LBOX_FS } from './shaders/tone';
 import { bandOf, deltaTexel, fromYcc, LUMA709, makeImg, q8, retouchCpu, retouchPixel, sample, toneFieldCpu, toYcc, type Img } from './toneCpu';
@@ -104,6 +104,60 @@ describe('toneCpu (skin-cleanup spec §4.3–4.4)', () => {
     const out = retouchCpu(base, f, R(w, w, [1, 0, 0, 0]), true);
     expect(lum(px(out, 70, 128)) - lum(px(base, 70, 128))).toBeGreaterThan(0.02);
     expect(Math.abs(lum(px(out, 186, 128)) - lum(px(base, 186, 128))) * 255).toBeLessThanOrEqual(1);
+  });
+
+  describe('法令紋: the valley depth across its band (S §4.3)', () => {
+    // a fold like the fixture's foldL: a soft shadow (σ 0.84 σ_mid, Y × (1 − 0.12 g)) on the flank of a convex cheek
+    // ridge, steep enough that the mid band makes no minimum across it, so no reference lower in the image (L) sees it
+    const w = 800;
+    const sMid = sigmaMid(w);
+    const xf = 400;
+    const ridge = (x: number) => 0.45 + 0.15 * Math.exp(-((x - (xf - 1.5 * sMid)) ** 2) / (2 * (3 * sMid) ** 2));
+    const foldG = (x: number) => Math.exp(-((x - xf) ** 2) / (2 * (0.84 * sMid) ** 2));
+    const skin = (y: number) => SKIN.map((v) => (v * y) / lum(SKIN));
+    const orig = image(w, w, (x) => skin(ridge(x)));
+    const fix = image(w, w, (x) => skin(ridge(x) * (1 - 0.12 * foldG(x + 0.5))));
+    // R.G: a vertical band at xf, 1 on its centre line falling to 0 at ±2 σ_mid; its chord, iso, top to bottom
+    const band = makeImg(w / 4, w / 4);
+    for (let y = 0; y < w / 4; y++) for (let x = 0; x < w / 4; x++) band.d[(y * (w / 4) + x) * 4 + 1] = q8(Math.max(0, 1 - Math.abs((x + 0.5) * 4 - xf) / (2 * sMid)));
+    const folds: FoldChords = { chords: [{ s: [xf / w, 0], e: [xf / w, 1] }] };
+    const run = (img: Img, f: FoldChords) => retouchCpu(img, toneFieldCpu(img, Q(w, w), band, sigmaLow(10_000, w), true, f), band, true);
+    const Y = (a: Img, x: number, y: number) => lum(px(a, x, y));
+
+    it('lifts a soft fold that makes no mid-band minimum (it sits on the flank of a cheek ridge) by ≥ 50 % at its core', () => {
+      // the premise: Mn8's luma falls steadily across the fold, within ±2 σ_mid of it
+      const mn8 = toneFieldCpu(fix, Q(w, w), band, sigmaLow(10_000, w), false).mn8;
+      const row: number[] = [];
+      for (let i = Math.floor((xf - 2 * sMid) / 8); i <= Math.ceil((xf + 2 * sMid) / 8); i++) row.push(lum(px(mn8, i, mn8.h >> 1)));
+      for (let i = 1; i < row.length; i++) expect(row[i]).toBeLessThan(row[i - 1]);
+      const out = run(fix, folds);
+      let num = 0;
+      let den = 0;
+      for (let y = 200; y < 600; y++)
+        for (let x = 0; x < w; x++) {
+          if (foldG(x + 0.5) < 0.9) continue;
+          num += Y(out, x, y) - Y(fix, x, y);
+          den += Y(orig, x, y) - Y(fix, x, y);
+        }
+      expect(num / den).toBeGreaterThanOrEqual(0.5);
+    });
+
+    it('leaves the ridge without a fold, and a linear slope, alone (only a valley across the band is lifted)', () => {
+      const ramp = image(w, w, (x) => skin(0.3 + (0.35 * x) / w));
+      for (const img of [orig, ramp]) {
+        const out = run(img, folds);
+        let max = 0;
+        for (let i = 0; i < out.d.length; i++) if (i % 4 !== 3) max = Math.max(max, Math.abs(Math.round(out.d[i] * 255) - Math.round(img.d[i] * 255)));
+        expect(max).toBeLessThanOrEqual(1);
+      }
+    });
+
+    it('with no band listed, R.G alone changes nothing (as 白牙 without a lip guard)', () => {
+      const out = run(fix, NO_FOLDS);
+      let moved = 0;
+      for (let i = 0; i < out.d.length; i++) if (out.d[i] !== fix.d[i]) moved++;
+      expect(moved).toBe(0);
+    });
   });
 
   it('膚色 ±1 moves skin Cb in opposite directions by similar amounts, keeps the luma, and leaves green and blue alone', () => {
@@ -253,6 +307,6 @@ describe('toneCpu (skin-cleanup spec §4.3–4.4)', () => {
 
 describe('tone shaders pin', () => {
   it('is pinned to the shader text and the TONE table: a change must be mirrored in toneCpu.ts (then update this hash)', () => {
-    expect(shaderHash([TONE_DOWN8_FS, TONE_BLUR_FS, TONE_LBOX_FS, TONE_FIELD_FS, RETOUCH_FS].join('\n'))).toBe('c12fa8a0');
+    expect(shaderHash([TONE_DOWN8_FS, TONE_BLUR_FS, TONE_LBOX_FS, TONE_FIELD_FS, RETOUCH_FS].join('\n'))).toBe('2f3ec5e2');
   });
 });

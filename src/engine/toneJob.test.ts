@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { adapt } from '../tracking/adapter111';
 import type { Spot } from '../types';
-import { mouthGuards, NEUTRAL_TONE, type ToneCap } from './passes/toneGeometry';
+import { foldChords, mouthGuards, NEUTRAL_TONE, type ToneCap } from './passes/toneGeometry';
 import { buildToneJob, objectId, type ToneJobFace } from './toneJob';
 
 const lm = JSON.parse(readFileSync(new URL('../../tests/fixtures/landmarks_sample_face.json', import.meta.url), 'utf8')) as { width: number; height: number; points: number[] };
@@ -29,6 +29,13 @@ describe('buildToneJob (skin-cleanup spec §4.1, §4.3 cache)', () => {
     expect(job({ 'tone.teeth': 0.5 })!.mouths).toEqual(mouthGuards([{ face, values: { ...NEUTRAL_TONE, teeth: 0.5 }, weight: 1, cap: null }], 1000 / 1500));
     expect(job({ 'tone.teeth': 0.5 })!.mouths.mouths).toHaveLength(1);
     expect(job({ 'tone.even': 0.5, 'tone.eyeBright': 0.3 })!.mouths.mouths).toEqual([]);
+  });
+
+  it("carries 法令紋's band chords for the field's fold reference: the faces with 法令紋 on, only when the field runs", () => {
+    expect(job({ 'tone.nasolabial': 0.5 })!.folds).toEqual(foldChords([{ face, values: { ...NEUTRAL_TONE, nasolabial: 0.5 }, weight: 1, cap: null }], 1000 / 1500));
+    expect(job({ 'tone.nasolabial': 0.5 })!.folds.chords).toHaveLength(2);
+    expect(job({ 'tone.even': 0.5, 'tone.teeth': 0.3 })!.folds.chords).toEqual([]);
+    expect(job({ 'tone.eyeBright': 0.5 })!.folds.chords).toEqual([]);
   });
 
   it('a 瘦臉, 白牙 or 亮眼-amount change keeps the key; a 勻膚 or 黑眼圈 change or a new spot rebuilds', () => {

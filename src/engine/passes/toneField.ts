@@ -1,11 +1,11 @@
 // P0c tone field and P0d retouch (skin-cleanup spec §4.3–4.4). The field is built at working resolution into ⅛-res and
-// smaller RGBA8 targets — D8 (8 × 8 box) → T8 → D8 = Mn8 (σ_mid/8), L (box of Mn8·q, q) → Lt → L (σ_low/f_L), Δ8 — and the
-// retouch writes base0 + Δ8, then 白牙 and 亮眼, at full resolution (one tile through uWin). Shaders: ../shaders/tone.ts.
-// Original work.
+// smaller RGBA8 targets — D8 (8 × 8 box) → T8 → D8 = Mn8 (σ_mid/8), L (box of Mn8·q, q) → Lt → L (σ_low/f_L), Δ8 (whose
+// 法令紋 term reads 8 × 8 boxes of base0 across each band) — and the retouch writes base0 + Δ8, then 白牙 and 亮眼, at
+// full resolution (one tile through uWin). Shaders: ../shaders/tone.ts. Original work.
 import { bindTarget, bindTexture, createProgram, createTexture, deleteTexture, drawFullscreen, FULLSCREEN_VS, type Framebuffer, type GL, type Texture } from '../gl/gl';
-import { fieldSizes, gaussWeights, MAX_BLUR_RADIUS, MAX_MOUTHS, RETOUCH_FS, sigmaMid, TONE_BLUR_FS, TONE_DOWN8_FS, TONE_FIELD_FS, TONE_LBOX_FS } from '../shaders/tone';
+import { fieldSizes, gaussWeights, MAX_BLUR_RADIUS, MAX_FOLDS, MAX_MOUTHS, RETOUCH_FS, sigmaMid, TONE, TONE_BLUR_FS, TONE_DOWN8_FS, TONE_FIELD_FS, TONE_LBOX_FS } from '../shaders/tone';
 import type { Size } from '../uniforms';
-import type { MouthGuards, Win } from './toneGeometry';
+import type { FoldChords, MouthGuards, Win } from './toneGeometry';
 
 export type FieldFbName = 'D8' | 'T8' | 'L' | 'Lt' | 'Delta8';
 export interface ToneFieldTextures {
@@ -15,8 +15,11 @@ export interface ToneFieldTextures {
   delta8: Texture | null;
 }
 export interface ToneFieldPass {
-  /** D8 → Mn8 from `base0` (`size` = its working size); with `fieldOn` also L → Δ8 from Q and R */
-  build(base0: Texture, size: Size, q: Texture, r: Texture, sigmaLowPx: number, fieldOn: boolean, fb: (name: FieldFbName, size: Size) => Framebuffer): ToneFieldTextures;
+  /**
+   * D8 → Mn8 from `base0` (`size` = its working size); with `fieldOn` also L → Δ8 from Q and R. `folds`: 法令紋's band
+   * chords, whose valley depth Δ8 reads from base0 (none listed: no 法令紋)
+   */
+  build(base0: Texture, size: Size, q: Texture, r: Texture, sigmaLowPx: number, fieldOn: boolean, fb: (name: FieldFbName, size: Size) => Framebuffer, folds: FoldChords): ToneFieldTextures;
   dispose(): void;
 }
 export interface RetouchPass {
@@ -42,7 +45,9 @@ export function createToneFieldPass(gl: GL): ToneFieldPass {
   gl.uniform1i(field.u('uL'), 1);
   gl.uniform1i(field.u('uQ'), 2);
   gl.uniform1i(field.u('uR'), 3);
+  gl.uniform1i(field.u('uBase'), 4);
   const weights = new Float32Array(MAX_BLUR_RADIUS + 1);
+  const chords = new Float32Array(MAX_FOLDS * 4);
 
   function blurInto(src: Texture, dst: Framebuffer, sigma: number, dx: number, dy: number): void {
     const w = gaussWeights(sigma);
@@ -60,7 +65,7 @@ export function createToneFieldPass(gl: GL): ToneFieldPass {
   }
 
   return {
-    build(base0, size, q, r, sigmaLowPx, fieldOn, fb) {
+    build(base0, size, q, r, sigmaLowPx, fieldOn, fb, folds) {
       gl.disable(gl.BLEND);
       const s = fieldSizes(size.width, size.height, sigmaLowPx);
       const d8 = fb('D8', { width: s.d8.w, height: s.d8.h });
@@ -94,9 +99,21 @@ export function createToneFieldPass(gl: GL): ToneFieldPass {
       bindTexture(gl, 1, l.tex);
       bindTexture(gl, 2, q);
       bindTexture(gl, 3, r);
+      bindTexture(gl, 4, base0);
+      // 法令紋's chords in working px (iso × width, as toneCpu.foldRefOf), and its reach in px
+      const n = Math.min(MAX_FOLDS, folds.chords.length);
+      chords.fill(0);
+      for (let f = 0; f < n; f++) {
+        const c = folds.chords[f];
+        chords.set([c.s[0] * size.width, c.s[1] * size.width, c.e[0] * size.width, c.e[1] * size.width], f * 4);
+      }
+      gl.uniform1i(field.u('uFolds'), n);
+      gl.uniform4fv(field.u('uFold'), chords);
+      gl.uniform1f(field.u('uFoldK'), TONE.nasolabial.reach * sigmaMid(Math.min(size.width, size.height)));
+      gl.uniform2f(field.u('uBaseSize'), size.width, size.height);
       bindTarget(gl, dl);
       drawFullscreen(gl);
-      for (let u = 0; u < 4; u++) bindTexture(gl, u, null);
+      for (let u = 0; u < 5; u++) bindTexture(gl, u, null);
       return { mn8: d8.tex, delta8: dl.tex };
     },
     dispose() {

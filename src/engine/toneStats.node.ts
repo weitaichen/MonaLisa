@@ -2,7 +2,7 @@
 // recovers and the "keeps" bounds, shared by the CPU calibration (toneCalibration.test.ts, scale 1) and the GPU harness
 // (tests/e2e/tone-engine.spec.ts, scale ⅔). Images are RGBA8; YCbCr is JPEG full range.
 import type { Face } from '../types';
-import { faceFrame, fieldActive, IDENTITY_WIN, mouthGuards, NEUTRAL_TONE, Q_CLEAR, R_CLEAR, toneDrawsQ, toneDrawsR, warmRingWidth, type ToneValues, type V2 } from './passes/toneGeometry';
+import { faceFrame, fieldActive, foldChords, IDENTITY_WIN, mouthGuards, NEUTRAL_TONE, Q_CLEAR, R_CLEAR, toneDrawsQ, toneDrawsR, warmRingWidth, type ToneValues, type V2 } from './passes/toneGeometry';
 import { sigmaLow } from './shaders/tone';
 import { fromRgba8, makeImg, retouchCpu, toneFieldCpu, toRgba8, type Img } from './toneCpu';
 import { rasterizeTone } from './toneRaster.node';
@@ -44,16 +44,18 @@ export const TOOL_VALUES: Record<ToolName, ToneValues> = {
  * CPU targets at 100 (S §8.2): 勻膚 Cr excess, 黑眼圈 / 法令紋 Y darkening, 白牙 Cb shift, 亮眼 sclera Cr shift. The GPU asserts ⅔.
  * Calibrated (plan Task 9): where the spec's target cannot be met without breaking a keep, the entry is the best value
  * reached, rounded down to 0.05 (S §9) — 黑眼圈 0.6 → 0.45 (darkR; one more lift step breaks the left lash line),
- * 法令紋 0.5 → 0 (the fold sits on a cheek highlight: even as the 28 px soft shadow of plan Task 11's decision (a) its
- * core keeps a mean mid-band bY of +0.036 / +0.023 above L, and the field lifts only what is darker than L; recovery
- * 0.002 / 0.013, 0.002 / 0.021 at lift ×2),
  * 亮眼 0.45 → 0.25 (the eye region's inset ramps leave the sclera near the lids and corners at R.A < 1),
  * 勻膚 0.5 → 0.45 (step 4 follow-up: its chroma factor is capped at 1 so it never inverts bC; blotch2 then reaches
  * 0.4956, and no even.chroma up to 2× gets it past 0.4959, since about half of a σ 0.04 fw blotch lies in L's band).
  * 白牙 is back at the spec's 0.45 (plan Task 11 decision b): the tooth gate passes shadowed teeth and the lip guard keeps
- * the lips still (TONE.teeth).
+ * the lips still (TONE.teeth). 法令紋 is back at the spec's 0.5 (step 4 follow-up): the fold path is a cheek highlight that
+ * L reads as brighter than its surroundings (mid-band bY +0.036 / +0.023 at the fold cores), so the field now lifts the
+ * valley depth across the band instead (TONE.nasolabial), over a band at full strength across its inner half
+ * (nasolabialGeometry). foldL / foldR 0.606 / 0.694 at nasolabial.lift ×1.5. ×1.3 is the first 10 % step past 0.5
+ * (0.526 / 0.604), but its mean change in the union of the two fold boxes, which S §8.4's app check reads, is 0.514/255
+ * (×1.5: 0.588), and the app reads about 5 % less than the CPU there.
  */
-export const TARGETS = { even: 0.45, darkCircle: 0.45, nasolabial: 0, teeth: 0.45, eyeBright: 0.25 };
+export const TARGETS = { even: 0.45, darkCircle: 0.45, nasolabial: 0.5, teeth: 0.45, eyeBright: 0.25 };
 
 export interface Check {
   name: string;
@@ -241,9 +243,10 @@ const OUTER_LIP = [84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95];
 
 /**
  * every check of one tool at 100 (S §8.2 case 2); `scale` multiplies the targets: 1 for the CPU, ⅔ for the GPU. A target
- * of 0 on the GPU (scale < 1; 法令紋 and 白牙 after Task 9) would read a bare "≥ 0", which a deleted tool passes and a
- * rounding bias of the mean can fail; it asks instead that the tool does not regress the defect, within the recovery a
- * 0.5/255 bias of the mean is worth (biasTolerance).
+ * of 0 on the GPU (scale < 1; none since the step 4 follow-up, but plan Task 9's rule falls back to 0 when a target
+ * cannot be met) would read a bare "≥ 0", which a deleted tool passes and a rounding bias of the mean can fail; it asks
+ * instead that the tool does not regress the defect, within the recovery a 0.5/255 bias of the mean is worth
+ * (biasTolerance).
  */
 export function toolChecks(tool: ToolName, out: Rgba8, fix: Rgba8, orig: Rgba8, fx: ToneFixture, face: Face, scale: number): Check[] {
   const W = fix.width;
@@ -344,6 +347,6 @@ export function renderToneCpu(img: Rgba8, face: Face, v: ToneValues): Rgba8 {
   const q: Img = fieldOn ? { w: qw, h: qh, d: rasterizeTone(toneDrawsQ(faces, aspect), qw, qh, IDENTITY_WIN, Q_CLEAR) } : makeImg(qw, qh);
   const base = fromRgba8(W, H, img.data);
   const sl = sigmaLow(faceFrame(face, aspect).fw * W, Math.min(W, H));
-  const field = fieldOn || v.eyeBright > 0 ? toneFieldCpu(base, q, r, sl, fieldOn) : null;
+  const field = fieldOn || v.eyeBright > 0 ? toneFieldCpu(base, q, r, sl, fieldOn, foldChords(faces, aspect)) : null;
   return { width: W, height: H, data: toRgba8(retouchCpu(base, field, r, fieldOn, IDENTITY_WIN, mouthGuards(faces, aspect))) };
 }

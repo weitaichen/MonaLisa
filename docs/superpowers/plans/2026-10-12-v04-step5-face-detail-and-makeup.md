@@ -5850,7 +5850,7 @@ The panel model of S5 §2.1–2.2 on top of step 1's lens-based `panelModel.ts`:
   - `splitToggle(lens: Lens, sel: PanelSelection): { edit: EditState; sel: PanelSelection; notice: string }`
   - `splitJointNotice(item: PanelItem, lens: Lens, sel: PanelSelection): string | null`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `src/ui/panelModel.test.ts`, merging the imports into its existing lines (it already imports `lensFor` from `../edit/lens`, `defaultPhoto` and `neutralPerson` from `../edit/state`, `paramsInGroup` from `../engine/params` and the `EditState` type): add `naturalPerson` to the `../edit/state` import, the new names and the types `PanelItem`, `SliderBinding` to the `./panelModel` import, and `PersonParams` to the `../types` type import:
 
@@ -5955,12 +5955,12 @@ describe('左右分開 interaction (face-detail spec §2.2)', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run src/ui/panelModel.test.ts`
 Expected: FAIL — `decorateShapeItems` is not exported.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/ui/panelModel.ts` (CRLF):
 
@@ -6065,12 +6065,12 @@ Wire them into step 1's functions:
 
 Imports: none new (`panelModel.ts` already imports the `EditState` type and `type Lens` from `../edit/lens`).
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/ui && npm run typecheck`
 Expected: PASS — the new describes and every existing panel test. One mechanical port: the strip now ends with the 左右分開 switch, so the 美型 key list of the test "skin / shape strips start with ⊘ 原圖 then every param of the group" (`panelModel.test.ts:77-83`, as steps 1 and 4 ported it: `expect(items.slice(1).map((i) => i.key)).toEqual(paramsInGroup(tab).map((d) => d.id))`) gains `'split'` at the end for `tab === 'shape'` (e.g. `[...paramsInGroup(tab).map((d) => d.id), ...(tab === 'shape' ? ['split'] : [])]`); any other exact length or key list of the 美型 strip in step 1's tests is ported the same way.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 file src/ui/panelModel.ts

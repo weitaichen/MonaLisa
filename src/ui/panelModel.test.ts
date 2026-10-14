@@ -9,10 +9,10 @@ import {
   setHeightBand,
   setParam,
 } from '../engine/params';
-import type { BeautyParams, EditState, ParamId, RegionStatus, Selection } from '../types';
+import type { BeautyParams, EditState, ParamId, PersonParams, RegionStatus, Selection } from '../types';
 import { lensFor, NO_BODY_NOTE, NO_FACE_NOTE, P0_INFO, type PersonInfo } from '../edit/lens';
 import { editFromLegacy, legacyProjection } from '../edit/legacy';
-import { assignPersons, defaultPhoto, neutralPerson, personFromPreset, withPersons } from '../edit/state';
+import { assignPersons, defaultPhoto, naturalPerson, neutralPerson, personFromPreset, withPersons } from '../edit/state';
 import { TONE_COPY } from '../edit/toneCopy';
 import { heightBandStretch } from '../body/bands';
 import { bandEdges, bandToDisplay, defaultStretch, displayToBand, dragEdge, keyStep, MIN_GAP, moveEdge } from './components/HeightBandOverlay';
@@ -33,6 +33,7 @@ import {
   clearLabel,
   clearTap,
   CLEAR_CONFIRM_MS,
+  decorateShapeItems,
   DEFAULT_BAND,
   EDITOR_TABS,
   faceAnswer,
@@ -50,7 +51,12 @@ import {
   skinNote,
   skinToolGate,
   sliderEmptyText,
+  shapeHasValue,
   sliderFor,
+  SPLIT_BADGE,
+  SPLIT_ON_NOTICE,
+  splitJointNotice,
+  splitToggle,
   spotItem,
   spotsOnTab,
   spotTapInside,
@@ -59,9 +65,12 @@ import {
   tapToast,
   toneItems,
   WARM_ENDS,
+  withSides,
   type BodyContext,
+  type PanelItem,
   type PanelSelection,
   type SkinPanelContext,
+  type SliderBinding,
 } from './panelModel';
 
 const sel = (over: Partial<PanelSelection>): PanelSelection => ({ ...INITIAL_SELECTION, ...over });
@@ -79,7 +88,7 @@ describe('itemsFor', () => {
     for (const tab of ['skin', 'shape'] as const) {
       const items = itemsFor(lensOf(defaultParams()), sel({ tab }));
       expect(items[0]).toMatchObject({ key: 'reset', label: '原圖' });
-      expect(items.slice(1).map((i) => i.key)).toEqual(paramsInGroup(tab).map((d) => d.id));
+      expect(items.slice(1).map((i) => i.key)).toEqual([...paramsInGroup(tab).map((d) => d.id), ...(tab === 'shape' ? ['split'] : [])]);
     }
   });
   it('has-value dots follow hasValue (bidirectional neutral at 0.5)', () => {
@@ -936,5 +945,166 @@ describe('step-5 icons (face-detail spec §3.1)', () => {
       'aegyo', 'contour', 'highlight', 'lens', 'split', 'parts', 'makeupOff',
     ])
       expect(hasIcon(k), k).toBe(true);
+  });
+});
+
+const E5 = (f0: PersonParams = naturalPerson()): EditState => ({ v: 2, photo: defaultPhoto(), persons: { f0 }, template: neutralPerson(), primaryInit: null });
+const L5 = (e: EditState, swap = false) => lensFor(e, { kind: 'person', id: 'f0' }, [{ id: 'f0', face: true, body: false, screenSwap: swap }], 'f0');
+const shapeDefs = (): PanelItem[] =>
+  paramsInGroup('shape').map((d) => ({
+    key: d.id,
+    label: d.label,
+    visual: { kind: 'icon', icon: d.icon },
+    selected: false,
+    hasValue: false,
+    action: { type: 'param', id: d.id },
+    disabled: false,
+    reason: null,
+  }));
+const splitOnEdit = () => L5(E5()).setSplit(true, 'L');
+
+describe('美型 strip (face-detail spec §2.1)', () => {
+  it('has dividers at the five group starts and 左右分開 last', () => {
+    const items = decorateShapeItems(shapeDefs(), L5(E5()));
+    expect(items.map((i) => i.key)).toEqual([...paramsInGroup('shape').map((d) => d.id), 'split']);
+    expect(items.filter((i) => i.divider === 'before').map((i) => i.key)).toEqual([
+      'shape.faceSlim', 'shape.noseSlim', 'shape.mouthSize', 'shape.eyeDistance', 'split',
+    ]);
+  });
+
+  it('左右分開 is a switch; the 左右 badge marks the six split items only while it is on', () => {
+    const off = decorateShapeItems(shapeDefs(), L5(E5()));
+    expect(off.at(-1)).toMatchObject({ key: 'split', label: '左右分開', pressed: false, action: { type: 'split' }, visual: { kind: 'icon', icon: 'split' } });
+    expect(off.filter((i) => i.badge)).toHaveLength(0);
+    const on = decorateShapeItems(shapeDefs(), L5(splitOnEdit()));
+    expect(on.at(-1)?.pressed).toBe(true);
+    expect(on.filter((i) => i.badge === SPLIT_BADGE).map((i) => i.key)).toEqual([
+      'shape.eyeEnlarge', 'shape.faceSlim', 'shape.faceV', 'shape.faceNarrow', 'shape.jawline', 'shape.temple',
+    ]);
+  });
+
+  it('item and tab dots see either side', () => {
+    const e = L5(splitOnEdit()).set('shape.jawline', 0.5, 'R');
+    const items = decorateShapeItems(shapeDefs(), L5(e));
+    expect(items.find((i) => i.key === 'shape.jawline')?.hasValue).toBe(true);
+    expect(shapeHasValue(L5(e))).toBe(true);
+    const neutral = { ...neutralPerson(), right: null };
+    expect(shapeHasValue(L5(E5(neutral)))).toBe(false);
+  });
+});
+
+describe('左右分開 interaction (face-detail spec §2.2)', () => {
+  it('turning it on copies the values, selects 左 and explains the screen sides; off keeps the active side', () => {
+    const s = { ...INITIAL_SELECTION, tab: 'shape' as const, side: 'R' as const };
+    const on = splitToggle(L5(E5()), s);
+    expect(on.sel.side).toBe('L');
+    expect(on.sel.shape).toBe(s.shape); // the switch never changes the selected slider item (S5 §2.1)
+    expect(on.notice).toBe('已開啟左右分開：左、右以螢幕上看到的方向為準');
+    expect(on.edit.persons.f0.right).not.toBeNull();
+    const edited = L5(on.edit).set('shape.faceSlim', 0.9, 'R');
+    const off = splitToggle(L5(edited), { ...s, side: 'R' });
+    expect(off.notice).toBe('已關閉左右分開：左右臉改回相同');
+    expect(off.edit.persons.f0.right).toBeNull();
+    expect(off.edit.persons.f0.values['shape.faceSlim']).toBe(0.9);
+    expect(off.sel.side).toBe('R');
+  });
+
+  it('the side binding: active chip, other-side caption value, a key per side, a write to that side only', () => {
+    const e = L5(splitOnEdit()).set('shape.faceSlim', 0.3, 'R');
+    const base: SliderBinding = {
+      key: 'f0:shape.faceSlim',
+      param: 'shape.faceSlim',
+      label: '瘦臉',
+      bidirectional: false,
+      value: 0.15,
+      mixed: false,
+      defaultValue: 0.15,
+      apply: (l, v) => l.set('shape.faceSlim', v),
+    };
+    const s = { ...INITIAL_SELECTION, tab: 'shape' as const, side: 'L' as const };
+    const b = withSides(base, L5(e), s, 'shape.faceSlim');
+    expect(b.sides?.active).toBe('L');
+    expect(b.sides?.other).toBe(0.3);
+    expect(b.value).toBe(naturalPerson().values['shape.faceSlim']);
+    expect(b.key).toBe('f0:shape.faceSlim:L');
+    expect(b.mixed).toBe(false);
+    expect(b.sides?.select('R')).toEqual({ ...s, side: 'R' });
+    expect(b.sides?.select('L')).toBe(s);
+    const w = b.apply(L5(e), 0.8).persons.f0;
+    expect([w.values['shape.faceSlim'], w.right?.['shape.faceSlim']]).toEqual([0.8, 0.3]);
+    // a non-split item, or 左右分開 off: the binding is returned unchanged
+    expect(withSides(base, L5(E5()), s, 'shape.faceSlim')).toBe(base);
+    expect(withSides({ ...base, key: 'f0:shape.chin', param: 'shape.chin' }, L5(e), s, 'shape.chin').sides).toBeUndefined();
+  });
+
+  it('a non-split item while 左右分開 is on gets 「{label}左右一起調整」', () => {
+    const s = { ...INITIAL_SELECTION, tab: 'shape' as const };
+    const chin = shapeDefs().find((i) => i.key === 'shape.chin')!;
+    const slim = shapeDefs().find((i) => i.key === 'shape.faceSlim')!;
+    expect(splitJointNotice(chin, L5(splitOnEdit()), s)).toBe('下巴左右一起調整');
+    expect(splitJointNotice(slim, L5(splitOnEdit()), s)).toBeNull();
+    expect(splitJointNotice(chin, L5(E5()), s)).toBeNull();
+  });
+});
+
+describe('美型 wiring: itemsFor, sliderFor, tabHasValue, activate (face-detail spec §2.1–2.2)', () => {
+  const s = { ...INITIAL_SELECTION, tab: 'shape' as const, shape: 'shape.faceSlim' as const, side: 'R' as const };
+
+  it('the 美型 strip keeps ⊘ 原圖 first, badges the split items and ends with the pressed switch', () => {
+    const items = itemsFor(L5(splitOnEdit()), s);
+    expect(items[0]).toMatchObject({ key: 'reset', label: '原圖' });
+    expect(items.at(-1)).toMatchObject({ key: 'split', pressed: true });
+    expect(byKey(items, 'shape.faceSlim')).toMatchObject({ badge: SPLIT_BADGE, divider: 'before', selected: true });
+    expect(itemsFor(L5(splitOnEdit()), { ...s, tab: 'skin' }).some((i) => i.key === 'split')).toBe(false);
+  });
+
+  it('the 美型 slider edits the chosen side while 左右分開 is on', () => {
+    const e = L5(splitOnEdit()).set('shape.faceSlim', 0.4, 'R');
+    const b = sliderFor(L5(e), s)!;
+    expect(b.key).toBe('shape.faceSlim:R');
+    expect(b.value).toBe(0.4);
+    expect(b.sides).toMatchObject({ active: 'R', other: naturalPerson().values['shape.faceSlim'] });
+    expect(sliderFor(L5(E5()), s)!.sides).toBeUndefined();
+  });
+
+  it('the 美型 tab dot sees a value on the right side only', () => {
+    const split = L5(E5(neutralPerson())).setSplit(true, 'L');
+    expect(tabHasValue(L5(split), 'shape')).toBe(false);
+    expect(tabHasValue(L5(L5(split).set('shape.jawline', 0.5, 'R')), 'shape')).toBe(true);
+  });
+
+  it('tapping 左右分開 is one edit with its notice, and never changes the selected item', () => {
+    const r = activate(byKey(itemsFor(L5(E5()), s), 'split'), L5(E5()), s);
+    expect(r).toMatchObject({ changed: true, notice: SPLIT_ON_NOTICE });
+    expect(r.sel).toEqual({ ...s, side: 'L' });
+    expect(r.edit.persons.f0.right).not.toBeNull();
+  });
+});
+
+describe('左右分開 without a face target', () => {
+  it('a body-only person: the tap changes nothing and claims nothing', () => {
+    const e: EditState = { ...E5(), persons: { f0: naturalPerson(), b1: naturalPerson() } };
+    const infos: PersonInfo[] = [{ id: 'f0', face: true, body: false }, { id: 'b1', face: false, body: true }];
+    const l = lensFor(e, { kind: 'person', id: 'b1' }, infos, 'f0');
+    const s = { ...INITIAL_SELECTION, tab: 'shape' as const, side: 'R' as const };
+    const r = activate(byKey(itemsFor(l, s), 'split'), l, s);
+    expect(r.changed).toBe(false);
+    expect(r.notice).toBeUndefined();
+    expect(r.edit).toBe(e);
+  });
+});
+
+describe('美型 dots under 全部 (face-detail spec §2.1, S1 §2.4 Dots)', () => {
+  it('a right-only value of a person other than the shown one lights the item and the tab', () => {
+    const f1 = L5(E5(neutralPerson())).setSplit(true, 'L').persons.f0;
+    const e: EditState = { ...E5(neutralPerson()), persons: { f0: neutralPerson(), f1: { ...f1, right: { ...f1.right, 'shape.jawline': 0.5 } } } };
+    const infos: PersonInfo[] = [{ id: 'f0', face: true, body: false }, { id: 'f1', face: true, body: false }];
+    const at = (s: Selection) => lensFor(e, s, infos, 'f0');
+    const s = { ...INITIAL_SELECTION, tab: 'shape' as const };
+    const dot = (l: ReturnType<typeof at>) => byKey(itemsFor(l, s), 'shape.jawline').hasValue;
+    expect(dot(at({ kind: 'all' }))).toBe(true);
+    expect(tabHasValue(at({ kind: 'all' }), 'shape')).toBe(true);
+    expect(dot(at({ kind: 'person', id: 'f0' }))).toBe(false);
+    expect(dot(at({ kind: 'person', id: 'f1' }))).toBe(true);
   });
 });

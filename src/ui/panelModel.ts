@@ -5,7 +5,7 @@ import { NO_BODY_NOTE, NO_FACE_NOTE, type Lens } from '../edit/lens';
 import { adjustIsNeutral, personOf } from '../edit/state';
 import { TONE_COPY } from '../edit/toneCopy';
 import type { CropLock } from '../geometry/view';
-import type { AdjustId, EditState, HeightBand, LookId, MakeupPart, ParamDef, ParamId, PersonId, PersonParamId, PhotoParams, PresetId, RegionStatus, ShadePart } from '../types';
+import type { AdjustId, EditState, HeightBand, LookId, MakeupPart, ParamDef, ParamId, PersonId, PersonParamId, PersonParams, PhotoParams, PresetId, RegionStatus, ShadePart, SplitParamId } from '../types';
 import type { CropAction } from './cropPanel';
 
 export type TabId = 'preset' | 'skin' | 'shape' | 'body' | 'filter' | 'makeup' | 'adjust' | 'crop';
@@ -50,6 +50,8 @@ export interface PanelSelection {
   presetPart: PresetPart;
   /** the 裁切 ratio lock (UI state: derived from the crop on entering the tab and after ↶ ↷, S §2.1) */
   crop: CropLock;
+  /** 左右分開 slider side as seen on screen (S5 §2.2); view state, never an undo step */
+  side: 'L' | 'R';
 }
 
 export const INITIAL_SELECTION: PanelSelection = {
@@ -61,6 +63,7 @@ export const INITIAL_SELECTION: PanelSelection = {
   adjust: 'adjust.brightness',
   presetPart: 'beauty',
   crop: 'free',
+  side: 'L',
 };
 
 // ───────────── 美體 context (fed by the screen: Editor detects, Camera is unsupported) ─────────────
@@ -309,6 +312,8 @@ export type ItemAction =
   | { type: 'spot' }
   /** 美體: toggle 背景保護 */
   | { type: 'protect' }
+  /** 美型: toggle 左右分開 */
+  | { type: 'split' }
   /** 一鍵 › 質感: pick a look, or 無 (null) */
   | { type: 'look'; id: LookId | null }
   /** 裁切: a ratio, 旋轉, 翻轉 or 還原 (BeautyPanel hands it to the Editor through cropActivate, never to activate) */
@@ -578,6 +583,97 @@ export function spotsOnTab(skin: SkinPanelContext | undefined): boolean {
   return (skin?.spots.total ?? 0) > 0;
 }
 
+// ───────────── 美型 groups and 左右分開 (face-detail spec §2.1–2.2) ─────────────
+
+/** 美型 group starts (S5 §2.1): 大眼 │ 瘦臉 … 髮際線 │ 瘦鼻 鼻翼 山根 │ 嘴型 嘴高 │ 眼距 │ 左右分開 */
+export const SHAPE_DIVIDERS: ReadonlySet<ParamId> = new Set<ParamId>(['shape.faceSlim', 'shape.noseSlim', 'shape.mouthSize', 'shape.eyeDistance']);
+export const SPLIT_BADGE = '左右';
+export const SPLIT_ON_NOTICE = '已開啟左右分開：左、右以螢幕上看到的方向為準';
+export const SPLIT_OFF_NOTICE = '已關閉左右分開：左右臉改回相同';
+
+/** a person's value off neutral on either half (`right` holds the GPUPixel-right half of a split item) */
+function halvesHaveValue(d: ParamDef, p: PersonParams): boolean {
+  const r = d.split ? p.right?.[d.id as SplitParamId] : undefined;
+  return hasValue(d, p.values[d.id as PersonParamId]) || (r !== undefined && hasValue(d, r));
+}
+
+/**
+ * Step 1's item dot (itemDot) over both sides (S5 §2.1 Dots): the selected person's 左 or 右 value; under 全部, either
+ * half of any applicable person, not only the shown one.
+ */
+function sidesDot(lens: Lens, d: ParamDef): boolean {
+  const shown = () => hasValue(d, lens.get(d.id, 'L').value) || hasValue(d, lens.get(d.id, 'R').value);
+  if (d.scope === 'photo' || lens.sel.kind !== 'all') return shown();
+  const t = lens.targets(d.id);
+  return t.length ? t.some((pid) => halvesHaveValue(d, personOf(lens.edit, pid))) : shown();
+}
+
+/** Step 1's per-def 美型 items, plus dividers, the 左右 badges, two-sided dots and the 左右分開 switch at the end. */
+export function decorateShapeItems(items: PanelItem[], lens: Lens): PanelItem[] {
+  const split = lens.split();
+  const out = items.map((it): PanelItem => {
+    if (it.action.type !== 'param') return it;
+    const d = paramDef(it.action.id);
+    return {
+      ...it,
+      hasValue: sidesDot(lens, d),
+      ...(SHAPE_DIVIDERS.has(d.id) ? { divider: 'before' as const } : {}),
+      ...(split && d.split ? { badge: SPLIT_BADGE } : {}),
+    };
+  });
+  out.push({
+    key: 'split',
+    label: '左右分開',
+    visual: { kind: 'icon', icon: 'split' },
+    selected: false,
+    hasValue: false,
+    action: { type: 'split' },
+    pressed: split,
+    divider: 'before',
+    ...ENABLED,
+  });
+  return out;
+}
+
+/** tab dot of 美型: any item off neutral on either side (S5 §2.1) */
+export function shapeHasValue(lens: Lens): boolean {
+  return paramsInGroup('shape').some((d) => sidesDot(lens, d));
+}
+
+/** a split item's slider while 左右分開 is on: edits one on-screen side; the other side's value is the caption */
+export function withSides(b: SliderBinding, lens: Lens, sel: PanelSelection, id: ParamId): SliderBinding {
+  if (!paramDef(id).split || !lens.split()) return b;
+  const side = sel.side;
+  const other = side === 'L' ? 'R' : 'L';
+  const cur = lens.get(id, side);
+  return {
+    ...b,
+    key: `${b.key}:${side}`,
+    value: cur.value,
+    // 「各人不同」 under 全部 compares the chosen side across persons (S5 §3.4)
+    mixed: cur.mixed,
+    apply: (l, v) => l.set(id, v, side),
+    sides: { active: side, other: lens.get(id, other).value, select: (s) => (s === side ? sel : { ...sel, side: s }) },
+  };
+}
+
+/** the 左右分開 tap: one EditState for every target; turning it on starts on 左 (S5 §2.2) */
+export function splitToggle(lens: Lens, sel: PanelSelection): { edit: EditState; sel: PanelSelection; notice: string } {
+  const on = !lens.split();
+  return {
+    edit: lens.setSplit(on, sel.side),
+    sel: on && sel.side !== 'L' ? { ...sel, side: 'L' } : sel,
+    notice: on ? SPLIT_ON_NOTICE : SPLIT_OFF_NOTICE,
+  };
+}
+
+/** a non-split 美型 item selected while 左右分開 is on (the screen shows it once per session, S5 §2.2) */
+export function splitJointNotice(item: PanelItem, lens: Lens, sel: PanelSelection): string | null {
+  if (sel.tab !== 'shape' || item.action.type !== 'param' || !lens.split()) return null;
+  const d = paramDef(item.action.id);
+  return d.split ? null : `${d.label}左右一起調整`;
+}
+
 // ───────────── 調節 and 質感 (v0.4 step 2) ─────────────
 
 /** the 調節 strip splits light │ colour │ effects: dividers before 色溫 and 褪色 (step-2 spec §2.1) */
@@ -746,26 +842,29 @@ export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext, sk
       return items;
     }
     case 'skin':
-    case 'shape':
+    case 'shape': {
+      const defs = paramsInGroup(sel.tab).map((d): PanelItem => {
+        const item: PanelItem = {
+          key: d.id,
+          label: d.label,
+          visual: { kind: 'icon', icon: d.icon },
+          selected: sel[sel.tab as 'skin' | 'shape'] === d.id,
+          hasValue: itemDot(lens, d),
+          action: { type: 'param', id: d.id },
+          ...ENABLED,
+        };
+        const it = photoLike(lens, d.id) ? badged(lens, item) : item;
+        // 美膚 gates per item (美白 / 銳化 stay usable for a body-only person); 美型 keeps the whole-strip dimming of
+        // personNote, as v0.3 did for a photo without a face
+        return multiPerson(lens) && sel.tab === 'skin' ? gated(it, lens.applies(d.id)) : it;
+      });
       return [
         RESET_ITEM(),
-        ...paramsInGroup(sel.tab).map((d): PanelItem => {
-          const item: PanelItem = {
-            key: d.id,
-            label: d.label,
-            visual: { kind: 'icon', icon: d.icon },
-            selected: sel[sel.tab as 'skin' | 'shape'] === d.id,
-            hasValue: itemDot(lens, d),
-            action: { type: 'param', id: d.id },
-            ...ENABLED,
-          };
-          const it = photoLike(lens, d.id) ? badged(lens, item) : item;
-          // 美膚 gates per item (美白 / 銳化 stay usable for a body-only person); 美型 keeps the whole-strip dimming of
-          // personNote, as v0.3 did for a photo without a face
-          return multiPerson(lens) && sel.tab === 'skin' ? gated(it, lens.applies(d.id)) : it;
-        }),
+        // 美型: group dividers, 左右 badges, two-sided dots and the 左右分開 switch last (S5 §2.1)
+        ...(sel.tab === 'shape' ? decorateShapeItems(defs, lens) : defs),
         ...(sel.tab === 'skin' && skin ? [...toneItems(lens, sel, skin), spotItem(sel, skin)] : []),
       ];
+    }
     case 'body':
       return bodyItems(lens, sel, body);
     case 'filter':
@@ -887,6 +986,12 @@ export function activate(item: PanelItem, lens: Lens, sel: PanelSelection, ctx: 
       // is about the same either way, so neither notice promises straight lines or a smoother outline
       return done(lens.setBodyProtect(on), sel, on ? '背景保護已開啟：背景變形範圍較小' : '背景保護已關閉：背景變形範圍較大但較平緩');
     }
+    case 'split': {
+      // one EditState for every target (one undo step); it never changes sel.shape (S5 §2.1)
+      const r = splitToggle(lens, sel);
+      // no face target (a body-only person): nothing to split, so no side change and no notice
+      return r.edit === edit ? done() : done(r.edit, r.sel, r.notice);
+    }
     case 'filter':
       if (edit.photo.filterId === a.id) return done();
       return done(lens.setFilter(a.id));
@@ -929,6 +1034,8 @@ export interface SliderView {
   scale?: SliderScale;
   /** captions under the two track ends (膚色: 冷 / 暖) */
   ends?: readonly [string, string];
+  /** present for a split item while 左右分開 is on: the on-screen side being edited, the other side's value */
+  sides?: { active: 'L' | 'R'; other: number; select(side: 'L' | 'R'): PanelSelection };
 }
 
 export interface SliderBinding extends SliderView {
@@ -990,7 +1097,7 @@ export function sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext, s
       if (sel.tab === 'skin' && isToneId(id) && !(skin && toneGate(lens, id, skin).ok)) return null;
       if (!usable(lens, id)) return null;
       const b = decorate(paramBinding(lens, id), lens, photoLike(lens, id));
-      return id === 'tone.warmth' ? { ...b, ends: WARM_ENDS } : b;
+      return id === 'tone.warmth' ? { ...b, ends: WARM_ENDS } : withSides(b, lens, sel, id);
     }
     case 'body':
       // the tile's own gate: an item the selected person cannot use has no slider, an enabled one always has one
@@ -1081,6 +1188,7 @@ export function tabHasValue(lens: Lens, tab: TabId, body?: BodyContext, skin?: S
     case 'skin':
     case 'shape':
     case 'makeup':
+      if (tab === 'shape') return shapeHasValue(lens);
       if (tab === 'skin' && spotsOnTab(skin)) return true;
       return lens.groupHasValue(tab);
     case 'crop':

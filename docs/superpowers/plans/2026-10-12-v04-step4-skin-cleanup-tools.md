@@ -4409,7 +4409,7 @@ git commit -m "v0.4 step 4 (11/20): tone field P0c and retouch P0d on the GPU, c
   ```
   The heal (S §4.5): copy src → A; RING fragment (k, s) holds `ZERO + Δ_k` (fill: `T_k`) and the robust weight o_k; each spot quad (half-side 1.1 r) blends `healed·α, α` with `ONE, ONE_MINUS_SRC_ALPHA`, healed = `src(p + d) + M` (fill: `M`), M the Poisson-kernel mean of the ring at radius 1.3 r. Robust weights: μ₀ = mean Y(Δ), σ₀ = rms(Y(Δ) − μ₀) + 0.01, o = 1/(1 + ((Y − μ)/2σ)²); then μ₁ and σ₁ (the o-weighted mean and rms, + 0.01) and o once more with them.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/engine/healCpu.test.ts`:
 ```ts
@@ -4537,12 +4537,12 @@ describe('healCpu', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `npx vitest run src/engine/healCpu.test.ts`
 Expected: FAIL — `Failed to resolve import "./healCpu"`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/engine/shaders/heal.ts`:
 ```ts
@@ -4826,14 +4826,14 @@ export function healCpu(src: Img, spots: readonly Spot[], win: Win = IDENTITY_WI
 }
 ```
 
-- [ ] **Step 4: Pin the hash and run the tests**
+- [x] **Step 4: Pin the hash and run the tests**
 
 Run: `npx vitest run src/engine/healCpu.test.ts`
 Expected: only the pin test fails, printing the received hash; copy it in place of `'00000000'`.
 Run: `npx vitest run src/engine/healCpu.test.ts && npm run typecheck`
 Expected: PASS (9 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/engine/shaders/heal.ts src/engine/healCpu.ts src/engine/healCpu.test.ts

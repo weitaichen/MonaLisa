@@ -123,13 +123,18 @@ export interface SurfaceOptions {
   type?: 'image/jpeg' | 'image/png';
   /** false: an opaque context (every exported pixel is opaque anyway) */
   alpha?: boolean;
+  /** the patch reader reads its pixels back on every tap (skin-cleanup spec §3.4) */
+  willReadFrequently?: boolean;
 }
 
 /** OffscreenCanvas when it can encode (Safari 16.4+), else a detached <canvas>. */
 export function createSurface(width: number, height: number, opts: SurfaceOptions = {}): Surface {
   const type = opts.type ?? 'image/jpeg';
   // annotated: an inferred `{ alpha: boolean } | undefined` sends <canvas>.getContext to its RenderingContext overload
-  const ctxOpts: CanvasRenderingContext2DSettings | undefined = opts.alpha === false ? { alpha: false } : undefined;
+  const settings: CanvasRenderingContext2DSettings = {};
+  if (opts.alpha === false) settings.alpha = false;
+  if (opts.willReadFrequently) settings.willReadFrequently = true;
+  const ctxOpts: CanvasRenderingContext2DSettings | undefined = Object.keys(settings).length ? settings : undefined;
   const enc = (quality?: number): ImageEncodeOptions => (quality === undefined ? { type } : { type, quality });
   if (typeof OffscreenCanvas !== 'undefined' && typeof OffscreenCanvas.prototype.convertToBlob === 'function') {
     const oc = new OffscreenCanvas(width, height);

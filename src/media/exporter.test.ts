@@ -154,4 +154,12 @@ describe('encodeOutput', () => {
     expect(made[0].ctxOpts).toBeUndefined();
     expect(made[0].blobOpts).toEqual({ type: 'image/jpeg', quality: 0.85 });
   });
+
+  it('createSurface asks for willReadFrequently for the 祛痘 patch reader (skin-cleanup spec §3.4)', () => {
+    const made = stubOffscreen();
+    createSurface(4, 4, { type: 'image/png', alpha: false, willReadFrequently: true });
+    createSurface(4, 4, { willReadFrequently: true });
+    expect(made[0].ctxOpts).toEqual({ alpha: false, willReadFrequently: true });
+    expect(made[1].ctxOpts).toEqual({ willReadFrequently: true });
+  });
 });

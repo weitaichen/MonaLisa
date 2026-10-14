@@ -4877,7 +4877,7 @@ git commit -m "v0.4 step 4 (12/20): heal shaders and their CPU reference" -m "Co
   export function readPatch(bitmap: CanvasImageSource, plan: PatchPlan): Patch;                   // DOM (2D canvas)
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/edit/spots.test.ts` (add to its imports: `readFileSync` from `node:fs`; `adapt` from `../tracking/adapter111`; `type Face` from `../types` (merged with the existing `type EditState, type Spot`); and to the `./spots` import: `ownerAt`, `planSpot`, `regionAt`, `spotRadius`, `SPOT_K`, `type Patch`, `type SpotFace`):
 ```ts
@@ -5046,12 +5046,12 @@ describe('patchPlan (skin-cleanup spec §3.4 step 4)', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `npx vitest run src/edit/spots.test.ts src/edit/patch.test.ts`
 Expected: FAIL — `regionAt is not a function` and `Failed to resolve import "./patch"`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/media/exporter.ts` (LF) — step 3 already exports `createSurface(width, height, opts: SurfaceOptions = {})` (`exporter.ts:129`), `Surface` (`:114`) and `SurfaceOptions { type?; alpha? }` (`:121-126`) (step-3 plan Task 5). Add to `SurfaceOptions`
 ```ts
@@ -5479,12 +5479,12 @@ export function readPatch(bitmap: CanvasImageSource, plan: PatchPlan): Patch {
 ```
 (`type` is irrelevant here because the patch is never encoded.)
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/edit src/media && npm run typecheck`
 Expected: PASS (the existing `exporter.test.ts` cases unchanged).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/edit/spots.ts src/edit/spots.test.ts src/edit/patch.ts src/edit/patch.test.ts src/media/exporter.ts

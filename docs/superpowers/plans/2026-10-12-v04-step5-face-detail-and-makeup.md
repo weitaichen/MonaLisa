@@ -2032,6 +2032,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
 
+Landed as `0692964`, which carries a stale step-2 subject (`v0.4 step 2 task 5: adjustMath.ts stages, …`, a leftover message file in the scratchpad, as with `db1f468`). Its content is this task's three files and its ticks. The `v0.4 step 5 task 5 fix:` commit on top of it records this note, and no commit was amended.
+
 ### Task 6: Warp uniforms, anchors, influence box and face-table packing
 
 CPU side of the six new warps and of 左右分開 (S5 §4.2–4.4): the engine deltas with per-side values, every anchor the shader needs (with the fold-safety clamps and degenerate-face guards), the influence box, the step-5 block of the face table, and the `U_MAX` box. The shader does not read any of it until Task 7, so pixels do not change in this task.
@@ -7316,7 +7318,7 @@ Every command below that needs the base of step 5 computes it itself (the shell 
 - [ ] **Step 1: Clean tree and the base of step 5**
 
 Run: `git status --short && BASE="$(git log --format=%H --grep='^v0.4 step 5' --reverse | head -1)~1" && git log --oneline "$BASE"..HEAD | cat`
-Expected: no uncommitted changes; on `feat/meiyan-pwa`, the `v0.4 step 5: reconcile plan` commit (on top of `db1f468`), then one local `v0.4 step 5 task <N>: …` commit per task 1–18 (plus any `v0.4 step 5 task <N> fix: …` commits).
+Expected: no uncommitted changes; on `feat/meiyan-pwa`, the `v0.4 step 5: reconcile plan` commit (on top of `db1f468`), then one local `v0.4 step 5 task <N>: …` commit per task 1–18 (plus any `v0.4 step 5 task <N> fix: …` commits). Task 5's code is `0692964` under a stale step-2 subject; its `v0.4 step 5 task 5 fix:` commit records that (see Task 5).
 
 - [ ] **Step 2: Typecheck**
 

@@ -4,6 +4,7 @@ import { isLookId } from '../engine/looks';
 import { applyPreset, FILTERS, neutralValue, PARAM_DEFS, paramsInGroup, PRESETS, sanitizeBand, SHADE_PARTS, SHADES as SHADE_DEFS } from '../engine/params';
 import { clampStraighten, cropConstrain, cropValid, flipView, IDENTITY_GEOMETRY, isIdentity, rotateLeft } from '../geometry/view';
 import { stableKey } from '../store/undo';
+import { sanitizeRight } from './sides';
 import { remapSpotOwners, sanitizeSpots } from './spots';
 import type {
   AdjustId,
@@ -190,10 +191,11 @@ export function editResetGeometry(edit: EditState): EditState {
   return isIdentity(edit.photo.geometry) ? edit : editSetGeometry(edit, IDENTITY_GEOMETRY);
 }
 
-/** the person part of `ref` (face items within 1e-6, lip / blush shades) is what `p` holds (RM §3.4 matching) */
+/** the person part of `ref` (face items within 1e-6, every shade, 左右分開 off) is what `p` holds (RM §3.4 matching, S5 §3.5) */
 export function matchesPersonPreset(p: PersonParams, ref: PresetRef): boolean {
   const q = personFromPreset(ref.id, ref.amount);
-  if (q.shades.lip !== p.shades.lip || q.shades.blush !== p.shades.blush) return false;
+  if (p.right !== null) return false;
+  if (SHADE_PARTS.some((k) => q.shades[k] !== p.shades[k])) return false;
   return PRESET_PERSON_IDS.every((id) => Math.abs(q.values[id] - p.values[id]) < 1e-6);
 }
 
@@ -225,10 +227,11 @@ export function sanitizePerson(raw: unknown, fallback: PersonParams): PersonPara
     const s = rs[part];
     return typeof s === 'string' && SHADES[part].has(s) ? s : null;
   };
-  const shades = { ...emptyShades(), lip: shade('lip'), blush: shade('blush') };
+  const shades = Object.fromEntries(SHADE_PARTS.map((k) => [k, shade(k)])) as Record<ShadePart, string | null>;
+  const right = sanitizeRight(r.right);
   const ref = presetRefOf('preset' in r ? r.preset : fallback.preset);
-  const preset = ref && matchesPersonPreset({ values, right: null, shades, preset: ref }, ref) ? ref : 'custom';
-  return { values, right: null, shades, preset };
+  const preset = ref && matchesPersonPreset({ values, right, shades, preset: ref }, ref) ? ref : 'custom';
+  return { values, right, shades, preset };
 }
 
 /** A stored 質感 → a valid look (amount clamped) or null. */

@@ -848,7 +848,7 @@ The pure side helpers (S5 §3.4) and the edit-state rules for the new fields: pr
   - `sanitizeRight(raw: unknown): PersonParams['right']`
   - `screenLeftIsGpLeft(face: Face, toScreen: (p: [number, number]) => [number, number]): boolean`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/edit/sides.test.ts`:
 
@@ -1036,12 +1036,12 @@ describe('step-5 fields in the edit state (S5 §3.5)', () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run src/edit/sides.test.ts src/edit/state.test.ts`
 Expected: FAIL — `Failed to resolve import "./sides"`; in `state.test.ts` the case "a preset id stands only while right is null" fails (`expected { id: 'natural', amount: 1 } to be 'custom'`: Task 1's `sanitizePerson` still drops `right`, so the split person keeps its preset id). The preset, fill, fuzz and `legacyProjection` cases already pass after Task 1 (its `withPresetPart` / `sanitizePerson` literals); they stay as the regression pins of this task.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/edit/sides.ts`:
 
@@ -1155,12 +1155,12 @@ export function screenLeftIsGpLeft(face: Face, toScreen: (p: [number, number]) =
 
 Imports: `sanitizeRight` from `./sides` (`SHADE_PARTS` and `SHADES as SHADE_DEFS` are imported since Task 1).
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/edit && npm run typecheck`
 Expected: PASS; no type errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 file src/edit/state.ts src/edit/sides.ts

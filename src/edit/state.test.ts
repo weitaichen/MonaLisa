@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { applyPreset, PARAM_DEFS } from '../engine/params';
+import { applyPreset, neutralValue, PARAM_DEFS, paramDef, SHADE_PARTS, SHADES, SPLIT_IDS } from '../engine/params';
 import { cropConstrain, cropValid, IDENTITY_GEOMETRY, rotateLeft } from '../geometry/view';
-import type { EditState, Geometry } from '../types';
+import type { EditState, Geometry, ParamId, PersonParams } from '../types';
+import { legacyProjection } from './legacy';
+import { lensFor } from './lens';
 import {
   assignPersons,
   cameraEdit,
@@ -342,5 +344,92 @@ describe('step 4: renamePersons remaps spot owners (C §5.2)', () => {
     expect(next.photo.spots.map((s) => s.x)).toEqual([0.1, 0.2, 0.3]);
     const kept = renamePersons(e, { f1: 'f2' });
     expect(kept.photo.spots.map((s) => s.owner)).toEqual(['f0', 'f2', null]);
+  });
+});
+
+const STEP5_IDS: ParamId[] = [
+  'shape.jawline', 'shape.temple', 'shape.hairline', 'shape.noseWing', 'shape.noseBridge', 'shape.mouthHeight',
+  'makeup.brow', 'makeup.eyeshadow', 'makeup.liner', 'makeup.lashes', 'makeup.aegyo', 'makeup.contour', 'makeup.highlight', 'makeup.lens',
+];
+const editOf = (f0: PersonParams): EditState => ({ v: 2, photo: defaultPhoto(), persons: { f0 }, template: neutralPerson(), primaryInit: null });
+
+describe('step-5 fields in the edit state (S5 §3.5)', () => {
+  it('every beauty preset resets the new items, their shades and 左右分開 (RM §11 Q7 default)', () => {
+    for (const id of ['original', 'natural', 'refined', 'glow'] as const) {
+      const p: PersonParams = {
+        ...naturalPerson(),
+        values: { ...naturalPerson().values, 'shape.jawline': 0.7, 'shape.temple': 0.9, 'makeup.lens': 0.6 },
+        right: { 'shape.faceSlim': 0.9 },
+        shades: { ...emptyShades(), brow: 'mocha', eyeshadow: 'earth', liner: 'wine', lens: 'blue' },
+      };
+      const out = lensFor(editOf(p), { kind: 'person', id: 'f0' }, [{ id: 'f0', face: true, body: false }], 'f0').applyPreset(id, 1).persons.f0;
+      expect(out.right).toBeNull();
+      for (const k of STEP5_IDS) expect(out.values[k as keyof typeof out.values]).toBe(neutralValue(paramDef(k)));
+      expect([out.shades.brow, out.shades.eyeshadow, out.shades.liner, out.shades.lens]).toEqual([null, null, null, null]);
+    }
+  });
+
+  it('a preset id stands only while right is null (matchesPersonPreset)', () => {
+    const split = { ...naturalPerson(), right: { 'shape.faceSlim': naturalPerson().values['shape.faceSlim'] } };
+    expect(sanitizeEditState(editOf(split), ['f0']).persons.f0.preset).toBe('custom');
+    expect(sanitizeEditState(editOf(naturalPerson()), ['f0']).persons.f0.preset).toEqual(naturalPerson().preset);
+  });
+
+  it('fills what step-1…4 builds did not write: neutral new values, null new shades, right = null', () => {
+    const p = naturalPerson();
+    const values: Record<string, unknown> = { ...p.values };
+    for (const k of STEP5_IDS) delete values[k];
+    const old = { values, shades: { lip: 'rose', blush: null }, preset: p.preset };
+    const out = sanitizeEditState({ v: 2, photo: defaultPhoto(), persons: { f0: old }, template: neutralPerson(), primaryInit: null }, ['f0']).persons.f0;
+    expect(out.right).toBeNull();
+    expect(out.shades).toEqual({ ...emptyShades(), lip: 'rose' });
+    for (const k of STEP5_IDS) expect(out.values[k as keyof typeof out.values]).toBe(neutralValue(paramDef(k)));
+  });
+
+  it('keeps valid new-part shades and a valid right through sanitize (a saved entry reopens as it was)', () => {
+    const p: PersonParams = {
+      ...naturalPerson(),
+      right: { 'shape.faceSlim': 0.4, 'shape.temple': 0.7 },
+      shades: { ...emptyShades(), lip: 'rose', brow: 'mocha', eyeshadow: 'earth', liner: 'wine', lens: 'black' },
+    };
+    const out = sanitizeEditState(JSON.parse(JSON.stringify(editOf(p))), ['f0']).persons.f0;
+    expect(out.right).toEqual({ 'shape.faceSlim': 0.4, 'shape.temple': 0.7 });
+    expect(out.shades).toEqual(p.shades);
+    expect(out.preset).toBe('custom');
+  });
+
+  it('drops unknown shade ids and bad right entries (fuzzed)', () => {
+    let s = 7;
+    const rnd = () => {
+      s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+      return s / 4294967296;
+    };
+    const junk = (): unknown => [Number.NaN, Number.POSITIVE_INFINITY, -2, 3, 'x', null, {}, 0.3][Math.floor(rnd() * 8)];
+    for (let n = 0; n < 200; n++) {
+      const right: Record<string, unknown> = {};
+      for (const id of [...SPLIT_IDS, 'shape.chin', 'makeup.lens']) if (rnd() < 0.5) right[id] = junk();
+      const shades: Record<string, unknown> = {};
+      for (const part of SHADE_PARTS) shades[part] = rnd() < 0.5 ? SHADES[part][Math.floor(rnd() * SHADES[part].length)].id : junk();
+      const raw = { v: 2, photo: defaultPhoto(), persons: { f0: { ...naturalPerson(), right, shades } }, template: neutralPerson(), primaryInit: null };
+      const out = sanitizeEditState(raw, ['f0']).persons.f0;
+      if (out.right !== null) {
+        expect(Object.keys(out.right).length).toBeGreaterThan(0);
+        for (const [k, v] of Object.entries(out.right)) {
+          expect(SPLIT_IDS).toContain(k);
+          expect(v).toBeGreaterThanOrEqual(0);
+          expect(v).toBeLessThanOrEqual(1);
+        }
+      }
+      expect(Object.keys(out.shades).sort()).toEqual([...SHADE_PARTS].sort());
+      for (const part of SHADE_PARTS) {
+        const v = out.shades[part];
+        if (v !== null) expect(SHADES[part].map((x) => x.id)).toContain(v);
+      }
+    }
+  });
+
+  it('legacyProjection writes the GPUPixel-left (values) side of a split item', () => {
+    const p = { ...naturalPerson(), values: { ...naturalPerson().values, 'shape.faceSlim': 0.3 }, right: { 'shape.faceSlim': 0.9 } };
+    expect(legacyProjection(editOf(p), 'f0').values['shape.faceSlim']).toBe(0.3);
   });
 });

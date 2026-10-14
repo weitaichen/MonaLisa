@@ -494,3 +494,110 @@ export function buildMakeupGeometry(faces: readonly RenderFace[], aspect: number
   }
   return { data: w.data, ranges };
 }
+
+/** aPos is O-space UV; uWin maps it to the target (identity untiled; a tile's O window otherwise, step 3) */
+export const PMAKEUP_VS = /* glsl */ `#version 300 es
+in vec2 aPos;
+in vec2 aLoc;
+in vec2 aAux;
+in vec4 aCol;
+in float aKind;
+uniform vec4 uWin;
+out vec2 vLoc;
+out vec2 vAux;
+out vec4 vCol;
+flat out int vKind;
+void main() {
+  vLoc = aLoc;
+  vAux = aAux;
+  vCol = aCol;
+  vKind = int(aKind + 0.5);
+  vec2 q = (aPos - uWin.xy) / uWin.zw;
+  gl_Position = vec4(q * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+/** Every kind's α and colour (face-detail spec §4.8, §4.9); pinned to makeupProcCpu.ts by makeupProcCpu.test.ts */
+export const PMAKEUP_FS = /* glsl */ `#version 300 es
+precision highp float;
+in vec2 vLoc;
+in vec2 vAux;
+in vec4 vCol;
+flat in int vKind;
+uniform sampler2D uSrc;
+uniform sampler2D uLashes;
+uniform vec2 uInvDst;
+uniform int uLayerMode; // 0 multiply, 1 screen, 2 over (LAYER_MODE in makeupProc.ts)
+out vec4 outColor;
+
+float band(float y, float a, float b, float f) { return smoothstep(a - f, a + f, y) * (1.0 - smoothstep(b - f, b + f, y)); }
+float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+float skinGate(vec3 c) { return smoothstep(0.06, 0.14, luma(c)) * smoothstep(0.005, 0.04, c.r - c.b); }
+
+void main() {
+  // every derivative and implicit-LOD fetch runs in uniform control flow, before the kind branches
+  vec3 src = texture(uSrc, gl_FragCoord.xy * uInvDst).rgb;
+  float lash = texture(uLashes, vec2(vLoc.x, 1.0 - vLoc.y)).r;
+  float fwD = fwidth(vLoc.y);
+  float fwU = fwidth(18.0 * vLoc.x);
+  float u = vLoc.x;
+  float d = vLoc.y;
+  vec3 rgb = vCol.rgb;
+  float a = 0.0;
+  if (vKind == 0) {
+    float H = vAux.x;
+    float h = smoothstep(-0.22, 0.02, u) * (1.0 - smoothstep(0.80, 1.02, u)) * (0.55 + 0.45 * (1.0 - u));
+    a = smoothstep(-0.02, 0.01, d) * (1.0 - smoothstep(0.30 * H, H, d)) * h;
+  } else if (vKind == 1) {
+    a = 0.35 * band(d, 0.0, 0.07, 0.02) * smoothstep(-0.15, 0.05, u) * (1.0 - smoothstep(0.35, 0.55, u));
+  } else if (vKind == 2) {
+    float T = vAux.x;
+    float f = max(0.75 * fwD, 0.004);
+    a = smoothstep(-0.006 - f, -0.006 + f, d) * (1.0 - smoothstep(T - f, T + f, d)) * (1.0 - smoothstep(0.85, 1.0, u));
+  } else if (vKind == 3) {
+    a = lash;
+  } else if (vKind == 4) {
+    float v = d / 0.12;
+    float h = smoothstep(0.10, 0.35, u) * (1.0 - smoothstep(0.80, 0.95, u));
+    a = 0.45 * h * smoothstep(0.05, 0.35, v) * (1.0 - smoothstep(0.55, 0.85, v));
+  } else if (vKind == 5) {
+    float v = d / 0.12;
+    float h = smoothstep(0.10, 0.35, u) * (1.0 - smoothstep(0.80, 0.95, u));
+    a = 0.35 * h * band(v, 0.86, 1.0, 0.06);
+  } else if (vKind == 6 || vKind == 7) {
+    float rho = length(vLoc);
+    float mask = 1.0 - smoothstep(1.04, 1.10, rho);
+    float lid = smoothstep(0.0, 0.05, vAux.x) * smoothstep(0.0, 0.04, vAux.y);
+    float Y = luma(src);
+    float catchl = 1.0 - smoothstep(0.72, 0.88, Y);
+    float ring = smoothstep(0.78, 0.92, rho);
+    if (vKind == 6) {
+      float th = rho > 1e-6 ? atan(vLoc.y, vLoc.x) : 0.0;
+      a = mask * lid * catchl * smoothstep(0.30, 0.38, rho);
+      rgb = vCol.rgb * (0.42 + 1.15 * Y) * (0.92 + 0.08 * sin(28.0 * th)) * mix(1.0, 0.55, ring) * (0.85 + 0.15 * smoothstep(0.0, 0.10, vAux.x));
+    } else {
+      a = mask * lid * catchl * ring;
+      rgb = src * 0.55;
+    }
+  } else if (vKind == 8) {
+    float tilt = mix(0.15, 0.7, smoothstep(0.6, 1.0, u));
+    float stripe = 1.0 - smoothstep(0.15, 0.35, abs(fract(18.0 * u + tilt * 2.2 * d) - 0.5));
+    float vis = 1.0 - smoothstep(0.25, 0.5, fwU);
+    float strokes = mix(0.89, 0.78 + 0.22 * stripe, vis);
+    a = smoothstep(0.0, 0.22, d) * (1.0 - smoothstep(0.78, 1.0, d)) * smoothstep(-0.12, 0.05, u) * mix(1.0, 0.45, smoothstep(0.70, 1.0, u)) * strokes;
+  } else if (vKind == 9) {
+    a = 0.55 * skinGate(src) * smoothstep(0.0, 0.18, d) * (1.0 - smoothstep(0.35, 1.0, d)) * smoothstep(0.0, 0.12, u) * (1.0 - smoothstep(0.88, 1.0, u));
+  } else if (vKind == 10) {
+    a = 0.45 * skinGate(src) * (1.0 - smoothstep(0.35, 1.0, dot(vLoc, vLoc)));
+  } else if (vKind == 11) {
+    a = 0.30 * skinGate(src) * (1.0 - smoothstep(0.3, 1.0, abs(2.0 * d - 1.0))) * smoothstep(0.0, 0.15, u) * (1.0 - smoothstep(0.75, 1.0, u));
+  } else if (vKind == 12) {
+    float q = abs(2.0 * d - 1.0);
+    a = 0.35 * skinGate(src) * (1.0 - smoothstep(0.2, 1.0, q * q));
+  } else if (vKind == 13) {
+    a = vAux.x * skinGate(src) * (1.0 - smoothstep(0.2, 1.0, dot(vLoc, vLoc)));
+  }
+  a = clamp(a * vCol.a, 0.0, 1.0);
+  if (uLayerMode == 0) outColor = vec4(mix(vec3(1.0), rgb, a), 1.0);
+  else if (uLayerMode == 1) outColor = vec4(rgb * a, 1.0);
+  else outColor = vec4(rgb, a);
+}`;

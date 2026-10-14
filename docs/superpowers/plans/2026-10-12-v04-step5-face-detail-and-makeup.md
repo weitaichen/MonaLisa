@@ -4224,7 +4224,7 @@ The fragment math of every kind (S5 §4.8), the skin gate (§4.9) and the three 
   - `makeupProc.ts`: `PMAKEUP_VS`, `PMAKEUP_FS` (strings). Uniforms: `uSrc` (unit 0), `uLashes` (unit 1), `uInvDst` (1 / target size), `uWin` (O-space rect the target covers, `(x0, y0, w, h)`), `uLayerMode` (0 multiply, 1 screen, 2 over). Attributes `aPos`, `aLoc`, `aAux`, `aCol`, `aKind` as Task 8's layout.
   - `makeupProcCpu.ts`: `interface FragIn { kind: number; loc: readonly [number, number]; aux: readonly [number, number]; col: readonly [number, number, number, number]; src: readonly [number, number, number]; lash: number; fwD: number; fwU: number }`, `fragment(i: FragIn): { rgb: [number, number, number]; a: number }`, `blend(mode: 0 | 1 | 2, dst: readonly [number, number, number], f: { rgb: [number, number, number]; a: number }): [number, number, number]`, `skinGate(r, g, b): number`, `luma(r, g, b): number`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/engine/passes/makeupProcCpu.test.ts`:
 
@@ -4304,12 +4304,12 @@ describe('PMAKEUP_FS CPU port (face-detail spec §8.2)', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run src/engine/passes/makeupProcCpu.test.ts`
 Expected: FAIL — `Failed to resolve import "./makeupProcCpu"`.
 
-- [ ] **Step 3: Implement the shaders**
+- [x] **Step 3: Implement the shaders**
 
 Append to `src/engine/passes/makeupProc.ts`:
 
@@ -4422,7 +4422,7 @@ void main() {
 }`;
 ```
 
-- [ ] **Step 4: Implement the CPU port**
+- [x] **Step 4: Implement the CPU port**
 
 Create `src/engine/passes/makeupProcCpu.ts`:
 
@@ -4562,12 +4562,12 @@ export function blend(mode: 0 | 1 | 2, dst: readonly [number, number, number], f
 }
 ```
 
-- [ ] **Step 5: Run the test**
+- [x] **Step 5: Run the test**
 
 Run: `npx vitest run src/engine/passes/makeupProcCpu.test.ts src/engine/passes/makeupProc.test.ts && npm run typecheck`
 Expected: PASS (6 + 9 tests). If the pin reports a different hash, the shader text differs from this plan: compare it character by character instead of re-pinning.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/engine/passes/makeupProc.ts src/engine/passes/makeupProcCpu.ts src/engine/passes/makeupProcCpu.test.ts

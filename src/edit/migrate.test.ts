@@ -1,13 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { applyPreset, defaultParams, sanitizeParams, setParam } from '../engine/params';
+import { applyPreset, defaultParams, PARAM_DEFS, sanitizeParams, setParam } from '../engine/params';
 import { makeBodyDetection } from '../app/testFakes';
 import { prepareFaces } from '../detect/faces';
 import { withBodies } from '../detect/cache';
 import { cacheBody, makeCache } from '../detect/testCaches';
 import { IDENTITY_GEOMETRY } from '../geometry/view';
+import { normalizeEntry } from '../store/history';
 import { stableKey } from '../store/undo';
-import type { Face, HistoryEntry, Landmarks478, Pose33 } from '../types';
+import type { BeautyParams, EditState, Face, HistoryEntry, Landmarks478, ParamId, Pose33 } from '../types';
 import { editFromLegacy, legacyProjection, splitLegacy } from './legacy';
 import { bodyAnswer, cameraShotEdit, firstAnswer, importEdit, openState } from './migrate';
 import { assignPersons, defaultPhoto, editFlipView, naturalPerson, neutralPerson, personFromPreset, withPersons } from './state';
@@ -30,6 +31,8 @@ const v2 = (over: Partial<HistoryEntry> = {}): HistoryEntry => {
   const params = sanitizeParams(legacyProjection(edit, 'f0'));
   return v1({ schema: 2, edit, params, paramsKey: stableKey(params), detect: makeCache(), ...over });
 };
+/** a stored record read back as the editor reads it: normalizeEntry (which checks paramsKey), then openState */
+const reopen = (raw: unknown, size = SIZE) => openState(normalizeEntry(raw)!, size);
 
 describe('openState (S §5.3)', () => {
   it('v1, no body: the look on p0 and as primaryInit, the template neutral, detection wanted', () => {
@@ -97,14 +100,14 @@ describe('openState (S §5.3)', () => {
   });
   it('a paramsKey mismatch (0.3 edited the entry after a rollback) rebuilds the photo and the primary from params', () => {
     const edited = setParam(applyPreset('glow', 1), 'skin.whiten', 0.9);
-    const o = openState(v2({ params: sanitizeParams(edited) }), SIZE);
+    const o = reopen(v2({ params: sanitizeParams(edited) }));
     expect(o.edit.photo.values['skin.whiten']).toBe(0.9);
     expect(o.edit.persons.f0).toEqual(splitLegacy(sanitizeParams(edited)).person);
     expect(o.edit.persons.f1).toEqual(v2().edit!.persons.f1);
   });
   it('a paramsKey mismatch with a cache that does not fit: the stored primary is rebuilt, no phantom p0 joins the rematch', () => {
     const edited = setParam(applyPreset('glow', 1), 'shape.eyeEnlarge', 0.9);
-    const o = openState(v2({ params: sanitizeParams(edited) }), { width: 1536, height: 2048 });
+    const o = reopen(v2({ params: sanitizeParams(edited) }), { width: 1536, height: 2048 });
     expect(Object.keys(o.edit.persons).sort()).toEqual(['f0', 'f1']);
     expect(o.edit.persons.f0).toEqual(splitLegacy(sanitizeParams(edited)).person);
     expect(o.edit.persons.f1).toEqual(v2().edit!.persons.f1);
@@ -120,6 +123,83 @@ describe('openState (S §5.3)', () => {
     expect(openState(entry, { width: 1536, height: 2048 }).edit.photo.geometry.flipH).toBe(true);
     const broken = { ...entry, edit: { ...edit, photo: { ...edit.photo, geometry: { ...edit.photo.geometry, crop: { x: 2, y: 2, w: 1, h: 1 } } } } };
     expect(openState(broken, { width: 1536, height: 2048 }).edit.photo.geometry).toEqual(IDENTITY_GEOMETRY);
+  });
+});
+
+/** the param ids a build stores: 0.3 and 0.4 step 1 (26: no 調節, no 膚質), steps 2–3 (38: no 膚質) */
+const IDS_03: readonly ParamId[] = PARAM_DEFS.filter((d) => d.group !== 'adjust' && d.group !== 'tone').map((d) => d.id);
+const IDS_STEP3: readonly ParamId[] = PARAM_DEFS.filter((d) => d.group !== 'tone').map((d) => d.id);
+/** `p` as a build that knew only `ids` stored it (its sanitizeParams keeps no other value) */
+const storedBy = (p: BeautyParams, ids: readonly ParamId[]) => ({ ...p, values: Object.fromEntries(ids.map((id) => [id, p.values[id]])) });
+
+describe('openState: what counts as 0.3 editing a v2 entry after a rollback (S §5.3)', () => {
+  /** a v2 edit with what only 0.4 holds: two persons, 膚質 values, 調節, 質感, a flip and a spot */
+  const rich = (): EditState => {
+    let e = assignPersons(editFromLegacy(applyPreset('glow', 1), { primaryInit: true }), ['f0', 'f1'], 'f0');
+    e = withPersons(e, ['f0'], (p) => ({ ...p, values: { ...p.values, 'tone.even': 0.6, 'shape.eyeEnlarge': 0.7 }, preset: 'custom' }));
+    e = withPersons(e, ['f1'], (p) => ({ ...p, values: { ...p.values, 'tone.teeth': 0.4 }, preset: 'custom' }));
+    e = editFlipView(e);
+    const spots = [{ x: 0.4, y: 0.3, r: 0.01, dx: 0.02, dy: 0, owner: 'f0' }];
+    return { ...e, photo: { ...e.photo, values: { ...e.photo.values, 'adjust.exposure': 0.7 }, look: { id: 'cinema', amount: 0.5 }, spots } };
+  };
+  /** the params 0.4 writes beside it (paramsPatch) */
+  const projected = (e: EditState) => sanitizeParams(legacyProjection(e, 'f0'));
+  /** the stored record, read back as the editor reads it (normalizeEntry, then openState) */
+  const record = (edit: EditState, params: unknown, paramsKey: string) => ({ ...v1(), schema: 2, edit, params, paramsKey, detect: makeCache() });
+  const asWritten = (edit: EditState) => reopen(record(edit, projected(edit), stableKey(projected(edit))));
+
+  for (const [build, ids] of [
+    ['steps 2–3 (38 params, this build 44)', IDS_STEP3],
+    ['0.4 step 1 (26 params)', IDS_03],
+  ] as const) {
+    it(`an entry saved by ${build} opens with its v2 edit: params a later build adds never count as a 0.3 edit`, () => {
+      const edit = rich();
+      const old = storedBy(projected(edit), ids);
+      const o = reopen(record(edit, old, stableKey(old)));
+      expect(o.edit).toEqual(asWritten(edit).edit);
+      expect(o.edit.photo.geometry.flipH).toBe(true);
+      expect(o.edit.photo.spots).toHaveLength(1);
+      expect(o.edit.photo.look).toEqual({ id: 'cinema', amount: 0.5 });
+      expect(o.edit.persons.f0.values['tone.even']).toBe(0.6);
+    });
+  }
+  it('nor does anything else the sanitizer re-derives on read (a stored preset id its values no longer match)', () => {
+    const edit = rich();
+    // what a later build that retunes a preset does to every params stored with that preset's id
+    const stale = { ...projected(edit), presetId: 'glow' as const, presetAmount: 1 };
+    expect(sanitizeParams(stale).presetId).toBe('custom');
+    expect(reopen(record(edit, stale, stableKey(stale))).edit).toEqual(asWritten(edit).edit);
+  });
+  it('params that are not an object were not written by 0.3 (it always writes one): the v2 edit opens', () => {
+    const edit = rich();
+    expect(reopen(record(edit, 'garbage', stableKey(projected(edit)))).edit).toEqual(asWritten(edit).edit);
+  });
+  it('0.3 rewrote params: still detected; what it stored wins for the photo and the primary, what it cannot write keeps the v2 state', () => {
+    const edit = rich();
+    const key = stableKey(projected(edit));
+    // 0.3's updateEntry spreads the record: a new params with its own 26 ids, the 0.4 key left behind
+    const by03 = storedBy(setParam(setParam(projected(edit), 'skin.whiten', 0.9), 'shape.eyeEnlarge', 0.3), IDS_03);
+    const o = reopen(record(edit, by03, key));
+    expect(o.edit.photo.values['skin.whiten']).toBe(0.9);
+    expect(o.edit.persons.f0.values['shape.eyeEnlarge']).toBe(0.3);
+    // sanitizeParams fills these with defaults (0.5, 0): 0.3 never wrote them, so the v2 values stand
+    expect(o.edit.photo.values['adjust.exposure']).toBe(0.7);
+    expect(o.edit.persons.f0.values['tone.even']).toBe(0.6);
+    expect(o.edit.persons.f1).toEqual(edit.persons.f1);
+    // and so does what params cannot carry at all (splitLegacy's identity, none and null)
+    expect(o.edit.photo.geometry).toEqual(edit.photo.geometry);
+    expect(o.edit.photo.spots).toEqual(edit.photo.spots);
+    expect(o.edit.photo.look).toEqual({ id: 'cinema', amount: 0.5 });
+    // a preset 0.3 picked stands only while the merged values still are that preset
+    const refined = storedBy(applyPreset('refined', 1, projected(edit)), IDS_03);
+    const r = reopen(record(edit, refined, key));
+    expect(r.edit.photo.presetLink).toEqual({ id: 'refined', amount: 1 });
+    expect(r.edit.persons.f0.values['shape.faceV']).toBe(0.3);
+    expect(r.edit.persons.f0.values['tone.even']).toBe(0.6);
+    expect(r.edit.persons.f0.preset).toBe('custom');
+    const plain = withPersons(edit, ['f0'], (p) => ({ ...p, values: { ...p.values, 'tone.even': 0 } }));
+    const back = reopen(record(plain, storedBy(applyPreset('refined', 1, projected(plain)), IDS_03), stableKey(projected(plain))));
+    expect(back.edit.persons.f0.preset).toEqual({ id: 'refined', amount: 1 });
   });
 });
 

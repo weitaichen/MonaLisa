@@ -7,8 +7,9 @@
 // every op resolves to a harmless fallback (no-op / empty list / undefined) instead of rejecting.
 import { normalizeDetect, normalizeMask } from '../detect/cache';
 import { isEditStateRecord, sanitizeEditState } from '../edit/state';
-import { sanitizeParams } from '../engine/params';
-import type { BodyDetection, HistoryEntry, PersonMask } from '../types';
+import { PARAM_DEFS, sanitizeParams } from '../engine/params';
+import type { BodyDetection, HistoryEntry, ParamId, PersonMask } from '../types';
+import { stableKey } from './undo';
 
 export const HISTORY_LIMIT = 12;
 
@@ -211,7 +212,11 @@ export function normalizeEntry(raw: unknown): HistoryEntry | null {
   // persons unfiltered here: openState filters them against the cache (or keeps them all for a rematch); the geometry is
   // validated against the entry's own size (step-3 spec D13), or every read would reset a saved crop to identity
   if (isEditStateRecord(r.edit)) entry.edit = sanitizeEditState(r.edit, null, { width, height });
-  if (typeof r.paramsKey === 'string') entry.paramsKey = r.paramsKey;
+  if (typeof r.paramsKey === 'string') {
+    entry.paramsKey = r.paramsKey;
+    const ids = legacyEditOf(r.params, r.paramsKey);
+    if (ids) entry.legacyEdited = ids;
+  }
   const d = normalizeDetect(r.detect);
   if (d.cache) entry.detect = d.cache;
   if (d.stale) entry.staleBoxes = d.stale;
@@ -223,6 +228,21 @@ export function normalizeEntry(raw: unknown): HistoryEntry | null {
     entry.sourceHeight = r.sourceHeight;
   }
   return entry;
+}
+
+/**
+ * The rollback check (S §5.3): 0.4 writes `paramsKey = stableKey(params)` with every params write and 0.3 does not, so
+ * stored params that no longer give that key were rewritten by 0.3. The key is checked against the params as stored,
+ * never against sanitizeParams' output: that fills in every param added since the write (steps 2 and 4 added 18, step 5
+ * adds more) and re-derives the preset id, so an entry saved by any earlier build would read as a 0.3 edit and lose its
+ * v2 edit. A non-object is no 0.3 write (0.3 always writes a whole params object). Returns the param ids the stored
+ * values hold (what 0.3 can have changed), or undefined when 0.3 did not edit the entry.
+ */
+function legacyEditOf(raw: unknown, key: string): ParamId[] | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || stableKey(raw) === key) return undefined;
+  const values = (raw as { values?: unknown }).values;
+  const v = values && typeof values === 'object' ? (values as Record<string, unknown>) : {};
+  return PARAM_DEFS.filter((d) => isFiniteNumber(v[d.id])).map((d) => d.id);
 }
 
 /** Untrusted stored 美體 detection → a valid one, or null when anything is off. */

@@ -516,7 +516,7 @@ The total is about 2.3 MB. C budgeted 1.6 MB for R and S, so step 4 adds 0.7 MB 
   - keeps the first 100 (C §5.3);
   - drops every spot when `sanitizeEditState` gets no `oSize` (the camera look, C §3.2), so `CameraLook.photo.spots` is always `[]`.
 - **Dedupe key:** `editKey` (C §3.4) includes the spot values (at most 100 × 6 numbers).
-- **Rollback:** `legacyProjection` drops the tone values and the spots, so 0.3 opens a 0.4 entry without them (C §5.1 rollback note).
+- **Rollback:** `legacyProjection` drops the tone values and the spots, so 0.3 opens a 0.4 entry without them (C §5.1 rollback note). An entry 0.3 then edits keeps both on the way back to 0.4: 0.3 stores no `tone.*` value and no spot, so `mergeLegacy` leaves them as the v2 edit has them (step-1 spec §5.3, v0.4 step 4 follow-up).
 - **Re-detection** with remapped persons (C §5.2, last rows): `owner` is remapped through the same person map; an unmatched owner becomes null. Spot positions never change, because they are in O.
 - **Nothing GPU-side is persisted.** The tone field is rebuilt on open (≤ 2 ms).
 - **Size:** ≤ 100 spots × about 70 B ≈ 7 KB per entry, well inside C's 512 KB edit budget.

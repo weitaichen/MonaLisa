@@ -6,9 +6,9 @@ import { cacheBody, makeCache } from '../detect/testCaches';
 import { editFromLegacy, legacyProjection } from '../edit/legacy';
 import { openState } from '../edit/migrate';
 import { assignPersons, defaultPhoto, naturalPerson, neutralPerson, renamePersons } from '../edit/state';
-import { applyPreset, defaultParams, sanitizeParams, setParam } from '../engine/params';
+import { applyPreset, defaultParams, PARAM_DEFS, sanitizeParams, setParam } from '../engine/params';
 import { cropConstrain } from '../geometry/view';
-import type { BodyDetection, DetectionCache, EditState, HistoryEntry } from '../types';
+import type { BeautyParams, BodyDetection, DetectionCache, EditState, HistoryEntry } from '../types';
 import {
   addEntry,
   closeHistory,
@@ -897,5 +897,46 @@ describe('step 4: a v2 entry keeps spots and tone values (§5)', () => {
       },
     ]);
     expect((await getEntry('spots'))?.edit?.photo.spots).toEqual([good]);
+  });
+});
+
+describe('the rollback check reads the stored params, never the sanitized ones (S §5.3)', () => {
+  const edit = () => editFromLegacy(applyPreset('glow', 1));
+  const now = () => sanitizeParams(legacyProjection(edit(), 'p0'));
+  /** what a build without the six 膚質 params (steps 2–3) wrote: its sanitizeParams kept only its own ids */
+  const older = (): BeautyParams => {
+    const p = now();
+    return { ...p, values: Object.fromEntries(Object.entries(p.values).filter(([id]) => !id.startsWith('tone.'))) as BeautyParams['values'] };
+  };
+  const rawGet = async (id: string): Promise<Record<string, unknown>> => {
+    const db = await rawDb();
+    const r = (await req(db.transaction(STORE_NAME).objectStore(STORE_NAME).get(id))) as Record<string, unknown>;
+    db.close();
+    return r;
+  };
+
+  it('an entry saved by a build with 6 params fewer reads back as 0.4 wrote it; a 0.3 rewrite of its params is flagged', async () => {
+    const p = older();
+    const id = await addEntry({ ...entry('older'), schema: 2, edit: edit(), params: p, paramsKey: stableKey(p) });
+    const got = (await getEntry(id))!;
+    // sanitizeParams filled in the six ids, which is why the key is never checked against got.params
+    expect(Object.keys(got.params.values)).toHaveLength(PARAM_DEFS.length);
+    expect(stableKey(got.params)).not.toBe(got.paramsKey);
+    expect(got.legacyEdited).toBeUndefined();
+    expect((await listEntries())[0].legacyEdited).toBeUndefined();
+    // 0.3's updateEntry: its own params, the key left behind (0.4's updateEntry spreads the record the same way)
+    const by03 = { ...p, values: { ...p.values, 'skin.whiten': 0.9 } };
+    await updateEntry(id, { params: by03 });
+    expect((await getEntry(id))!.legacyEdited).toEqual(Object.keys(p.values).filter((k) => PARAM_DEFS.some((d) => d.id === k)));
+  });
+  it('legacyEdited is read side only: the ids with a usable stored value, never written back', async () => {
+    const values = { ...now().values, 'skin.whiten': Number.NaN, 'some.future': 0.4 };
+    const e = normalizeEntry({ ...validRecord('r', 1), schema: 2, edit: edit(), params: { ...now(), values }, paramsKey: 'k' })!;
+    expect(e.legacyEdited).toEqual(PARAM_DEFS.map((d) => d.id).filter((id) => id !== 'skin.whiten'));
+    const id = await addEntry(e);
+    await updateEntry(id, { thumb: jpeg('t2') });
+    expect(await rawGet(id)).not.toHaveProperty('legacyEdited');
+    // without a key (v1, or a v2 written before paramsKey) nothing is checked
+    expect(normalizeEntry({ ...validRecord('v1', 1), params: setParam(defaultParams(), 'skin.whiten', 0.9) })!.legacyEdited).toBeUndefined();
   });
 });

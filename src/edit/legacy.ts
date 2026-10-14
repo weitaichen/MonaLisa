@@ -3,8 +3,8 @@
 // entries with the primary person's look. New code never takes BeautyParams.
 import { neutralValue, paramsInGroup } from '../engine/params';
 import { IDENTITY_GEOMETRY } from '../geometry/view';
-import type { BeautyParams, EditState, ParamId, PersonId, PersonParamId, PersonParams, PhotoParamId, PhotoParams } from '../types';
-import { neutralPerson, P0, PERSON_IDS, PHOTO_IDS } from './state';
+import type { BeautyParams, EditState, HeightBand, ParamId, PersonId, PersonParamId, PersonParams, PhotoParamId, PhotoParams } from '../types';
+import { matchesPersonPreset, matchesPhotoLink, neutralPerson, P0, PERSON_IDS, PHOTO_IDS } from './state';
 
 export function splitLegacy(p: BeautyParams): { photo: PhotoParams; person: PersonParams } {
   const ref = p.presetId === 'custom' ? null : { id: p.presetId, amount: p.presetAmount };
@@ -46,4 +46,40 @@ export function legacyProjection(edit: EditState, primary: PersonId): BeautyPara
 export function editFromLegacy(p: BeautyParams, opts: { primaryInit?: boolean } = {}): EditState {
   const { photo, person } = splitLegacy(p);
   return { v: 2, photo, persons: { [P0]: person }, template: neutralPerson(), primaryInit: opts.primaryInit ? person : null };
+}
+
+/** two 增高 bands are the same band (null = none) */
+const sameBand = (a: HeightBand | null, b: HeightBand | null) => a === b || (!!a && !!b && a.top === b.top && a.bottom === b.bottom && a.amount === b.amount);
+
+/**
+ * A v2 edit that 0.3 edited after a rollback (S §5.3): 0.3's `params` win for the photo and for `primary` (the person
+ * they were projected from) in what 0.3 can write: the values of `stored` (the param ids the stored record holds a
+ * value for: normalizeEntry's legacyEdited), the filter, the preset and its link, 背景保護, the 增高 band and the lip /
+ * blush shades. Everything else stays as the v2 edit has it, since 0.3 can neither show nor change it: the values it did
+ * not store (調節, 膚質, any param a later build adds; sanitizeParams fills those with defaults), 質感, the geometry, the
+ * spots, the 長腿 anchor and every other person. A preset or link the merged values no longer match becomes 'custom' /
+ * null. 0.3 draws the band in O rows and 0.4 keeps it in E rows (C §3.5), which differ under a quarter turn: a band
+ * 0.3 changed there is dropped, as 旋轉 drops it.
+ */
+export function mergeLegacy(edit: EditState, p: BeautyParams, primary: PersonId, stored: readonly ParamId[]): EditState {
+  const has = new Set<ParamId>(stored);
+  const split = splitLegacy(p);
+  const photoValues = { ...edit.photo.values };
+  for (const id of PHOTO_IDS) if (has.has(id)) photoValues[id] = split.photo.values[id];
+  const band = split.photo.heightBand;
+  const photo: PhotoParams = {
+    ...edit.photo,
+    values: photoValues,
+    filterId: split.photo.filterId,
+    presetLink: split.photo.presetLink,
+    bodyProtect: split.photo.bodyProtect,
+    heightBand: edit.photo.geometry.quarter !== 0 && !sameBand(band, edit.photo.heightBand) ? null : band,
+  };
+  if (photo.presetLink && !matchesPhotoLink(photo, photo.presetLink)) photo.presetLink = null;
+  const was = edit.persons[primary] ?? edit.primaryInit ?? edit.template;
+  const values = { ...was.values };
+  for (const id of PERSON_IDS) if (has.has(id)) values[id] = split.person.values[id];
+  const person: PersonParams = { ...was, values, shades: { ...was.shades, ...split.person.shades }, preset: split.person.preset };
+  if (person.preset !== 'custom' && !matchesPersonPreset(person, person.preset)) person.preset = 'custom';
+  return { ...edit, photo, persons: { ...edit.persons, [primary]: person } };
 }

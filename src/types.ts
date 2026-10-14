@@ -681,7 +681,11 @@ export interface HistoryEntry {
   schema?: 2;
   /** v2 edit (RM §3.2) */
   edit?: EditState;
-  /** v2: stableKey(params) as written by 0.4; a mismatch means 0.3 edited `params` after a rollback (S §5.3) */
+  /**
+   * v2: stableKey(params) as written by 0.4; a mismatch with the stored `params` means 0.3 edited them after a rollback
+   * (S §5.3). Checked against the record as stored (normalizeEntry → legacyEdited), never against the sanitized `params`
+   * (they gain every param a later build adds).
+   */
   paramsKey?: string;
   /** v2 detection cache; written as soon as detection runs (no updatedAt bump) */
   detect?: DetectionCache;
@@ -689,6 +693,11 @@ export interface HistoryEntry {
   staleBoxes?: Record<PersonId, Rect>;
   /** read side only: normalization dropped persons from the cache (the cache-dropped toast) */
   detectLost?: boolean;
+  /**
+   * read side only: the stored `params` are not what 0.4 wrote with `paramsKey` (0.3 edited the entry after a rollback);
+   * the param ids they store a value for, the only values openState takes from them (S §5.3)
+   */
+  legacyEdited?: readonly ParamId[];
 }
 
 // ───────────────────────── Debug ─────────────────────────

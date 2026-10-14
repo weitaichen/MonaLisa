@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { applyPreset, BLUSH_SHADES, defaultParams, FILTERS, LIP_SHADES, neutralValue, PARAM_DEFS, paramsInGroup, PRESETS, sanitizeParams } from '../engine/params';
 import type { BeautyParams } from '../types';
-import { editFromLegacy, legacyProjection, splitLegacy } from './legacy';
-import { defaultPhoto, neutralPerson } from './state';
+import { editFromLegacy, legacyProjection, mergeLegacy, splitLegacy } from './legacy';
+import { defaultPhoto, editRotateLeft, neutralPerson } from './state';
 
 /** presetAmount is dead data while custom (setPresetAmount ignores it, a preset tap overwrites it) */
 const canon = (p: BeautyParams): BeautyParams => (p.presetId === 'custom' ? { ...p, presetAmount: 1 } : p);
@@ -81,5 +81,40 @@ describe('step 4: the legacy projection drops tone values and spots (§5 rollbac
     const legacy = legacyProjection(e, 'f0');
     for (const d of paramsInGroup('tone')) expect(legacy.values[d.id], d.id).toBe(neutralValue(d));
     expect('spots' in legacy).toBe(false);
+  });
+});
+
+describe('mergeLegacy: 0.3 edited a v2 entry after a rollback (S §5.3)', () => {
+  it('takes only what the stored record holds; a link or preset the merged values no longer match is dropped', () => {
+    const e0 = editFromLegacy(applyPreset('glow', 1));
+    const e = { ...e0, photo: { ...e0.photo, values: { ...e0.photo.values, 'adjust.tint': 0.8 }, legsAnchor: 'p0' } };
+    // 0.3 picked 精緻, but its record holds no readable 美白: the v2 value stays, so the 精緻 link no longer holds
+    const stored = PARAM_DEFS.map((d) => d.id).filter((id) => id !== 'skin.whiten' && !id.startsWith('adjust.') && !id.startsWith('tone.'));
+    const refined = applyPreset('refined', 1);
+    const m = mergeLegacy(e, refined, 'p0', stored);
+    expect(m.photo.values['skin.whiten']).toBe(e.photo.values['skin.whiten']);
+    expect(m.photo.values['skin.sharpen']).toBe(refined.values['skin.sharpen']);
+    expect(m.photo.values['adjust.tint']).toBe(0.8);
+    expect(m.photo.filterId).toBe('soft');
+    expect(m.photo.presetLink).toBeNull();
+    expect(m.photo.legsAnchor).toBe('p0');
+    expect(m.persons.p0).toEqual(splitLegacy(refined).person);
+    // a 膚質 value 0.3 cannot see stays, so the person is no longer 精緻 (the no-cache paths open this unsanitized)
+    const toned = { ...e, persons: { p0: { ...e.persons.p0, values: { ...e.persons.p0.values, 'tone.even': 0.6 } } } };
+    const t = mergeLegacy(toned, refined, 'p0', stored);
+    expect(t.persons.p0.values['tone.even']).toBe(0.6);
+    expect(t.persons.p0.preset).toBe('custom');
+  });
+  it('the 增高 band: 0.3 draws it in O rows, so one it changed under a quarter turn is dropped; an unchanged one stays', () => {
+    const all = PARAM_DEFS.map((d) => d.id);
+    const band = { top: 0.5, bottom: 0.8, amount: 0.4 };
+    const moved = { top: 0.2, bottom: 0.4, amount: 0.4 };
+    const e = editFromLegacy({ ...defaultParams(), heightBand: band });
+    const by03 = (b: typeof band) => ({ ...legacyProjection(e, 'p0'), heightBand: b });
+    expect(mergeLegacy(e, by03(moved), 'p0', all).photo.heightBand).toEqual(moved);
+    const turned = { ...editRotateLeft(e), photo: { ...editRotateLeft(e).photo, heightBand: band } };
+    expect(mergeLegacy(turned, by03(band), 'p0', all).photo.heightBand).toEqual(band);
+    expect(mergeLegacy(turned, by03(moved), 'p0', all).photo.heightBand).toBeNull();
+    expect(mergeLegacy(turned, by03(moved), 'p0', all).photo.geometry).toEqual(turned.photo.geometry);
   });
 });

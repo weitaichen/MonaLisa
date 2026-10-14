@@ -3480,7 +3480,7 @@ The CPU half of the makeup pass (S5 §4.6–4.9): for every listed face, the str
   - `class StripWriter` (exported for its unit test)
   - `lashHeight(x: number): number`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/engine/passes/makeupProc.test.ts`:
 
@@ -3682,12 +3682,12 @@ describe('buildMakeupGeometry (face-detail spec §4.6–4.9)', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run src/engine/passes/makeupProc.test.ts`
 Expected: FAIL — `Failed to resolve import "./makeupProc"`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/engine/passes/makeupProc.ts`:
 
@@ -4190,12 +4190,12 @@ export function buildMakeupGeometry(faces: readonly RenderFace[], aspect: number
 }
 ```
 
-- [ ] **Step 4: Run the test**
+- [x] **Step 4: Run the test**
 
 Run: `npx vitest run src/engine/passes/makeupProc.test.ts && npm run typecheck`
 Expected: PASS (9 tests); no type errors. (Measured on the fixture: 668 vertices per face with every part on, about 0.1–0.2 ms per face.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/engine/passes/makeupProc.ts src/engine/passes/makeupProc.test.ts

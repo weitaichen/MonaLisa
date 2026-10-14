@@ -285,7 +285,6 @@ button:focus-visible {
   background: var(--bg);
   position: relative;
   z-index: 2;
-  overflow: hidden;
   display: grid;
   grid-template-rows: 1fr;
   /* without minmax(0,…) the column grows to the strip's max-content width */
@@ -295,9 +294,11 @@ button:focus-visible {
 .panel.collapsed {
   grid-template-rows: 0fr;
 }
+/* the collapse clips here, not on .panel: the 美膚 .skin-note (positioned against .panel) rises above the panel's top */
 .panel-inner {
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .strip {
@@ -595,6 +596,23 @@ button:focus-visible {
 }
 .body-note-action:active {
   background: var(--panel);
+}
+/* 美膚: a tone item's note (skin-cleanup spec §2.2), above the strip and outside the scroller, in the 24 px band between
+   the docked slider's thumb and the tiles: neither the canvas nor the strip moves when it shows */
+.skin-note {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: -8px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 13px;
+  color: var(--text-2);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
 }
 
 /* ───────────── 增高 band (HeightBandOverlay) ───────────── */

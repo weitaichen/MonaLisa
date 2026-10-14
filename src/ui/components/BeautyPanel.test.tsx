@@ -10,7 +10,8 @@ import { defaultPhoto, naturalPerson, neutralPerson } from '../../edit/state';
 import { IDENTITY_GEOMETRY, rotateLeft, type CropLock } from '../../geometry/view';
 import type { EditState, Geometry, LookId, PhotoParams, Size } from '../../types';
 import type { CropAction } from '../cropPanel';
-import { INITIAL_SELECTION, type PanelSelection } from '../panelModel';
+import { TONE_COPY } from '../../edit/toneCopy';
+import { CAMERA_BODY, INITIAL_SELECTION, type BodyContext, type PanelSelection, type SkinPanelContext } from '../panelModel';
 
 // haptic() is a no-op in node (no HTMLInputElement): spy on it to see which taps buzz
 vi.mock('../platform', async (orig) => ({ ...(await orig<typeof import('../platform')>()), haptic: vi.fn() }));
@@ -162,6 +163,9 @@ function mount(
     faceNote?: string | null;
     lookFailed?: (id: LookId) => boolean;
     crop?: { geometry: Geometry; lock: CropLock; oSize: Size; onAction(a: CropAction): void };
+    skin?: SkinPanelContext;
+    body?: BodyContext;
+    collapsed?: boolean;
   } = {},
 ): Mounted {
   const root = new FakeElement('div');
@@ -394,5 +398,47 @@ describe('裁切 (v0.4 step 3, S §2.1)', () => {
     const dot = (g: Geometry) => !!tabs(mount(lensOf(editOf()), sel({}), { crop: cropOf(g) }).root).at(-1)!.find('tab-dot');
     expect(dot(IDENTITY_GEOMETRY)).toBe(false);
     expect(dot(rotateLeft(IDENTITY_GEOMETRY))).toBe(true);
+  });
+});
+
+describe('美膚 tone notes (skin-cleanup spec §2.2): above the strip, outside the scroller', () => {
+  const skin = (extra: Partial<SkinPanelContext> = {}): SkinPanelContext => ({ answer: 'faces', mouthClosed: false, eyesClosed: false, ...extra });
+  const toneSel = (id: string) => sel({ tab: 'skin', skin: id as PanelSelection['skin'] });
+  /** the .panel-inner children, in order: ¶ for the tone note, ▤ for the strip, ▭ for the tab row */
+  const layout = (root: FakeElement): string[] =>
+    root.find('panel-inner')!.elements.map((e) => (e.classes.includes('skin-note') ? '¶' : e.attrs.role === 'listbox' ? '▤' : e.classes.includes('tabs') ? '▭' : e.localName));
+
+  it('白牙 with the mouth closed, 亮眼 with the eyes closed, a disabled selection: the note precedes the strip, never in it', () => {
+    const cases: [string, SkinPanelContext, string][] = [
+      ['tone.teeth', skin({ mouthClosed: true }), TONE_COPY.mouthClosed],
+      ['tone.eyeBright', skin({ eyesClosed: true }), TONE_COPY.eyesClosed],
+      ['tone.even', skin({ answer: 'basic' }), TONE_COPY.basic],
+    ];
+    for (const [id, ctx, text] of cases) {
+      const m = mount(lensOf(editOf()), toneSel(id), { skin: ctx });
+      expect(layout(m.root), id).toEqual(['¶', '▤', '▭']);
+      const note = m.root.find('skin-note')!;
+      expect(note.text, id).toBe(text);
+      expect(note.attrs.role).toBe('status');
+      // the strip is exactly as without a note: nothing is inserted ahead of the tiles, so they do not shift
+      expect(m.strip.find('skin-note'), id).toBeUndefined();
+      expect(m.strip.find('strip-note'), id).toBeUndefined();
+      expect(sequence(m.strip), id).toEqual(sequence(mount(lensOf(editOf()), toneSel(id), { skin: skin() }).strip));
+    }
+  });
+
+  it('no note: 白牙 with an open mouth, 磨皮, the camera (no skin context), a collapsed panel', () => {
+    const none = (s: PanelSelection, extra: Parameters<typeof mount>[2]) => mount(lensOf(editOf()), s, extra).root.find('skin-note');
+    expect(none(toneSel('tone.teeth'), { skin: skin() })).toBeUndefined();
+    expect(none(toneSel('skin.smooth'), { skin: skin({ answer: 'basic', mouthClosed: true }) })).toBeUndefined();
+    expect(none(toneSel('tone.teeth'), {})).toBeUndefined();
+    expect(none(toneSel('tone.teeth'), { skin: skin({ mouthClosed: true }), collapsed: true })).toBeUndefined();
+  });
+
+  it('美體 keeps its note at the head of the strip', () => {
+    const m = mount(lensOf(editOf()), sel({ tab: 'body' }), { body: CAMERA_BODY });
+    expect(layout(m.root)).toEqual(['▤', '▭']);
+    expect(sequence(m.strip)[0]).toBe('¶');
+    expect(m.strip.find('body-note')).toBeDefined();
   });
 });

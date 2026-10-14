@@ -98,8 +98,11 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
   const offText = faceNote ?? (pNote?.dim ? pNote.text : null);
   const faceOff = !!offText && FACE_TABS.includes(sel.tab);
   const infoNote = !faceOff && pNote && !pNote.dim ? pNote.text : null;
-  // 美膚: a tone item's note (why it is off, or the closed-mouth / closed-eye hint; skin-cleanup spec §2.2)
-  const note = sel.tab === 'body' ? bodyNoteFor(body, lens, sel) : sel.tab === 'skin' ? skinNote(lens, sel, skin) : null;
+  // 美體's note leads the strip (its items are few). 美膚's tone note (why the item is off, or the closed-mouth /
+  // closed-eye hint; skin-cleanup spec §2.2) sits above the strip, outside the scroller: the tone items close a long
+  // strip, so a note at its head would be off-screen and would push the tapped tile out from under the finger
+  const note = sel.tab === 'body' ? bodyNoteFor(body, lens, sel) : null;
+  const toneNote = collapsed ? null : skinNote(lens, sel, skin);
   const bodyOff = body?.status === 'unsupported';
 
   const tapItem = (item: PanelItem) => {
@@ -131,6 +134,11 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
   return (
     <div id={id} class={`panel${collapsed ? ' collapsed' : ''}`} aria-hidden={collapsed ? 'true' : undefined} inert={collapsed}>
       <div class="panel-inner">
+        {toneNote && (
+          <p class="skin-note" role="status" aria-live="polite">
+            {toneNote.text}
+          </p>
+        )}
         <div class={`strip${faceOff ? ' face-off' : ''}`} ref={stripRef} role="listbox" aria-label="效果">
           {faceOff && (
             <p class="strip-note" role="note" id="face-note">

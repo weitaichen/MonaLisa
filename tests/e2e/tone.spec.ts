@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Locator, Page } from '@playwright/test';
 import { PNG } from 'pngjs';
-import { debugState, dragSlider, expect, mad, selectPerson, settled, test, type Pixels, type Rect } from './fixtures';
+import { debugState, dragSlider, expect, mad, selectPerson, settled, shot, test, type Pixels, type Rect } from './fixtures';
 
 const TONE_PNG = resolve(import.meta.dirname, '../fixtures/sample_face_tone.png');
 const GROUP_PNG = resolve(import.meta.dirname, '../fixtures/group_faces.png');
@@ -168,6 +168,38 @@ test('a photo without a face disables the six sliders with the reason', async ({
   // controls → force the tap (as body.spec.ts does)
   await option(page, '勻膚').click({ force: true });
   await expect(page.getByText('未偵測到臉部，膚質工具不會套用').first()).toBeVisible();
+});
+
+test('a disabled 膚質 selection explains itself above the strip; its tile stays in view', async ({ page }) => {
+  await importPhoto(page, TONE_PNG);
+  await pick(page, '美膚', '白牙');
+  // close in the app (no reload): the next photo opens on the remembered 美膚 › 白牙, which a photo without a face disables
+  await page.getByRole('button', { name: '關閉' }).click();
+  await expect.poll(async () => (await debugState(page)).screen).toBe('home');
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: /匯入照片/ }).click();
+  await (await chooser).setFiles({ name: 'noface.png', mimeType: 'image/png', buffer: noFaceDotPng() });
+  await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 90_000 });
+  const teeth = option(page, '白牙');
+  // the strip opens on it while the photo is analysed (no answer yet: enabled, selected, scrolled into view); then the
+  // no-face answer dims it (a gated tile drops its selected look) and the note appears
+  await expect(teeth).toHaveAttribute('aria-disabled', 'true');
+  // the note is not in the scroller: at the head of the long 美膚 strip it would sit off-screen and push the tiles along
+  const note = page.locator('.skin-note');
+  await expect(note).toHaveText('未偵測到臉部，膚質工具不會套用');
+  await expect(page.locator('.strip .skin-note, .strip .body-note')).toHaveCount(0);
+  const width = page.viewportSize()!.width;
+  const n = (await note.boundingBox())!;
+  const tile = (await teeth.locator('.item-tile').boundingBox())!;
+  const dock = (await page.locator('.editor-panel').boundingBox())!;
+  for (const [name, b] of [['note', n], ['白牙', tile]] as const) {
+    expect(b.x, name).toBeGreaterThanOrEqual(0);
+    expect(b.x + b.width, name).toBeLessThanOrEqual(width);
+  }
+  // in the docked panel (not over the photo), above the tiles
+  expect(n.y).toBeGreaterThanOrEqual(dock.y);
+  expect(n.y + n.height).toBeLessThanOrEqual(tile.y);
+  await shot(page, 'tone-disabled-note');
 });
 
 test('the camera offers none of the 膚質 tools', async ({ page }) => {

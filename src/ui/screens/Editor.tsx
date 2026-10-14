@@ -25,6 +25,7 @@ import { measureBody, paramAvailability } from '../../body/measure';
 import { bodyBox, personInfos } from '../../detect/cache';
 import { hitPerson } from '../../detect/persons';
 import { sanitizeParams } from '../../engine/params';
+import { earOf, mouthOpen } from '../../engine/passes/toneGeometry';
 import { abortable } from '../../media/exportFull';
 import { EXPORT_COPY, NO_SOURCE, planExport, sourceSizeRecord, type ExportPlan, type SourceInfo } from '../../media/exportPlan';
 import { takePersonsHint } from '../../store/settings';
@@ -90,6 +91,7 @@ import { Icon } from '../icons';
 import {
   bandOrSuggested,
   bandTouchToast,
+  faceAnswer,
   INITIAL_SELECTION,
   personNumber,
   photoScoped,
@@ -99,6 +101,7 @@ import {
   sliderEmptyText,
   sliderFor,
   type PanelSelection,
+  type SkinPanelContext,
   type SliderBinding,
 } from '../panelModel';
 import { haptic } from '../platform';
@@ -1405,7 +1408,17 @@ export function Editor({ source }: { source: EditorSource }) {
     legsAnchor: detect ? legsAnchorOf(edit, detect, measures) : null,
   };
   const lens = lensOf(edit);
-  const binding = sliderFor(lens, sel, bodyCtx);
+  // 膚質 (skin-cleanup spec §1.2, §2.2): the photo's face answer; the closed-mouth / closed-eye notes of the target faces
+  const personOfFace = new Map((detect?.persons ?? []).filter((p) => p.face).map((p) => [p.face as string, p.id]));
+  const toneTargets = (session?.faces ?? []).filter((f) => selected.kind === 'all' || personOfFace.get(f.id) === selected.id).map((f) => f.face);
+  const skinCtx: SkinPanelContext = {
+    // no answer yet while analysing (session null): no disabled flash, as the face note below (the slider row and the
+    // canvas input are off until the session exists anyway)
+    answer: session ? faceAnswer({ hasFaces: session.faces.length > 0, basic: !!bundle?.basic, unsure: !!bound?.unsure, tracker: trackerHealth }) : 'faces',
+    mouthClosed: toneTargets.length > 0 && toneTargets.every((f) => mouthOpen(f, bodyAspect) < 0.01),
+    eyesClosed: toneTargets.length > 0 && toneTargets.every((f) => earOf(f, 'L', bodyAspect) < 0.12 && earOf(f, 'R', bodyAspect) < 0.12),
+  };
+  const binding = sliderFor(lens, sel, bodyCtx, skinCtx);
 
   // ── persons UI (S §2): photo taps, the strip, the face boxes ──
   /** 調節 and 一鍵 › 質感 act on the whole photo, like 濾鏡: no face boxes, no photo taps (step-2 spec §2.1–2.2) */
@@ -1621,6 +1634,7 @@ export function Editor({ source }: { source: EditorSource }) {
           onEdit={(e) => update(e, true)}
           faceNote={faceNote}
           body={bodyCtx}
+          skin={skinCtx}
           photoTouched={touchedPhoto.current}
           lookFailed={(id) => bundle?.engine.lutState('look', id) === 'failed'}
           onRetryLook={retryLook}

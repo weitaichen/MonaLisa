@@ -165,7 +165,13 @@ test('no face in the photo: 美型 / 美妝 are dimmed with a note and no slider
 
   await tab('美膚').click();
   await expect(note).toHaveCount(0);
-  for (const o of await options.all()) await expect(o).not.toHaveAttribute('aria-disabled', 'true');
+  // the 美膚 group stays available; the six 膚質 sliders need a face (v0.4 step 4, skin-cleanup spec §1.2)
+  const tone = ['勻膚', '膚色', '黑眼圈', '法令紋', '白牙', '亮眼'];
+  for (const o of await options.all()) {
+    const label = (await o.locator('.item-label').textContent()) ?? '';
+    if (tone.includes(label)) await expect(o, label).toHaveAttribute('aria-disabled', 'true');
+    else await expect(o, label).not.toHaveAttribute('aria-disabled', 'true');
+  }
   await expect(page.getByRole('slider')).toHaveCount(1);
 });
 

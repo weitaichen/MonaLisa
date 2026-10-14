@@ -3,6 +3,7 @@ import { BLUSH_SHADES, FILTERS, hasValue, LIP_SHADES, MAKEUP_PICK_DEFAULT, neutr
 import { lookDef, LOOKS, lookThumbUrl } from '../engine/looks';
 import { NO_BODY_NOTE, NO_FACE_NOTE, type Lens } from '../edit/lens';
 import { adjustIsNeutral, personOf } from '../edit/state';
+import { TONE_COPY } from '../edit/toneCopy';
 import type { CropLock } from '../geometry/view';
 import type { AdjustId, EditState, HeightBand, LookId, ParamDef, ParamId, PersonId, PersonParamId, PhotoParams, PresetId, RegionStatus } from '../types';
 import type { CropAction } from './cropPanel';
@@ -421,6 +422,95 @@ function bodyItems(lens: Lens, sel: PanelSelection, body: BodyContext | undefine
   ];
 }
 
+// ───────────── 膚質 (skin-cleanup spec §2.1–2.4, §3.6) ─────────────
+
+/** the photo's face answer, in the order of the editor's notes (Editor.tsx faceNote) */
+export type FaceAnswer = 'faces' | 'noFace' | 'basic' | 'recovering' | 'paused' | 'failed';
+export interface SkinPanelContext {
+  answer: FaceAnswer;
+  /** 白牙: every target face's mouth is closed (mouthOpen < 0.01) */
+  mouthClosed: boolean;
+  /** 亮眼: every target face has both eyes closed (EAR < 0.12) */
+  eyesClosed: boolean;
+}
+/** 膚色's end captions under the track */
+export const WARM_ENDS: readonly [string, string] = TONE_COPY.warmEnds;
+
+export function faceAnswer(i: { hasFaces: boolean; basic: boolean; unsure: boolean; tracker: 'ok' | 'lost' | 'failed' }): FaceAnswer {
+  if (i.hasFaces) return 'faces';
+  if (i.basic) return 'basic';
+  if (!i.unsure) return 'noFace';
+  return i.tracker === 'lost' ? 'recovering' : i.tracker === 'failed' ? 'paused' : 'failed';
+}
+
+const SKIN_OK: RegionStatus = { ok: true, reason: null };
+/**
+ * The photo-level gate of the seven tools: while the face answer is only temporarily unknown all seven are off (a tap
+ * could heal an eye the refusal rule cannot see yet); without a face or in 基本模式 the six sliders are off, 祛痘 works.
+ */
+export function skinToolGate(item: ParamId | 'spot', skin: SkinPanelContext): RegionStatus {
+  switch (skin.answer) {
+    case 'faces':
+      return SKIN_OK;
+    case 'recovering':
+      return { ok: false, reason: TONE_COPY.recovering };
+    case 'paused':
+      return { ok: false, reason: TONE_COPY.paused };
+    case 'failed':
+      return { ok: false, reason: TONE_COPY.failed };
+    case 'basic':
+      return item === 'spot' ? SKIN_OK : { ok: false, reason: TONE_COPY.basic };
+    case 'noFace':
+      return item === 'spot' ? SKIN_OK : { ok: false, reason: TONE_COPY.noFace };
+  }
+}
+
+export function isToneId(id: string): id is ParamId {
+  return id.startsWith('tone.');
+}
+
+/** the photo-level gate, then the lens (the selected person needs a face; under 全部, any face person) */
+export function toneGate(lens: Lens, id: ParamId, skin: SkinPanelContext): RegionStatus {
+  const g = skinToolGate(id, skin);
+  if (!g.ok) return g;
+  const a = lens.applies(id);
+  return a.ok ? SKIN_OK : { ok: false, reason: a.reason ?? TONE_COPY.noFace };
+}
+
+/** 勻膚 · 膚色 · 黑眼圈 · 法令紋 · 白牙 · 亮眼, after the 美膚 group, 勻膚 opening step 2's divider */
+export function toneItems(lens: Lens, sel: PanelSelection, skin: SkinPanelContext): PanelItem[] {
+  return paramsInGroup('tone').map((d, i) =>
+    gated(
+      {
+        key: d.id,
+        label: d.label,
+        visual: { kind: 'icon', icon: d.icon },
+        selected: sel.skin === d.id,
+        // step 1's item dot: the selected person's value, under 全部 any applicable person's (S1 §2.4 Dots)
+        hasValue: itemDot(lens, d),
+        action: { type: 'param', id: d.id },
+        ...ENABLED,
+        ...(i === 0 ? { divider: 'before' as const } : {}),
+      },
+      toneGate(lens, d.id, skin),
+    ),
+  );
+}
+
+export function toneHasValue(lens: Lens): boolean {
+  return paramsInGroup('tone').some((d) => hasValue(d, lens.get(d.id).value));
+}
+
+/** the 美膚 strip note while a tone item is selected: why it is off, or the closed-mouth / closed-eye hint */
+export function skinNote(lens: Lens, sel: PanelSelection, skin: SkinPanelContext | undefined): BodyNote | null {
+  if (sel.tab !== 'skin' || !skin || !isToneId(sel.skin)) return null;
+  const g = toneGate(lens, sel.skin, skin);
+  if (!g.ok) return { text: g.reason ?? TONE_COPY.noFace, tone: 'info' };
+  if (sel.skin === 'tone.teeth' && skin.mouthClosed) return { text: TONE_COPY.mouthClosed, tone: 'info' };
+  if (sel.skin === 'tone.eyeBright' && skin.eyesClosed) return { text: TONE_COPY.eyesClosed, tone: 'info' };
+  return null;
+}
+
 // ───────────── 調節 and 質感 (v0.4 step 2) ─────────────
 
 /** the 調節 strip splits light │ colour │ effects: dividers before 色溫 and 褪色 (step-2 spec §2.1) */
@@ -567,7 +657,8 @@ function shownPreset(lens: Lens): PresetId | 'custom' | null {
   return ref === 'custom' ? 'custom' : ref.id;
 }
 
-export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext): PanelItem[] {
+/** `skin`: the 膚質 context; only the editor passes it (the camera gets neither the six tone items nor their divider) */
+export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext, skin?: SkinPanelContext): PanelItem[] {
   const edit = lens.edit;
   switch (sel.tab) {
     case 'preset': {
@@ -606,6 +697,7 @@ export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext): P
           // personNote, as v0.3 did for a photo without a face
           return multiPerson(lens) && sel.tab === 'skin' ? gated(it, lens.applies(d.id)) : it;
         }),
+        ...(sel.tab === 'skin' && skin ? toneItems(lens, sel, skin) : []),
       ];
     case 'body':
       return bodyItems(lens, sel, body);
@@ -763,6 +855,8 @@ export interface SliderView {
   hideDefault?: boolean;
   /** absent → 0–100 / −50…+50 (拉直: −45.0°…+45.0°) */
   scale?: SliderScale;
+  /** captions under the two track ends (膚色: 冷 / 暖) */
+  ends?: readonly [string, string];
 }
 
 export interface SliderBinding extends SliderView {
@@ -800,7 +894,8 @@ function decorate(b: SliderBinding, lens: Lens, photo: boolean): SliderBinding {
   return { ...b, key: `${selKey(lens)}:${b.key}`, label: photo ? `${b.label} · ${PHOTO_SCOPE}` : b.label, aria: `${b.label}，${who}` };
 }
 
-export function sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext): SliderBinding | null {
+/** `skin`: the 膚質 context (editor only); a tone slider needs it and an open toneGate */
+export function sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext, skin?: SkinPanelContext): SliderBinding | null {
   const edit = lens.edit;
   switch (sel.tab) {
     case 'preset': {
@@ -819,8 +914,10 @@ export function sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext): 
     case 'skin':
     case 'shape': {
       const id = sel[sel.tab];
+      if (sel.tab === 'skin' && isToneId(id) && !(skin && toneGate(lens, id, skin).ok)) return null;
       if (!usable(lens, id)) return null;
-      return decorate(paramBinding(lens, id), lens, photoLike(lens, id));
+      const b = decorate(paramBinding(lens, id), lens, photoLike(lens, id));
+      return id === 'tone.warmth' ? { ...b, ends: WARM_ENDS } : b;
     }
     case 'body':
       // the tile's own gate: an item the selected person cannot use has no slider, an enabled one always has one

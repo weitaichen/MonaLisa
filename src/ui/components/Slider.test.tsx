@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { render } from 'preact';
 import { act } from 'preact/test-utils';
 import type { SliderBinding, SliderView } from '../panelModel';
-import { SliderRow } from './Slider';
+import { SliderRow, valueText } from './Slider';
 
 class FakeNode {
   childNodes: FakeNode[] = [];
@@ -215,5 +215,25 @@ describe('SliderRow with a display scale (拉直, v0.4 step 3, S §2.1)', () => 
     };
     expect(press(straighten(0.5), ['ArrowRight', 'ArrowLeft']).map((v) => Math.round((v * 90 - 45) * 10) / 10)).toEqual([0.1, -0.1]);
     expect(press(eye(), ['ArrowRight', 'ArrowDown'])).toEqual([0.21, 0.19]);
+  });
+});
+
+describe('valueText (膚色 ends, skin-cleanup spec §2.2)', () => {
+  it('names the end the value leans to', () => {
+    expect(valueText('−20', -20, ['冷', '暖'])).toBe('−20 冷');
+    expect(valueText('+15', 15, ['冷', '暖'])).toBe('+15 暖');
+    expect(valueText('0', 0, ['冷', '暖'])).toBe('0');
+    expect(valueText('35', 35)).toBe('35');
+  });
+
+  it('SliderRow with ends: two hidden captions under the track, and aria-valuetext names the end (各人不同 kept)', () => {
+    const warmth = (over: Partial<SliderBinding> = {}) => eye({ key: 'tone.warmth', param: 'tone.warmth', label: '膚色', bidirectional: true, value: 0.3, defaultValue: 0.5, ends: ['冷', '暖'], ...over });
+    const root = mount(warmth());
+    const ends = root.find('slider-ends')!;
+    expect(ends.attrs['aria-hidden']).toBe('true');
+    expect(ends.text).toBe('冷暖');
+    expect(root.all().find((e) => e.attrs.role === 'slider')?.attrs['aria-valuetext']).toBe('−20 冷');
+    expect(mount(warmth({ mixed: true })).all().find((e) => e.attrs.role === 'slider')?.attrs['aria-valuetext']).toBe('−20 冷，各人不同');
+    expect(mount(eye()).find('slider-ends')).toBeUndefined();
   });
 });

@@ -755,6 +755,19 @@ button:focus-visible {
 .slider-track.track-tint {
   background: linear-gradient(90deg, #3ecf6e, rgba(255, 255, 255, 0.22) 50%, #e04fd8);
 }
+/* 膚色: the end captions 冷 / 暖 under the two ends of the track (skin-cleanup spec §2.2) */
+.slider-ends {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(50% + 9px);
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-2);
+  pointer-events: none;
+}
 .slider-fill {
   position: absolute;
   top: 0;

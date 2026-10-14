@@ -12,7 +12,8 @@ import {
 import type { BeautyParams, EditState, ParamId, RegionStatus, Selection } from '../types';
 import { lensFor, NO_BODY_NOTE, NO_FACE_NOTE, P0_INFO, type PersonInfo } from '../edit/lens';
 import { editFromLegacy, legacyProjection } from '../edit/legacy';
-import { assignPersons, personFromPreset, withPersons } from '../edit/state';
+import { assignPersons, defaultPhoto, neutralPerson, personFromPreset, withPersons } from '../edit/state';
+import { TONE_COPY } from '../edit/toneCopy';
 import { heightBandStretch } from '../body/bands';
 import { bandEdges, bandToDisplay, defaultStretch, displayToBand, dragEdge, keyStep, MIN_GAP, moveEdge } from './components/HeightBandOverlay';
 import { hasIcon } from './icons';
@@ -30,6 +31,7 @@ import {
   CAMERA_BODY,
   DEFAULT_BAND,
   EDITOR_TABS,
+  faceAnswer,
   INITIAL_SELECTION,
   itemsFor,
   legsAnchorNote,
@@ -38,13 +40,19 @@ import {
   photoScoped,
   photoTouchToast,
   showsHeightBand,
+  skinNote,
+  skinToolGate,
   sliderEmptyText,
   sliderFor,
   tabHasValue,
   TABS,
   tapToast,
+  toneHasValue,
+  toneItems,
+  WARM_ENDS,
   type BodyContext,
   type PanelSelection,
+  type SkinPanelContext,
 } from './panelModel';
 
 const sel = (over: Partial<PanelSelection>): PanelSelection => ({ ...INITIAL_SELECTION, ...over });
@@ -710,5 +718,91 @@ describe('裁切 tab (v0.4 step 3)', () => {
     const l = lensOf(defaultParams());
     expect(photoScoped(sel({ tab: 'crop' }), l)).toBe(true);
     expect(personNote('crop', l)).toBeNull();
+  });
+});
+
+describe('step 4: 膚質 items (skin-cleanup spec §2.1, §2.2, §3.6)', () => {
+  const persons = [
+    { id: 'f0', face: true, body: false },
+    { id: 'b0', face: false, body: true },
+  ];
+  const edit = (values: Record<string, number> = {}) => ({
+    v: 2 as const,
+    photo: { ...defaultPhoto(), spots: [] },
+    persons: { f0: { ...neutralPerson(), values: { ...neutralPerson().values, ...values } }, b0: neutralPerson() },
+    template: neutralPerson(),
+    primaryInit: null,
+  });
+  const lens = (values: Record<string, number> = {}, who = 'f0') => lensFor(edit(values), { kind: 'person', id: who }, persons, 'f0');
+  const skin = (answer: SkinPanelContext['answer'] = 'faces', extra: Partial<SkinPanelContext> = {}): SkinPanelContext => ({ answer, mouthClosed: false, eyesClosed: false, ...extra });
+  const sel = (s: string) => ({ ...INITIAL_SELECTION, tab: 'skin' as const, skin: s as never });
+
+  it('six tone items in strip order, 勻膚 opening the divider, each with its own icon', () => {
+    const items = toneItems(lens(), sel('skin.smooth'), skin());
+    expect(items.map((i) => i.label)).toEqual(['勻膚', '膚色', '黑眼圈', '法令紋', '白牙', '亮眼']);
+    expect(items.map((i) => i.divider)).toEqual(['before', undefined, undefined, undefined, undefined, undefined]);
+    for (const it of items) if (it.visual.kind === 'icon') expect(hasIcon(it.visual.icon), it.visual.icon).toBe(true);
+    expect(items.every((i) => !i.disabled)).toBe(true);
+  });
+
+  it('the dot follows the selected person’s value; the tab dot lights for a tone value alone', () => {
+    expect(toneItems(lens({ 'tone.warmth': 0.62 }), sel('skin.smooth'), skin()).find((i) => i.label === '膚色')!.hasValue).toBe(true);
+    expect(toneHasValue(lens({ 'tone.teeth': 0.3 }))).toBe(true);
+    expect(toneHasValue(lens())).toBe(false);
+  });
+
+  it('disables the six with the photo-level reasons; a face-less person gets the lens reason', () => {
+    const reasons = (s: SkinPanelContext, who = 'f0') => [...new Set(toneItems(lens({}, who), sel('skin.smooth'), s).map((i) => i.reason))];
+    expect(reasons(skin('noFace'))).toEqual([TONE_COPY.noFace]);
+    expect(reasons(skin('basic'))).toEqual([TONE_COPY.basic]);
+    expect(reasons(skin('recovering'))).toEqual([TONE_COPY.recovering]);
+    expect(reasons(skin('paused'))).toEqual([TONE_COPY.paused]);
+    expect(reasons(skin('failed'))).toEqual([TONE_COPY.failed]);
+    expect(reasons(skin(), 'b0')).toEqual(['這位人物未偵測到臉部，臉部效果不適用']);
+    expect(skinToolGate('spot', skin('noFace')).ok).toBe(true);
+    expect(skinToolGate('spot', skin('basic')).ok).toBe(true);
+    expect(skinToolGate('spot', skin('paused'))).toEqual({ ok: false, reason: TONE_COPY.paused });
+  });
+
+  it('notes: 白牙 on a closed mouth, 亮眼 on closed eyes, a disabled selection explains itself', () => {
+    expect(skinNote(lens(), sel('tone.teeth'), skin('faces', { mouthClosed: true }))?.text).toBe(TONE_COPY.mouthClosed);
+    expect(skinNote(lens(), sel('tone.eyeBright'), skin('faces', { eyesClosed: true }))?.text).toBe(TONE_COPY.eyesClosed);
+    expect(skinNote(lens(), sel('tone.teeth'), skin())).toBeNull();
+    expect(skinNote(lens(), sel('tone.even'), skin('basic'))?.text).toBe(TONE_COPY.basic);
+    expect(skinNote(lens(), sel('skin.smooth'), skin('basic'))).toBeNull();
+    expect(skinNote(lens(), sel('tone.even'), undefined)).toBeNull();
+  });
+
+  it('膚色 carries the end captions 冷 / 暖', () => {
+    expect(WARM_ENDS).toEqual(['冷', '暖']);
+  });
+
+  it('faceAnswer follows the editor’s note order: faces, 基本模式, no face, then the tracker state', () => {
+    const a = (hasFaces: boolean, basic: boolean, unsure: boolean, tracker: 'ok' | 'lost' | 'failed') => faceAnswer({ hasFaces, basic, unsure, tracker });
+    expect(a(true, true, true, 'lost')).toBe('faces');
+    expect(a(false, true, false, 'ok')).toBe('basic');
+    expect(a(false, false, false, 'ok')).toBe('noFace');
+    expect(a(false, false, true, 'lost')).toBe('recovering');
+    expect(a(false, false, true, 'failed')).toBe('paused');
+    expect(a(false, false, true, 'ok')).toBe('failed');
+  });
+
+  it('the editor strip (with a skin context) appends the six after the 美膚 group; the camera (none) gets neither them nor the divider', () => {
+    const editor = itemsFor(lens(), sel('skin.smooth'), undefined, skin());
+    expect(editor.map((i) => i.key)).toEqual(['reset', ...paramsInGroup('skin').map((d) => d.id), ...paramsInGroup('tone').map((d) => d.id)]);
+    const camera = itemsFor(lens(), sel('skin.smooth'));
+    expect(camera.map((i) => i.key)).toEqual(['reset', ...paramsInGroup('skin').map((d) => d.id)]);
+    expect(camera.some((i) => i.divider)).toBe(false);
+  });
+
+  it('a tone slider needs the skin context and an open gate; only 膚色 carries the ends', () => {
+    expect(sliderFor(lens(), sel('tone.warmth'), undefined, skin())).toMatchObject({ param: 'tone.warmth', bidirectional: true, ends: ['冷', '暖'] });
+    expect(sliderFor(lens(), sel('tone.even'), undefined, skin())).toMatchObject({ param: 'tone.even' });
+    expect(sliderFor(lens(), sel('tone.even'), undefined, skin())?.ends).toBeUndefined();
+    expect(sliderFor(lens(), sel('tone.even'))).toBeNull();
+    expect(sliderFor(lens(), sel('tone.even'), undefined, skin('noFace'))).toBeNull();
+    expect(sliderFor(lens({}, 'b0'), sel('tone.even'), undefined, skin())).toBeNull();
+    // the 美膚 group itself is not gated by the skin context
+    expect(sliderFor(lens(), sel('skin.smooth'), undefined, skin('noFace'))).not.toBeNull();
   });
 });

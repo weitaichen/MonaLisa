@@ -36,6 +36,11 @@ export function formatDisplay(bidirectional: boolean, v: number, scale?: SliderS
   return n > 0 ? `+${n.toFixed(d)}${scale.suffix}` : `−${(-n).toFixed(d)}${scale.suffix}`;
 }
 
+/** aria-valuetext: the value, plus the end it leans to when the slider has end captions (「−20 冷」, 「+15 暖」) */
+export function valueText(text: string, n: number, ends?: readonly [string, string]): string {
+  return ends && n !== 0 ? `${text} ${n < 0 ? ends[0] : ends[1]}` : text;
+}
+
 /** Drag maths, exported for tests: new value from a horizontal delta, with bidirectional snapping. */
 export function dragValue(bidirectional: boolean, startV: number, dxPx: number, widthPx: number, scale?: SliderScale): { v: number; snapped: boolean } {
   let v = clamp01(startV + (widthPx > 0 ? dxPx / widthPx : 0));
@@ -187,7 +192,7 @@ export function SliderRow({ binding, onChange, onCommit, float, emptyText }: Pro
         aria-valuemin={sc ? sc.min : bi ? -50 : 0}
         aria-valuemax={sc ? sc.max : bi ? 50 : 100}
         aria-valuenow={displayOf(bi, v, sc)}
-        aria-valuetext={binding.mixed ? `${text}，各人不同` : text}
+        aria-valuetext={binding.mixed ? `${valueText(text, displayOf(bi, v, sc), binding.ends)}，各人不同` : valueText(text, displayOf(bi, v, sc), binding.ends)}
         tabIndex={0}
         onPointerDown={onDown}
         onPointerMove={onMove}
@@ -213,6 +218,12 @@ export function SliderRow({ binding, onChange, onCommit, float, emptyText }: Pro
             {text}
           </div>
         </div>
+        {binding.ends && (
+          <div class="slider-ends" aria-hidden="true">
+            <span>{binding.ends[0]}</span>
+            <span>{binding.ends[1]}</span>
+          </div>
+        )}
       </div>
       <span class="slider-value num">{text}</span>
     </div>

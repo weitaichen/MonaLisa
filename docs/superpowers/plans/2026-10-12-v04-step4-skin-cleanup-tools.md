@@ -5915,6 +5915,8 @@ git commit -m "v0.4 step 4 (15/20): pure tap rule in zoomPan, 祛痘 tap mode" -
 
 ### Task 16: The six tone sliders in the 美膚 strip
 
+> **Task 16 as built — Task 11's open decision is still open.** The first `tone.spec.ts` case measured inside / background: 勻膚 2.33 / 0, 膚色 4.05 / 0, 黑眼圈 0.77 / 0, 法令紋 0.03 / 0, 白牙 0.00 / 0, 亮眼 1.07 / 0. These are the CPU numbers of the Task 9 review (法令紋 0.025, 白牙 0.000), so "inside > 0.5" cannot hold for 法令紋 or 白牙 on this fixture. Until (a), (b) or (c) is chosen, the case asks 法令紋 for inside > 0.01 (the slider reaches the frame; 0 without the tool) and holds 白牙 to the background bound alone. The other four keep > 0.5. After (a) or (b), restore > 0.5 for both (`minInside` in `tone.spec.ts`). The no-face case forces its tap on the disabled 勻膚 (`click({ force: true })`, as `body.spec.ts` does), because Playwright does not click `aria-disabled` controls. Two unit cases were added: `itemsFor` with and without the skin context, and `sliderFor`'s tone gate and `ends`. A `SliderRow` render case was added too: the `.slider-ends` captions, and `aria-valuetext` with the end (「各人不同」 kept). `editor.spec.ts` 'no face in the photo …; 美膚 stays available' asserted that every 美膚 option is enabled. It now expects the 美膚 group enabled and the six 膚質 items disabled (S §1.2).
+
 **Files:**
 - Modify: `src/ui/panelModel.ts` (CRLF; types and helpers; wiring in `itemsFor` 'skin' `:590-608`, `sliderFor` 'skin' `:819-824`, `SliderView` `:748-766`)
 - Modify: `src/ui/components/Slider.tsx` (CRLF; `aria-valuetext` `:190`, the `.slider-track` element `:208-215`), `src/ui/components/BeautyPanel.tsx` (CRLF; `Props` `:34-63`, the `itemsFor` call `:87`, the strip note `:97`), `src/ui/icons.tsx` (CRLF; six icons, after `eyeDistance`, `:96-101`), `src/ui/theme.css` (CRLF; `.slider-ends`, after the `.slider-track` rules, `:741-757`)
@@ -5943,7 +5945,7 @@ git commit -m "v0.4 step 4 (15/20): pure tap rule in zoomPan, 祛痘 tap mode" -
   export function valueText(text: string, n: number, ends?: readonly [string, string]): string;
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/ui/panelModel.test.ts` (add to its imports whichever of these it does not have yet: `lensFor` from `../edit/lens`; `defaultPhoto`, `neutralPerson` from `../edit/state`; `TONE_COPY` from `../edit/toneCopy`; from `./panelModel`: `faceAnswer`, `INITIAL_SELECTION`, `skinNote`, `skinToolGate`, `toneHasValue`, `toneItems`, `WARM_ENDS`, `type SkinPanelContext`):
 ```ts
@@ -6203,12 +6205,12 @@ test('the camera offers none of the 膚質 tools', async ({ page }) => {
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `npx vitest run src/ui/panelModel.test.ts src/ui/components/Slider.test.tsx`
 Expected: FAIL — `toneItems is not a function`, `valueText is not a function`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/ui/panelModel.ts` — add (imports: `TONE_COPY` from `../edit/toneCopy`; `type Lens` (`panelModel.ts:4`), `paramDef`, `paramsInGroup`, `hasValue` (`:2`) and `RegionStatus` (`:7`) are already imported):
 ```ts
@@ -6417,14 +6419,14 @@ In `SliderRow`, step 1's `aria-valuetext` (`Slider.tsx:190`) appends 「，各�
 ```
 (`detect` = step 1's detection-cache state of the Editor (`Editor.tsx:134`), `selected` = its resolved per-photo `Selection` (`:151`), `session.faces` = step 1's `SessionFace[]` (O-space, `id` = the cache face id), `bundle` / `bound` / `trackerHealth` as the face note uses them (`:128`, `:188`, `:127`); `bodyAspect` is the photo aspect, `Editor.tsx:266`. Imports: add `faceAnswer`, `type SkinPanelContext` to the `../panelModel` import (`:90-103`); `earOf`, `mouthOpen` from `../../engine/passes/toneGeometry`.) Then the binding line becomes `const binding = sliderFor(lens, sel, bodyCtx, skinCtx);`, and `<BeautyPanel … body={bodyCtx} …/>` (`:1617-1628`) gains `skin={skinCtx}`. `Camera.tsx` is not touched.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/ui && npm run typecheck`
 Expected: PASS (step 1's 美膚 strip test still sees the first five items unchanged; if it asserts the whole strip with an editor context, extend its expected list with the six tone labels).
 Run: `npm run build && npx playwright test tests/e2e/tone.spec.ts tests/e2e/camera.spec.ts tests/e2e/editor.spec.ts`
 Expected: all pass; the log prints each tool's `inside … background …` pair.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/ui/panelModel.ts src/ui/panelModel.test.ts src/ui/components/Slider.tsx src/ui/components/Slider.test.tsx src/ui/components/BeautyPanel.tsx src/ui/icons.tsx src/ui/theme.css src/ui/screens/Editor.tsx tests/e2e/tone.spec.ts

@@ -19,6 +19,7 @@ import {
   personNote,
   photoTabLabel,
   selectPart,
+  skinNote,
   tabHasValue,
   TABS,
   tapToast,
@@ -26,6 +27,7 @@ import {
   type BodyNote,
   type PanelItem,
   type PanelSelection,
+  type SkinPanelContext,
   type TabId,
 } from '../panelModel';
 import { haptic } from '../platform';
@@ -59,13 +61,15 @@ interface Props {
   onRetryLook?(id: LookId): void;
   /** the editor's 裁切 tab (absent in the camera: the tab is not listed) */
   crop?: { geometry: Geometry; lock: CropLock; oSize: Size; onAction(a: CropAction): void };
+  /** 膚質 context; the editor passes it, the camera never does */
+  skin?: SkinPanelContext;
   id?: string;
 }
 
 /** tabs whose effects need a detected face */
 export const FACE_TABS: readonly TabId[] = ['shape', 'makeup'];
 
-export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, body, photoTouched, lookFailed, onRetryLook, crop, id }: Props) {
+export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, body, photoTouched, lookFailed, onRetryLook, crop, skin, id }: Props) {
   const stripRef = useRef<HTMLDivElement>(null);
   const stripKey =
     sel.tab === 'makeup' ? `makeup.${sel.makeupPart}` : sel.tab === 'preset' ? `preset.${sel.presetPart}` : sel.tab;
@@ -84,7 +88,7 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
   }, [stripKey]);
 
   const tabs = crop ? EDITOR_TABS : TABS;
-  const items = sel.tab === 'crop' && crop ? cropItems(crop.geometry, crop.lock, crop.oSize) : itemsFor(lens, sel, body);
+  const items = sel.tab === 'crop' && crop ? cropItems(crop.geometry, crop.lock, crop.oSize) : itemsFor(lens, sel, body, skin);
   const look = lens.look();
   const parts = partButtons(sel, { makeupOn: (p) => partHasValue(lens, p), look });
   const lead = leadChip(sel, look);
@@ -94,7 +98,8 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
   const offText = faceNote ?? (pNote?.dim ? pNote.text : null);
   const faceOff = !!offText && FACE_TABS.includes(sel.tab);
   const infoNote = !faceOff && pNote && !pNote.dim ? pNote.text : null;
-  const note = sel.tab === 'body' ? bodyNoteFor(body, lens, sel) : null;
+  // 美膚: a tone item's note (why it is off, or the closed-mouth / closed-eye hint; skin-cleanup spec §2.2)
+  const note = sel.tab === 'body' ? bodyNoteFor(body, lens, sel) : sel.tab === 'skin' ? skinNote(lens, sel, skin) : null;
   const bodyOff = body?.status === 'unsupported';
 
   const tapItem = (item: PanelItem) => {

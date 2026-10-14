@@ -2,18 +2,66 @@
 // source at. v0.4 (S §4.4): the 美體 field is the outermost map; every listed face's chain (contour curveWarps, chin,
 // forehead, the per-face 瘦臉 limit, nose, mouth, eye distance, big eyes) starts from the same tcB, a capped face's
 // displacement is held within its cap budget, and the displacements are summed — one face without a cap is its own chain
-// output, bit-exact with v0.3 (reshapeCpuV03.ts). Double precision throughout; the e2e reshape pins compare the GPU with
-// this port within 0.05 px. Imported by the app only for the editor's fold safety net (src/edit/warpGuard.ts, on slider
-// commits).
+// output, bit-exact with v0.3 (reshapeCpuV03.ts). Step 5 (face-detail spec §4.5): 下頜線 / 太陽穴 / 髮際線 in the contour
+// part, 鼻翼 / 山根 after the nose, 嘴高 before 嘴型, and the split items' per-side strengths (左右分開; with right = null
+// every side equals the left value exactly, so the map stays bit-exact). Double precision throughout; the e2e reshape
+// pins compare the GPU with this port within 0.05 px. Imported by the app only for the editor's fold safety net
+// (src/edit/warpGuard.ts, on slider commits).
 import type { BodyField, Face, FaceProtect, Rect } from '../../types';
 import { fieldAt } from '../../body/cpuWarp';
 import { attenuate, boxCentre, faceDrawn, influenceBox, ovalBox, WHOLE, type TableFace } from './faceCap';
-import { faceWidthIso, NARROW, NOSE, PROTECT_RAMP, PROTECT_REACH, PROTECT_SLOPE, PROTECT_SMOOTH, reshapeGeometry, SLIM, V_JAW, type ReshapeUniforms, type ReshapeView } from './reshape';
+import {
+  faceWidthIso,
+  JAW,
+  JAW_SIDE,
+  NARROW,
+  NARROW_SIDE,
+  NOSE,
+  PROTECT_RAMP,
+  PROTECT_REACH,
+  PROTECT_SLOPE,
+  PROTECT_SMOOTH,
+  reshapeGeometry,
+  sided,
+  SLIM,
+  SLIM_SIDE,
+  TEMPLE,
+  TEMPLE_SIDE,
+  TEMPLE_W,
+  V_JAW,
+  VJAW_SIDE,
+  type ReshapeUniforms,
+  type ReshapeView,
+} from './reshape';
 
 /** output UV → source UV (backward) */
 export type UvMap = (u: number, v: number) => [number, number];
 
 type V2 = [number, number];
+
+/** RESHAPE_FS shiftEllipse, operation for operation (face-detail spec §4.2): r = (rx, ry toward −ay, ry toward +ay) iso */
+export function shiftEllipseUv(tc: V2, c: V2, ax: V2, ay: V2, r: readonly [number, number, number], disp: V2, aspect: number): V2 {
+  const d: V2 = [tc[0] - c[0], tc[1] / aspect - c[1] / aspect];
+  const qy = d[0] * ay[0] + d[1] * ay[1];
+  const qx = (d[0] * ax[0] + d[1] * ax[1]) / r[0];
+  const qyn = qy / (qy < 0 ? r[1] : r[2]);
+  const w2 = qx * qx + qyn * qyn;
+  if (w2 >= 1) return tc;
+  const k = 1 - w2 * w2;
+  return [tc[0] - disp[0] * k * k, tc[1] - disp[1] * k * k];
+}
+
+/** RESHAPE_FS squeezeAxis: r = (r−, r+, ry) iso; the move is along ax only */
+export function squeezeAxisUv(tc: V2, c: V2, ax: V2, ay: V2, r: readonly [number, number, number], k: number, aspect: number): V2 {
+  const d: V2 = [tc[0] - c[0], tc[1] / aspect - c[1] / aspect];
+  const a = d[0] * ax[0] + d[1] * ax[1];
+  const t = a / (a < 0 ? r[0] : r[1]);
+  const v = (d[0] * ay[0] + d[1] * ay[1]) / r[2];
+  if (t * t >= 1 || v * v >= 1) return tc;
+  const h = (1 - t * t) * (1 - v * v);
+  const s = k * a * h * h;
+  return [tc[0] + ax[0] * s, tc[1] + ax[1] * s * aspect];
+}
 
 /** the engine uploads FaceProtect as R16F: what the shader reads back */
 const f16 = (Math as { f16round?: (x: number) => number }).f16round ?? ((x: number) => x);
@@ -87,22 +135,41 @@ function chainOf(face: Face, u: ReshapeUniforms, aspect: number, prot: FaceProte
   return (tcIn) => {
     let tc = tcIn;
     const tc0 = tc;
-    if (u.faceSlim !== 0) for (const [o, t] of SLIM) tc = curveWarp(tc, pt(o), pt(t), u.faceSlim);
-    if (u.faceV !== 0) V_JAW.forEach((i, k) => (tc = curveWarp(tc, pt(i), [g.vTargets[k * 2], g.vTargets[k * 2 + 1]], u.faceV)));
-    if (u.faceNarrow !== 0) NARROW.forEach((i, k) => (tc = curveWarp(tc, pt(i), [g.narrowTargets[k * 2], g.narrowTargets[k * 2 + 1]], u.faceNarrow)));
+    const at = (a: Float32Array, k: number): V2 => [a[k * 2], a[k * 2 + 1]];
+    const rh: V2 = [g.axes[0], g.axes[1]];
+    const mh: V2 = [g.axes[2], g.axes[3]];
+    // contour: each split anchor takes its side's strength (S5 §4.3)
+    if (u.faceSlim !== 0 || u.faceSlimR !== 0)
+      SLIM.forEach(([o, t], i) => (tc = curveWarp(tc, pt(o), pt(t), sided(u.faceSlim, u.faceSlimR, SLIM_SIDE[i]))));
+    if (u.faceV !== 0 || u.faceVR !== 0)
+      V_JAW.forEach((i, k) => (tc = curveWarp(tc, pt(i), at(g.vTargets, k), sided(u.faceV, u.faceVR, VJAW_SIDE[k]))));
+    if (u.faceNarrow !== 0 || u.faceNarrowR !== 0)
+      NARROW.forEach((i, k) => (tc = curveWarp(tc, pt(i), at(g.narrowTargets, k), sided(u.faceNarrow, u.faceNarrowR, NARROW_SIDE[k]))));
+    if (u.jawline !== 0 || u.jawlineR !== 0)
+      JAW.forEach((i, k) => (tc = curveWarp(tc, pt(i), at(g.jawTargets, k), sided(u.jawline, u.jawlineR, JAW_SIDE[k]))));
+    if (u.temple !== 0 || u.templeR !== 0)
+      TEMPLE.forEach((_, k) => (tc = curveWarp(tc, at(g.templeAnchors, k), at(g.templeTargets, k), sided(u.temple, u.templeR, TEMPLE_SIDE[k]) * TEMPLE_W[k])));
     if (u.chin !== 0) tc = curveWarp(tc, pt(16), g.chinTarget, u.chin);
     if (u.forehead !== 0) tc = curveWarp(tc, ext(0), ext(3), u.forehead);
+    if (g.hairlineS !== 0) tc = shiftEllipseUv(tc, ext(0), rh, mh, g.hairlineRadii, g.hairlineDisp, aspect);
     if (prot) tc = protectContour(tc0, tc);
+    // nose
     if (u.noseSlim !== 0) for (const [o, t] of NOSE) tc = curveWarp(tc, pt(o), pt(t), u.noseSlim);
+    if (g.noseWingS !== 0) {
+      tc = shiftAround(tc, pt(80), g.noseWingR, g.noseWingDisp);
+      tc = shiftAround(tc, pt(81), g.noseWingR, [-g.noseWingDisp[0], -g.noseWingDisp[1]]);
+    }
+    if (g.rootK !== 0) tc = squeezeAxisUv(tc, [g.root[0], g.root[1]], rh, mh, [g.root[2], g.root[3], g.rootRy], g.rootK, aspect);
+    // mouth: 嘴高, then 嘴型 (backward order: forward, 嘴型 scales about the true p106, then 嘴高 moves it)
+    if (g.mouthHS !== 0) tc = shiftEllipseUv(tc, pt(106), [-g.mouthHAxis[1], g.mouthHAxis[0]], g.mouthHAxis, g.mouthHRadii, g.mouthHDisp, aspect);
     if (u.mouthSize !== 0) tc = scaleAround(tc, pt(106), g.mouthR, u.mouthSize);
+    // eyes: 眼距, then 大眼 per side
     if (g.eyeDisp[0] !== 0 || g.eyeDisp[1] !== 0) {
       tc = shiftAround(tc, pt(74), g.eyeR[0], g.eyeDisp);
       tc = shiftAround(tc, pt(77), g.eyeR[1], [-g.eyeDisp[0], -g.eyeDisp[1]]);
     }
-    if (u.eyeEnlarge !== 0) {
-      tc = enlargeEye(tc, pt(74), g.eyeR[0], u.eyeEnlarge);
-      tc = enlargeEye(tc, pt(77), g.eyeR[1], u.eyeEnlarge);
-    }
+    if (u.eyeEnlarge !== 0) tc = enlargeEye(tc, pt(74), g.eyeR[0], u.eyeEnlarge);
+    if (u.eyeEnlargeR !== 0) tc = enlargeEye(tc, pt(77), g.eyeR[1], u.eyeEnlargeR);
     return tc;
   };
 }

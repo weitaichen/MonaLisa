@@ -212,7 +212,7 @@ describe('displacementBound (step 3, S §4.4 D7)', () => {
       const face = faces[i % 2];
       const values = neutral();
       for (const id of SHAPE) if (rnd() < 0.7) values[id] = rnd();
-      const u = reshapeUniforms(values, 1);
+      const u = reshapeUniforms(values, 1, rnd() < 0.5 ? null : Object.fromEntries(SPLIT_IDS.map((id) => [id, rnd()])));
       const bound = displacementBound(face, aspect, u);
       const map = reshapeMapCpu(face, u, aspect);
       let max = 0;

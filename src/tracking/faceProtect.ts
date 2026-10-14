@@ -1,7 +1,8 @@
 // 瘦臉 background limit (reports/美體修圖 背景扭曲 抑制技術.md, stage 1 ②): the signed distance from every point of the
 // photo to the person, which the reshape shader turns into a displacement budget for the face CONTOUR warps (瘦臉 /
-// V臉 / 窄臉 / 下巴 / 額頭): full effect on the person, then a budget that falls smoothly to 0 a short way outside it,
-// so the wall next to a cheek no longer swims. The eye / nose / mouth warps are never limited (see reshape.ts).
+// V臉 / 窄臉 / 下巴 / 額頭, and step 5's 下頜線 / 太陽穴 / 髮際線, which run before the limit too): full effect on the
+// person, then a budget that falls smoothly to 0 a short way outside it, so the wall next to a cheek no longer swims.
+// The eye / nose / mouth warps are never limited (see reshape.ts).
 //
 // The person = the person mask (美體's PoseLandmarker PersonMask when a detection is cached, else the on-demand
 // selfie segmenter) ∪ the face oval, so a mask that misses part of the face never limits the face itself, restricted to

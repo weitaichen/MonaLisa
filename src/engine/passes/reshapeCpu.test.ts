@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import type { Face, Landmarks478, ParamId } from '../../types';
+import type { Face, Landmarks478, ParamId, PersonParams } from '../../types';
 import { MAX_RENDER_FACES } from '../../config/limits';
 import { prepareFaces } from '../../detect/faces';
-import { applyPreset, setParam } from '../params';
+import { applyPreset, neutralValue, PARAM_DEFS, paramsInGroup, setParam, SPLIT_IDS } from '../params';
 import { adapt } from '../../tracking/adapter111';
 import { apply, glMat3, IDENTITY_GEOMETRY, rotateLeft, vToO } from '../../geometry/view';
-import { IDENTITY_VIEW, RESHAPE_FS, reshapeFs, reshapeGeometry, reshapeUniforms } from './reshape';
-import { reshapeMapCpu, reshapeMapMulti, withView } from './reshapeCpu';
+import { faceDetailMoves, faceWidthIso, IDENTITY_VIEW, RESHAPE_FS, reshapeFs, reshapeGeometry, reshapeUniforms } from './reshape';
+import { reshapeMapCpu, reshapeMapMulti, shiftEllipseUv, squeezeAxisUv, withView } from './reshapeCpu';
 import { reshapeMapCpuV03 } from './reshapeCpuV03';
 import { attenuate, boxCentre, capsFor, influenceBox, ovalBox, WHOLE, type TableFace } from './faceCap';
 import type { ReshapeUniforms as RU } from './reshape';
@@ -16,12 +16,13 @@ import { syntheticPortrait } from '../../body/synthetic';
 import { buildFaceProtect } from '../../tracking/faceProtect';
 import { shaderHash } from '../shaderHash';
 
-const PINNED = 'e65a71b2';
+const PINNED = '913c3d3b';
 
 const lm = JSON.parse(readFileSync(new URL('../../../tests/fixtures/landmarks_sample_face.json', import.meta.url), 'utf8')) as {
   width: number;
   height: number;
   points: number[];
+  mirrored: number[];
 };
 const face = adapt({ points: new Float32Array(lm.points) }, lm.width, lm.height);
 const aspect = lm.width / lm.height;
@@ -227,11 +228,25 @@ describe('N-face port (S §4.4)', () => {
   // keeps 0.708 at 2.0 FW, 0.837 at 2.1 and 0.939 at 2.2 (the contour items carry the chin point about 0.15 FW; the 下巴
   // slider alone keeps ≥ 0.995 from 1.8 FW): ≥ 0.9 from 2.2 FW, pinned ≥ 0.7 at 2.0–2.1 FW. The fold bound is never
   // relaxed.
+  // Step 5 (face-detail spec §4.2) adds three settings: every 美型 item at + max, every one at − max (the one-way ones at
+  // max), and + max with the six split items' right sides at 0. Measured: min det J 0.476 / 0.442 / 0.461 (worst: the
+  // − max setting, 3 faces 1.0 FW apart at 0°); the 8 landmarks keep ≥ 0.927 at 1.2 FW and ≥ 0.982 from 1.3 FW; 額頭
+  // 1.000 from 2.0 FW; 下巴 keeps 0.684 at 2.0 FW, 0.808 at 2.1 and 0.919 from 2.2 with the − max setting (下頜線 at max
+  // carries the chin point farther when the face is alone, and the cap holds the same budget), ≥ 0.998 with the other
+  // two. So the step-5 settings keep every floor except 下巴 at 2.0 FW, pinned there at ≥ 0.68.
   it('fold and strength sweep (accepted radius-cap trade-off, S §4.4): min det J ≥ MIN_DET on a 0.02 FW grid; the 8 eye / nose / mouth landmarks keep ≥ 0.9 from 1.3 FW (≥ 0.8 at 1.2 FW, measured 0.838); 額頭 ≥ 0.9 from 2.0 FW; 下巴 ≥ 0.9 from 2.2 FW (≥ 0.7 at 2.0 FW, measured 0.708)', () => {
     const FW = 0.12;
     const oneWay: ParamId[] = ['shape.eyeEnlarge', 'shape.faceSlim', 'shape.faceV', 'shape.faceNarrow', 'shape.noseSlim'];
     const bi: ParamId[] = ['shape.chin', 'shape.forehead', 'shape.mouthSize', 'shape.eyeDistance'];
-    const settings = [0, 1].map((end) => reshapeUniforms(bi.reduce((p, id) => setParam(p, id, end), oneWay.reduce((p, id) => setParam(p, id, 1), applyPreset('original', 1))).values, 1));
+    // step 5: every 美型 item at its extreme, both signs, and the six split items at opposite extremes
+    const ALL15_HI = Object.fromEntries(paramsInGroup('shape').map((d) => [d.id, 1]));
+    const ALL15_LO = Object.fromEntries(paramsInGroup('shape').map((d) => [d.id, d.bidirectional ? 0 : 1]));
+    const settings = [
+      ...[0, 1].map((end) => reshapeUniforms(bi.reduce((p, id) => setParam(p, id, end), oneWay.reduce((p, id) => setParam(p, id, 1), applyPreset('original', 1))).values, 1)),
+      reshapeUniforms({ ...NEUTRAL, ...ALL15_HI }, 1),
+      reshapeUniforms({ ...NEUTRAL, ...ALL15_LO }, 1),
+      reshapeUniforms({ ...NEUTRAL, ...ALL15_HI }, 1, Object.fromEntries(SPLIT_IDS.map((id) => [id, 0]))),
+    ];
     const featureMean = (map: (x: number, y: number) => [number, number], f: Face) => {
       const P = f.pts111;
       let s = 0;
@@ -288,7 +303,8 @@ describe('N-face port (S §4.4)', () => {
                   chinWorst = Math.min(chinWorst, chin);
                   foreheadWorst = Math.min(foreheadWorst, forehead);
                   expect(forehead, `額頭 ${count} faces ${dFW.toFixed(1)} FW ${deg}° yaw ${yaw}`).toBeGreaterThanOrEqual(0.9);
-                  expect(chin, `下巴 ${count} faces ${dFW.toFixed(1)} FW ${deg}° yaw ${yaw}`).toBeGreaterThanOrEqual(dFW >= 2.2 - 1e-9 ? 0.9 : 0.7);
+                  const chinFloor = dFW >= 2.2 - 1e-9 ? 0.9 : dFW < 2.05 && settings.indexOf(u) >= 2 ? 0.68 : 0.7;
+                  expect(chin, `下巴 ${count} faces ${dFW.toFixed(1)} FW ${deg}° yaw ${yaw} setting ${settings.indexOf(u)}`).toBeGreaterThanOrEqual(chinFloor);
                 }
               }
             }
@@ -297,7 +313,7 @@ describe('N-face port (S §4.4)', () => {
         `the 8 landmarks keep ≥ ${featureWorst12.toFixed(3)} at 1.2 FW, ≥ ${featureWorst13.toFixed(3)} from 1.3 FW; ` +
         `at ≥ 2.0 FW 下巴 keeps ≥ ${chinWorst.toFixed(3)}, 額頭 ≥ ${foreheadWorst.toFixed(3)}`,
     );
-  }, 180_000);
+  }, 360_000);
   // The fold bound alone does not need the cap here: with the cap off, the 4-item setting with 2 faces at 0° still keeps
   // min det J 0.367 at 0.3 FW and 0.459 at 0.5 FW (≥ MIN_DET). What the cap is for is pinned on a fine grid: each face's
   // displacement is exactly 0 outside its disc, the map is the identity outside every disc, and no output point samples
@@ -427,5 +443,269 @@ describe('N-face port (S §4.4)', () => {
     expect(annulus).toBeGreaterThan(1000);
     expect(moved, 'beyond its new cap the near face moves nothing').toBe(0);
     expect(movedBefore, 'without the obstacle the near face warps there (the check is not vacuous)').toBeGreaterThan(100);
+  });
+});
+
+type V2 = [number, number];
+const W = lm.width;
+const H = lm.height;
+const mirroredFace = adapt({ points: new Float32Array(lm.mirrored) }, W, H);
+const NEUTRAL = Object.fromEntries(PARAM_DEFS.map((d) => [d.id, neutralValue(d)])) as Record<ParamId, number>;
+const U5 = (over: Partial<Record<ParamId, number>> = {}, right: PersonParams['right'] = null) =>
+  reshapeUniforms({ ...NEUTRAL, ...over }, 1, right);
+const pt = (f: Face, i: number): V2 => [f.pts111[i * 2], f.pts111[i * 2 + 1]];
+const moved = (map: (x: number, y: number) => V2, q: V2) => {
+  const s = map(q[0], q[1]);
+  return Math.hypot((s[0] - q[0]) * W, (s[1] - q[1]) * H);
+};
+
+/** min det J (px Jacobian, forward differences) and max move (fractions of FW) on a 300 × 300 grid over `box` */
+function sweep(f: Face, map: (x: number, y: number) => V2, box: readonly number[]): { minDet: number; maxMoveFW: number } {
+  const N = 300;
+  const x0 = Math.max(0, box[0]);
+  const y0 = Math.max(0, box[1]);
+  const dx = (Math.min(1, box[2]) - x0) / N;
+  const dy = (Math.min(1, box[3]) - y0) / N;
+  const fw = faceWidthIso(f, aspect);
+  let minDet = Infinity;
+  let maxMove = 0;
+  for (let j = 0; j < N; j++)
+    for (let i = 0; i < N; i++) {
+      const u = x0 + (i + 0.5) * dx;
+      const v = y0 + (j + 0.5) * dy;
+      const a = map(u, v);
+      const b = map(u + dx, v);
+      const c = map(u, v + dy);
+      const j00 = (b[0] - a[0]) / dx;
+      const j10 = ((b[1] - a[1]) / dx) * (H / W);
+      const j01 = ((c[0] - a[0]) / dy) * (W / H);
+      const j11 = (c[1] - a[1]) / dy;
+      minDet = Math.min(minDet, j00 * j11 - j01 * j10);
+      maxMove = Math.max(maxMove, Math.hypot(a[0] - u, (a[1] - v) / aspect) / fw);
+    }
+  return { minDet, maxMoveFW: maxMove };
+}
+
+describe('step-5 warps through the CPU port (face-detail spec §4.2, §8.1)', () => {
+  // [id, value, min det J of S5 §4.2, max move of S5 §4.2 in FW]
+  const TABLE: [ParamId, number, number, number][] = [
+    ['shape.jawline', 1, 0.73, 0.05],
+    ['shape.temple', 1, 0.62, 0.035],
+    ['shape.temple', 0, 0.67, 0.035],
+    ['shape.hairline', 1, 0.56, 0.024],
+    ['shape.hairline', 0, 0.6, 0.024],
+    ['shape.noseWing', 1, 0.72, 0.024],
+    ['shape.noseWing', 0, 0.72, 0.024],
+    ['shape.noseBridge', 1, 0.76, 0.012],
+    ['shape.noseBridge', 0, 0.7, 0.012],
+    ['shape.mouthHeight', 1, 0.73, 0.029],
+    ['shape.mouthHeight', 0, 0.56, 0.029],
+  ];
+  for (const [name, f] of [
+    ['fixture', face],
+    ['mirrored', mirroredFace],
+  ] as const) {
+    for (const [id, v, det, move] of TABLE) {
+      it(`${name}: ${id} = ${v}: min det J ≥ 0.5 and within ±0.05 of ${det}; max move ≈ ${move} FW`, () => {
+        const u = U5({ [id]: v });
+        const r = sweep(f, reshapeMapCpu(f, u, aspect), reshapeGeometry(f, aspect, u).box);
+        expect(r.minDet).toBeGreaterThanOrEqual(0.5);
+        expect(Math.abs(r.minDet - det)).toBeLessThanOrEqual(0.05);
+        expect(r.maxMoveFW).toBeGreaterThan(0.7 * move);
+        expect(r.maxMoveFW).toBeLessThan(1.3 * move);
+      });
+    }
+  }
+
+  it('directions: 下頜線 inward, 太陽穴 + outward, 髮際線 + down, 鼻翼 − together, 山根 + narrower, 嘴高 + up', () => {
+    // backward map: content moves from map(q) to q, so the sample sits on the far side of the motion
+    const jaw = reshapeMapCpu(face, U5({ 'shape.jawline': 1 }), aspect);
+    for (const i of [8, 10, 12, 24, 22, 20]) {
+      const s = jaw(...pt(face, i));
+      const n = pt(face, 46);
+      const p = pt(face, i);
+      expect((s[0] - p[0]) * (n[0] - p[0]) + ((s[1] - p[1]) * (n[1] - p[1])) / (aspect * aspect)).toBeLessThan(0);
+    }
+    const g = reshapeGeometry(face, aspect, U5({ 'shape.temple': 1 }));
+    const temple = reshapeMapCpu(face, U5({ 'shape.temple': 1 }), aspect);
+    for (let k = 0; k < 6; k++) {
+      const o: V2 = [g.templeAnchors[k * 2], g.templeAnchors[k * 2 + 1]];
+      const t: V2 = [g.templeTargets[k * 2], g.templeTargets[k * 2 + 1]];
+      const s = temple(...o);
+      expect((s[0] - o[0]) * (t[0] - o[0]) + (s[1] - o[1]) * (t[1] - o[1])).toBeLessThan(0);
+    }
+    const hair = reshapeMapCpu(face, U5({ 'shape.hairline': 1 }), aspect);
+    expect(hair(face.ext[0], face.ext[1])[1]).toBeLessThan(face.ext[1]);
+    const wing = reshapeMapCpu(face, U5({ 'shape.noseWing': 0 }), aspect);
+    const [l, r] = [pt(face, 80), pt(face, 81)];
+    expect((wing(...l)[0] - l[0]) * (r[0] - l[0])).toBeLessThan(0);
+    expect((wing(...r)[0] - r[0]) * (r[0] - l[0])).toBeGreaterThan(0);
+    const root = reshapeMapCpu(face, U5({ 'shape.noseBridge': 1 }), aspect);
+    const [a, b] = [pt(face, 78), pt(face, 79)];
+    expect(Math.abs(root(...b)[0] - root(...a)[0])).toBeGreaterThan(Math.abs(b[0] - a[0]));
+    const mouth = reshapeMapCpu(face, U5({ 'shape.mouthHeight': 1 }), aspect);
+    expect(mouth(...pt(face, 106))[1]).toBeGreaterThan(pt(face, 106)[1]);
+  });
+
+  it('locality: 山根 never moves p55, p58 or a lid point; 嘴高 never moves p49; 髮際線 never moves a brow point', () => {
+    for (const f of [face, mirroredFace]) {
+      for (const v of [0, 1]) {
+        const root = reshapeMapCpu(f, U5({ 'shape.noseBridge': v }), aspect);
+        for (const i of [55, 58]) expect(moved(root, pt(f, i))).toBeLessThan(1e-6);
+        for (let k = 0; k < 32; k++) expect(moved(root, [f.lids[k * 2], f.lids[k * 2 + 1]])).toBeLessThan(1e-6);
+        expect(moved(reshapeMapCpu(f, U5({ 'shape.mouthHeight': v }), aspect), pt(f, 49))).toBeLessThan(1e-6);
+        const hair = reshapeMapCpu(f, U5({ 'shape.hairline': v }), aspect);
+        for (let i = 33; i <= 42; i++) expect(hair(...pt(f, i))).toEqual(pt(f, i));
+        for (let i = 64; i <= 71; i++) expect(hair(...pt(f, i))).toEqual(pt(f, i));
+      }
+    }
+  });
+
+  it('山根 moves only along r̂; 鼻翼 mostly along r̂', () => {
+    const [rx, ry] = reshapeGeometry(face, aspect, U5({ 'shape.noseBridge': 1 })).axes;
+    for (const [id, tol] of [
+      ['shape.noseBridge', 1e-9],
+      ['shape.noseWing', 0.2],
+    ] as const) {
+      const map = reshapeMapCpu(face, U5({ [id]: 1 }), aspect);
+      for (const i of [44, 45, 46, 78, 79, 80, 81, 82, 83]) {
+        const q = pt(face, i);
+        const s = map(...q);
+        const d: V2 = [s[0] - q[0], (s[1] - q[1]) / aspect];
+        const along = Math.abs(d[0] * rx + d[1] * ry);
+        const across = Math.abs(-d[0] * ry + d[1] * rx);
+        expect(across).toBeLessThanOrEqual(tol * Math.max(along, 1e-12) + 1e-12);
+      }
+    }
+  });
+
+  it('左右分開: L ≠ R moves the left half and leaves the right half (almost) still', () => {
+    const on = { 'shape.faceSlim': 1, 'shape.faceV': 1, 'shape.faceNarrow': 1, 'shape.jawline': 1 };
+    const off = { 'shape.faceSlim': 0, 'shape.faceV': 0, 'shape.faceNarrow': 0, 'shape.jawline': 0 };
+    const leftOnly = reshapeMapCpu(face, U5(on, off), aspect);
+    const rightOnly = reshapeMapCpu(face, U5(off, on), aspect);
+    const mean = (map: (x: number, y: number) => V2, ids: number[]) => ids.reduce((s, i) => s + moved(map, pt(face, i)), 0) / ids.length;
+    const L = [3, 7, 10];
+    const R = [29, 25, 22];
+    expect(mean(leftOnly, R)).toBeLessThan(0.05 * mean(leftOnly, L));
+    expect(mean(rightOnly, L)).toBeLessThan(0.05 * mean(rightOnly, R));
+  });
+
+  it('with right = null, and with right equal to the values, the map is bit-identical to the v0.3 port', () => {
+    const v = {
+      'shape.faceSlim': 0.37, 'shape.faceV': 0.21, 'shape.faceNarrow': 0.3, 'shape.chin': 0.7, 'shape.forehead': 0.2,
+      'shape.noseSlim': 0.4, 'shape.mouthSize': 0.8, 'shape.eyeDistance': 0.3, 'shape.eyeEnlarge': 0.6,
+    };
+    const u = U5(v);
+    const same = U5(v, Object.fromEntries(SPLIT_IDS.map((id) => [id, { ...NEUTRAL, ...v }[id]])));
+    const a = reshapeMapCpu(face, u, aspect);
+    const b = reshapeMapCpu(face, same, aspect);
+    const c = reshapeMapCpuV03(face, u, aspect);
+    for (let j = 0; j <= 40; j++)
+      for (let i = 0; i <= 40; i++) {
+        const x = i / 40;
+        const y = j / 40;
+        expect(a(x, y)).toEqual(c(x, y));
+        expect(b(x, y)).toEqual(c(x, y));
+      }
+  });
+
+  it('faceDetailMoves bounds the measured move of the step-5 warps (step 3 displacementBound terms)', () => {
+    let s = 3;
+    const rnd = () => {
+      s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+      return s / 4294967296;
+    };
+    for (let n = 0; n < 12; n++) {
+      const values = {
+        'shape.jawline': rnd(), 'shape.temple': rnd(), 'shape.hairline': rnd(), 'shape.noseWing': rnd(), 'shape.noseBridge': rnd(), 'shape.mouthHeight': rnd(),
+      };
+      const right = rnd() < 0.5 ? null : { 'shape.jawline': rnd(), 'shape.temple': rnd() };
+      const u = U5(values, right);
+      const g = reshapeGeometry(face, aspect, u);
+      const m = faceDetailMoves(g, u, face);
+      const bound = m.uv.reduce((acc, d) => acc + Math.hypot(d[0] * W, d[1] * H), 0) + m.iso.reduce((acc, l) => acc + l * W, 0);
+      const map = reshapeMapCpu(face, u, aspect);
+      let mx = 0;
+      for (let j = 0; j <= 128; j++)
+        for (let i = 0; i <= 128; i++) mx = Math.max(mx, moved(map, [g.box[0] + ((g.box[2] - g.box[0]) * i) / 128, g.box[1] + ((g.box[3] - g.box[1]) * j) / 128]));
+      expect(mx).toBeLessThanOrEqual(bound + 1e-9);
+    }
+  });
+
+  it('identity outside the box: every step-5 warp leaves its influence-box border unmoved, so the box skip cuts no warp (S5 §4.4, §8.1)', () => {
+    const CASES: [ParamId, number][] = [
+      ['shape.jawline', 1], ['shape.temple', 0], ['shape.temple', 1], ['shape.hairline', 0], ['shape.hairline', 1], ['shape.noseWing', 0],
+      ['shape.noseWing', 1], ['shape.noseBridge', 0], ['shape.noseBridge', 1], ['shape.mouthHeight', 0], ['shape.mouthHeight', 1],
+    ];
+    for (const f of [face, mirroredFace])
+      for (const [id, v] of CASES) {
+        const u = U5({ [id]: v });
+        const b = reshapeGeometry(f, aspect, u).box;
+        const map = reshapeMapCpu(f, u, aspect);
+        const e = 1e-7;
+        let worst = 0;
+        for (let i = 0; i <= 400; i++) {
+          const x = b[0] + ((b[2] - b[0]) * i) / 400;
+          const y = b[1] + ((b[3] - b[1]) * i) / 400;
+          for (const q of [[x, b[1] + e], [x, b[3] - e], [b[0] + e, y], [b[2] - e, y]] as V2[]) worst = Math.max(worst, moved(map, q));
+        }
+        // just inside the border the chain runs; it must already be the identity there (measured 0 px; 0.07–0.09 px
+        // for 山根 with S5 §4.4's disc(c, max(r−, r+, ry)), which misses the band's corners: Task 6 uses the circumscribed disc)
+        expect(worst, `${id} = ${v}`).toBeLessThan(1e-6);
+      }
+  });
+});
+
+describe('shiftEllipse and squeezeAxis ports (face-detail spec §4.2)', () => {
+  const A = 1.5;
+  const c: V2 = [0.5, 0.5];
+  const ax: V2 = [1, 0];
+  const ay: V2 = [0, 1];
+
+  it('shiftEllipse: content within w ≤ 0.5 moves at least 0.878 of disp; C¹ across the axis; identity outside', () => {
+    const r = [0.2, 0.1, 0.16] as const;
+    const disp: V2 = [0.01, 0.02];
+    for (const w of [0, 0.25, 0.5])
+      for (let th = 0; th < 6; th++) {
+        const qx = Math.cos(th) * w;
+        const qy = Math.sin(th) * w;
+        const tc: V2 = [c[0] + qx * r[0], c[1] + qy * (qy < 0 ? r[1] : r[2]) * A];
+        const out = shiftEllipseUv(tc, c, ax, ay, r, disp, A);
+        expect((tc[0] - out[0]) / disp[0]).toBeGreaterThanOrEqual(0.878);
+      }
+    const f = (y: number) => shiftEllipseUv([0.53, 0.5 + y], c, ax, ay, r, disp, A)[1] - (0.5 + y);
+    const h = 1e-6;
+    expect(Math.abs((f(0) - f(-h)) / h - (f(h) - f(0)) / h)).toBeLessThan(1e-4);
+    expect(shiftEllipseUv([0.71, 0.5], c, ax, ay, r, disp, A)).toEqual([0.71, 0.5]);
+  });
+
+  it('squeezeAxis: zero on the axis and at |t| = 1, |v| = 1; det J within [1 − 0.8k, 1 + k] (k > 0) / [1 − |k|, 1 + 0.8|k|] (k < 0)', () => {
+    const r = [0.05, 0.08, 0.06] as const;
+    for (const k of [0.3, 0.5, -0.3, -0.5]) {
+      expect(squeezeAxisUv([0.5, 0.52], c, ax, ay, r, k, A)).toEqual([0.5, 0.52]);
+      expect(squeezeAxisUv([0.45, 0.5], c, ax, ay, r, k, A)).toEqual([0.45, 0.5]);
+      expect(squeezeAxisUv([0.58, 0.5], c, ax, ay, r, k, A)).toEqual([0.58, 0.5]);
+      expect(squeezeAxisUv([0.52, 0.5 + 0.06 * A], c, ax, ay, r, k, A)).toEqual([0.52, 0.5 + 0.06 * A]);
+      const lo = k > 0 ? 1 - 0.8 * k : 1 - Math.abs(k);
+      const hi = k > 0 ? 1 + k : 1 + 0.8 * Math.abs(k);
+      const M = (x: number, y: number): V2 => {
+        const o = squeezeAxisUv([x, y * A], c, ax, ay, r, k, A);
+        return [o[0], o[1] / A];
+      };
+      const e = 1e-6;
+      for (let i = 0; i <= 80; i++)
+        for (let j = 0; j <= 80; j++) {
+          const x = 0.44 + (0.15 * i) / 80;
+          const y = 0.5 / A - 0.07 + (0.14 * j) / 80;
+          const p = M(x + e, y);
+          const q = M(x - e, y);
+          const s = M(x, y + e);
+          const t = M(x, y - e);
+          const det = ((p[0] - q[0]) * (s[1] - t[1]) - (s[0] - t[0]) * (p[1] - q[1])) / (4 * e * e);
+          expect(det).toBeGreaterThanOrEqual(lo - 1e-4);
+          expect(det).toBeLessThanOrEqual(hi + 1e-4);
+        }
+    }
   });
 });

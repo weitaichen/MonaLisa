@@ -19,10 +19,10 @@ import { prepareFaces } from '../../../src/detect/faces';
 import { buildFrame, legacyFrame } from '../../../src/edit/frame';
 import { firstAnswer, openState } from '../../../src/edit/migrate';
 import { createEngine } from '../../../src/engine/index';
-import { applyPreset, PARAM_DEFS, setHeightBand, setParam, setShade } from '../../../src/engine/params';
+import { applyPreset, setHeightBand, setParam, setShade } from '../../../src/engine/params';
 import { adapt } from '../../../src/tracking/adapter111';
 import { BodyFieldMemo, fieldInputOf, frameFacesOf, measurePersons } from '../../../src/ui/editorModel';
-import type { BeautyParams, BodyDetection, Face, HistoryEntry, RenderInput } from '../../../src/types';
+import type { BeautyParams, BodyDetection, Face, HistoryEntry, ParamId, RenderInput } from '../../../src/types';
 
 export type ParityCase = 'natural' | 'refined-shape-max' | 'makeup-shades' | 'fullbody-body' | 'face-body';
 
@@ -100,7 +100,12 @@ window.runParity = async () => {
   const f = adapt({ points: new Float32Array(landmarks.points) }, face.width, face.height);
   const onFace = (params: BeautyParams): RenderInput => ({ source: face, width: face.width, height: face.height, ...legacyFrame(params, f, 1) });
 
-  const shapeMax = PARAM_DEFS.filter((d) => d.group === 'shape').reduce((p, d) => setParam(p, d.id, 1), applyPreset('refined', 1));
+  // 美型 max = the nine 美型 items of v0.3 (892ea61's shape group) at max. Step 5 adds six items to the group, which the
+  // golden never saw; they stay neutral here, as RM §1.1's invariant (every new item neutral) requires.
+  const V03_SHAPE: ParamId[] = [
+    'shape.eyeEnlarge', 'shape.faceSlim', 'shape.faceV', 'shape.faceNarrow', 'shape.chin', 'shape.forehead', 'shape.noseSlim', 'shape.mouthSize', 'shape.eyeDistance',
+  ];
+  const shapeMax = V03_SHAPE.reduce((p, id) => setParam(p, id, 1), applyPreset('refined', 1));
   const shades = setShade(setShade(applyPreset('natural', 1), 'lip', 'rose'), 'blush', 'peach');
 
   const det: BodyDetection = {

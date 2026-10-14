@@ -3,14 +3,14 @@
 // shader sampled there, and the port's map at the same pixel centre must agree. Run by tests/e2e/reshape.spec.ts on
 // the dev server (this page imports src/ directly).
 import landmarks from '../../fixtures/landmarks_sample_face.json';
-import { createReshapePass, reshapeUniforms, type ReshapeView } from '../../../src/engine/passes/reshape';
+import { createReshapePass, reshapeUniforms, type ReshapeUniforms, type ReshapeView } from '../../../src/engine/passes/reshape';
 import { reshapeMapCpu, reshapeMapMulti, withView, type UvMap } from '../../../src/engine/passes/reshapeCpu';
 import { attenuate, boxCentre, ovalBox, WHOLE, type TableFace } from '../../../src/engine/passes/faceCap';
-import { applyPreset, setParam } from '../../../src/engine/params';
+import { applyPreset, neutralValue, PARAM_DEFS, paramsInGroup, setParam } from '../../../src/engine/params';
 import { adapt } from '../../../src/tracking/adapter111';
 import { glMat3, IDENTITY_GEOMETRY, setStraighten, vToO } from '../../../src/geometry/view';
 import { buildFaceProtect, protectWindow } from '../../../src/tracking/faceProtect';
-import type { BodyField, Face, FaceProtect, ParamId } from '../../../src/types';
+import type { BodyField, Face, FaceProtect, ParamId, PersonParams } from '../../../src/types';
 import type { Framebuffer, GL, Texture } from '../../../src/engine/gl/gl';
 
 export interface PinCase {
@@ -31,6 +31,8 @@ declare global {
     runReshapePinView?: () => PinCase[];
     runReshapePinMulti?: (carrier: 'texture' | 'ubo') => PinCase[];
     runProtectPinMulti?: (carrier: 'texture' | 'ubo') => PinCase[];
+    /** step 5 (face-detail spec §8.3 item 1): 13 cases per face-table carrier */
+    runReshapePinFaceDetail?: (carrier: 'texture' | 'ubo') => PinCase[];
   }
 }
 
@@ -289,6 +291,39 @@ window.runProtectPinMulti = (carrier) => {
   const cases: { name: string; faces: TableFace[]; protects: FaceProtect[] }[] = [
     { name: `two faces, windowed limits (${carrier})`, faces: [tf(A, capAB, 0, pA), tf(B, capAB, 1, pB)], protects: [pA, pB] },
     { name: `small face in its 128² window (${carrier})`, faces: [tf(S, -1, 0, pS)], protects: [pS] },
+  ];
+  return pinCases(gl, cases, aspect, carrier);
+};
+
+/**
+ * step 5 (face-detail spec §8.3 item 1): every new warp at ±max, 左右分開 with L ≠ R, and all 15 美型 items together,
+ * through the same drawFaces path the app renders with, on the fixture face
+ */
+window.runReshapePinFaceDetail = (carrier) => {
+  const gl = context();
+  const { width: W, height: H } = landmarks;
+  const aspect = W / H;
+  const face = adapt({ points: new Float32Array(landmarks.points) }, W, H);
+  const neutral = Object.fromEntries(PARAM_DEFS.map((d) => [d.id, neutralValue(d)])) as Record<ParamId, number>;
+  const U = (over: Partial<Record<ParamId, number>>, right: PersonParams['right'] = null) => reshapeUniforms({ ...neutral, ...over }, 1, right);
+  /** one face, as ReshapePass.draw packs it: yaw-attenuated, no cap, no protect layer */
+  const one = (u: ReshapeUniforms): TableFace[] => [{ face, u: attenuate(u, face.yaw), layer: -1, window: WHOLE, centre: boxCentre(ovalBox(face)), cap: -1 }];
+  const split = { 'shape.eyeEnlarge': 1, 'shape.faceSlim': 1, 'shape.faceV': 1, 'shape.faceNarrow': 1, 'shape.jawline': 1, 'shape.temple': 1 };
+  const all15 = Object.fromEntries(paramsInGroup('shape').map((d) => [d.id, 1]));
+  const cases: { name: string; faces: TableFace[] }[] = [
+    { name: `下頜線 max (${carrier})`, faces: one(U({ 'shape.jawline': 1 })) },
+    { name: `太陽穴 +max (${carrier})`, faces: one(U({ 'shape.temple': 1 })) },
+    { name: `太陽穴 −max (${carrier})`, faces: one(U({ 'shape.temple': 0 })) },
+    { name: `髮際線 +max (${carrier})`, faces: one(U({ 'shape.hairline': 1 })) },
+    { name: `髮際線 −max (${carrier})`, faces: one(U({ 'shape.hairline': 0 })) },
+    { name: `鼻翼 +max (${carrier})`, faces: one(U({ 'shape.noseWing': 1 })) },
+    { name: `鼻翼 −max (${carrier})`, faces: one(U({ 'shape.noseWing': 0 })) },
+    { name: `山根 +max (${carrier})`, faces: one(U({ 'shape.noseBridge': 1 })) },
+    { name: `山根 −max (${carrier})`, faces: one(U({ 'shape.noseBridge': 0 })) },
+    { name: `嘴高 +max (${carrier})`, faces: one(U({ 'shape.mouthHeight': 1 })) },
+    { name: `嘴高 −max (${carrier})`, faces: one(U({ 'shape.mouthHeight': 0 })) },
+    { name: `左右分開 L = max, R = 0 (${carrier})`, faces: one(U(split, Object.fromEntries(Object.keys(split).map((id) => [id, 0])))) },
+    { name: `every 美型 item at max (${carrier})`, faces: one(U(all15)) },
   ];
   return pinCases(gl, cases, aspect, carrier);
 };

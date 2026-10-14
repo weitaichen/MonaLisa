@@ -12,7 +12,8 @@
 // the outermost map (body research report §管線); a person-distance budget on the contour warps (瘦臉 background
 // limit, reports/美體修圖 背景扭曲 抑制技術.md stage 1 ②); v0.4: up to MAX_RENDER_FACES faces read from one face table
 // (texture or UBO), their displacements capped and summed, one 瘦臉 limit layer per face in an R16F array; step 3: the
-// V → O geometry, buffer tile and source window uniforms (uGeo, uTile, uWin) around the chain.
+// V → O geometry, buffer tile and source window uniforms (uGeo, uTile, uWin) around the chain; step 5: 下頜線, 太陽穴,
+// 髮際線, 鼻翼, 山根 and 嘴高 warps, new shiftEllipse / squeezeAxis primitives, per-side strengths (左右分開).
 import { MAX_RENDER_FACES } from '../../config/limits';
 import { IDENTITY_MAT3 } from '../../geometry/view';
 import type { Face, FaceProtect, ParamId, PersonParams, SplitParamId } from '../../types';
@@ -413,23 +414,31 @@ export function reshapeGeometry(face: Face, aspect: number, u: ReshapeUniforms):
  * Upper bound of how far the face chain moves any coordinate, in iso units (fractions of the image width): the sum of
  * each active warp's largest move (S §4.4 D7): curveWarp |t − o|·|d|, enlargeEye / scaleAround R·|d|, shiftAround |disp|
  * (two eyes). The yaw attenuation, the 瘦臉 limit and the influence cap only scale moves down, so they are ignored.
- * The tile planner grows each tile's source window by it; step 5 adds its warps here.
+ * The tile planner grows each tile's source window by it. Step 5: a split item counts its stronger side, and
+ * faceDetailMoves adds the new warps.
  */
 export function displacementBound(face: Face, aspect: number, u: ReshapeUniforms): number {
   const g = reshapeGeometry(face, aspect, u);
   const p = (i: number) => pt(face.pts111, i);
   const isoLen = (dx: number, dy: number) => Math.hypot(dx, dy / aspect);
   const curve = (o: V2, t: V2, d: number) => isoLen(t[0] - o[0], t[1] - o[1]) * Math.abs(d);
+  const slim = Math.max(Math.abs(u.faceSlim), Math.abs(u.faceSlimR));
+  const v = Math.max(Math.abs(u.faceV), Math.abs(u.faceVR));
+  const narrow = Math.max(Math.abs(u.faceNarrow), Math.abs(u.faceNarrowR));
   let b = 0;
-  if (u.faceSlim) for (const [o, t] of SLIM) b += curve(p(o), p(t), u.faceSlim);
-  if (u.faceV) V_JAW.forEach((i, k) => (b += curve(p(i), [g.vTargets[k * 2], g.vTargets[k * 2 + 1]], u.faceV)));
-  if (u.faceNarrow) NARROW.forEach((i, k) => (b += curve(p(i), [g.narrowTargets[k * 2], g.narrowTargets[k * 2 + 1]], u.faceNarrow)));
+  if (slim) for (const [o, t] of SLIM) b += curve(p(o), p(t), slim);
+  if (v) V_JAW.forEach((i, k) => (b += curve(p(i), [g.vTargets[k * 2], g.vTargets[k * 2 + 1]], v)));
+  if (narrow) NARROW.forEach((i, k) => (b += curve(p(i), [g.narrowTargets[k * 2], g.narrowTargets[k * 2 + 1]], narrow)));
   if (u.chin) b += curve(p(16), g.chinTarget, u.chin);
   if (u.forehead) b += curve(pt(face.ext, 0), pt(face.ext, 3), u.forehead);
   if (u.noseSlim) for (const [o, t] of NOSE) b += curve(p(o), p(t), u.noseSlim);
   if (u.mouthSize) b += g.mouthR * Math.abs(u.mouthSize);
   if (g.eyeDisp[0] !== 0 || g.eyeDisp[1] !== 0) b += 2 * isoLen(g.eyeDisp[0], g.eyeDisp[1]);
-  if (u.eyeEnlarge) b += (g.eyeR[0] + g.eyeR[1]) * Math.abs(u.eyeEnlarge);
+  // 大眼 per side: p74 takes the left strength, p77 the right one
+  if (u.eyeEnlarge || u.eyeEnlargeR) b += g.eyeR[0] * Math.abs(u.eyeEnlarge) + g.eyeR[1] * Math.abs(u.eyeEnlargeR);
+  const m = faceDetailMoves(g, u, face);
+  for (const d of m.uv) b += isoLen(d[0], d[1]);
+  for (const l of m.iso) b += l;
   return b;
 }
 
@@ -441,7 +450,8 @@ export const FACE_TABLE_UNIT = 3;
 export const FACE_UBO_BINDING = 0;
 
 /**
- * 瘦臉 background limit (stage 1 ②). The contour warps' displacement g (瘦臉 / V臉 / 窄臉 / 下巴 / 額頭 together) is held
+ * 瘦臉 background limit (stage 1 ②). The contour warps' displacement g (瘦臉 / V臉 / 窄臉 / 下巴 / 額頭 together; step 5:
+ * 下頜線 / 太陽穴 / 髮際線 too, which run before the limit, face-detail spec §4.5) is held
  * within a budget B(sd) that depends on the signed distance sd to the person (FaceProtect, sampled where the face chain
  * samples: after the body map) and is 0 from R = PROTECT_REACH face widths outside the person on: so nothing farther out
  * moves. B rises inward at slope PROTECT_SLOPE, which bounds what the limit adds to the map's Jacobian (stretch ≤
@@ -492,7 +502,34 @@ export function packFaceDetail(row: Float32Array, u: ReshapeUniforms, g: Reshape
   set(95, g.rootRy, 0, 0, 0);
 }
 
+/**
+ * The largest move of every active step-5 warp, for step 3's displacementBound (S3 §4.4): UV vectors (count
+ * hypot(dx·W, dy·H) px) and iso lengths (count iso·W px). Two 鼻翼 discs may overlap, so the wing counts twice.
+ */
+export function faceDetailMoves(g: ReshapeGeometry, u: ReshapeUniforms, face: Face): { uv: V2[]; iso: number[] } {
+  const P = face.pts111;
+  const uvs: V2[] = [];
+  const jd = Math.max(Math.abs(u.jawline), Math.abs(u.jawlineR));
+  if (jd) JAW.forEach((i, k) => uvs.push([(g.jawTargets[k * 2] - P[i * 2]) * jd, (g.jawTargets[k * 2 + 1] - P[i * 2 + 1]) * jd]));
+  const td = Math.max(Math.abs(u.temple), Math.abs(u.templeR));
+  if (td)
+    TEMPLE.forEach((_, k) =>
+      uvs.push([
+        (g.templeTargets[k * 2] - g.templeAnchors[k * 2]) * td * TEMPLE_W[k],
+        (g.templeTargets[k * 2 + 1] - g.templeAnchors[k * 2 + 1]) * td * TEMPLE_W[k],
+      ]),
+    );
+  if (g.hairlineS) uvs.push(g.hairlineDisp);
+  if (g.noseWingS) uvs.push(g.noseWingDisp, g.noseWingDisp);
+  if (g.mouthHS) uvs.push(g.mouthHDisp);
+  return { uv: uvs, iso: g.rootK ? [Math.abs(g.rootK) * Math.max(g.root[2], g.root[3])] : [] };
+}
+
 const glslFloat = (n: number) => (Number.isInteger(n) ? n.toFixed(1) : String(n));
+/** a GLSL constant array from a TS table (the GPU and the CPU port share one definition, like PROTECT_RAMP) */
+const glslFloats = (name: string, xs: readonly number[]) =>
+  `const float ${name}[${xs.length}] = float[${xs.length}](${xs.map((x) => glslFloat(x)).join(', ')});`;
+const glslInts = (name: string, xs: readonly number[]) => `const int ${name}[${xs.length}] = int[${xs.length}](${xs.join(', ')});`;
 
 /**
  * The N-face reshape (S §4.4): the body field is the outermost backward map; every listed face's chain starts from the
@@ -590,37 +627,96 @@ const ivec2 SLIM[9] = ivec2[9](ivec2(3,44), ivec2(29,44), ivec2(7,45), ivec2(25,
 const int V_JAW[6] = int[6](8, 10, 12, 24, 22, 20);
 const int NARROW[4] = int[4](2, 4, 30, 28);
 const ivec2 NOSE[4] = ivec2[4](ivec2(80,46), ivec2(81,46), ivec2(82,49), ivec2(83,49));
+${glslFloats('SLIM_SIDE', SLIM_SIDE)}
+${glslFloats('VJAW_SIDE', VJAW_SIDE)}
+${glslFloats('NARROW_SIDE', NARROW_SIDE)}
+${glslInts('JAW', JAW)}
+${glslFloats('JAW_SIDE', JAW_SIDE)}
+${glslFloats('TEMPLE_SIDE', TEMPLE_SIDE)}
+${glslFloats('TEMPLE_W', TEMPLE_W)}
+float sided(float dl, float dr, float side) { return dl + (dr - dl) * side; } // == dl exactly when dr == dl
+vec2 JT(int f, int k) { return pairOf(F(f, 77 + (k >> 1)), k); } // 下頜線 targets (step 5, texels 77–81)
+vec2 TA(int f, int k) { return pairOf(F(f, 82 + (k >> 1)), k); } // 太陽穴 anchors (82–84)
+vec2 TT(int f, int k) { return pairOf(F(f, 85 + (k >> 1)), k); } // 太陽穴 targets (85–87)
+
+// Elliptical local translate with a flat top (face-detail spec §4.2): content near c moves by disp. ax / ay = unit iso
+// axes; r = (rx, ry toward −ay, ry toward +ay) iso. Profile (1 − w⁴)²: k ≥ 0.88 for w ≤ 0.5, C¹, max |dk/dw| 2.42.
+vec2 shiftEllipse(vec2 tc, vec2 c, vec2 ax, vec2 ay, vec3 r, vec2 disp) {
+  vec2 d = iso(tc) - iso(c);
+  float qy = dot(d, ay);
+  vec2 q = vec2(dot(d, ax) / r.x, qy / (qy < 0.0 ? r.y : r.z));
+  float w2 = dot(q, q);
+  if (w2 >= 1.0) return tc;
+  float k = 1.0 - w2 * w2;
+  return tc - disp * k * k;
+}
+
+// Squeeze toward the axis through c along ay: content at signed distance a = (q − c)·ax moves toward the axis by
+// k·a·(1 − t²)²·(1 − v²)², t = a / r− or a / r+, v = (q − c)·ay / ry; zero at |t| = 1 and |v| = 1, C¹.
+vec2 squeezeAxis(vec2 tc, vec2 c, vec2 ax, vec2 ay, vec3 r, float k) {
+  vec2 d = iso(tc) - iso(c);
+  float a = dot(d, ax);
+  float t = a / (a < 0.0 ? r.x : r.y);
+  float v = dot(d, ay) / r.z;
+  if (t * t >= 1.0 || v * v >= 1.0) return tc;
+  float h = (1.0 - t * t) * (1.0 - v * v);
+  vec2 s = ax * (k * a * h * h);              // iso
+  return tc + vec2(s.x, s.y * uAspect);        // iso → UV
+}
 
 vec2 faceChain(int f, vec2 tc) {
   vec2 tc0 = tc;
-  vec4 s1 = F(f, ${FT.S1});        // slim, v, narrow, chin
-  vec4 s2 = F(f, ${FT.S2});        // forehead, nose, mouth, eye
+  vec4 s1 = F(f, ${FT.S1});        // slim, v, narrow, chin (GPUPixel-left)
+  vec4 s2 = F(f, ${FT.S2});        // forehead, nose, mouth, eye (GPUPixel-left)
   vec4 r = F(f, ${FT.RADII});      // eyeR.x, eyeR.y, mouthR, protect layer (−1 = none)
   vec4 ce = F(f, ${FT.CHIN_EYE});  // chinTarget, eyeDisp
-  if (s1.x != 0.0) {
-    for (int i = 0; i < 9; i++) tc = curveWarp(tc, P(f, SLIM[i].x), P(f, SLIM[i].y), s1.x);
+  vec4 sR = F(f, ${FT.RIGHT});     // step 5: slimR, vR, narrowR, eyeR (GPUPixel-right; == s1/s2 while 左右分開 is off)
+  vec4 sR2 = F(f, ${FT.RIGHT} + 1); // jawR, templeR
+  vec4 s5 = F(f, 75);              // jawL, templeL, hairline, noseWing
+  vec4 s6 = F(f, 76);              // 山根 k, mouthHeight
+  vec4 axes = F(f, 88);            // r̂ (iso), m̂ (iso)
+  if (s1.x != 0.0 || sR.x != 0.0) {
+    for (int i = 0; i < 9; i++) tc = curveWarp(tc, P(f, SLIM[i].x), P(f, SLIM[i].y), sided(s1.x, sR.x, SLIM_SIDE[i]));
   }
-  if (s1.y != 0.0) {
-    for (int i = 0; i < 6; i++) tc = curveWarp(tc, P(f, V_JAW[i]), VT(f, i), s1.y);
+  if (s1.y != 0.0 || sR.y != 0.0) {
+    for (int i = 0; i < 6; i++) tc = curveWarp(tc, P(f, V_JAW[i]), VT(f, i), sided(s1.y, sR.y, VJAW_SIDE[i]));
   }
-  if (s1.z != 0.0) {
-    for (int i = 0; i < 4; i++) tc = curveWarp(tc, P(f, NARROW[i]), NT(f, i), s1.z);
+  if (s1.z != 0.0 || sR.z != 0.0) {
+    for (int i = 0; i < 4; i++) tc = curveWarp(tc, P(f, NARROW[i]), NT(f, i), sided(s1.z, sR.z, NARROW_SIDE[i]));
+  }
+  if (s5.x != 0.0 || sR2.x != 0.0) {
+    for (int i = 0; i < 10; i++) tc = curveWarp(tc, P(f, JAW[i]), JT(f, i), sided(s5.x, sR2.x, JAW_SIDE[i]));
+  }
+  if (s5.y != 0.0 || sR2.y != 0.0) {
+    for (int i = 0; i < 6; i++) tc = curveWarp(tc, TA(f, i), TT(f, i), sided(s5.y, sR2.y, TEMPLE_SIDE[i]) * TEMPLE_W[i]);
   }
   if (s1.w != 0.0) tc = curveWarp(tc, P(f, 16), ce.xy, s1.w);
   if (s2.x != 0.0) tc = curveWarp(tc, EXT(f, 0), EXT(f, 3), s2.x);
+  if (s5.z != 0.0) tc = shiftEllipse(tc, EXT(f, 0), axes.xy, axes.zw, F(f, 89).xyz, F(f, 90).xy); // 髮際線
   if (r.w >= 0.0) tc = protectContour(f, tc0, tc, r.w);
   if (s2.y != 0.0) {
     for (int i = 0; i < 4; i++) tc = curveWarp(tc, P(f, NOSE[i].x), P(f, NOSE[i].y), s2.y);
+  }
+  if (s5.w != 0.0) { // 鼻翼
+    vec4 nw = F(f, 93);
+    tc = shiftAround(tc, P(f, 80), nw.x, nw.yz);
+    tc = shiftAround(tc, P(f, 81), nw.x, -nw.yz);
+  }
+  if (s6.x != 0.0) { // 山根
+    vec4 rt = F(f, 94);
+    tc = squeezeAxis(tc, rt.xy, axes.xy, axes.zw, vec3(rt.z, rt.w, F(f, 95).x), s6.x);
+  }
+  if (s6.y != 0.0) { // 嘴高, then 嘴型 (backward order: forward, 嘴型 scales about the true p106, then 嘴高 moves it)
+    vec2 ay = F(f, 92).xy;
+    tc = shiftEllipse(tc, P(f, 106), vec2(-ay.y, ay.x), ay, F(f, 91).xyz, F(f, 90).zw);
   }
   if (s2.z != 0.0) tc = scaleAround(tc, P(f, 106), r.z, s2.z);
   if (ce.zw != vec2(0.0)) {
     tc = shiftAround(tc, P(f, 74), r.x, ce.zw);
     tc = shiftAround(tc, P(f, 77), r.y, -ce.zw);
   }
-  if (s2.w != 0.0) {
-    tc = enlargeEye(tc, P(f, 74), r.x, s2.w);
-    tc = enlargeEye(tc, P(f, 77), r.y, s2.w);
-  }
+  if (s2.w != 0.0) tc = enlargeEye(tc, P(f, 74), r.x, s2.w);  // 大眼 per side: p74 left, p77 right
+  if (sR.w != 0.0) tc = enlargeEye(tc, P(f, 77), r.y, sR.w);
   return tc;
 }
 

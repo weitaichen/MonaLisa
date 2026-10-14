@@ -2,10 +2,11 @@
 // the source decoded at up to 4096), the tile planner and the 設定 view of 輸出解析度. Pure: no DOM, no GL.
 import { FULL_EXPORT_MAX_EDGE, GL_TILE_BUDGET_MB, SOURCE_MAX_MB } from '../config/limits';
 import { displacementBound, reshapeActive, reshapeGeometry, reshapeUniforms } from '../engine/passes/reshape';
+import { toneActive, toneValuesOf } from '../engine/passes/toneGeometry';
 import { MEAN_REFERENCE_SHORT_EDGE } from '../engine/uniforms';
 import { apply, snapCrop, viewSize, vToO } from '../geometry/view';
 import type { ExportDebugKnob } from '../store/settings';
-import type { BodyField, ExportFormat, ExportSize, Geometry, Prefs, PxRect, Rect, RenderFace, Size, Tier } from '../types';
+import type { BodyField, ExportFormat, ExportSize, Geometry, Prefs, PxRect, Rect, RenderFace, Size, Spot, StillFrame, Tier } from '../types';
 import { FULL_JPEG_QUALITY, JPEG_QUALITY } from './exporter';
 import { fitLongEdge } from './importer';
 
@@ -248,6 +249,69 @@ export function faceBoundsFor(faces: readonly RenderFace[], oAspect: number): Fa
     out.push({ box: reshapeGeometry(f.face, oAspect, u).box, bound: displacementBound(f.face, oAspect, u) });
   }
   return out;
+}
+
+/**
+ * Grow a tile's O-normalized source window so every spot whose quad (1.1 r) meets it also brings in its ring and donor
+ * boxes, bbox(c ± 1.4 r) ∪ bbox(c + d ± 1.4 r) (skin-cleanup spec §4.6, A5); repeated until no further spot is met.
+ * The heal then runs per tile on the tile's own pixels. `oSize` is any size with the O aspect: r and d are fractions of
+ * its short side, and one of its pixels is the margin for the bilinear ring taps (the working size: ≥ 1 decode px).
+ * Clipped to the photo; step 3's planner snaps the result outward to the decode grid.
+ */
+export function spotWindowGrowth(winO: Rect, spots: readonly Spot[], oSize: Size): Rect {
+  const W = oSize.width;
+  const H = oSize.height;
+  const short = Math.min(W, H);
+  let x0 = winO.x * W;
+  let y0 = winO.y * H;
+  let x1 = (winO.x + winO.w) * W;
+  let y1 = (winO.y + winO.h) * H;
+  const used = new Set<number>();
+  let grew = true;
+  while (grew) {
+    grew = false;
+    spots.forEach((s, i) => {
+      if (used.has(i)) return;
+      const cx = s.x * W;
+      const cy = s.y * H;
+      const r = s.r * short;
+      const q = 1.1 * r;
+      if (cx + q <= x0 || cx - q >= x1 || cy + q <= y0 || cy - q >= y1) return;
+      used.add(i);
+      const e = 1.4 * r + 1; // + 1 px for the bilinear ring taps
+      const dx = s.dx * short;
+      const dy = s.dy * short;
+      const nx0 = Math.min(x0, cx - e, cx + dx - e);
+      const ny0 = Math.min(y0, cy - e, cy + dy - e);
+      const nx1 = Math.max(x1, cx + e, cx + dx + e);
+      const ny1 = Math.max(y1, cy + e, cy + dy + e);
+      if (nx0 < x0 || ny0 < y0 || nx1 > x1 || ny1 > y1) grew = true;
+      x0 = nx0;
+      y0 = ny0;
+      x1 = nx1;
+      y1 = ny1;
+    });
+  }
+  if (used.size === 0) return winO;
+  const cx0 = Math.max(0, x0);
+  const cy0 = Math.max(0, y0);
+  const cx1 = Math.min(W, x1);
+  const cy1 = Math.min(H, y1);
+  return { x: cx0 / W, y: cy0 / H, w: (cx1 - cx0) / W, h: (cy1 - cy0) / H };
+}
+
+/** a step-4 pass runs in the export: spots, or a drawn face with a tone item */
+export function step4Active(frame: Pick<StillFrame, 'faces' | 'photo'>): boolean {
+  return frame.photo.spots.length > 0 || frame.faces.some((f) => f.weight > 0 && toneActive(toneValuesOf(f.person.values)));
+}
+
+/** step 4's values for step 3's planner hooks (crop spec §4.4 steps 1 and 4): B at window size while a step-4 pass runs; spot windows */
+export function spotBounds(frame: Pick<StillFrame, 'faces' | 'photo'>, oSize: Size): Pick<TileBounds, 'spotWindowGrowth' | 'oSpacePasses'> {
+  const spots = frame.photo.spots;
+  return {
+    oSpacePasses: step4Active(frame),
+    ...(spots.length ? { spotWindowGrowth: (winO: Rect) => spotWindowGrowth(winO, spots, oSize) } : {}),
+  };
 }
 
 export function planExport(

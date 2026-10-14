@@ -7209,7 +7209,7 @@ git commit -m "v0.4 step 4 (17/20): 祛痘 tap mode in the editor" -m "Co-Author
   ```
   S §4.6: the tone field is one global texture from the working image (`toneSource`); a tile whose engine has no matching field rebuilds it once from `toneSource` (P0b and P0c at working resolution) before its own passes. Each spot whose quad (1.1 r) meets a tile's source window grows the window to hold bbox(c ± 1.4 r) ∪ bbox(c + d ± 1.4 r).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/media/exportPlan.test.ts` (imports: `spotBounds`, `spotWindowGrowth`, `tileBytes` from `./exportPlan`; `defaultPhoto`, `neutralPerson` from `../edit/state`; `makeFace` from `../app/testFakes`; `type Rect`, `type Spot` from `../types`):
 ```ts
@@ -7467,14 +7467,14 @@ test('spots stay on their content under 瘦臉 + 大眼, after 旋轉 and after 
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `npx vitest run src/media/exportPlan.test.ts`
 Expected: FAIL — `spotWindowGrowth is not a function` (and `spotBounds`).
 Run: `npm run build && npx playwright test tests/e2e/tone-engine.spec.ts -g tiles`
 Expected: FAIL — the page does not compile (`spotWindowGrowth` missing); once it does, `cold` exceeds 1 (the tile engine has no field: Task 11's warning path).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/media/exportPlan.ts` (step 3's module; add `Spot`, `StillFrame` to its `../types` type import — `Rect` and `Size` are there already):
 ```ts
@@ -7595,14 +7595,14 @@ export function spotBounds(frame: Pick<StillFrame, 'faces' | 'photo'>, oSize: Si
 ```
 (`job()` reads no texture content, so building it before the uploads is safe; keep the rest of `renderTile` — the read-back of `read` — as step 3 wrote it.)
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/media src/app && npm run typecheck`
 Expected: PASS.
 Run: `npm run build && npx playwright test tests/e2e/tone-engine.spec.ts tests/e2e/tone.spec.ts tests/e2e/crop.spec.ts tests/e2e/export.spec.ts`
 Expected: all pass; the log prints `tiles 12: warm max ≤ 1, cold max ≤ 1` and each geometry step's `lastSpot … px from the dot`; step 3's tile harness (`export.spec.ts`, which has no spots or tone) still prints max channel diff ≤ 1 per case after the `renderTile` change.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/engine/pipeline.ts src/engine/index.ts src/app/still.ts src/media/exportPlan.ts src/media/exportPlan.test.ts tests/e2e/pages/tone.ts tests/e2e/tone-engine.spec.ts tests/e2e/tone.spec.ts

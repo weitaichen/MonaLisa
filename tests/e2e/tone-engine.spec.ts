@@ -201,3 +201,12 @@ test('heal: the GPU equals healCpu within 2/255, a blemish disappears, a border 
   expect(r.passes.none.filter((p) => p === 'heal')).toEqual([]);
   expect(r.passes.spots).toContain('heal');
 });
+
+test('tiles: a forced 256-px tiling equals the untiled render within 1/255, also when the field is rebuilt from toneSource', async ({ page }) => {
+  await openHarness(page, 'runToneTiles');
+  const r = await page.evaluate(() => window.runToneTiles!());
+  console.log(`tiles ${r.tiles}: warm max ${r.warm}, cold max ${r.cold}`);
+  expect(r.tiles).toBe(6 * 2);
+  expect(r.warm).toBeLessThanOrEqual(1);
+  expect(r.cold).toBeLessThanOrEqual(1);
+});

@@ -14,8 +14,9 @@ import { createRetouchPass, createToneFieldPass } from '../../../src/engine/pass
 import { createToneMaskPass } from '../../../src/engine/passes/toneMask';
 import { faceFrame, IDENTITY_WIN, NEUTRAL_TONE, Q_CLEAR, R_CLEAR, toneDrawsQ, toneDrawsR, type ToneDraw, type ToneFaceInput, type ToneValues } from '../../../src/engine/passes/toneGeometry';
 import { sigmaLow } from '../../../src/engine/shaders/tone';
+import { spotWindowGrowth } from '../../../src/media/exportPlan';
 import { adapt } from '../../../src/tracking/adapter111';
-import type { ParamId, PersonParams, PhotoParams, RenderInput, Spot } from '../../../src/types';
+import type { Engine, ParamId, PersonParams, PhotoParams, RenderInput, Spot } from '../../../src/types';
 
 export const W = landmarks.width;
 export const H = landmarks.height;
@@ -120,6 +121,7 @@ declare global {
       releaseMaxDiff: number;
     }>;
     runToneHeal?: () => Promise<{ spots: Spot[]; out: string; err: number; passes: { none: string[]; spots: string[] } }>;
+    runToneTiles?: () => Promise<{ warm: number; cold: number; tiles: number }>;
   }
 }
 
@@ -332,4 +334,83 @@ window.runToneHeal = async () => {
   engine.dispose();
   bmp.close();
   return { spots, out, err, passes };
+};
+
+/** a pixel rect snapped outward to multiples of 4, then clipped (the step-3 planner's order) */
+function snapClip(r: { x: number; y: number; w: number; h: number }, W0: number, H0: number) {
+  const x0 = Math.max(0, Math.floor(r.x / 4) * 4);
+  const y0 = Math.max(0, Math.floor(r.y / 4) * 4);
+  const x1 = Math.min(W0, Math.ceil((r.x + r.w) / 4) * 4);
+  const y1 = Math.min(H0, Math.ceil((r.y + r.h) / 4) * 4);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+/** 黑眼圈, 白牙, 亮眼 and 勻膚 on, three spots across 256-px tile borders: tiled (warm cache, then a fresh engine) vs untiled */
+window.runToneTiles = async () => {
+  const fullRes = await fixtureBitmap();
+  const W0 = 400;
+  const H0 = 600;
+  const c = new OffscreenCanvas(W0, H0);
+  c.getContext('2d')!.drawImage(fullRes, 0, 0, W0, H0);
+  fullRes.close();
+  const bmp = await createImageBitmap(c, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+  const v: ToneValues = { ...NEUTRAL_TONE, even: 0.5, darkCircle: 1, teeth: 1, eyeBright: 1 };
+  const spots: Spot[] = [
+    { x: 256 / W0, y: 0.42, r: 0.025, dx: 0.075, dy: 0, owner: null },
+    { x: 0.3, y: 256 / H0, r: 0.025, dx: 0, dy: 0.075, owner: null },
+    { x: 0.6, y: 512 / H0, r: 0.025, dx: -0.075, dy: 0, owner: null },
+  ];
+  const toneSource = { source: bmp, width: W0, height: H0 };
+  const T = 256;
+  const apron = 16; // ⌈14·k⌉ + 2 = 10 at k = 400/720, rounded up to 4, plus a margin
+  let tiles = 0;
+  const tiled = async (engine: Engine): Promise<ImageData> => {
+    const out = new ImageData(W0, H0);
+    for (let ty = 0; ty < H0; ty += T)
+      for (let tx = 0; tx < W0; tx += T) {
+        const o = { x: tx, y: ty, w: Math.min(T, W0 - tx), h: Math.min(T, H0 - ty) };
+        const buf = snapClip({ x: o.x - apron, y: o.y - apron, w: o.w + 2 * apron, h: o.h + 2 * apron }, W0, H0);
+        const g = spotWindowGrowth({ x: buf.x / W0, y: buf.y / H0, w: buf.w / W0, h: buf.h / H0 }, spots, { width: W0, height: H0 });
+        const grown = { x: g.x * W0, y: g.y * H0, w: g.w * W0, h: g.h * H0 };
+        const win = snapClip({ x: grown.x - 4, y: grown.y - 4, w: grown.w + 8, h: grown.h + 8 }, W0, H0);
+        const crop = await createImageBitmap(bmp, win.x, win.y, win.w, win.h);
+        const img = engine.renderTile(
+          {
+            ...inputFor(crop, v, spots),
+            width: win.w,
+            height: win.h,
+            oAspect: W0 / H0, // tiles must pass the working aspect (step 3, RenderInput.oAspect)
+            sourceWindow: { x: win.x / W0, y: win.y / H0, w: win.w / W0, h: win.h / H0 },
+            output: { tile: { x: buf.x / W0, y: buf.y / H0, w: buf.w / W0, h: buf.h / H0 }, pixelSize: { width: buf.w, height: buf.h }, fullShortEdge: W0 },
+            toneSource,
+          },
+          { x: o.x - buf.x, y: o.y - buf.y, w: o.w, h: o.h },
+        );
+        crop.close();
+        for (let y = 0; y < o.h; y++) out.data.set(img.data.subarray(y * o.w * 4, (y + 1) * o.w * 4), ((o.y + y) * W0 + o.x) * 4);
+        tiles++;
+      }
+    return out;
+  };
+  const maxDiff = (a: ImageData, b: ImageData) => {
+    let m = 0;
+    for (let i = 0; i < a.data.length; i++) if (i % 4 !== 3) m = Math.max(m, Math.abs(a.data[i] - b.data[i]));
+    return m;
+  };
+  const newEngine = async () => {
+    const canvas = document.createElement('canvas');
+    document.body.append(canvas);
+    const e = createEngine(canvas, { mirror: false });
+    await e.ready;
+    return e;
+  };
+  const warmEngine = await newEngine();
+  const whole = warmEngine.renderToImageData({ ...inputFor(bmp, v, spots), toneSource }, { mirror: false });
+  const warm = maxDiff(whole, await tiled(warmEngine));
+  warmEngine.dispose();
+  const coldEngine = await newEngine();
+  const cold = maxDiff(whole, await tiled(coldEngine));
+  coldEngine.dispose();
+  bmp.close();
+  return { warm, cold, tiles };
 };

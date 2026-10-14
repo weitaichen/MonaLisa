@@ -5,6 +5,7 @@ import { splitLegacy } from '../edit/legacy';
 import { defaultPhoto } from '../edit/state';
 import { applyPreset, setParam } from '../engine/params';
 import { applyRatio, IDENTITY_GEOMETRY, rotateLeft, snapCrop } from '../geometry/view';
+import { spotWindowGrowth } from '../media/exportPlan';
 import { adapt } from '../tracking/adapter111';
 import type { BeautyParams, Geometry, PhotoParams, StillFrame } from '../types';
 import { createStillSession, sameDisplayFrame, type StillSession } from './still';
@@ -626,5 +627,21 @@ describe('crop view mode, display pause and tiles (step 3)', () => {
     expect('source' in t).toBe(false);
     expect(s.bounds(frame()).body).toBe(body);
     expect(s.bounds(frame(), null).body).toBeNull();
+  });
+
+  it('step 4 (skin-cleanup spec §4.6): every tile carries the working bitmap as toneSource; bounds add the spot hooks', () => {
+    const bmp = bitmap();
+    const s = createStillSession(fakeEngine(), null, bmp, { faces: [] });
+    expect(s.tileInput(frame()).toneSource).toEqual({ source: bmp, width: 1536, height: 2048 });
+    expect(s.tileInput(frame()).toneSource!.source).toBe(bmp);
+    const plainBounds = s.bounds(frame());
+    expect(plainBounds.oSpacePasses).toBe(false);
+    expect(plainBounds.spotWindowGrowth).toBeUndefined();
+    const spot = { x: 0.5, y: 0.5, r: 0.01, dx: 0.02, dy: 0, owner: null };
+    const withSpot: StillFrame = { ...frame(), photo: { ...photo, spots: [spot] } };
+    const b = s.bounds(withSpot);
+    expect(b.oSpacePasses).toBe(true);
+    const win = { x: 0.49, y: 0.49, w: 0.002, h: 0.002 };
+    expect(b.spotWindowGrowth!(win)).toEqual(spotWindowGrowth(win, [spot], { width: 1536, height: 2048 }));
   });
 });

@@ -248,6 +248,13 @@ export interface Pipeline {
   readonly adjustFailed: boolean;
   /** every FBO to 1 × 1 (after a tiled export, S §4.4); the next frame re-allocates at its own size */
   releaseBuffers(): void;
+  /** step 4 (tiles): the cached tone field is the one for `key` */
+  toneFieldReady(key: string): boolean;
+  /**
+   * step 4 (tiles, skin-cleanup spec §4.6): build the tone field of `tj` from `src`, the working image (RenderInput.toneSource)
+   * uploaded at tj.work — heal into A at that size when there are spots, then R, Q and P0c — so the tile's frame finds it.
+   */
+  prepareToneField(tj: ToneJob, src: Texture): void;
   /** `lost` = context already lost: drop references without issuing GL calls. */
   dispose(lost?: boolean): void;
 }
@@ -514,7 +521,8 @@ export function createPipeline(gl: GL): Pipeline {
 
       // ── step 4: P0c tone field (cached) and P0d retouch, in O before P1 (skin-cleanup spec §4.1) ──
       if (tj && tj.retouchOn) {
-        // a tile (its src covers only a window of O) never builds the field: it reuses the preview's (Task 18 prepares it)
+        // a tile (its src covers only a window of O) never builds the field: it reuses the preview's, or the one renderTile
+        // built from RenderInput.toneSource (prepareToneField) before the tile's own passes
         const tile = job.win[0] !== 0 || job.win[1] !== 0 || job.win[2] !== 1 || job.win[3] !== 1;
         toneMask ??= createToneMaskPass(gl);
         const r = fb('R', maskBufferSize(job.srcSize));
@@ -650,6 +658,28 @@ export function createPipeline(gl: GL): Pipeline {
         const f = fbs[k];
         if (f) resizeFramebuffer(gl, f, 1, 1);
       }
+    },
+
+    toneFieldReady(key) {
+      return toneKey === key && toneTex !== null;
+    },
+
+    prepareToneField(tj, src) {
+      if (!tj.mn8On || (toneKey === tj.key && toneTex)) return;
+      resetState();
+      // base0 at working resolution: P0b over the whole working image when there are spots (the field holds the heal)
+      let base0: Texture = src;
+      if (tj.spots.length > 0) {
+        heal ??= createHealPass(gl);
+        const a = fb('A', tj.work);
+        heal.draw(src, a, fb('RING', { width: HEAL_RING_SAMPLES, height: tj.spots.length }), tj.spots, IDENTITY_WIN, tj.work);
+        base0 = a.tex;
+      }
+      toneMask ??= createToneMaskPass(gl);
+      const r = fb('R', maskBufferSize(tj.work));
+      toneMask.draw(r, tj.drawsR, IDENTITY_WIN, R_CLEAR);
+      buildToneField(tj, base0, r.tex);
+      resetState();
     },
 
     drawOverlay(face, mirror) {

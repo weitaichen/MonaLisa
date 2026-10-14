@@ -1,13 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { makeFace } from '../app/testFakes';
 import { fieldAt } from '../body/cpuWarp';
+import { defaultPhoto, neutralPerson } from '../edit/state';
 import { backMapperCpu } from '../engine/backMapCpu';
 import { PARAM_DEFS } from '../engine/params';
 import { displacementBound, reshapeGeometry, reshapeUniforms } from '../engine/passes/reshape';
 import { reshapeMapCpu, type UvMap } from '../engine/passes/reshapeCpu';
 import { applyRatio, IDENTITY_GEOMETRY, rotateLeft, setStraighten, snapCrop, viewSize } from '../geometry/view';
 import { adapt } from '../tracking/adapter111';
-import type { BodyField, Face, Geometry, ParamId, Prefs } from '../types';
+import type { BodyField, Face, Geometry, ParamId, Prefs, Rect, Spot } from '../types';
 import {
   apronFor,
   chooseTile,
@@ -18,7 +20,10 @@ import {
   planTiles,
   shouldKeepSource,
   sourceSizeRecord,
+  spotBounds,
+  spotWindowGrowth,
   TILE_SIZES,
+  tileBytes,
   type ExportEnv,
   type SourceInfo,
   type TileBounds,
@@ -256,5 +261,96 @@ describe('source retention (S §3.7)', () => {
     expect(sourceSizeRecord({ width: 4032, height: 3024 }, 2048)).toEqual({ sourceWidth: 4032, sourceHeight: 3024 });
     expect(sourceSizeRecord({ width: 2000, height: 1500 }, 2048)).toBeNull();
     expect(sourceSizeRecord(null, 2048)).toBeNull();
+  });
+});
+
+describe('step 4: spot windows and the GL budget (skin-cleanup spec §4.6)', () => {
+  const decode = { width: 4000, height: 3000 };
+  const spot = (x: number, y: number, dx = 0.02, dy = 0): Spot => ({ x, y, r: 0.01, dx, dy, owner: null });
+  const toO = (r: Rect): Rect => ({ x: r.x / decode.width, y: r.y / decode.height, w: r.w / decode.width, h: r.h / decode.height });
+  const toPx = (r: Rect): Rect => ({ x: r.x * decode.width, y: r.y * decode.height, w: r.w * decode.width, h: r.h * decode.height });
+  const eps = 1e-6;
+  const contains = (o: Rect, x0: number, y0: number, x1: number, y1: number) => {
+    const w = toPx(o);
+    return (
+      w.x <= Math.max(0, x0) + eps &&
+      w.y <= Math.max(0, y0) + eps &&
+      w.x + w.w >= Math.min(decode.width, x1) - eps &&
+      w.y + w.h >= Math.min(decode.height, y1) - eps
+    );
+  };
+
+  it('a spot whose quad meets the window brings its ring and donor boxes in', () => {
+    const win = toO({ x: 1000, y: 1000, w: 1000, h: 1000 });
+    const s = spot(2010 / 4000, 1500 / 3000); // centre 10 px right of the window, r = 30 px, quad 33 px
+    const g = spotWindowGrowth(win, [s], decode);
+    const r = 30;
+    expect(contains(g, 2010 - 1.4 * r, 1500 - 1.4 * r, 2010 + 1.4 * r, 1500 + 1.4 * r)).toBe(true);
+    expect(contains(g, 2010 + 60 - 1.4 * r, 1500 - 1.4 * r, 2010 + 60 + 1.4 * r, 1500 + 1.4 * r)).toBe(true);
+  });
+
+  it('a spot far away leaves the window alone; growth chains to spots the grown window now meets', () => {
+    const win = toO({ x: 1000, y: 1000, w: 1000, h: 1000 });
+    expect(spotWindowGrowth(win, [spot(0.9, 0.9)], decode)).toEqual(win);
+    const a = spot(2010 / 4000, 0.5, 0.03); // its donor reaches x = 2010 + 90 + 42
+    const b = spot(2160 / 4000, 0.5, 0); // quad from 2127: met only by the grown window
+    const g = spotWindowGrowth(win, [b, a], decode);
+    expect(contains(g, 2160 - 42, 1500 - 42, 2160 + 42, 1500 + 42)).toBe(true);
+  });
+
+  it('clips to the photo', () => {
+    const g = spotWindowGrowth(toO({ x: 0, y: 0, w: 100, h: 100 }), [spot(0.001, 0.001, -0.02, -0.02)], decode);
+    expect(g.x).toBe(0);
+    expect(g.y).toBe(0);
+  });
+
+  it('the planner hooks: B at window size while a step-4 pass runs; the window growth only with spots', () => {
+    const f0 = { faces: [], photo: { ...defaultPhoto(), spots: [] as Spot[] } };
+    expect(spotBounds(f0, decode)).toEqual({ oSpacePasses: false });
+    const withSpot = { ...f0, photo: { ...f0.photo, spots: [spot(0.5, 0.5)] } };
+    const b = spotBounds(withSpot, decode);
+    expect(b.oSpacePasses).toBe(true);
+    const win = { x: 0.49, y: 0.49, w: 0.002, h: 0.002 };
+    expect(b.spotWindowGrowth!(win)).toEqual(spotWindowGrowth(win, withSpot.photo.spots, decode));
+    const person = { ...neutralPerson(), values: { ...neutralPerson().values, 'tone.teeth': 0.4 } };
+    const toned = { faces: [{ face: makeFace(), weight: 1, person, protect: null }], photo: f0.photo };
+    expect(spotBounds(toned, decode).oSpacePasses).toBe(true);
+    expect(spotBounds({ ...toned, faces: [{ ...toned.faces[0], weight: 0 }] }, decode).oSpacePasses).toBe(false);
+    const t = { out: { x: 0, y: 0, w: 1024, h: 1024 }, buf: { x: 0, y: 0, w: 1060, h: 1060 }, win: { x: 0, y: 0, w: 1100, h: 1100 } };
+    expect(tileBytes(t, true)).toBe((3 * 1100 * 1100 + 2 * 1060 * 1060) * 4);
+  });
+
+  it('coverage: through planTiles, every spot whose quad meets a tile window has both 1.4 r boxes inside it (A5)', () => {
+    const dec = { width: 400, height: 600 };
+    const spots: Spot[] = [
+      { x: 256 / 400, y: 0.42, r: 0.025, dx: 0.075, dy: 0, owner: null },
+      { x: 0.3, y: 256 / 600, r: 0.025, dx: 0, dy: 0.075, owner: null },
+      { x: 0.6, y: 512 / 600, r: 0.025, dx: -0.075, dy: 0, owner: null },
+    ];
+    const bounds: TileBounds = { body: null, faces: [], ...spotBounds({ faces: [], photo: { ...defaultPhoto(), spots } }, dec) };
+    const tiles = planTiles({ V: dec, decode: dec, geometry: IDENTITY_GEOMETRY, oAspect: dec.width / dec.height, fullShortEdge: 400 }, bounds, 256);
+    const short = Math.min(dec.width, dec.height);
+    let met = 0;
+    for (const t of tiles) {
+      // the grown window before step 3's outward snap to the 4-px grid lies within 4 px inside `win` (except where clipped)
+      const x0 = t.win.x === 0 ? 0 : t.win.x + 4;
+      const y0 = t.win.y === 0 ? 0 : t.win.y + 4;
+      const x1 = t.win.x + t.win.w === dec.width ? dec.width : t.win.x + t.win.w - 4;
+      const y1 = t.win.y + t.win.h === dec.height ? dec.height : t.win.y + t.win.h - 4;
+      for (const s of spots) {
+        const cx = s.x * dec.width;
+        const cy = s.y * dec.height;
+        const r = s.r * short;
+        if (cx + 1.1 * r <= x0 || cx - 1.1 * r >= x1 || cy + 1.1 * r <= y0 || cy - 1.1 * r >= y1) continue;
+        met++;
+        for (const [bx, by] of [[cx, cy], [cx + s.dx * short, cy + s.dy * short]]) {
+          expect(Math.max(0, bx - 1.4 * r)).toBeGreaterThanOrEqual(t.win.x);
+          expect(Math.max(0, by - 1.4 * r)).toBeGreaterThanOrEqual(t.win.y);
+          expect(Math.min(dec.width, bx + 1.4 * r)).toBeLessThanOrEqual(t.win.x + t.win.w);
+          expect(Math.min(dec.height, by + 1.4 * r)).toBeLessThanOrEqual(t.win.y + t.win.h);
+        }
+      }
+    }
+    expect(met).toBeGreaterThan(spots.length); // the spots straddle tile borders, so several tiles meet each
   });
 });

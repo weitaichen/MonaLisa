@@ -6,7 +6,7 @@ import { adaptCached, prepareFaces } from '../detect/faces';
 import { photoLuts } from '../engine/looks';
 import { IDENTITY_GEOMETRY, snapCrop, viewSize } from '../geometry/view';
 import type { TileInputBase } from '../media/exportFull';
-import { faceBoundsFor, type TileBounds } from '../media/exportPlan';
+import { faceBoundsFor, spotBounds, type TileBounds } from '../media/exportPlan';
 import type { BodyField, CachedFace, CachedObstacle, Engine, Face, Geometry, Rect, RenderInput, RenderStats, Size, StillFrame, Tracker } from '../types';
 import { debugState, reportError } from './debug';
 
@@ -71,9 +71,9 @@ export interface StillSession {
   setViewMode(mode: ViewMode): void;
   /** held during a tiled export: no display frame at all (the last one stays on screen); lifting it draws once */
   pauseDisplay(on: boolean): void;
-  /** the tile runner's input: the frame plus the session's body field and the working aspect, geometry unsnapped */
+  /** the tile runner's input: the frame plus the session's body field, the working aspect and (step 4) the working bitmap as toneSource, geometry unsnapped */
   tileInput(frame: StillFrame, body?: BodyField | null): TileInputBase;
-  /** the planner's displacement bounds for this frame */
+  /** the planner's displacement bounds for this frame, with step 4's spot windows and GL budget hooks */
   bounds(frame: StillFrame, body?: BodyField | null): TileBounds;
   /**
    * The screen is closing but an export is still pending: stop drawing to the shared display canvas (another
@@ -370,10 +370,12 @@ export function createStillSession(
       delete all.source;
       delete all.width;
       delete all.height;
-      return { ...(all as TileInputBase), geometry: f.geometry ?? IDENTITY_GEOMETRY, oAspect: width / height };
+      // skin-cleanup spec §4.6: every tile carries the working image, so a tile engine without the preview's tone field rebuilds it
+      return { ...(all as TileInputBase), geometry: f.geometry ?? IDENTITY_GEOMETRY, oAspect: width / height, toneSource: { source: bitmap, width, height } };
     },
     bounds(f, b) {
-      return { body: b === undefined ? body : b, faces: faceBoundsFor(f.faces, width / height) };
+      // step 4 (skin-cleanup spec §4.6): B at window size while a 膚質 pass runs, and the spot windows
+      return { body: b === undefined ? body : b, faces: faceBoundsFor(f.faces, width / height), ...spotBounds(f, { width, height }) };
     },
     stopDisplay() {
       displayOff = true;

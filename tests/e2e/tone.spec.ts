@@ -404,3 +404,106 @@ test('a photo without a face: 祛痘 still heals', async ({ page }) => {
   const sd = (img: Pixels) => discSd(img, (300 / 600) * img.width, (400 / 800) * img.height, (6 / 600) * img.width);
   expect(sd(after)).toBeLessThanOrEqual(0.5 * sd(before));
 });
+
+/**
+ * The darkest blob within `rad` of (cx, cy), screenshot px (S §8.4 item 4): the position whose 5 × 5-mean luma lies
+ * farthest below the darkest of 16 samples (5 × 5 means) on a ring of radius `ring` around it. A plain "darkest 5 × 5
+ * mean" finds the cheek's shadow side or the background the 瘦臉 contour uncovers, not the blemish; a centre that must be
+ * darker than every ring sample is a blob, not an edge or a gradient.
+ */
+function darkestBlob(p: Pixels, cx: number, cy: number, rad: number, ring: number): [number, number] {
+  const mean5 = (x: number, y: number) => {
+    let s = 0;
+    for (let j = -2; j <= 2; j++)
+      for (let i = -2; i <= 2; i++) {
+        const k = ((y + j) * p.width + (x + i)) * 4;
+        s += 0.299 * p.data[k] + 0.587 * p.data[k + 1] + 0.114 * p.data[k + 2];
+      }
+    return s / 25;
+  };
+  let best = -Infinity;
+  let at: [number, number] = [cx, cy];
+  for (let y = Math.round(cy - rad); y <= Math.round(cy + rad); y += 2)
+    for (let x = Math.round(cx - rad); x <= Math.round(cx + rad); x += 2) {
+      let rmin = Infinity;
+      for (let k = 0; k < 16; k++) {
+        const a = (2 * Math.PI * k) / 16;
+        rmin = Math.min(rmin, mean5(Math.round(x + ring * Math.cos(a)), Math.round(y + ring * Math.sin(a))));
+      }
+      const depth = rmin - mean5(x, y);
+      if (depth > best) {
+        best = depth;
+        at = [x + 0.5, y + 0.5];
+      }
+    }
+  return at;
+}
+
+/**
+ * How far a blob at (cx, cy) lies below its surroundings, screenshot px: the mean luma of the annulus [2σ, 3σ] minus that
+ * of the 1.2σ disc. A linear gradient cancels out, so on the shaded cheek that 瘦臉 compresses in V it measures the
+ * blemish, not the skin texture and shading a disc's standard deviation also holds after the heal.
+ */
+function blobDeficit(p: Pixels, cx: number, cy: number, sigma: number): number {
+  const meanIn = (r0: number, r1: number) => {
+    let s = 0;
+    let n = 0;
+    for (let y = Math.floor(cy - r1); y <= Math.ceil(cy + r1); y++)
+      for (let x = Math.floor(cx - r1); x <= Math.ceil(cx + r1); x++) {
+        const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+        if (d < r0 || d > r1) continue;
+        const i = (y * p.width + x) * 4;
+        s += 0.299 * p.data[i] + 0.587 * p.data[i + 1] + 0.114 * p.data[i + 2];
+        n++;
+      }
+    return s / n;
+  };
+  return meanIn(2 * sigma, 3 * sigma) - meanIn(0, 1.2 * sigma);
+}
+
+test('spots stay on their content under 瘦臉 + 大眼, after 旋轉 and after 翻轉', async ({ page }) => {
+  const fx = fixture();
+  const dot = defect(fx, 'dot3');
+  const rPx = 0.03 * fx.fw;
+  await importPhoto(page, TONE_PNG);
+  await plain(page);
+  for (const name of ['瘦臉', '大眼']) {
+    await pick(page, '美型', name);
+    await dragSlider(page, 400);
+  }
+  const o: [number, number] = [dot.center[0] / fx.width, dot.center[1] / fx.height];
+  const steps: { label: string; act?: string; map(p: [number, number]): [number, number] }[] = [
+    { label: 'warped', map: (p) => p },
+    { label: '旋轉', act: '旋轉', map: (p) => [p[1], 1 - p[0]] }, // 90° counter-clockwise
+    { label: '旋轉 + 翻轉', act: '翻轉', map: (p) => [1 - p[1], 1 - p[0]] },
+  ];
+  for (const s of steps) {
+    if (s.act) {
+      await page.getByRole('tab', { name: '裁切' }).click();
+      await option(page, s.act).click();
+    }
+    await pick(page, '美膚', '祛痘');
+    const shot = await settled(frame(page));
+    const scale = Math.max(shot.width, shot.height) / Math.max(fx.width, fx.height);
+    const guess = s.map(o);
+    // the search window: 瘦臉 100 moves dot 3 ≈ 60 px toward the nose, so the warped dot is found, not assumed
+    const at = darkestBlob(shot, guess[0] * shot.width, guess[1] * shot.height, 100 * scale, 12 * scale);
+    const b = (await frame(page).boundingBox())!;
+    await page.mouse.click(b.x + (at[0] / shot.width) * b.width, b.y + (at[1] / shot.height) * b.height);
+    await expect.poll(async () => (await debugState(page)).spots).toBe(1);
+    const spot = (await debugState(page)).lastSpot!;
+    const off = Math.hypot(spot.x * fx.width - dot.center[0], spot.y * fx.height - dot.center[1]);
+    console.log(`${s.label}: lastSpot ${off.toFixed(1)} px from the dot (r ${rPx.toFixed(1)} px)`);
+    expect(off, s.label).toBeLessThanOrEqual(0.3 * rPx);
+    // the blob is gone (S §8.4 item 4): its luma deficit against the surrounding skin drops to a quarter or less
+    const healed = await settled(frame(page));
+    const sigma = (dot.sigma ?? 5) * scale;
+    const before = blobDeficit(shot, at[0], at[1], sigma);
+    const after = blobDeficit(healed, at[0], at[1], sigma);
+    console.log(`${s.label}: blob deficit ${before.toFixed(2)} → ${after.toFixed(2)}`);
+    expect(before, s.label).toBeGreaterThan(3);
+    expect(after, s.label).toBeLessThanOrEqual(0.25 * before);
+    await page.getByRole('button', { name: '復原' }).click();
+    await expect.poll(async () => (await debugState(page)).spots).toBe(0);
+  }
+});

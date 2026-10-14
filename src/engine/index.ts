@@ -451,8 +451,18 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       if (!input.output) throw new Error('renderTile: no output tile');
       if (input.width <= 0 || input.height <= 0) throw new Error('renderTile: empty source');
       const size = frameSize(input, true);
+      // job() reads no texture content, so the tile's FrameJob is built before the uploads
+      const j = job(input, srcTex, size, false, 'fbo', false);
+      // skin-cleanup spec §4.6: the tone field is one global texture of the working image; a tile whose engine does not
+      // hold the field for this key (the export started before the preview drew the latest edit, a fresh engine) builds
+      // it once from toneSource, P0b and P0c at working resolution, before the tile's own passes
+      const ts = input.toneSource;
+      if (j.tone && j.tone.mn8On && ts && !pipeline.toneFieldReady(j.tone.key)) {
+        uploadSource(gl, srcTex, ts.source, ts.width, ts.height);
+        pipeline.prepareToneField(j.tone, srcTex);
+      }
       uploadSource(gl, srcTex, input.source, input.width, input.height);
-      const res = pipeline.run(job(input, srcTex, size, false, 'fbo', false));
+      const res = pipeline.run(j);
       const out = res.output;
       if (!out) throw new Error('renderTile: no output buffer');
       const pixels = new Uint8Array(read.w * read.h * 4);

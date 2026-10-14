@@ -20,6 +20,7 @@ import {
   spotsInScope,
   type Patch,
   type SpotFace,
+  type V2,
 } from './spots';
 
 const spot = (x: number, owner: string | null = null): Spot => ({ x, y: 0.5, r: 0.01, dx: 0.03, dy: 0, owner });
@@ -126,6 +127,24 @@ function patch(n: number, luma: (x: number, y: number) => number, rect = { x: 0,
     }
   return { data, w: n, h: n, rect, pxPerShort: n / rect.w };
 }
+/** the patch a tap reads (S §3.4): 112 px over the half-side 5.6 rr around `o`, so r = 10 patch px; luma from the O point */
+function patchAround(o: V2, rr: number, luma: (q: V2, x: number, y: number) => number): Patch {
+  const half = 5.6 * rr;
+  const rect = { x: o[0] - half, y: o[1] - half * ASPECT, w: 2 * half, h: 2 * half * ASPECT };
+  return patch(112, (x, y) => luma([rect.x + (x / 112) * rect.w, rect.y + (y / 112) * rect.h], x, y), rect);
+}
+/** distance between two O points in short-edge units (the fixture is portrait: the width) */
+const isoDist = (a: V2, b: V2) => Math.hypot(a[0] - b[0], (a[1] - b[1]) / ASPECT);
+/** the O point k·rr from `o` at j × 45° (y down): planSpot's donor candidates for an unsnapped spot */
+const cand = (o: V2, rr: number, k: number, j: number): V2 => [o[0] + k * rr * Math.cos((j * Math.PI) / 4), o[1] + k * rr * Math.sin((j * Math.PI) / 4) * ASPECT];
+const donorOf = (s: Spot): V2 => [s.x + s.dx, s.y + s.dy * ASPECT];
+/** the regions of the 8 rim points (1.1 r) of a donor centred on `d` */
+const rimKinds = (d: V2, rr: number, faces: readonly SpotFace[]) => Array.from({ length: 8 }, (_, m) => regionAt(cand(d, rr, 1.1, m), faces, ASPECT).kind);
+/** `f` moved right by `dx` (a second face of a group photo) */
+const shifted = (f: Face, dx: number): Face => {
+  const sh = (a: Float32Array) => a.map((v, i) => (i % 2 ? v : v + dx));
+  return { ...f, pts111: sh(f.pts111), ext: sh(f.ext), oval: sh(f.oval) };
+};
 
 describe('regionAt / spotRadius / ownerAt (skin-cleanup spec §2.3, §3.3)', () => {
   it('tells the eyes, the open mouth, the lips, the skin and the rest apart', () => {
@@ -218,15 +237,21 @@ describe('planSpot (§3.5)', () => {
     expect([Math.round(s.dx * 200), Math.round(s.dy * 200)]).toEqual([32, 0]);
   });
 
-  it('keeps a lip spot’s donor on the lip of the same face (never lip-to-skin)', () => {
-    const o = mid(P(93), P(102)); // the middle of the lower lip, ≈ 57 px thick on the fixture
-    const rr = 0.006; // 6 px on the 1000 px short edge
-    const half = 5.6 * rr;
-    const rect = { x: o[0] - half, y: o[1] - half * ASPECT, w: 2 * half, h: 2 * half * ASPECT };
-    const s = planSpot(patch(112, (x, y) => 0.55 + 0.02 * hash(x, y), rect), o, rr, { faces: FACES, aspect: ASPECT, existing: [] }) as Spot;
+  // The region tests below lure the planner: the image is flat around the spot and around one forbidden donor, and noise
+  // elsewhere, so the forbidden donor is the cheapest by far and only the region rules keep it out.
+  const lure = (calm: (q: V2) => boolean) => (q: V2, x: number, y: number) => (calm(q) ? 0.6 : 0.6 + 0.1 * hash(x, y));
+
+  it('keeps a lip spot’s donor on the lip of the same face, even when the skin below matches best (never lip-to-skin)', () => {
+    const rr = 0.006; // 6 px on the 1000 px short edge; the lower lip is ≈ 57 px (9.5 r) thick on the fixture
+    const o: V2 = [P(93)[0] + 0.1 * (P(102)[0] - P(93)[0]), P(93)[1] + 0.1 * (P(102)[1] - P(93)[1])]; // ≈ 1 r above the lip's lower edge
+    expect(regionAt(o, FACES, ASPECT)).toEqual({ kind: 'lip', face: 'f0' });
+    expect(regionAt(cand(o, rr, 3.2, 2), FACES, ASPECT)).toEqual({ kind: 'skin', face: 'f0' }); // the donor straight down is skin
+    // flat skin and a flat ring around the spot; the rest of the lip is noise
+    const img = lure((q) => regionAt(q, FACES, ASPECT).kind !== 'lip' || isoDist(q, o) <= 1.6 * rr);
+    const s = planSpot(patchAround(o, rr, img), o, rr, { faces: FACES, aspect: ASPECT, existing: [] }) as Spot;
     expect(regionAt([s.x, s.y], FACES, ASPECT)).toEqual({ kind: 'lip', face: 'f0' });
     expect([s.dx, s.dy]).not.toEqual([0, 0]);
-    expect(regionAt([s.x + s.dx, s.y + s.dy * ASPECT], FACES, ASPECT)).toEqual({ kind: 'lip', face: 'f0' });
+    expect(regionAt(donorOf(s), FACES, ASPECT)).toEqual({ kind: 'lip', face: 'f0' });
   });
 
   it('respects the image edge and existing spots; fill mode when nothing fits; deterministic', () => {
@@ -242,21 +267,41 @@ describe('planSpot (§3.5)', () => {
     expect(planSpot(patch(200, img), [0.5, 0.5], r, { faces: [], aspect: 1, existing: [] })).toEqual(first);
   });
 
-  it('never takes a donor across eyes, the mouth, a lip edge or another face', () => {
+  it('never takes a donor whose rim reaches an eye or the open mouth, even when it matches best', () => {
     const below = mid(P(73), P(57));
-    const o: [number, number] = [below[0], below[1] + 0.03];
-    const rect = { x: o[0] - 0.08, y: o[1] - 0.08 * ASPECT, w: 0.16, h: 0.16 * ASPECT }; // 160 × 160 px
-    const pp = patch(112, (x, y) => 0.62 + 0.02 * hash(x, y), rect);
-    pp.pxPerShort = 112 / rect.w;
-    const rr = 0.012;
-    const s = planSpot(pp, o, rr, { faces: FACES, aspect: ASPECT, existing: [] }) as Spot;
-    const donor: [number, number] = [s.x + s.dx, s.y + s.dy * ASPECT];
-    expect(regionAt(donor, FACES, ASPECT).kind).toBe('skin');
-    for (let j = 0; j < 8; j++) {
-      const a = (j * Math.PI) / 4;
-      const rim: [number, number] = [donor[0] + 1.1 * rr * Math.cos(a), donor[1] + 1.1 * rr * Math.sin(a) * ASPECT];
-      expect(['eye', 'mouth']).not.toContain(regionAt(rim, FACES, ASPECT).kind);
+    const cases: { o: V2; rr: number; kind: 'skin' | 'lip'; rim: 'eye' | 'mouth' }[] = [
+      { o: [below[0], below[1] + 0.03], rr: 0.012, kind: 'skin', rim: 'eye' }, // skin under an eye
+      { o: [P(102)[0] + 0.3 * (P(93)[0] - P(102)[0]), P(102)[1] + 0.3 * (P(93)[1] - P(102)[1])], rr: 0.006, kind: 'lip', rim: 'mouth' }, // the lower lip, ≈ 3 r under the open mouth
+    ];
+    for (const { o, rr, kind, rim } of cases) {
+      const up = cand(o, rr, 2.4, 6); // 2.4 r straight up: the centre on the spot's own region, the rim in the eye or the mouth
+      expect(regionAt(up, FACES, ASPECT)).toEqual({ kind, face: 'f0' });
+      expect(rimKinds(up, rr, FACES)).toContain(rim);
+      const img = lure((q) => isoDist(q, o) <= 1.7 * rr || isoDist(q, up) <= 1.7 * rr);
+      const s = planSpot(patchAround(o, rr, img), o, rr, { faces: FACES, aspect: ASPECT, existing: [] }) as Spot;
+      expect([s.x, s.y]).toEqual(o); // no snap: the candidates are where `cand` puts them
+      expect([s.dx, s.dy]).not.toEqual([0, 0]);
+      const donor = donorOf(s);
+      expect(isoDist(donor, up)).toBeGreaterThan(rr);
+      expect(regionAt(donor, FACES, ASPECT)).toEqual({ kind, face: 'f0' });
+      for (const k of rimKinds(donor, rr, FACES)) expect(['eye', 'mouth']).not.toContain(k);
     }
+  });
+
+  it('never takes a donor from another face, even when its skin matches best', () => {
+    const xs = Array.from(FACE.oval).filter((_, i) => i % 2 === 0);
+    // a second face one oval width to the right: the two ovals nearly touch (≈ 0.014 apart at y = 0.32)
+    const faces: SpotFace[] = [{ id: 'f0', face: FACE }, { id: 'f1', face: shifted(FACE, Math.max(...xs) - Math.min(...xs)) }];
+    const rr = 0.018; // ≈ 祛痘 M on this face
+    const o: V2 = [0.788, 0.32]; // ≈ 1 r inside the first face's right edge
+    const right = cand(o, rr, 3.2, 0);
+    expect(regionAt(o, faces, ASPECT)).toEqual({ kind: 'skin', face: 'f0' });
+    expect(regionAt(right, faces, ASPECT)).toEqual({ kind: 'skin', face: 'f1' });
+    expect(rimKinds(right, rr, faces).filter((k) => k === 'eye' || k === 'mouth')).toEqual([]); // only the face rule can refuse it
+    const img = lure((q) => isoDist(q, o) <= 1.7 * rr || isoDist(q, right) <= 1.7 * rr);
+    const s = planSpot(patchAround(o, rr, img), o, rr, { faces, aspect: ASPECT, existing: [] }) as Spot;
+    expect([s.dx, s.dy]).not.toEqual([0, 0]);
+    expect(regionAt(donorOf(s), faces, ASPECT)).toEqual({ kind: 'skin', face: 'f0' });
   });
 
   it('refuses eyes, the open mouth and a full list', () => {

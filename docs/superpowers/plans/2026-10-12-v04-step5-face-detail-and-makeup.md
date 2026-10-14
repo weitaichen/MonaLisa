@@ -6108,7 +6108,7 @@ The panel model of S5 §2.3–2.4: ten parts; level 1 (卸妝 │ the ten part t
   - `makeupAction(a: ItemAction, lens: Lens, sel: PanelSelection): { edit: EditState | null; sel: PanelSelection } | null` (null edit = unchanged)
   - `MAKEUP_EYES_NOTE`, `MAKEUP_SMALL_NOTE`, `MAKEUP_PROC_NOTE`; `interface MakeupNoteInput { lensClosed: boolean; lashesClosed: boolean; lashesSmall: boolean; procFailed: boolean }`; `makeupNote(sel: PanelSelection, i: MakeupNoteInput): string | null`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `src/ui/panelModel.test.ts` (reusing Task 13's `E5` / `L5`; imports merged into the existing lines: `emptyShades` into the `../edit/state` import, `SHADES` into the `../engine/params` import, which already has `MAKEUP_PICK_DEFAULT`, the new names into the `./panelModel` import, which already has `type PanelSelection`):
 
@@ -6230,12 +6230,12 @@ describe('美妝 strip notes (face-detail spec §2.4)', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run src/ui/panelModel.test.ts`
 Expected: FAIL — `makeupShadeItems` is not exported.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/ui/panelModel.ts` (CRLF), replacing the two-entry `MAKEUP_PARTS` (`panelModel.ts:31-34`):
 
@@ -6421,12 +6421,12 @@ Wire them in:
 
 Imports in `panelModel.ts`: `MAKEUP_PARAM`, `SHADE_PARTS`, `SHADES`, `shadeColor` from `../engine/params` (`isShadePart` since Task 1; `MAKEUP_PICK_DEFAULT` already); the `ShadePart` type since Task 1, `EditState` already. Remove the now unused `LIP_SHADES` / `BLUSH_SHADES` imports.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/ui src/edit && npm run typecheck`
 Expected: PASS. The existing makeup tests (`panelModel.test.ts:103-107` level-2 keys, "after picking a shade exactly that shade is selected", "tapping the already-selected makeup 無 is a no-op") keep their assertions; the ported `partButtons` assertion passes.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 file src/ui/panelModel.ts

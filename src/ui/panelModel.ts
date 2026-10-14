@@ -1,5 +1,5 @@
 // BeautyPanel logic (spec §7.3), kept pure so it can be unit-tested without a DOM.
-import { BLUSH_SHADES, FILTERS, hasValue, isShadePart, LIP_SHADES, MAKEUP_PICK_DEFAULT, neutralValue, paramDef, paramsInGroup, PRESETS } from '../engine/params';
+import { FILTERS, hasValue, isShadePart, MAKEUP_PARAM, MAKEUP_PICK_DEFAULT, neutralValue, paramDef, paramsInGroup, PRESETS, SHADE_PARTS, SHADES, shadeColor } from '../engine/params';
 import { lookDef, LOOKS, lookThumbUrl } from '../engine/looks';
 import { NO_BODY_NOTE, NO_FACE_NOTE, type Lens } from '../edit/lens';
 import { adjustIsNeutral, personOf } from '../edit/state';
@@ -28,10 +28,33 @@ export const TABS: readonly { id: TabId; label: string }[] = [
 /** the photo editor's tabs: the shared 7 plus 裁切 (C §2.1; the camera has none, C §2.4) */
 export const EDITOR_TABS: readonly { id: TabId; label: string }[] = [...TABS, { id: 'crop', label: '裁切' }];
 
-export const MAKEUP_PARTS: readonly { id: MakeupPart; label: string }[] = [
-  { id: 'lip', label: '口紅' },
-  { id: 'blush', label: '腮紅' },
+export interface MakeupPartDef {
+  id: MakeupPart;
+  label: string;
+  param: ParamId;
+  /** offers shades (else a single 自然) */
+  shades: boolean;
+  /** offers 原色 (眼線 does not: its null reads as 黑) */
+  orig: boolean;
+}
+
+/** the ten 美妝 parts in RM §2.1 order (S5 §2.3) */
+export const MAKEUP_PARTS: readonly MakeupPartDef[] = [
+  { id: 'lip', label: '口紅', param: 'makeup.lip', shades: true, orig: true },
+  { id: 'blush', label: '腮紅', param: 'makeup.blush', shades: true, orig: true },
+  { id: 'brow', label: '眉毛', param: 'makeup.brow', shades: true, orig: true },
+  { id: 'eyeshadow', label: '眼影', param: 'makeup.eyeshadow', shades: true, orig: true },
+  { id: 'liner', label: '眼線', param: 'makeup.liner', shades: true, orig: false },
+  { id: 'lashes', label: '睫毛', param: 'makeup.lashes', shades: false, orig: false },
+  { id: 'aegyo', label: '臥蠶', param: 'makeup.aegyo', shades: false, orig: false },
+  { id: 'contour', label: '修容', param: 'makeup.contour', shades: false, orig: false },
+  { id: 'highlight', label: '高光', param: 'makeup.highlight', shades: false, orig: false },
+  { id: 'lens', label: '美瞳', param: 'makeup.lens', shades: true, orig: true },
 ];
+const PART_BY_ID = new Map(MAKEUP_PARTS.map((p) => [p.id, p]));
+export function makeupPartDef(id: MakeupPart): MakeupPartDef {
+  return PART_BY_ID.get(id) ?? MAKEUP_PARTS[0];
+}
 
 /** 一鍵's parts (step-2 spec §2.2): the beauty presets (person-level) and the 質感 looks (photo-level) */
 export type PresetPart = 'beauty' | 'look';
@@ -46,6 +69,8 @@ export interface PanelSelection {
   shape: ParamId;
   body: BodySel;
   makeupPart: MakeupPart;
+  /** 美妝 strip level (S5 §2.3) */
+  makeupView: 'parts' | 'shades';
   adjust: AdjustId;
   presetPart: PresetPart;
   /** the 裁切 ratio lock (UI state: derived from the crop on entering the tab and after ↶ ↷, S §2.1) */
@@ -60,6 +85,7 @@ export const INITIAL_SELECTION: PanelSelection = {
   shape: 'shape.eyeEnlarge',
   body: 'body.legs',
   makeupPart: 'lip',
+  makeupView: 'shades',
   adjust: 'adjust.brightness',
   presetPart: 'beauty',
   crop: 'free',
@@ -292,7 +318,7 @@ export function bandOrSuggested(edit: EditState, body: BodyContext | undefined):
 // ───────────── items ─────────────
 
 export type ItemVisual =
-  | { kind: 'icon'; icon: string }
+  | { kind: 'icon'; icon: string; /** 10 px shade swatch at the lower right (level-1 part tiles) */ mini?: string }
   | { kind: 'thumb'; src: string; /** icon under the image (shown when it fails to load); default 'filter' */ fallback?: string }
   /** null colour = 原色 (GPUPixel texture) */
   | { kind: 'swatch'; color: string | null }
@@ -306,6 +332,14 @@ export type ItemAction =
   | { type: 'param'; id: ParamId }
   | { type: 'filter'; id: string }
   | { type: 'shade'; part: ShadePart; shade: string | null }
+  /** 美妝 level 1: make this part active and open its shades */
+  | { type: 'part'; part: MakeupPart }
+  /** 美妝 level 2 lead tile: open the part list */
+  | { type: 'parts' }
+  /** 美妝 level 1: 卸妝 */
+  | { type: 'makeupReset' }
+  /** 自然 on a part without shades */
+  | { type: 'makeupOn'; part: MakeupPart }
   /** 美體: select the manual 增高 tool (the screen shows HeightBandOverlay) */
   | { type: 'height' }
   /** 美膚: select the 祛痘 tap mode (the screen shows SpotControls) */
@@ -358,10 +392,6 @@ const PRESET_ICON: Record<PresetId, string> = {
   glow: 'presetGlow',
 };
 
-function makeupKey(part: MakeupPart): ParamId {
-  return part === 'lip' ? 'makeup.lip' : 'makeup.blush';
-}
-
 /**
  * Item dot (S §2.4 Dots): with a person selected, that person's value (or the photo's); under 全部, any applicable
  * person's, not only the one the slider shows (lens.get reads the primary, or the first applicable person).
@@ -372,11 +402,10 @@ function itemDot(lens: Lens, d: ParamDef): boolean {
   return t.length ? t.some((pid) => hasValue(d, personOf(lens.edit, pid).values[d.id as PersonParamId])) : hasValue(d, lens.get(d.id).value);
 }
 
-/** The 美妝 part chip's dot (口紅 / 腮紅): the selected person's, or under 全部 any face person's (S §2.4 Dots). */
+/** A 美妝 part tile's dot (any of the ten): the selected person's, or under 全部 any face person's (S §2.4 Dots). */
 export function partHasValue(lens: Lens, part: MakeupPart): boolean {
-  if (!isShadePart(part)) return false;
-  if (lens.sel.kind !== 'all') return lens.shade(part).on;
-  const key = makeupKey(part) as PersonParamId;
+  if (lens.sel.kind !== 'all') return isShadePart(part) ? lens.shade(part).on : lens.get(MAKEUP_PARAM[part]).value > 0.01;
+  const key = MAKEUP_PARAM[part];
   return lens.faceTargets().some((pid) => personOf(lens.edit, pid).values[key] > 0.01);
 }
 
@@ -674,6 +703,140 @@ export function splitJointNotice(item: PanelItem, lens: Lens, sel: PanelSelectio
   return d.split ? null : `${d.label}左右一起調整`;
 }
 
+// ───────────── 美妝 two-level strip (face-detail spec §2.3–2.4) ─────────────
+
+/** the shade the strip treats as current: 眼線 null reads as its first shade, 黑 (S5 §2.3) */
+export function effectiveShade(part: ShadePart, shade: string | null): string | null {
+  return part === 'liner' ? (shade ?? SHADES.liner[0].id) : shade;
+}
+
+/** level 2's leading tile: the active part; its 「切換部位」 aria label and ‹ are drawn by BeautyPanel */
+export function makeupLeadItem(sel: PanelSelection): PanelItem {
+  const p = makeupPartDef(sel.makeupPart);
+  return { key: 'lead', label: p.label, visual: { kind: 'icon', icon: paramDef(p.param).icon }, selected: false, hasValue: false, action: { type: 'parts' }, ...ENABLED };
+}
+
+/** level 1: 卸妝 │ the ten parts with dots and, when on with a shade, a 10 px swatch */
+export function makeupPartItems(lens: Lens, sel: PanelSelection): PanelItem[] {
+  return [
+    { key: 'makeupReset', label: '卸妝', visual: { kind: 'icon', icon: 'makeupOff' }, selected: false, hasValue: false, action: { type: 'makeupReset' }, ...ENABLED },
+    ...MAKEUP_PARTS.map((p, i): PanelItem => {
+      const on = lens.get(p.param).value > 0.01;
+      const shade = p.shades && isShadePart(p.id) ? effectiveShade(p.id, lens.shade(p.id).shade) : null;
+      const mini = on && shade && isShadePart(p.id) ? shadeColor(p.id, shade) : null;
+      const icon = paramDef(p.param).icon;
+      return {
+        key: `part.${p.id}`,
+        label: p.label,
+        visual: mini ? { kind: 'icon', icon, mini } : { kind: 'icon', icon },
+        selected: sel.makeupPart === p.id,
+        // step 1's part dot: the selected person's, under 全部 any face person's, not only the shown one (S §2.4 Dots)
+        hasValue: partHasValue(lens, p.id),
+        action: { type: 'part', part: p.id },
+        ...ENABLED,
+        ...(i === 0 ? { divider: 'before' as const } : {}),
+      };
+    }),
+  ];
+}
+
+/**
+ * level 2: 無 · (原色) · shades, or 無 · 自然; exactly one selected unless 全部 shows mixed persons. An item is selected,
+ * and its tap a no-op (makeupAction), only when every target already matches it (RM §3.3): a shade or 自然 matches a
+ * target that has the part on with it, whatever its intensity (the slider shows 各人不同 for that).
+ */
+export function makeupShadeItems(lens: Lens, part: MakeupPart): PanelItem[] {
+  const p = makeupPartDef(part);
+  const v = lens.get(p.param);
+  const on = v.value > 0.01;
+  const reset = { ...RESET_ITEM('無'), selected: !on && !v.mixed };
+  if (!p.shades || !isShadePart(part)) {
+    const key = MAKEUP_PARAM[part];
+    const natural: PanelItem = {
+      key: 'on',
+      label: '自然',
+      visual: { kind: 'icon', icon: paramDef(p.param).icon },
+      selected: on && lens.faceTargets().every((pid) => personOf(lens.edit, pid).values[key] > 0.01),
+      hasValue: false,
+      action: { type: 'makeupOn', part },
+      ...ENABLED,
+    };
+    return [reset, natural];
+  }
+  const st = lens.shade(part);
+  const cur = effectiveShade(part, st.shade);
+  const pick = (shade: string | null) => st.on && !st.mixed && cur === shade;
+  const items: PanelItem[] = [reset];
+  if (p.orig)
+    items.push({ key: 'orig', label: '原色', visual: { kind: 'swatch', color: null }, selected: pick(null), hasValue: false, action: { type: 'shade', part, shade: null }, ...ENABLED });
+  for (const s of SHADES[part])
+    items.push({ key: s.id, label: s.label, visual: { kind: 'swatch', color: s.color }, selected: pick(s.id), hasValue: false, action: { type: 'shade', part, shade: s.id }, ...ENABLED });
+  return items;
+}
+
+/** the 美妝 actions (S5 §2.3); edit null = unchanged (no undo step, no haptic). Not a 美妝 action → null. */
+export function makeupAction(a: ItemAction, lens: Lens, sel: PanelSelection): { edit: EditState | null; sel: PanelSelection } | null {
+  switch (a.type) {
+    case 'parts':
+      return { edit: null, sel: sel.makeupView === 'parts' ? sel : { ...sel, makeupView: 'parts' } };
+    case 'part':
+      return { edit: null, sel: sel.makeupPart === a.part && sel.makeupView === 'shades' ? sel : { ...sel, makeupPart: a.part, makeupView: 'shades' } };
+    case 'makeupReset': {
+      const anyOn =
+        MAKEUP_PARTS.some((p) => {
+          const g = lens.get(p.param);
+          return g.value > 0.01 || g.mixed;
+        }) ||
+        SHADE_PARTS.some((k) => {
+          const s = lens.shade(k);
+          return s.shade !== null || s.mixed;
+        });
+      return { edit: anyOn ? lens.resetGroup('makeup') : null, sel };
+    }
+    case 'makeupOn': {
+      const p = makeupPartDef(a.part);
+      return { edit: lens.ensureOn(p.param, MAKEUP_PICK_DEFAULT[a.part]), sel };
+    }
+    case 'reset': {
+      if (sel.tab !== 'makeup') return null;
+      const p = makeupPartDef(sel.makeupPart);
+      const v = lens.get(p.param);
+      const st = isShadePart(p.id) ? lens.shade(p.id) : null;
+      // already off everywhere: tapping the selected 無 is a no-op (no haptic, no undo step, no flip to 自訂)
+      const off = v.value <= 0.01 && !v.mixed && (!st || (st.shade === null && !st.mixed));
+      return { edit: off ? null : lens.clearMakeup(p.id), sel };
+    }
+    case 'shade': {
+      const st = lens.shade(a.part);
+      // the selected item (every target on with this effective shade): 黑 on a liner that reads as 黑 is no undo step
+      if (st.on && !st.mixed && effectiveShade(a.part, st.shade) === effectiveShade(a.part, a.shade)) return { edit: null, sel };
+      return { edit: lens.setShade(a.part, a.shade), sel };
+    }
+    default:
+      return null;
+  }
+}
+
+export const MAKEUP_EYES_NOTE = '眼睛閉合時不套用美瞳與睫毛';
+export const MAKEUP_SMALL_NOTE = '臉部太小，睫毛不會套用';
+export const MAKEUP_PROC_NOTE = '此裝置無法使用這個妝容';
+export interface MakeupNoteInput {
+  lensClosed: boolean;
+  lashesClosed: boolean;
+  lashesSmall: boolean;
+  procFailed: boolean;
+}
+
+/** the 美妝 level-2 note (S5 §2.4); a note never blocks the slider, the value applies when the condition goes away */
+export function makeupNote(sel: PanelSelection, i: MakeupNoteInput): string | null {
+  if (sel.tab !== 'makeup' || sel.makeupView !== 'shades') return null;
+  const p = sel.makeupPart;
+  if (i.procFailed && p !== 'lip' && p !== 'blush') return MAKEUP_PROC_NOTE;
+  if ((p === 'lens' && i.lensClosed) || (p === 'lashes' && i.lashesClosed)) return MAKEUP_EYES_NOTE;
+  if (p === 'lashes' && i.lashesSmall) return MAKEUP_SMALL_NOTE;
+  return null;
+}
+
 // ───────────── 調節 and 質感 (v0.4 step 2) ─────────────
 
 /** the 調節 strip splits light │ colour │ effects: dividers before 色溫 and 褪色 (step-2 spec §2.1) */
@@ -775,10 +938,11 @@ export interface PartButton {
   hasValue: boolean;
 }
 
-/** The part row that leads the strip: 美妝's 口紅／腮紅 and 一鍵's 美顏／質感 (step-2 spec §2.2); null on other tabs. */
+/**
+ * The part row that leads the strip: 一鍵's 美顏／質感 (step-2 spec §2.2); null on other tabs. 美妝 has none: its
+ * leading part tile and level-1 part list replace it (face-detail spec §2.3).
+ */
 export function partButtons(sel: PanelSelection, state: { makeupOn(part: MakeupPart): boolean; look: PhotoParams['look'] }): PartButton[] | null {
-  if (sel.tab === 'makeup')
-    return MAKEUP_PARTS.map((p) => ({ id: p.id, label: p.label, icon: p.id, active: sel.makeupPart === p.id, hasValue: state.makeupOn(p.id) }));
   if (sel.tab === 'preset')
     return PRESET_PARTS.map((p) => ({ id: p.id, label: p.label, icon: p.icon, active: sel.presetPart === p.id, hasValue: p.id === 'look' && state.look !== null }));
   return null;
@@ -879,29 +1043,9 @@ export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext, sk
           ...ENABLED,
         }),
       );
-    case 'makeup': {
-      const part = sel.makeupPart;
-      if (!isShadePart(part)) return [{ ...RESET_ITEM('無'), selected: true }];
-      const s = lens.shade(part);
-      const on = s.on && !s.mixed;
-      const shades = part === 'lip' ? LIP_SHADES : BLUSH_SHADES;
-      return [
-        // exactly one item is selected in every unmixed state: 無 (off) · 原色 (on, no shade) · a shade
-        { ...RESET_ITEM('無'), selected: !s.on && !s.mixed },
-        { key: 'orig', label: '原色', visual: { kind: 'swatch', color: null }, selected: on && s.shade === null, hasValue: false, action: { type: 'shade', part, shade: null }, ...ENABLED },
-        ...shades.map(
-          (x): PanelItem => ({
-            key: x.id,
-            label: x.label,
-            visual: { kind: 'swatch', color: x.color },
-            selected: on && s.shade === x.id,
-            hasValue: false,
-            action: { type: 'shade', part, shade: x.id },
-            ...ENABLED,
-          }),
-        ),
-      ];
-    }
+    case 'makeup':
+      // level 1 (卸妝 │ the ten parts) or level 2 (the active part's shades) share one row (S5 §2.3)
+      return sel.makeupView === 'parts' ? makeupPartItems(lens, sel) : makeupShadeItems(lens, sel.makeupPart);
     case 'adjust':
       return adjustItems((id) => lens.get(id).value, sel);
     case 'crop':
@@ -936,6 +1080,8 @@ export function activate(item: PanelItem, lens: Lens, sel: PanelSelection, ctx: 
     ...(notice ? { notice } : {}),
   });
   if (item.disabled) return done(edit, sel, item.reason ?? undefined);
+  const m = makeupAction(a, lens, sel);
+  if (m) return done(m.edit ?? edit, m.sel);
   switch (a.type) {
     case 'custom':
       return done();
@@ -959,13 +1105,7 @@ export function activate(item: PanelItem, lens: Lens, sel: PanelSelection, ctx: 
     }
     case 'reset':
       if (sel.tab === 'adjust') return adjustIsNeutral(edit.photo) ? done(edit) : done(lens.resetGroup('adjust'));
-      if (sel.tab === 'makeup') {
-        if (!isShadePart(sel.makeupPart)) return done();
-        const s = lens.shade(sel.makeupPart);
-        // already off everywhere: tapping the selected 無 is a no-op (no haptic, no undo step, no flip to 自訂)
-        if (!s.on && s.shade === null && !s.mixed) return done();
-        return done(lens.clearMakeup(sel.makeupPart));
-      }
+      // 美妝's 無 is answered by makeupAction above
       // body reset keeps the preset, so an already-neutral body would be an empty undo step
       if (sel.tab === 'body') return lens.groupNeutral('body') ? done() : done(lens.resetGroup('body'));
       if (sel.tab === 'skin' || sel.tab === 'shape' || sel.tab === 'filter') return done(lens.resetGroup(sel.tab));
@@ -998,11 +1138,13 @@ export function activate(item: PanelItem, lens: Lens, sel: PanelSelection, ctx: 
     case 'filter':
       if (edit.photo.filterId === a.id) return done();
       return done(lens.setFilter(a.id));
-    case 'shade': {
-      const s = lens.shade(a.part);
-      if (s.on && !s.mixed && s.shade === a.shade) return done();
-      return done(lens.setShade(a.part, a.shade));
-    }
+    case 'shade':
+    case 'part':
+    case 'parts':
+    case 'makeupReset':
+    case 'makeupOn':
+      // makeupAction has already answered every one of them
+      return done();
   }
 }
 
@@ -1114,11 +1256,12 @@ export function sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext, s
     }
     case 'makeup': {
       // always shown (one person, or a face person): dragging to 0 must not unmount the slider mid-gesture; raising it
-      // from 0 applies 原色. A body-only person has no slider (no dead slider, Review Focus #2)
-      const key = makeupKey(sel.makeupPart);
-      if (!usable(lens, key)) return null;
-      const b = paramBinding(lens, key);
-      return decorate({ ...b, label: sel.makeupPart === 'lip' ? '口紅' : '腮紅', defaultValue: MAKEUP_PICK_DEFAULT[sel.makeupPart] }, lens, false);
+      // from 0 applies 原色 (眼線: 黑). A body-only person has no slider (no dead slider, Review Focus #2). It shows the
+      // active part's intensity on both levels of the strip (S5 §2.3)
+      const p = makeupPartDef(sel.makeupPart);
+      if (!usable(lens, p.param)) return null;
+      const b = paramBinding(lens, p.param);
+      return decorate({ ...b, label: p.label, defaultValue: MAKEUP_PICK_DEFAULT[sel.makeupPart] }, lens, false);
     }
     case 'adjust':
       return decorate(adjustSlider((id) => lens.get(id).value, sel), lens, true);

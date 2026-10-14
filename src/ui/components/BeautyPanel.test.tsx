@@ -249,10 +249,9 @@ describe('一鍵: the part row 美顏／質感 (step-2 spec §2.2)', () => {
     expect(haptic).toHaveBeenCalledTimes(1);
   });
 
-  it('美妝 keeps its 口紅／腮紅 row (icons lip / blush)', () => {
+  it('美妝 has no part row', () => {
     const { strip } = mount(lensOf(editOf()), sel({ tab: 'makeup' }));
-    expect(sequence(strip).slice(0, 3)).toEqual(['口紅', '腮紅', '│']);
-    expect(shape(button(strip, '口紅').find('item-tile')!.elements[0])).toBe(iconShape('lip'));
+    expect(sequence(strip).slice(0, 2)).toEqual(['無', '原色']);
   });
 });
 

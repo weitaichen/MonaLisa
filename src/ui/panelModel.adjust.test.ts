@@ -83,7 +83,7 @@ describe('一鍵 › 美顏／質感 (step-2 spec §2.2)', () => {
       ['質感', false, true],
     ]);
     expect(selectPart(sel({ tab: 'preset' }), 'look').presetPart).toBe('look');
-    expect(partButtons(sel({ tab: 'makeup' }), { makeupOn: (p) => p === 'blush', look: null })!.map((p) => p.hasValue)).toEqual([false, true]);
+    expect(partButtons(sel({ tab: 'makeup' }), { makeupOn: (p) => p === 'blush', look: null })).toBeNull();
     expect(partButtons(sel({ tab: 'adjust' }), { makeupOn: () => false, look: null })).toBeNull();
   });
 

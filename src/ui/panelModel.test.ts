@@ -8,11 +8,12 @@ import {
   paramsInGroup,
   setHeightBand,
   setParam,
+  SHADES,
 } from '../engine/params';
 import type { BeautyParams, EditState, ParamId, PersonParams, RegionStatus, Selection } from '../types';
 import { lensFor, NO_BODY_NOTE, NO_FACE_NOTE, P0_INFO, type PersonInfo } from '../edit/lens';
 import { editFromLegacy, legacyProjection } from '../edit/legacy';
-import { assignPersons, defaultPhoto, naturalPerson, neutralPerson, personFromPreset, withPersons } from '../edit/state';
+import { assignPersons, defaultPhoto, emptyShades, naturalPerson, neutralPerson, personFromPreset, withPersons } from '../edit/state';
 import { TONE_COPY } from '../edit/toneCopy';
 import { heightBandStretch } from '../body/bands';
 import { bandEdges, bandToDisplay, defaultStretch, displayToBand, dragEdge, keyStep, MIN_GAP, moveEdge } from './components/HeightBandOverlay';
@@ -36,10 +37,17 @@ import {
   decorateShapeItems,
   DEFAULT_BAND,
   EDITOR_TABS,
+  effectiveShade,
   faceAnswer,
   INITIAL_SELECTION,
   itemsFor,
   legsAnchorNote,
+  MAKEUP_PARTS,
+  makeupAction,
+  makeupLeadItem,
+  makeupNote,
+  makeupPartItems,
+  makeupShadeItems,
   partHasValue,
   personNote,
   photoScoped,
@@ -1123,5 +1131,145 @@ describe('美型 dots under 全部 (face-detail spec §2.1, S1 §2.4 Dots)', () 
     expect(tabHasValue(at({ kind: 'all' }), 'shape')).toBe(true);
     expect(dot(at({ kind: 'person', id: 'f0' }))).toBe(false);
     expect(dot(at({ kind: 'person', id: 'f1' }))).toBe(true);
+  });
+});
+
+const withMakeup = (values: Record<string, number>, shades: Partial<PersonParams['shades']> = {}): PersonParams => ({
+  ...naturalPerson(),
+  values: { ...naturalPerson().values, ...values },
+  shades: { ...emptyShades(), ...shades },
+});
+const S14 = (over: Partial<PanelSelection> = {}): PanelSelection => ({ ...INITIAL_SELECTION, tab: 'makeup', ...over });
+
+describe('美妝 level 2: the shades of one part (face-detail spec §2.3)', () => {
+  it('keeps 無 · 原色 · shades for the 原色 parts, drops 原色 for 眼線, and has 無 · 自然 for the four parts without shades', () => {
+    const lens = L5(E5());
+    for (const part of ['lip', 'blush', 'brow', 'eyeshadow', 'lens'] as const)
+      expect(makeupShadeItems(lens, part).map((i) => i.key)).toEqual(['reset', 'orig', ...SHADES[part].map((s) => s.id)]);
+    expect(makeupShadeItems(lens, 'liner').map((i) => i.key)).toEqual(['reset', ...SHADES.liner.map((s) => s.id)]);
+    for (const part of ['lashes', 'aegyo', 'contour', 'highlight'] as const) {
+      const items = makeupShadeItems(lens, part);
+      expect(items.map((i) => [i.key, i.label])).toEqual([
+        ['reset', '無'],
+        ['on', '自然'],
+      ]);
+      expect(items[1].action).toEqual({ type: 'makeupOn', part });
+    }
+  });
+
+  it('exactly one item is selected; 眼線 on with no shade selects 黑', () => {
+    expect(makeupShadeItems(L5(E5()), 'liner').filter((i) => i.selected).map((i) => i.key)).toEqual(['reset']);
+    const on = L5(E5(withMakeup({ 'makeup.liner': 0.6 })));
+    expect(makeupShadeItems(on, 'liner').filter((i) => i.selected).map((i) => i.key)).toEqual(['black']);
+    const lashes = L5(E5(withMakeup({ 'makeup.lashes': 0.55 })));
+    expect(makeupShadeItems(lashes, 'lashes').filter((i) => i.selected).map((i) => i.key)).toEqual(['on']);
+  });
+
+  it('the lead tile names the active part and opens the part list', () => {
+    expect(makeupLeadItem(S14({ makeupPart: 'eyeshadow' }))).toMatchObject({ key: 'lead', label: '眼影', action: { type: 'parts' }, visual: { kind: 'icon', icon: 'eyeshadow' } });
+  });
+});
+
+describe('美妝 level 1: the part list (face-detail spec §2.3)', () => {
+  it('lists 卸妝, then the ten parts in RM order behind a divider; the active part is outlined', () => {
+    const items = makeupPartItems(L5(E5()), S14({ makeupPart: 'lens', makeupView: 'parts' }));
+    expect(items.map((i) => i.label)).toEqual(['卸妝', '口紅', '腮紅', '眉毛', '眼影', '眼線', '睫毛', '臥蠶', '修容', '高光', '美瞳']);
+    expect(items[0]).toMatchObject({ key: 'makeupReset', action: { type: 'makeupReset' }, visual: { kind: 'icon', icon: 'makeupOff' } });
+    expect(items[1].divider).toBe('before');
+    expect(items.filter((i) => i.selected).map((i) => i.key)).toEqual(['part.lens']);
+    expect(MAKEUP_PARTS.map((p) => p.param)).toEqual([
+      'makeup.lip', 'makeup.blush', 'makeup.brow', 'makeup.eyeshadow', 'makeup.liner', 'makeup.lashes', 'makeup.aegyo', 'makeup.contour', 'makeup.highlight', 'makeup.lens',
+    ]);
+  });
+
+  it('dots show the parts that are on; a part on with a shade shows its 10 px swatch (眼線 null → 黑)', () => {
+    const lens = L5(E5(withMakeup({ 'makeup.eyeshadow': 0.4, 'makeup.liner': 0.6, 'makeup.contour': 0.4 }, { eyeshadow: 'mauve' })));
+    const items = makeupPartItems(lens, S14({ makeupView: 'parts' }));
+    const at = (k: string) => items.find((i) => i.key === k)!;
+    expect(at('part.eyeshadow')).toMatchObject({ hasValue: true, visual: { kind: 'icon', icon: 'eyeshadow', mini: '#9A7FA6' } });
+    expect(at('part.liner').visual).toEqual({ kind: 'icon', icon: 'liner', mini: '#151313' });
+    expect(at('part.contour').visual).toEqual({ kind: 'icon', icon: 'contour' });
+    expect(at('part.brow').hasValue).toBe(false);
+  });
+});
+
+describe('美妝 actions (face-detail spec §2.3)', () => {
+  it('part / parts change only the selection', () => {
+    const lens = L5(E5());
+    expect(makeupAction({ type: 'parts' }, lens, S14())).toEqual({ edit: null, sel: S14({ makeupView: 'parts' }) });
+    expect(makeupAction({ type: 'part', part: 'aegyo' }, lens, S14({ makeupView: 'parts' }))).toEqual({ edit: null, sel: S14({ makeupPart: 'aegyo' }) });
+  });
+
+  it('卸妝 is a no-op when nothing is on, and otherwise clears every part and shade in one step', () => {
+    const none = L5(E5());
+    expect(makeupAction({ type: 'makeupReset' }, none, S14())?.edit).toBeNull();
+    const made = L5(E5(withMakeup({ 'makeup.lip': 0.5, 'makeup.lens': 0.6 }, { lip: 'rose', lens: 'blue' })));
+    const out = makeupAction({ type: 'makeupReset' }, made, S14())!.edit!.persons.f0;
+    expect(out.shades).toEqual(emptyShades());
+    expect([out.values['makeup.lip'], out.values['makeup.lens']]).toEqual([0, 0]);
+  });
+
+  it('無 clears the active part only; a no-op when it is already off', () => {
+    const lens = L5(E5(withMakeup({ 'makeup.liner': 0.6, 'makeup.brow': 0.4 }, { liner: 'navy' })));
+    const out = makeupAction({ type: 'reset' }, lens, S14({ makeupPart: 'liner' }))!.edit!.persons.f0;
+    expect([out.values['makeup.liner'], out.shades.liner, out.values['makeup.brow']]).toEqual([0, null, 0.4]);
+    expect(makeupAction({ type: 'reset' }, lens, S14({ makeupPart: 'aegyo' }))?.edit).toBeNull();
+    expect(makeupAction({ type: 'reset' }, lens, S14({ tab: 'skin' }))).toBeNull();
+  });
+
+  it('自然 from 0 applies the pick default; again is a no-op (same EditState)', () => {
+    const e = E5();
+    const r = makeupAction({ type: 'makeupOn', part: 'lashes' }, L5(e), S14({ makeupPart: 'lashes' }))!;
+    expect(r.edit!.persons.f0.values['makeup.lashes']).toBe(MAKEUP_PICK_DEFAULT.lashes);
+    const again = makeupAction({ type: 'makeupOn', part: 'lashes' }, L5(r.edit!), S14({ makeupPart: 'lashes' }))!;
+    expect(again.edit).toBe(r.edit);
+  });
+
+  it('a shade from 0 applies the part pick default; tapping 黑 on a liner that reads as 黑 is not an undo step', () => {
+    const r = makeupAction({ type: 'shade', part: 'lens', shade: 'blue' }, L5(E5()), S14({ makeupPart: 'lens' }))!;
+    expect(r.edit!.persons.f0.values['makeup.lens']).toBe(MAKEUP_PICK_DEFAULT.lens);
+    expect(r.edit!.persons.f0.shades.lens).toBe('blue');
+    const liner = L5(E5(withMakeup({ 'makeup.liner': 0.6 })));
+    expect(makeupAction({ type: 'shade', part: 'liner', shade: 'black' }, liner, S14({ makeupPart: 'liner' }))?.edit).toBeNull();
+    expect(effectiveShade('liner', null)).toBe('black');
+    expect(effectiveShade('lens', null)).toBeNull();
+  });
+});
+
+describe('美妝 under 全部 (RM §3.3, S §2.4 Dots)', () => {
+  const infos: PersonInfo[] = [{ id: 'f0', face: true, body: false }, { id: 'f1', face: true, body: false }];
+  const all = (f0: PersonParams, f1: PersonParams) => lensFor({ ...E5(f0), persons: { f0, f1 } }, { kind: 'all' }, infos, 'f0');
+
+  it('a shade or 自然 every target has on is selected, and its tap a no-op, whatever the intensities (the slider says 各人不同)', () => {
+    const l = all(withMakeup({ 'makeup.lens': 0.3, 'makeup.lashes': 0.3 }, { lens: 'blue' }), withMakeup({ 'makeup.lens': 0.8, 'makeup.lashes': 0.8 }, { lens: 'blue' }));
+    expect(makeupShadeItems(l, 'lens').filter((i) => i.selected).map((i) => i.key)).toEqual(['blue']);
+    expect(makeupAction({ type: 'shade', part: 'lens', shade: 'blue' }, l, S14({ makeupPart: 'lens' }))?.edit).toBeNull();
+    expect(makeupShadeItems(l, 'lashes').filter((i) => i.selected).map((i) => i.key)).toEqual(['on']);
+    expect(sliderFor(l, S14({ makeupPart: 'lens' }))?.mixed).toBe(true);
+    // one target off: nothing is selected, and 自然 turns that one on
+    const half = all(withMakeup({ 'makeup.lashes': 0.55 }), withMakeup({}));
+    expect(makeupShadeItems(half, 'lashes').filter((i) => i.selected)).toEqual([]);
+    const on = makeupAction({ type: 'makeupOn', part: 'lashes' }, half, S14({ makeupPart: 'lashes' }))!.edit!;
+    expect([on.persons.f0.values['makeup.lashes'], on.persons.f1.values['makeup.lashes']]).toEqual([0.55, MAKEUP_PICK_DEFAULT.lashes]);
+  });
+
+  it('a part tile dot lights for any face person, not only the shown one', () => {
+    const l = all(withMakeup({}), withMakeup({ 'makeup.aegyo': 0.5, 'makeup.brow': 0.4 }));
+    const items = makeupPartItems(l, S14({ makeupView: 'parts' }));
+    expect(items.filter((i) => i.hasValue).map((i) => i.key)).toEqual(['part.brow', 'part.aegyo']);
+  });
+});
+
+describe('美妝 strip notes (face-detail spec §2.4)', () => {
+  const none = { lensClosed: false, lashesClosed: false, lashesSmall: false, procFailed: false };
+  it('closed eyes on 美瞳 / 睫毛, a small face on 睫毛, a compile failure on the eight new parts; only on level 2', () => {
+    expect(makeupNote(S14({ makeupPart: 'lens' }), { ...none, lensClosed: true })).toBe('眼睛閉合時不套用美瞳與睫毛');
+    expect(makeupNote(S14({ makeupPart: 'lashes' }), { ...none, lashesClosed: true })).toBe('眼睛閉合時不套用美瞳與睫毛');
+    expect(makeupNote(S14({ makeupPart: 'eyeshadow' }), { ...none, lensClosed: true, lashesClosed: true })).toBeNull();
+    expect(makeupNote(S14({ makeupPart: 'lashes' }), { ...none, lashesSmall: true })).toBe('臉部太小，睫毛不會套用');
+    expect(makeupNote(S14({ makeupPart: 'brow' }), { ...none, procFailed: true })).toBe('此裝置無法使用這個妝容');
+    expect(makeupNote(S14({ makeupPart: 'lip' }), { ...none, procFailed: true })).toBeNull();
+    expect(makeupNote(S14({ makeupPart: 'lens', makeupView: 'parts' }), { ...none, lensClosed: true })).toBeNull();
+    expect(makeupNote(S14({ tab: 'shape' }), { ...none, procFailed: true })).toBeNull();
   });
 });

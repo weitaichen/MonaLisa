@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { applyPreset, LIP_SHADES, setFilter, setParam, setShade } from '../engine/params';
-import type { BeautyParams, EditState } from '../types';
+import { applyPreset, LIP_SHADES, setFilter, setParam, setShade, SPLIT_IDS } from '../engine/params';
+import type { BeautyParams, EditState, PersonParams } from '../types';
 import { editFromLegacy, legacyProjection, splitLegacy } from './legacy';
 import { LIVE_PERSONS, lensFor, NO_BODY_NOTE, NO_FACE_NOTE, P0_INFO, type PersonInfo } from './lens';
-import { assignPersons, cameraEdit, defaultPhoto, LIVE, lookOf, naturalPerson, neutralPerson, personFromPreset } from './state';
+import { splitOn } from './sides';
+import { assignPersons, cameraEdit, defaultPhoto, emptyShades, LIVE, lookOf, naturalPerson, neutralPerson, personFromPreset } from './state';
 import { TONE_COPY } from './toneCopy';
 
 const three: PersonInfo[] = [
@@ -212,5 +213,123 @@ describe('step 4 tone items (skin-cleanup spec §3.1, §3.6)', () => {
     const e2 = lensFor(e1, { kind: 'person', id: 'f0' }, persons, 'f0').resetGroup('skin');
     expect(e2.persons.f0.values['tone.teeth']).toBe(0);
     expect(e2.photo.spots).toEqual(e1.photo.spots);
+  });
+});
+
+const P = (over: Partial<PersonParams> = {}): PersonParams => ({ ...naturalPerson(), ...over });
+const E = (persons: Record<string, PersonParams>): EditState => ({ v: 2, photo: defaultPhoto(), persons, template: neutralPerson(), primaryInit: null });
+const onePerson = (swap = false): PersonInfo[] => [{ id: 'f0', face: true, body: false, screenSwap: swap }];
+const twoPersons = (swap0 = false, swap1 = false): PersonInfo[] => [
+  { id: 'f0', face: true, body: false, screenSwap: swap0 },
+  { id: 'f1', face: true, body: false, screenSwap: swap1 },
+];
+const SEL0 = { kind: 'person', id: 'f0' } as const;
+const ALL = { kind: 'all' } as const;
+
+describe('lens: sides and 左右分開 (face-detail spec §3.4)', () => {
+  it('setSplit on copies the six values and marks the person 自訂; off keeps the active side', () => {
+    const e0 = E({ f0: P() });
+    const on = lensFor(e0, SEL0, onePerson(), 'f0').setSplit(true, 'L');
+    expect(on.persons.f0.right).toEqual(Object.fromEntries(SPLIT_IDS.map((id) => [id, e0.persons.f0.values[id]])));
+    expect(on.persons.f0.preset).toBe('custom');
+    const edited = lensFor(on, SEL0, onePerson(), 'f0').set('shape.faceSlim', 0.9, 'R');
+    expect(edited.persons.f0.right?.['shape.faceSlim']).toBe(0.9);
+    expect(lensFor(edited, SEL0, onePerson(), 'f0').setSplit(false, 'R').persons.f0.values['shape.faceSlim']).toBe(0.9);
+    const offL = lensFor(edited, SEL0, onePerson(), 'f0').setSplit(false, 'L').persons.f0;
+    expect(offL.values['shape.faceSlim']).toBe(e0.persons.f0.values['shape.faceSlim']);
+    expect(offL.right).toBeNull();
+  });
+
+  it('side writes and reads follow screenSwap', () => {
+    const on = lensFor(E({ f0: P() }), SEL0, onePerson(), 'f0').setSplit(true, 'L');
+    const a = lensFor(on, SEL0, onePerson(false), 'f0').set('shape.jawline', 0.6, 'L').persons.f0;
+    expect([a.values['shape.jawline'], a.right?.['shape.jawline']]).toEqual([0.6, 0]);
+    const b = lensFor(on, SEL0, onePerson(true), 'f0').set('shape.jawline', 0.6, 'L').persons.f0;
+    expect([b.values['shape.jawline'], b.right?.['shape.jawline']]).toEqual([0, 0.6]);
+    const lb = lensFor({ ...on, persons: { f0: b } }, SEL0, onePerson(true), 'f0');
+    expect([lb.get('shape.jawline', 'L').value, lb.get('shape.jawline', 'R').value]).toEqual([0.6, 0]);
+  });
+
+  it('without a side, for a non-split item, or while right is null: values only, right never created', () => {
+    const e0 = E({ f0: P() });
+    const a = lensFor(e0, SEL0, onePerson(), 'f0').set('shape.faceSlim', 0.4, 'R').persons.f0;
+    expect(a.right).toBeNull();
+    expect(a.values['shape.faceSlim']).toBe(0.4);
+    const on = lensFor(e0, SEL0, onePerson(), 'f0').setSplit(true, 'L');
+    const b = lensFor(on, SEL0, onePerson(), 'f0').set('shape.faceSlim', 0.7).persons.f0;
+    expect(b.values['shape.faceSlim']).toBe(0.7);
+    expect(b.right?.['shape.faceSlim']).toBe(on.persons.f0.right?.['shape.faceSlim']);
+    expect(lensFor(on, SEL0, onePerson(), 'f0').get('shape.chin', 'R').value).toBe(on.persons.f0.values['shape.chin']);
+  });
+
+  it('全部: the reference person decides the switch, a tap sets everyone to the opposite, existing right is kept', () => {
+    const f1 = splitOn(P({ values: { ...naturalPerson().values, 'shape.faceSlim': 0.3 } }));
+    const e = E({ f0: P(), f1: { ...f1, right: { ...f1.right, 'shape.faceSlim': 0.8 } } });
+    const lens = lensFor(e, ALL, twoPersons(), 'f0');
+    expect(lens.split()).toBe(false);
+    const on = lens.setSplit(true, 'L');
+    expect(on.persons.f0.right).not.toBeNull();
+    expect(on.persons.f1.right?.['shape.faceSlim']).toBe(0.8);
+    expect(lensFor(on, ALL, twoPersons(), 'f0').split()).toBe(true);
+    const off = lensFor(on, ALL, twoPersons(), 'f0').setSplit(false, 'R');
+    expect([off.persons.f0.right, off.persons.f1.right]).toEqual([null, null]);
+    expect(off.persons.f1.values['shape.faceSlim']).toBe(0.8);
+  });
+
+  it('全部: mixed compares the requested side; each face maps its own screen side', () => {
+    const f0 = splitOn(P());
+    const f1 = splitOn(P());
+    const e = E({ f0, f1: { ...f1, right: { ...f1.right, 'shape.temple': 0.9 } } });
+    const lens = lensFor(e, ALL, twoPersons(false, false), 'f0');
+    expect(lens.get('shape.temple', 'L').mixed).toBe(false);
+    expect(lens.get('shape.temple', 'R').mixed).toBe(true);
+    const w = lensFor(e, ALL, twoPersons(false, true), 'f0').set('shape.temple', 0.2, 'L');
+    expect(w.persons.f0.values['shape.temple']).toBe(0.2);
+    expect(w.persons.f1.right?.['shape.temple']).toBe(0.2);
+    expect(w.persons.f1.values['shape.temple']).toBe(0.5);
+  });
+
+  it('a side write leaves the persons it does not write as they were (same objects)', () => {
+    // f0 is not selected, but its 左 is its `right` (screenSwap), and its `right` lacks the item (a sanitized entry)
+    const e = E({ f0: { ...P(), right: { 'shape.faceSlim': 0.3 } }, f1: splitOn(P()) });
+    const w = lensFor(e, { kind: 'person', id: 'f1' }, twoPersons(true, false), 'f0').set('shape.temple', 0.2, 'L');
+    expect(w.persons.f1.values['shape.temple']).toBe(0.2);
+    expect(w.persons.f0).toBe(e.persons.f0);
+  });
+
+  it('⊘ on 美型 clears right; resetGroup("makeup") clears every part and all six shades', () => {
+    const on = lensFor(E({ f0: P() }), SEL0, onePerson(), 'f0').setSplit(true, 'L');
+    expect(lensFor(on, SEL0, onePerson(), 'f0').resetGroup('shape').persons.f0.right).toBeNull();
+    const made = E({
+      f0: P({
+        values: { ...naturalPerson().values, 'makeup.liner': 0.6, 'makeup.lens': 0.5 },
+        shades: { ...emptyShades(), liner: 'wine', lens: 'blue', lip: 'rose' },
+      }),
+    });
+    const out = lensFor(made, SEL0, onePerson(), 'f0').resetGroup('makeup').persons.f0;
+    expect(out.shades).toEqual(emptyShades());
+    expect([out.values['makeup.liner'], out.values['makeup.lens']]).toEqual([0, 0]);
+  });
+
+  it('ensureOn only where the part is off; clearMakeup zeroes one part (any of the ten) and its shade', () => {
+    const e = E({ f0: P() });
+    const a = lensFor(e, SEL0, onePerson(), 'f0').ensureOn('makeup.lashes', 0.55);
+    expect(a.persons.f0.values['makeup.lashes']).toBe(0.55);
+    expect(a.persons.f0.preset).toBe('custom');
+    expect(lensFor(a, SEL0, onePerson(), 'f0').ensureOn('makeup.lashes', 0.9)).toBe(a);
+    const b = E({ f0: P({ values: { ...naturalPerson().values, 'makeup.liner': 0.6, 'makeup.blush': 0.4 }, shades: { ...emptyShades(), liner: 'navy' } }) });
+    const c = lensFor(b, SEL0, onePerson(), 'f0').clearMakeup('liner').persons.f0;
+    expect([c.values['makeup.liner'], c.shades.liner, c.values['makeup.blush']]).toEqual([0, null, 0.4]);
+    expect(lensFor(a, SEL0, onePerson(), 'f0').clearMakeup('lashes').persons.f0.values['makeup.lashes']).toBe(0);
+    expect(lensFor(e, SEL0, onePerson(), 'f0').clearMakeup('aegyo')).toBe(e);
+  });
+
+  it('shade / setShade read each part’s own value (step 1’s makeupKey knew lip and blush only)', () => {
+    const e = E({ f0: P({ values: { ...naturalPerson().values, 'makeup.blush': 0.4 } }) });
+    const lens = lensFor(e, SEL0, onePerson(), 'f0');
+    expect(lens.shade('lens').on).toBe(false);
+    const s = lens.setShade('lens', 'blue').persons.f0;
+    expect([s.values['makeup.lens'], s.shades.lens, s.values['makeup.blush']]).toEqual([0.6, 'blue', 0.4]);
+    expect(lensFor({ ...e, persons: { f0: s } }, SEL0, onePerson(), 'f0').shade('lens')).toMatchObject({ shade: 'blue', on: true });
   });
 });

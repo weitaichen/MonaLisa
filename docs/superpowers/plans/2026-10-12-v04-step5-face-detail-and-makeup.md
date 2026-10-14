@@ -1201,7 +1201,7 @@ Every panel read and write goes through step 1's lens (RM §3.3). This task wrap
   - `params.ts`: `MAKEUP_PARAM: Readonly<Record<MakeupPart, PersonParamId>>` (a `PersonParamId` is a `ParamId`, so every `ParamId` parameter takes it)
   - Every change made by the new operations sets the changed person's `preset = 'custom'` (RM §3.4).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/edit/lens.test.ts`, merging the imports into step 1's lines, never importing a name twice (step 1 already imports `lensFor`, `type PersonInfo` from `./lens`, `defaultPhoto`, `naturalPerson`, `neutralPerson` from `./state` and `EditState` from `../types`): add `SPLIT_IDS` to the `../engine/params` import, `emptyShades` to the `./state` import, `PersonParams` to the type import, and `import { splitOn } from './sides';`. Step 1's file already declares top-level `three`, `group`, `one` and `all`, so the helpers below are named `onePerson` / `twoPersons`:
 
@@ -1317,12 +1317,12 @@ describe('lens: sides and 左右分開 (face-detail spec §3.4)', () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run src/edit/lens.test.ts`
 Expected: FAIL — `lens.setSplit is not a function` (and the side arguments are ignored by step 1's `get` / `set`).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/engine/params.ts`, after `MAKEUP_PICK_DEFAULT` (add `PersonParamId` to its `import type` line: the ten ids are person-level, so `values[MAKEUP_PARAM[part]]` indexes a `PersonParams.values` without a cast, as Tasks 12 and 18 do):
 
@@ -1474,12 +1474,12 @@ export function lensFor(edit: EditState, sel: Selection, persons: readonly Perso
 
 Imports to add to `lens.ts` (merged into step 1's lines): `isShadePart`, `MAKEUP_PARAM`, `SHADE_PARTS` from `../engine/params`; `isSplitId`, `slotFor`, `splitOff`, `splitOn`, `type Side` from `./sides`; `emptyShades`, `personOf` from `./state` (step 1 already imports `personOf`); `MakeupPart`, `PersonParamId`, `SplitParamId` types. Step 1's lens is a plain object literal (`const lens: Lens = { edit, sel, persons, … }`), so `{ ...base }` carries every untouched member, and step 1's `setPresetAmount` keeps calling its own `lens.preset()`. `sideView` iterates `persons` (the `PersonInfo` list) and skips anyone whose `right` is null or whose requested side is already `values`, so step 1's routing decides who is written.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/edit && npm run typecheck`
 Expected: PASS (the step-1 lens tests are unchanged and still pass); no type errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 file src/edit/lens.ts src/engine/params.ts
@@ -1494,6 +1494,8 @@ person or everyone under 全部, each as one EditState.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
+
+**Landed deviations:** (1) Step 1's `const lens: Lens = { … }` lacks `split` / `setSplit` / `ensureOn` once `Lens` declares them (TS2739), so `baseLensFor` returns a module-local `BaseLens = Omit<Lens, 'split' | 'setSplit' | 'ensureOn'>`, which `withFaceDetail` takes. (2) Step 1's `resetGroup('makeup')` already nulls all six shades of every face target, so the wrapper keeps only the `'shape'` branch (`right = null`); the `'makeup'` branch was a no-op, and `SHADE_PARTS` is not imported. (3) `clearMakeup` narrows with `const shaded = isShadePart(part) ? part : null`, since a boolean does not narrow `part` for indexing `shades`. (4) A side `set` gives every swapped person that step 1's routing did not write its own object back, instead of swapping it twice. With the plan's swap-back, an unselected person whose requested side was `right` came back as a new object, and one whose `right` lacked the id (a sanitized partial `right`) also gained that key. One `lens.test.ts` case beyond the list pins this ("a side write leaves the persons it does not write as they were"); it failed on the plan's literal code and passes now.
 
 ### Task 5: Eye frames, lid stations, EAR, iris and gates
 

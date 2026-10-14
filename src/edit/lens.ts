@@ -1,14 +1,16 @@
 // One lens for every edit (RM §3.3): all panel reads and writes go through it, so the routing between the photo and
 // the person layer, and between one person and 全部, lives in one place. The editor and the camera both use it.
-import { applyPreset, cleanBand, displayValue, FILTERS, hasValue, MAKEUP_PICK_DEFAULT, neutralValue, paramDef, paramsInGroup } from '../engine/params';
+import { applyPreset, cleanBand, displayValue, FILTERS, hasValue, isShadePart, MAKEUP_PARAM, MAKEUP_PICK_DEFAULT, neutralValue, paramDef, paramsInGroup } from '../engine/params';
 import type {
   EditState,
   HeightBand,
   LookId,
+  MakeupPart,
   ParamDef,
   ParamGroup,
   ParamId,
   PersonId,
+  PersonParamId,
   PersonParams,
   PhotoParams,
   PresetId,
@@ -16,7 +18,9 @@ import type {
   RegionStatus,
   Selection,
   ShadePart,
+  SplitParamId,
 } from '../types';
+import { isSplitId, type Side, slotFor, splitOff, splitOn } from './sides';
 import { emptyShades, personOf, PRESET_PERSON_IDS, PRESET_PHOTO_IDS, resetAdjust, resetAll, setLook as setPhotoLook, withPersons, withPhoto } from './state';
 import { TONE_COPY } from './toneCopy';
 
@@ -28,6 +32,8 @@ export interface PersonInfo {
   id: PersonId;
   face: boolean;
   body: boolean;
+  /** face-detail spec §3.4: the person's GPUPixel-left half shows on the right of the screen (翻轉, camera mirror) */
+  screenSwap?: boolean;
 }
 export interface LensOptions {
   /** paramAvailability of a body item for that person's measure (absent → available) */
@@ -43,13 +49,21 @@ export interface Lens {
   targets(id: ParamId): PersonId[];
   /** the persons presets, shades and 無 write */
   faceTargets(): PersonId[];
-  get(id: ParamId): { value: number; mixed: boolean };
-  set(id: ParamId, v: number): EditState;
+  /** `side` (on-screen) applies to split items of persons with 左右分開 on; otherwise ignored */
+  get(id: ParamId, side?: Side): { value: number; mixed: boolean };
+  set(id: ParamId, v: number, side?: Side): EditState;
+  /** 左右分開 state of the reference person (faceTargets()[0]: the selected person; under 全部 the primary, else the first face person) */
+  split(): boolean;
+  /** on: right copies the six values; off: both sides take `activeSide`'s value. Every face target, one EditState. */
+  setSplit(on: boolean, activeSide: Side): EditState;
+  /** 自然 on a part without shades: `v` on every target whose value is ≤ 0.01 */
+  ensureOn(id: ParamId, v: number): EditState;
   applies(id: ParamId): RegionStatus;
   shade(part: ShadePart): { shade: string | null; on: boolean; mixed: boolean };
   preset(): { ref: PresetRef | 'custom' | null; mixed: boolean };
   setShade(part: ShadePart, shade: string | null): EditState;
-  clearMakeup(part: ShadePart): EditState;
+  /** 無 for one part (any of the ten): value 0 and, for a shade part, shade null on every face target; `edit` when all are off */
+  clearMakeup(part: MakeupPart): EditState;
   applyPreset(id: PresetId, amount: number): EditState;
   setPresetAmount(amount: number): EditState;
   setFilter(filterId: string): EditState;
@@ -70,6 +84,8 @@ export const P0_INFO: readonly PersonInfo[] = [{ id: 'p0', face: true, body: tru
 /** the camera's one person: a face, never a body (美體 is photo-only) */
 export const LIVE_PERSONS: readonly PersonInfo[] = [{ id: 'live', face: true, body: false }];
 
+/** step 1's lens; `withFaceDetail` adds the 左右分開 / 自然 operations */
+type BaseLens = Omit<Lens, 'split' | 'setSplit' | 'ensureOn'>;
 type PV = keyof PersonParams['values'];
 type PhV = keyof PhotoParams['values'];
 const OK: RegionStatus = { ok: true, reason: null };
@@ -79,7 +95,6 @@ const clamp01 = (v: number) => (Number.isNaN(v) ? 0 : Math.min(1, Math.max(0, v)
 const ALL_SKIN: ReadonlySet<ParamId> = new Set<ParamId>(['skin.smooth', 'skin.rosy']);
 /** editing these breaks the photo's preset link (RM §3.4) */
 const LINK_BREAKERS: ReadonlySet<ParamId> = new Set<ParamId>(['skin.whiten', 'skin.sharpen', 'filter.amount']);
-const makeupKey = (part: ShadePart): PV => (part === 'lip' ? 'makeup.lip' : 'makeup.blush');
 /** presets match by id: 程度 differences do not make 全部 "mixed" for the strip (S §2.4) */
 const sameRef = (a: PresetRef | 'custom', b: PresetRef | 'custom') => (a === 'custom' ? b === 'custom' : b !== 'custom' && a.id === b.id);
 /** the defs a strip's ⊘, its no-op check and its dot cover: 美膚 also covers the six 膚質 items (skin-cleanup spec §2.1) */
@@ -87,7 +102,7 @@ function stripDefs(group: ParamGroup): ParamDef[] {
   return group === 'skin' ? [...paramsInGroup('skin'), ...paramsInGroup('tone')] : paramsInGroup(group);
 }
 
-export function lensFor(edit: EditState, sel: Selection, persons: readonly PersonInfo[], primary: PersonId, opts: LensOptions = {}): Lens {
+function baseLensFor(edit: EditState, sel: Selection, persons: readonly PersonInfo[], primary: PersonId, opts: LensOptions = {}): BaseLens {
   const info = new Map(persons.map((p) => [p.id, p]));
   const noFace = !persons.some((p) => p.face);
   /** primary first: "the first applicable person" under 全部 */
@@ -126,7 +141,7 @@ export function lensFor(edit: EditState, sel: Selection, persons: readonly Perso
     return { ...ph, values, filterId: q.filterId, presetLink: { id, amount: q.presetAmount } };
   };
 
-  const lens: Lens = {
+  const lens: BaseLens = {
     edit,
     sel,
     persons,
@@ -161,7 +176,7 @@ export function lensFor(edit: EditState, sel: Selection, persons: readonly Perso
       return no(isBody(id) ? NO_BODY_NOTE : NO_FACE_NOTE);
     },
     shade(part) {
-      const key = makeupKey(part);
+      const key = MAKEUP_PARAM[part] as PV;
       const t = faceTargets();
       const p = person(shownOf(t));
       const on = p.values[key] > 0.01;
@@ -179,7 +194,7 @@ export function lensFor(edit: EditState, sel: Selection, persons: readonly Perso
       return { ref: refs[0], mixed: refs.some((r) => !sameRef(refs[0], r)) };
     },
     setShade(part, shade) {
-      const key = makeupKey(part);
+      const key = MAKEUP_PARAM[part] as PV;
       return withPersons(edit, faceTargets(), (p) => ({
         ...p,
         shades: { ...p.shades, [part]: shade },
@@ -188,8 +203,17 @@ export function lensFor(edit: EditState, sel: Selection, persons: readonly Perso
       }));
     },
     clearMakeup(part) {
-      const key = makeupKey(part);
-      return withPersons(edit, faceTargets(), (p) => ({ ...p, shades: { ...p.shades, [part]: null }, values: { ...p.values, [key]: 0 }, preset: 'custom' }));
+      const key = MAKEUP_PARAM[part] as PV;
+      const shaded = isShadePart(part) ? part : null;
+      const t = faceTargets();
+      const off = (q: PersonParams) => q.values[key] === 0 && (shaded === null || q.shades[shaded] === null);
+      if (t.every((pid) => off(person(pid)))) return edit;
+      return withPersons(edit, t, (p) => ({
+        ...p,
+        values: { ...p.values, [key]: 0 },
+        shades: shaded === null ? p.shades : { ...p.shades, [shaded]: null },
+        preset: 'custom',
+      }));
     },
     applyPreset(id, amount) {
       const a = clamp01(amount);
@@ -278,4 +302,87 @@ export function lensFor(edit: EditState, sel: Selection, persons: readonly Perso
     },
   };
   return lens;
+}
+
+/** swaps the two halves of one split item (an involution once `right` holds the id) */
+function swapHalves(p: PersonParams, id: SplitParamId): PersonParams {
+  return { ...p, values: { ...p.values, [id]: p.right?.[id] ?? p.values[id] }, right: { ...p.right, [id]: p.values[id] } };
+}
+
+/**
+ * The EditState in which every split person's `side` half sits in `values`, so step 1's routing (selection, 全部,
+ * applies, mixed by display value) reads and writes the requested side. `swapped` lists the persons to swap back.
+ */
+function sideView(edit: EditState, id: SplitParamId, side: Side, persons: readonly PersonInfo[]): { view: EditState; swapped: PersonId[] } {
+  const swapped: PersonId[] = [];
+  let next: Record<PersonId, PersonParams> | null = null;
+  for (const info of persons) {
+    const p = edit.persons[info.id];
+    if (!p || p.right === null || slotFor(!!info.screenSwap, side) === 'values') continue;
+    next ??= { ...edit.persons };
+    next[info.id] = swapHalves(p, id);
+    swapped.push(info.id);
+  }
+  return { view: next ? { ...edit, persons: next } : edit, swapped };
+}
+
+/** step 1's lens plus the step-5 operations; step 1's own `faceTargets()` (primary first under 全部) picks every target */
+function withFaceDetail(base: BaseLens, opts: LensOptions): Lens {
+  const { edit, sel, persons, primary } = base;
+  const infoOf = new Map(persons.map((p) => [p.id, p]));
+  const swapOf = (pid: PersonId) => !!infoOf.get(pid)?.screenSwap;
+  /** `fn` on each face target; a changed person becomes 自訂 (a person-level face edit, RM §3.4). Unchanged → `e` itself. */
+  const mapTargets = (e: EditState, fn: (p: PersonParams, pid: PersonId) => PersonParams): EditState => {
+    let next: Record<PersonId, PersonParams> | null = null;
+    for (const pid of base.faceTargets()) {
+      const p = personOf(e, pid);
+      const q = fn(p, pid);
+      if (q === p) continue;
+      next ??= { ...e.persons };
+      next[pid] = { ...q, preset: 'custom' };
+    }
+    return next ? { ...e, persons: next } : e;
+  };
+  const sideOf = (id: ParamId, side: Side | undefined): Side | null => (side !== undefined && isSplitId(id) ? side : null);
+  return {
+    ...base,
+    get(id, side) {
+      const s = sideOf(id, side);
+      if (!s) return base.get(id);
+      const { view, swapped } = sideView(edit, id as SplitParamId, s, persons);
+      return swapped.length ? baseLensFor(view, sel, persons, primary, opts).get(id) : base.get(id);
+    },
+    set(id, v, side) {
+      const s = sideOf(id, side);
+      if (!s) return base.set(id, v);
+      const { view, swapped } = sideView(edit, id as SplitParamId, s, persons);
+      if (!swapped.length) return base.set(id, v);
+      const out = baseLensFor(view, sel, persons, primary, opts).set(id, v);
+      if (out === view) return edit;
+      const back = { ...out.persons };
+      // a person step 1's routing did not write gets its own object back; a written one swaps its halves back
+      for (const pid of swapped) back[pid] = back[pid] === view.persons[pid] ? edit.persons[pid] : swapHalves(back[pid], id as SplitParamId);
+      return { ...out, persons: back };
+    },
+    split() {
+      const ref = base.faceTargets()[0] ?? (sel.kind === 'person' ? sel.id : primary);
+      return (personOf(edit, ref).right ?? null) !== null;
+    },
+    setSplit(on, activeSide) {
+      return mapTargets(edit, (p, pid) => (on ? splitOn(p) : splitOff(p, slotFor(swapOf(pid), activeSide))));
+    },
+    ensureOn(id, v) {
+      const key = id as PersonParamId;
+      return mapTargets(edit, (p) => (p.values[key] > 0.01 ? p : { ...p, values: { ...p.values, [key]: v } }));
+    },
+    resetGroup(group) {
+      // step 1's resetGroup('makeup') already sets every face target's six shades to null
+      const out = base.resetGroup(group);
+      return group === 'shape' ? mapTargets(out, (p) => (p.right === null ? p : { ...p, right: null })) : out;
+    },
+  };
+}
+
+export function lensFor(edit: EditState, sel: Selection, persons: readonly PersonInfo[], primary: PersonId, opts: LensOptions = {}): Lens {
+  return withFaceDetail(baseLensFor(edit, sel, persons, primary, opts), opts);
 }

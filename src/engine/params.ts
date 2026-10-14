@@ -1,5 +1,5 @@
 // Parameter schema, presets, filters and shades (spec §7.4, RB §5). Pure data + pure functions.
-import type { BeautyParams, FilterDef, HeightBand, MakeupPart, ParamDef, ParamGroup, ParamId, PresetDef, PresetId, ShadeDef, ShadePart, SplitParamId } from '../types';
+import type { BeautyParams, FilterDef, HeightBand, MakeupPart, ParamDef, ParamGroup, ParamId, PersonParamId, PresetDef, PresetId, ShadeDef, ShadePart, SplitParamId } from '../types';
 
 export const PARAM_DEFS: readonly ParamDef[] = [
   // 美膚 — 美白 / 銳化 are photo-level (the GPUPixel chain is not masked, composite.ts); 磨皮 / 紅潤 per person
@@ -172,6 +172,20 @@ export const MAKEUP_PICK_DEFAULT: Readonly<Record<MakeupPart, number>> = {
   contour: 0.4,
   highlight: 0.4,
   lens: 0.6,
+};
+
+/** the ParamId of each 美妝 part */
+export const MAKEUP_PARAM: Readonly<Record<MakeupPart, PersonParamId>> = {
+  lip: 'makeup.lip',
+  blush: 'makeup.blush',
+  brow: 'makeup.brow',
+  eyeshadow: 'makeup.eyeshadow',
+  liner: 'makeup.liner',
+  lashes: 'makeup.lashes',
+  aegyo: 'makeup.aegyo',
+  contour: 'makeup.contour',
+  highlight: 'makeup.highlight',
+  lens: 'makeup.lens',
 };
 
 export function isShadePart(p: MakeupPart): p is ShadePart {

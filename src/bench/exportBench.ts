@@ -10,6 +10,7 @@ import { browserRunnerDeps, type TileInputBase } from '../media/exportFull';
 import { faceBoundsFor, planTiles, type TileGrid } from '../media/exportPlan';
 import { createSurface, FULL_JPEG_QUALITY } from '../media/exporter';
 import { importPhotoInfo } from '../media/importer';
+import { blankEyes } from '../tracking/adapter111';
 import type { BodyField, Engine, Face, RenderFace, RenderInput } from '../types';
 import { type ExportBenchRow, median } from './report';
 
@@ -27,7 +28,7 @@ export function gridFaces(): RenderFace[] {
     const at = (a: ArrayLike<number>) => Float32Array.from(a, (v, i) => (i % 2 === 0 ? ox + v * 0.3 : oy + v * 0.45));
     const pts111 = at(FACE_TEMPLATE);
     // the contour points stand in for the oval: enough for the bench's mask and box work
-    const face: Face = { pts111, ext: at(ext), oval: pts111.slice(0, 72), yaw: 0 };
+    const face: Face = { pts111, ext: at(ext), oval: pts111.slice(0, 72), yaw: 0, ...blankEyes() };
     out.push({ face, weight: 1, person, protect: null });
   }
   return out;

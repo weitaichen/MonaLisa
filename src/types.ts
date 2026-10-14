@@ -344,6 +344,15 @@ export interface Face {
   oval: Float32Array;
   /** yaw proxy in −1..1 (0 = frontal), RB §2.4 */
   yaw: number;
+  /** MediaPipe 468–477 (x, y): [0..9] = 468 centre + 469–472 (GPUPixel-left eye), [10..19] = 473 + 474–477 */
+  iris: Float32Array;
+  /**
+   * MediaPipe eye contours (x, y), 16 points per eye: outer corner, 7 upper (outer → inner), inner corner, 7 lower
+   * (outer → inner). [0..31] GPUPixel-left eye = MP 33, 246, 161, 160, 159, 158, 157, 173, 133, 7, 163, 144, 145, 153,
+   * 154, 155; [32..63] GPUPixel-right eye = MP 263, 466, 388, 387, 386, 385, 384, 398, 362, 249, 390, 373, 374, 380,
+   * 381, 382 (FaceLandmarker's RIGHT_EYE / LEFT_EYE contours; face-detail spec §3.3)
+   */
+  lids: Float32Array;
 }
 
 export type Delegate = 'GPU' | 'CPU';

@@ -226,7 +226,7 @@ window.runReshapePinMulti = (carrier) => {
     const b = ovalBox(f);
     const c = [b.x + b.w / 2, b.y + b.h / 2];
     const m = (a: Float32Array) => a.map((v, i) => (i % 2 === 0 ? c[0] + (v - c[0]) * k + dx : c[1] + (v - c[1]) * k));
-    return { pts111: m(f.pts111), ext: m(f.ext), oval: m(f.oval), yaw: f.yaw };
+    return { pts111: m(f.pts111), ext: m(f.ext), oval: m(f.oval), yaw: f.yaw, iris: m(f.iris), lids: m(f.lids) };
   };
   const A = shrink(base, 0.45, -0.24);
   const B = shrink(base, 0.45, 0.24);
@@ -258,7 +258,7 @@ window.runProtectPinMulti = (carrier) => {
     const b = ovalBox(f);
     const c = [b.x + b.w / 2, b.y + b.h / 2];
     const m = (a: Float32Array) => a.map((v, i) => (i % 2 === 0 ? c[0] + (v - c[0]) * k + dx : c[1] + (v - c[1]) * k));
-    return { pts111: m(f.pts111), ext: m(f.ext), oval: m(f.oval), yaw: f.yaw };
+    return { pts111: m(f.pts111), ext: m(f.ext), oval: m(f.oval), yaw: f.yaw, iris: m(f.iris), lids: m(f.lids) };
   };
   const A = shrink(base, 0.45, -0.24);
   const B = shrink(base, 0.45, 0.24);

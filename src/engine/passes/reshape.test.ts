@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Face, ParamId } from '../../types';
 import { applyPreset, defaultParams, PARAM_DEFS, paramDef } from '../params';
-import { adapt } from '../../tracking/adapter111';
+import { adapt, blankEyes } from '../../tracking/adapter111';
 import { FACE_TEMPLATE } from './faceMesh';
 import { reshapeMapCpu } from './reshapeCpu';
 import {
@@ -22,7 +22,7 @@ const T = (i: number): [number, number] => [FACE_TEMPLATE[i * 2], FACE_TEMPLATE[
 
 function templateFace(): Face {
   const ext = new Float32Array([0.5, 0.2, 0.5, 0.26, 0.5, 0.33, 0.5, 0.4, 0.5, 0.71, 0.5, 0.68, 0.3, 0.45, 0.7, 0.45]);
-  return { pts111: new Float32Array(FACE_TEMPLATE), ext, oval: new Float32Array(72), yaw: 0 };
+  return { pts111: new Float32Array(FACE_TEMPLATE), ext, oval: new Float32Array(72), yaw: 0, ...blankEyes() };
 }
 
 describe('reshapeUniforms', () => {

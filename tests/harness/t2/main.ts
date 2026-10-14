@@ -31,7 +31,7 @@ import { createMaskPass } from '../../../src/engine/passes/mask';
 import { maskBufferSize } from '../../../src/engine/uniforms';
 import { createLandmarkOverlay } from '../../../src/engine/passes/overlay';
 import { FACE_INDICES, FACE_TEMPLATE } from '../../../src/engine/passes/faceMesh';
-import { adapt } from '../../../src/tracking/adapter111';
+import { adapt, blankEyes } from '../../../src/tracking/adapter111';
 import { minJacobian, warpRef } from './warpRef';
 
 interface Check {
@@ -979,7 +979,7 @@ function templateFace(W: number, H: number): Face {
   [[0.5, 0.2], [0.5, 0.26], [0.5, 0.34], [0.5, 0.4], [0.5, 0.71], [0.5, 0.68], [0.3, 0.45], [0.7, 0.45]].forEach((p, i) =>
     ext.set(map(p as V2), i * 2),
   );
-  return { pts111, ext, oval, yaw: 0 };
+  return { pts111, ext, oval, yaw: 0, ...blankEyes() };
 }
 
 const state = { done: false, checks, metrics, images } as NonNullable<Window['__t2']>;

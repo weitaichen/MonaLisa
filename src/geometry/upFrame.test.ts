@@ -87,13 +87,24 @@ describe('U ↔ O permutations (C §3.5, S §3.4)', () => {
     }
   });
 
-  it('a face goes to U point by point (pts111, ext, oval); the yaw is kept', () => {
-    const f: Face = { pts111: new Float32Array(222).fill(0.25), ext: new Float32Array(16).fill(0.5), oval: new Float32Array(72).fill(0.75), yaw: 0.3 };
+  it('a face goes to U point by point (pts111, ext, oval, iris, lids); the yaw is kept', () => {
+    const pairs = (n: number, x: number, y: number) => Float32Array.from({ length: n }, (_, i) => (i % 2 === 0 ? x : y));
+    const f: Face = {
+      pts111: new Float32Array(222).fill(0.25),
+      ext: new Float32Array(16).fill(0.5),
+      oval: new Float32Array(72).fill(0.75),
+      yaw: 0.3,
+      iris: pairs(20, 0.125, 0.375),
+      lids: pairs(64, 0.625, 0.875),
+    };
     expect(faceOToU(f, 0)).toBe(f);
     const u = faceOToU(f, 1);
     // R1 (x, y) → (1 − y, x)
     expect([u.pts111[0], u.pts111[1]]).toEqual([0.75, 0.25]);
     expect([u.oval[0], u.oval[1]]).toEqual([0.25, 0.75]);
+    expect(Array.from(u.iris)).toEqual(Array.from(pairs(20, 0.625, 0.125)));
+    expect(Array.from(u.lids)).toEqual(Array.from(pairs(64, 0.125, 0.625)));
+    expect(f.iris[0]).toBe(0.125); // the O face is untouched
     expect(u.yaw).toBe(0.3);
     expect(f.pts111[0]).toBe(0.25); // the O face is untouched
   });

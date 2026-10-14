@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Face } from '../../types';
+import { blankEyes } from '../../tracking/adapter111';
 import { FACE_TEMPLATE } from './faceMesh';
 import { MASK_MAX_FLOATS, buildMaskGeometry } from './mask';
 
@@ -10,7 +11,7 @@ function face(): Face {
     oval[i * 2] = 0.5 + 0.21 * Math.sin(a);
     oval[i * 2 + 1] = 0.47 - 0.26 * Math.cos(a);
   }
-  return { pts111: new Float32Array(FACE_TEMPLATE), ext: new Float32Array(16), oval, yaw: 0 };
+  return { pts111: new Float32Array(FACE_TEMPLATE), ext: new Float32Array(16), oval, yaw: 0, ...blankEyes() };
 }
 
 describe('buildMaskGeometry', () => {

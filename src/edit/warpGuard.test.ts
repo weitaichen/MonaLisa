@@ -22,7 +22,7 @@ const at = (k: number, dx: number): Face => {
   const b = ovalBox(base);
   const c = [b.x + b.w / 2, b.y + b.h / 2];
   const m = (a: Float32Array) => a.map((v, i) => (i % 2 === 0 ? c[0] + (v - c[0]) * k + dx : c[1] + (v - c[1]) * k));
-  return { pts111: m(base.pts111), ext: m(base.ext), oval: m(base.oval), yaw: base.yaw };
+  return { pts111: m(base.pts111), ext: m(base.ext), oval: m(base.oval), yaw: base.yaw, iris: m(base.iris), lids: m(base.lids) };
 };
 const strong = (() => {
   const p = personFromPreset('original', 1);

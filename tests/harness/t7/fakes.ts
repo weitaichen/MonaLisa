@@ -6,6 +6,7 @@ import type { LiveDeps, LiveLoop } from '../../../src/app/live';
 import type { StillSession } from '../../../src/app/still';
 import { splitLegacy } from '../../../src/edit/legacy';
 import { encodeOutput } from '../../../src/media/exporter';
+import { blankEyes } from '../../../src/tracking/adapter111';
 import type { Deps, UndoLike } from '../../../src/ui/deps';
 import type {
   BeautyParams,
@@ -293,7 +294,7 @@ function fakeStill(
         : [
             {
               id: 'f0',
-              face: { pts111: new Float32Array(222).fill(0.5), ext: new Float32Array(16).fill(0.5), oval: new Float32Array(72).fill(0.5), yaw: 0 },
+              face: { pts111: new Float32Array(222).fill(0.5), ext: new Float32Array(16).fill(0.5), oval: new Float32Array(72).fill(0.5), yaw: 0, ...blankEyes() },
               box: { x: 0.3, y: 0.3, w: 0.4, h: 0.4 },
               lm: new Float32Array(1434).fill(0.5),
             },

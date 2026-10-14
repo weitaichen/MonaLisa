@@ -232,7 +232,7 @@ export async function rowR(): Promise<MultiRow[]> {
     const b = ovalBox(base);
     const c = [b.x + b.w / 2, b.y + b.h / 2];
     const m = (a: Float32Array) => a.map((v, i) => (i % 2 === 0 ? cx + (v - c[0]) * k : cy + (v - c[1]) * k));
-    return { pts111: m(base.pts111), ext: m(base.ext), oval: m(base.oval), yaw: 0 };
+    return { pts111: m(base.pts111), ext: m(base.ext), oval: m(base.oval), yaw: 0, iris: m(base.iris), lids: m(base.lids) };
   };
   // the clustered layouts at FW 0.1 (the bench frame is square: iso = UV), so their spacing is what their names say
   const kClustered = 0.1 / faceWidthIso(base, 1);

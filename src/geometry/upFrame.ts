@@ -41,7 +41,14 @@ export function poseUToO(p: Pose33, q: Quarter): Pose33 {
 /** the face in U, for the body measure's head / neck anchors (S §3.4) */
 export function faceOToU(f: Face, q: Quarter): Face {
   if (q === 0) return f;
-  return { ...f, pts111: pointsOToU(f.pts111, 2, q), ext: pointsOToU(f.ext, 2, q), oval: pointsOToU(f.oval, 2, q) };
+  return {
+    ...f,
+    pts111: pointsOToU(f.pts111, 2, q),
+    ext: pointsOToU(f.ext, 2, q),
+    oval: pointsOToU(f.oval, 2, q),
+    iris: pointsOToU(f.iris, 2, q),
+    lids: pointsOToU(f.lids, 2, q),
+  };
 }
 
 /** grid permutation by q clockwise quarter turns (row 0 = top); channels interleaved */

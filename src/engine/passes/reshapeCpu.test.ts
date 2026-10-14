@@ -92,7 +92,7 @@ function placed(cx: number, cy: number, fw: number, yaw = 0): Face {
     }
     return out;
   };
-  return { pts111: iso(face.pts111), ext: iso(face.ext), oval: iso(face.oval), yaw };
+  return { pts111: iso(face.pts111), ext: iso(face.ext), oval: iso(face.oval), yaw, iris: iso(face.iris), lids: iso(face.lids) };
 }
 
 /**

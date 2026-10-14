@@ -103,7 +103,7 @@ describe('buildFaceProtect with other persons (S §4.7)', () => {
   const twin = (dx: number) => {
     const f = pr.face;
     const m = (a: Float32Array) => a.map((v, i) => (i % 2 === 0 ? v + dx : v));
-    return { pts111: m(f.pts111), ext: m(f.ext), oval: m(f.oval), yaw: 0 };
+    return { pts111: m(f.pts111), ext: m(f.ext), oval: m(f.oval), yaw: 0, iris: m(f.iris), lids: m(f.lids) };
   };
   const B = twin(0.45);
   const P = pr.face.pts111;

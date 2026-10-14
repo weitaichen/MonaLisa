@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { adapt } from '../../tracking/adapter111';
+import { adapt, blankEyes } from '../../tracking/adapter111';
 import type { Face } from '../../types';
 import { rasterizeTone } from '../toneRaster.node';
 import {
@@ -77,7 +77,9 @@ function mirrorFace(f: Face): Face {
     oval[i * 2] = 1 - f.oval[(n - 1 - i) * 2];
     oval[i * 2 + 1] = f.oval[(n - 1 - i) * 2 + 1];
   }
-  return { pts111, ext, oval, yaw: -f.yaw };
+  // iris / lids: x → 1 − x with the two eyes' halves swapped
+  const swapEyes = (a: Float32Array) => a.map((_, i) => (i % 2 === 0 ? 1 - a[(i + a.length / 2) % a.length] : a[(i + a.length / 2) % a.length]));
+  return { pts111, ext, oval, yaw: -f.yaw, iris: swapEyes(f.iris), lids: swapEyes(f.lids) };
 }
 
 /** every vertex of `a`, mirrored (x → 1 − x), matches a distinct vertex of `b` within `tol` (position and value) */
@@ -222,7 +224,7 @@ describe('crescents and nasolabial bands', () => {
   });
 
   it('a degenerate face (all points equal) gives finite, zero-area output', () => {
-    const d: Face = { pts111: new Float32Array(222).fill(0.5), ext: new Float32Array(16).fill(0.5), oval: new Float32Array(72).fill(0.5), yaw: 0 };
+    const d: Face = { pts111: new Float32Array(222).fill(0.5), ext: new Float32Array(16).fill(0.5), oval: new Float32Array(72).fill(0.5), yaw: 0, ...blankEyes() };
     for (const g of [crescentGeometry(d, 'L', ASPECT), nasolabialGeometry(d, 'R', ASPECT)]) {
       for (const v of g) expect(Number.isFinite(v)).toBe(true);
       const vs = verts(g);
@@ -330,7 +332,7 @@ describe('膚色 ring width w_T', () => {
 /** the face moved by `dx` (uv) along the image x axis */
 function shiftedFace(f: Face, dx: number): Face {
   const move = (a: Float32Array) => a.map((v, i) => (i % 2 === 0 ? v + dx : v));
-  return { pts111: move(f.pts111), ext: move(f.ext), oval: move(f.oval), yaw: f.yaw };
+  return { pts111: move(f.pts111), ext: move(f.ext), oval: move(f.oval), yaw: f.yaw, iris: move(f.iris), lids: move(f.lids) };
 }
 const ovalOf = (f: Face): V2[] => Array.from({ length: f.oval.length / 2 }, (_, i) => iso(f.oval[i * 2], f.oval[i * 2 + 1]));
 function inPolygon(p: V2, poly: readonly V2[]): boolean {

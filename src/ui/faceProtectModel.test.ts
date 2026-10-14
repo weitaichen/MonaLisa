@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { loadPoseFixture } from '../body/fixtures.node';
 import { addEntry, closeHistory, getEntry, updateEntry } from '../store/history';
-import { adapt } from '../tracking/adapter111';
+import { adapt, blankEyes } from '../tracking/adapter111';
 import { buildFaceProtect } from '../tracking/faceProtect';
 import { applyPreset, sanitizeParams, setParam } from '../engine/params';
 import { editFromLegacy, legacyProjection } from '../edit/legacy';
@@ -23,7 +23,7 @@ import {
   type ProtectRequest,
 } from './faceProtectModel';
 
-const face = (): Face => ({ pts111: new Float32Array(222), ext: new Float32Array(16), oval: new Float32Array(72), yaw: 0 });
+const face = (): Face => ({ pts111: new Float32Array(222), ext: new Float32Array(16), oval: new Float32Array(72), yaw: 0, ...blankEyes() });
 const mask = (): PersonMask => ({ width: 1, height: 1, data: new Uint8Array(1) });
 const flush = () => new Promise((r) => setTimeout(r, 0));
 

@@ -2,6 +2,7 @@
 // Not used by the app. Proportions follow a generic adult standing pose, arms slightly away from the body.
 import type { BodyDetection, Face } from '../types';
 import { FACE_TEMPLATE } from '../engine/passes/faceMesh';
+import { blankEyes } from '../tracking/adapter111';
 import { segDist, type V2 } from './geom';
 
 /**
@@ -164,7 +165,7 @@ export function syntheticFigure(opts: SyntheticOptions = {}): SyntheticFigure {
   const top = z([0.5, 0.075]);
   const chin = z([0.5, 0.163]);
   ext.set([top[0], top[1], top[0], top[1] + 0.01, top[0], top[1] + 0.03, top[0], top[1] + 0.04, chin[0], chin[1], chin[0], chin[1] - 0.01, 0.46, 0.12, 0.54, 0.12]);
-  const face: Face = { pts111: new Float32Array(222), ext, oval: new Float32Array(72), yaw: 0 };
+  const face: Face = { pts111: new Float32Array(222), ext, oval: new Float32Array(72), yaw: 0, ...blankEyes() };
 
   // background geometry: the silhouette edges at the waist (narrowest torso station), shoulder and hip rows
   let tw = 0.6;
@@ -372,7 +373,7 @@ export function syntheticPortrait(opts: { width?: number; height?: number; faceW
     [0.3, 0.45],
     [0.7, 0.45],
   ].forEach((t, i) => ext.set(toUV(t as unknown as V2), i * 2));
-  const face: Face = { pts111, ext, oval, yaw: 0 };
+  const face: Face = { pts111, ext, oval, yaw: 0, ...blankEyes() };
 
   const ovalPx: V2[] = [];
   for (let i = 0; i < 36; i++) ovalPx.push([oval[i * 2] * W, oval[i * 2 + 1] * H]);

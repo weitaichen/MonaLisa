@@ -681,7 +681,7 @@ The adapter fills the two new `Face` fields from the 478 raw landmarks that step
   - `Face.lids: Float32Array` (length 64: 16 points per eye, outer corner, 7 upper outer → inner, inner corner, 7 lower outer → inner; `[0..31]` GPUPixel-left eye = MP 33, 246, 161, 160, 159, 158, 157, 173, 133, 7, 163, 144, 145, 153, 154, 155; `[32..63]` = MP 263, 466, 388, 387, 386, 385, 384, 398, 362, 249, 390, 373, 374, 380, 381, 382)
   - `adapter111.ts`: `IRIS_MP: readonly number[]`, `LIDS_MP: readonly number[]`, `blankEyes(): Pick<Face, 'iris' | 'lids'>` (zero-filled, for synthetic faces)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `src/tracking/adapter111.test.ts`:
 
@@ -739,12 +739,12 @@ describe('iris and lids (face-detail spec §3.3, §4.7)', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run src/tracking/adapter111.test.ts`
 Expected: FAIL — `Cannot read properties of undefined (reading 'length')` (no `iris` on the adapted face).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/types.ts` (CRLF), inside `Face` after `yaw`:
 
@@ -802,12 +802,12 @@ Same edit at `src/body/synthetic.ts:375`, `src/app/testFakes.ts:50`, `src/engine
 
 Step 3's `faceOToU` (`src/geometry/upFrame.ts:42-45`) spreads the face and maps `pts111`, `ext` and `oval` into U; add `iris: pointsOToU(f.iris, 2, q), lids: pointsOToU(f.lids, 2, q)` to it, so a U face never mixes frames (the body measure reads none of them today).
 
-- [ ] **Step 4: Run the tests and the typecheck**
+- [x] **Step 4: Run the tests and the typecheck**
 
 Run: `npx vitest run src/tracking/adapter111.test.ts && npm run typecheck && npm test`
 Expected: PASS; no type errors; the rest of the unit suite unchanged.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 file src/types.ts src/tracking/adapter111.ts src/app/testFakes.ts src/engine/passes/reshape.test.ts tests/harness/t2/main.ts

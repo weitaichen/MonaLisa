@@ -47,7 +47,8 @@ export function makeFace(tag = 0, cx = 0.5): Face {
     oval[i * 2] = cx + 0.2 * Math.cos((i / 36) * 2 * Math.PI);
     oval[i * 2 + 1] = 0.5 + 0.2 * Math.sin((i / 36) * 2 * Math.PI);
   }
-  return { pts111, ext: new Float32Array(16), oval, yaw: 0 };
+  // blankEyes() spelled out: live / still tests mock the whole adapter module and call makeFace from their adapt
+  return { pts111, ext: new Float32Array(16), oval, yaw: 0, iris: new Float32Array(20), lids: new Float32Array(64) };
 }
 
 /** `tag` lands in the first coordinate (0.5 + tag/1000), so a mocked adapt can tell results apart */

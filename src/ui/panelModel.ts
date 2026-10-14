@@ -1,15 +1,15 @@
 // BeautyPanel logic (spec §7.3), kept pure so it can be unit-tested without a DOM.
-import { BLUSH_SHADES, FILTERS, hasValue, LIP_SHADES, MAKEUP_PICK_DEFAULT, neutralValue, paramDef, paramsInGroup, PRESETS } from '../engine/params';
+import { BLUSH_SHADES, FILTERS, hasValue, isShadePart, LIP_SHADES, MAKEUP_PICK_DEFAULT, neutralValue, paramDef, paramsInGroup, PRESETS } from '../engine/params';
 import { lookDef, LOOKS, lookThumbUrl } from '../engine/looks';
 import { NO_BODY_NOTE, NO_FACE_NOTE, type Lens } from '../edit/lens';
 import { adjustIsNeutral, personOf } from '../edit/state';
 import { TONE_COPY } from '../edit/toneCopy';
 import type { CropLock } from '../geometry/view';
-import type { AdjustId, EditState, HeightBand, LookId, ParamDef, ParamId, PersonId, PersonParamId, PhotoParams, PresetId, RegionStatus } from '../types';
+import type { AdjustId, EditState, HeightBand, LookId, MakeupPart, ParamDef, ParamId, PersonId, PersonParamId, PhotoParams, PresetId, RegionStatus, ShadePart } from '../types';
 import type { CropAction } from './cropPanel';
 
 export type TabId = 'preset' | 'skin' | 'shape' | 'body' | 'filter' | 'makeup' | 'adjust' | 'crop';
-export type MakeupPart = 'lip' | 'blush';
+export type { MakeupPart } from '../types';
 /** what the 美體 strip has selected: one of the 10 body sliders, or the manual 增高 tool */
 export type BodySel = ParamId | 'height';
 /** what the 美膚 strip has selected: a slider, or the 祛痘 tap mode (skin-cleanup spec §2.3, the BodySel pattern) */
@@ -302,7 +302,7 @@ export type ItemAction =
   | { type: 'custom' }
   | { type: 'param'; id: ParamId }
   | { type: 'filter'; id: string }
-  | { type: 'shade'; part: MakeupPart; shade: string | null }
+  | { type: 'shade'; part: ShadePart; shade: string | null }
   /** 美體: select the manual 增高 tool (the screen shows HeightBandOverlay) */
   | { type: 'height' }
   /** 美膚: select the 祛痘 tap mode (the screen shows SpotControls) */
@@ -369,6 +369,7 @@ function itemDot(lens: Lens, d: ParamDef): boolean {
 
 /** The 美妝 part chip's dot (口紅 / 腮紅): the selected person's, or under 全部 any face person's (S §2.4 Dots). */
 export function partHasValue(lens: Lens, part: MakeupPart): boolean {
+  if (!isShadePart(part)) return false;
   if (lens.sel.kind !== 'all') return lens.shade(part).on;
   const key = makeupKey(part) as PersonParamId;
   return lens.faceTargets().some((pid) => personOf(lens.edit, pid).values[key] > 0.01);
@@ -781,6 +782,7 @@ export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext, sk
       );
     case 'makeup': {
       const part = sel.makeupPart;
+      if (!isShadePart(part)) return [{ ...RESET_ITEM('無'), selected: true }];
       const s = lens.shade(part);
       const on = s.on && !s.mixed;
       const shades = part === 'lip' ? LIP_SHADES : BLUSH_SHADES;
@@ -859,6 +861,7 @@ export function activate(item: PanelItem, lens: Lens, sel: PanelSelection, ctx: 
     case 'reset':
       if (sel.tab === 'adjust') return adjustIsNeutral(edit.photo) ? done(edit) : done(lens.resetGroup('adjust'));
       if (sel.tab === 'makeup') {
+        if (!isShadePart(sel.makeupPart)) return done();
         const s = lens.shade(sel.makeupPart);
         // already off everywhere: tapping the selected 無 is a no-op (no haptic, no undo step, no flip to 自訂)
         if (!s.on && s.shade === null && !s.mixed) return done();

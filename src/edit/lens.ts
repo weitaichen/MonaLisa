@@ -17,7 +17,7 @@ import type {
   Selection,
   ShadePart,
 } from '../types';
-import { personOf, PRESET_PERSON_IDS, PRESET_PHOTO_IDS, resetAdjust, resetAll, setLook as setPhotoLook, withPersons, withPhoto } from './state';
+import { emptyShades, personOf, PRESET_PERSON_IDS, PRESET_PHOTO_IDS, resetAdjust, resetAll, setLook as setPhotoLook, withPersons, withPhoto } from './state';
 import { TONE_COPY } from './toneCopy';
 
 export const NO_FACE_NOTE = '這位人物未偵測到臉部，臉部效果不適用';
@@ -117,7 +117,7 @@ export function lensFor(edit: EditState, sel: Selection, persons: readonly Perso
     const q = applyPreset(id, amount);
     const values = { ...p.values };
     for (const k of PRESET_PERSON_IDS) values[k] = q.values[k];
-    return { values, shades: { lip: q.lipShade, blush: q.blushShade }, preset: { id, amount: q.presetAmount } };
+    return { values, right: null, shades: { ...emptyShades(), lip: q.lipShade, blush: q.blushShade }, preset: { id, amount: q.presetAmount } };
   };
   const withPhotoPart = (ph: PhotoParams, id: PresetId, amount: number): PhotoParams => {
     const q = applyPreset(id, amount);
@@ -240,7 +240,7 @@ export function lensFor(edit: EditState, sel: Selection, persons: readonly Perso
         for (const id of personIds) values[id as PV] = neutralValue(paramDef(id));
         return { ...p, values, preset: group === 'body' ? p.preset : 'custom' };
       });
-      if (group === 'makeup') e = withPersons(e, faceTargets(), (p) => ({ ...p, shades: { lip: null, blush: null } }));
+      if (group === 'makeup') e = withPersons(e, faceTargets(), (p) => ({ ...p, shades: emptyShades() }));
       const photoIds = defs.filter((d) => d.scope === 'photo').map((d) => d.id);
       if ((photoToo || group === 'filter') && (photoIds.length || group === 'body')) {
         e = withPhoto(e, (ph) => {

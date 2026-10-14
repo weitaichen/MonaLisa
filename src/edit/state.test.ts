@@ -11,6 +11,7 @@ import {
   editResetGeometry,
   editRotateLeft,
   editSetGeometry,
+  emptyShades,
   isEditStateRecord,
   lookOf,
   naturalPerson,
@@ -39,7 +40,13 @@ describe('scope table (RM §3.1, step-1 subset)', () => {
     expect(person).toEqual(
       expect.arrayContaining(['tone.even', 'tone.warmth', 'tone.darkCircle', 'tone.nasolabial', 'tone.teeth', 'tone.eyeBright']),
     );
-    expect(person.filter((id) => id.startsWith('shape.'))).toHaveLength(9);
+    expect(person).toEqual(
+      expect.arrayContaining([
+        'shape.jawline', 'shape.temple', 'shape.hairline', 'shape.noseWing', 'shape.noseBridge', 'shape.mouthHeight',
+        'makeup.brow', 'makeup.eyeshadow', 'makeup.liner', 'makeup.lashes', 'makeup.aegyo', 'makeup.contour', 'makeup.highlight', 'makeup.lens',
+      ]),
+    );
+    expect(person.filter((id) => id.startsWith('shape.'))).toHaveLength(15);
     expect(person.filter((id) => id.startsWith('body.'))).toHaveLength(9);
     expect(person.filter((id) => id.startsWith('tone.'))).toHaveLength(6);
   });
@@ -63,7 +70,7 @@ describe('constructors', () => {
     expect(neutralPerson().preset).toEqual({ id: 'original', amount: 1 });
     expect(neutralPerson().values['shape.chin']).toBe(0.5);
     expect(neutralPerson().values['skin.smooth']).toBe(0);
-    expect(neutralPerson().shades).toEqual({ lip: null, blush: null });
+    expect(neutralPerson().shades).toEqual({ ...emptyShades(), lip: null, blush: null });
   });
   it('cameraEdit / lookOf round-trip the camera look through the one person "live"', () => {
     const look = { photo: defaultPhoto(), person: naturalPerson() };
@@ -194,7 +201,7 @@ describe('sanitizeEditState (RM §3.4)', () => {
     expect(s.photo).toMatchObject({ filterId: 'none', presetLink: null });
     expect(s.persons.f0.values['skin.smooth']).toBe(0);
     expect(s.persons.f0.values['shape.chin']).toBe(1);
-    expect(s.persons.f0.shades).toEqual({ lip: 'coral', blush: null });
+    expect(s.persons.f0.shades).toEqual({ ...emptyShades(), lip: 'coral', blush: null });
     expect(s.persons.f0.preset).toBe('custom');
     expect(s.template.values['skin.rosy']).toBe(1);
     expect(s.primaryInit?.values['skin.smooth']).toBe(0);
@@ -206,7 +213,7 @@ describe('sanitizeEditState (RM §3.4)', () => {
     expect(s.primaryInit).toBeNull();
     expect(s.persons.p0.values['skin.smooth']).toBe(0.4);
     expect(s.persons.p0.values['shape.chin']).toBe(0.5);
-    expect(s.persons.p0.shades).toEqual({ lip: null, blush: null });
+    expect(s.persons.p0.shades).toEqual({ ...emptyShades(), lip: null, blush: null });
     expect(s.photo.filterId).toBe('none');
     expect(isEditStateRecord({ v: 1, photo: {}, persons: {} })).toBe(false);
     expect(isEditStateRecord({ v: 2, photo: {}, persons: {} })).toBe(true);

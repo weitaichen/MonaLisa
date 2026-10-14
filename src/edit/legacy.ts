@@ -4,7 +4,7 @@
 import { neutralValue, paramsInGroup } from '../engine/params';
 import { IDENTITY_GEOMETRY } from '../geometry/view';
 import type { BeautyParams, EditState, HeightBand, ParamId, PersonId, PersonParamId, PersonParams, PhotoParamId, PhotoParams } from '../types';
-import { matchesPersonPreset, matchesPhotoLink, neutralPerson, P0, PERSON_IDS, PHOTO_IDS } from './state';
+import { emptyShades, matchesPersonPreset, matchesPhotoLink, neutralPerson, P0, PERSON_IDS, PHOTO_IDS } from './state';
 
 export function splitLegacy(p: BeautyParams): { photo: PhotoParams; person: PersonParams } {
   const ref = p.presetId === 'custom' ? null : { id: p.presetId, amount: p.presetAmount };
@@ -14,7 +14,7 @@ export function splitLegacy(p: BeautyParams): { photo: PhotoParams; person: Pers
   for (const id of PERSON_IDS) personValues[id] = p.values[id];
   return {
     photo: { values: photoValues, filterId: p.filterId, look: null, presetLink: ref, bodyProtect: p.bodyProtect, heightBand: p.heightBand, legsAnchor: null, geometry: IDENTITY_GEOMETRY, spots: [] },
-    person: { values: personValues, shades: { lip: p.lipShade, blush: p.blushShade }, preset: ref ?? 'custom' },
+    person: { values: personValues, right: null, shades: { ...emptyShades(), lip: p.lipShade, blush: p.blushShade }, preset: ref ?? 'custom' },
   };
 }
 
@@ -79,7 +79,9 @@ export function mergeLegacy(edit: EditState, p: BeautyParams, primary: PersonId,
   const was = edit.persons[primary] ?? edit.primaryInit ?? edit.template;
   const values = { ...was.values };
   for (const id of PERSON_IDS) if (has.has(id)) values[id] = split.person.values[id];
-  const person: PersonParams = { ...was, values, shades: { ...was.shades, ...split.person.shades }, preset: split.person.preset };
+  // only the two shades 0.3 writes; the step-5 shades and `right` (via ...was) stay as the v2 edit has them
+  const shades = { ...was.shades, lip: split.person.shades.lip, blush: split.person.shades.blush };
+  const person: PersonParams = { ...was, values, shades, preset: split.person.preset };
   if (person.preset !== 'custom' && !matchesPersonPreset(person, person.preset)) person.preset = 'custom';
   return { ...edit, photo, persons: { ...edit.persons, [primary]: person } };
 }

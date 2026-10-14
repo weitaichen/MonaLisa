@@ -928,3 +928,13 @@ describe('step 4: 祛痘 (skin-cleanup spec §2.3)', () => {
     expect(spotTapInside([0.5, 1.02])).toBe(false);
   });
 });
+
+describe('step-5 icons (face-detail spec §3.1)', () => {
+  it('every new item and strip control has an icon', () => {
+    for (const k of [
+      'jawline', 'temple', 'hairline', 'noseWing', 'noseBridge', 'mouthHeight', 'brow', 'eyeshadow', 'liner', 'lashes',
+      'aegyo', 'contour', 'highlight', 'lens', 'split', 'parts', 'makeupOff',
+    ])
+      expect(hasIcon(k), k).toBe(true);
+  });
+});

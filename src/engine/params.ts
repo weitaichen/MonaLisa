@@ -1,5 +1,5 @@
 // Parameter schema, presets, filters and shades (spec §7.4, RB §5). Pure data + pure functions.
-import type { BeautyParams, FilterDef, HeightBand, ParamDef, ParamGroup, ParamId, PresetDef, PresetId, ShadeDef } from '../types';
+import type { BeautyParams, FilterDef, HeightBand, MakeupPart, ParamDef, ParamGroup, ParamId, PresetDef, PresetId, ShadeDef, ShadePart, SplitParamId } from '../types';
 
 export const PARAM_DEFS: readonly ParamDef[] = [
   // 美膚 — 美白 / 銳化 are photo-level (the GPUPixel chain is not masked, composite.ts); 磨皮 / 紅潤 per person
@@ -14,15 +14,21 @@ export const PARAM_DEFS: readonly ParamDef[] = [
   { id: 'tone.nasolabial', label: '法令紋', group: 'tone', bidirectional: false, default: 0, icon: 'nasolabial', scope: 'person', live: false },
   { id: 'tone.teeth', label: '白牙', group: 'tone', bidirectional: false, default: 0, icon: 'teeth', scope: 'person', live: false },
   { id: 'tone.eyeBright', label: '亮眼', group: 'tone', bidirectional: false, default: 0, icon: 'eyeBright', scope: 'person', live: false },
-  // 美型
-  { id: 'shape.eyeEnlarge', label: '大眼', group: 'shape', bidirectional: false, default: 0.2, icon: 'eye', scope: 'person', live: true },
-  { id: 'shape.faceSlim', label: '瘦臉', group: 'shape', bidirectional: false, default: 0.15, icon: 'faceSlim', scope: 'person', live: true },
-  { id: 'shape.faceV', label: 'V臉', group: 'shape', bidirectional: false, default: 0.1, icon: 'faceV', scope: 'person', live: true },
-  { id: 'shape.faceNarrow', label: '窄臉', group: 'shape', bidirectional: false, default: 0, icon: 'faceNarrow', scope: 'person', live: true },
+  // 美型 (RM §2.1 strip order; face-detail spec §3.1)
+  { id: 'shape.eyeEnlarge', label: '大眼', group: 'shape', bidirectional: false, default: 0.2, icon: 'eye', scope: 'person', live: true, split: true },
+  { id: 'shape.faceSlim', label: '瘦臉', group: 'shape', bidirectional: false, default: 0.15, icon: 'faceSlim', scope: 'person', live: true, split: true },
+  { id: 'shape.faceV', label: 'V臉', group: 'shape', bidirectional: false, default: 0.1, icon: 'faceV', scope: 'person', live: true, split: true },
+  { id: 'shape.faceNarrow', label: '窄臉', group: 'shape', bidirectional: false, default: 0, icon: 'faceNarrow', scope: 'person', live: true, split: true },
+  { id: 'shape.jawline', label: '下頜線', group: 'shape', bidirectional: false, default: 0, icon: 'jawline', scope: 'person', live: true, split: true },
+  { id: 'shape.temple', label: '太陽穴', group: 'shape', bidirectional: true, default: 0.5, icon: 'temple', scope: 'person', live: true, split: true },
   { id: 'shape.chin', label: '下巴', group: 'shape', bidirectional: true, default: 0.5, icon: 'chin', scope: 'person', live: true },
   { id: 'shape.forehead', label: '額頭', group: 'shape', bidirectional: true, default: 0.5, icon: 'forehead', scope: 'person', live: true },
+  { id: 'shape.hairline', label: '髮際線', group: 'shape', bidirectional: true, default: 0.5, icon: 'hairline', scope: 'person', live: true },
   { id: 'shape.noseSlim', label: '瘦鼻', group: 'shape', bidirectional: false, default: 0.1, icon: 'nose', scope: 'person', live: true },
+  { id: 'shape.noseWing', label: '鼻翼', group: 'shape', bidirectional: true, default: 0.5, icon: 'noseWing', scope: 'person', live: true },
+  { id: 'shape.noseBridge', label: '山根', group: 'shape', bidirectional: true, default: 0.5, icon: 'noseBridge', scope: 'person', live: true },
   { id: 'shape.mouthSize', label: '嘴型', group: 'shape', bidirectional: true, default: 0.5, icon: 'mouth', scope: 'person', live: true },
+  { id: 'shape.mouthHeight', label: '嘴高', group: 'shape', bidirectional: true, default: 0.5, icon: 'mouthHeight', scope: 'person', live: true },
   { id: 'shape.eyeDistance', label: '眼距', group: 'shape', bidirectional: true, default: 0.5, icon: 'eyeDistance', scope: 'person', live: true },
   // 美體 — all neutral by default and never part of a preset (body research report §參數). 長腿 is a row band, so
   // photo-level; the local items are per person. Editor only (live: false).
@@ -39,9 +45,17 @@ export const PARAM_DEFS: readonly ParamDef[] = [
   { id: 'body.head', label: '小頭', group: 'body', bidirectional: false, default: 0, icon: 'head', scope: 'person', live: false },
   // 濾鏡
   { id: 'filter.amount', label: '濾鏡強度', group: 'filter', bidirectional: false, default: 0.5, icon: 'filter', scope: 'photo', live: true },
-  // 美妝
+  // 美妝 (face-detail spec §3.1): 口紅 · 腮紅 (GPUPixel meshes), then the eight procedural parts
   { id: 'makeup.lip', label: '口紅', group: 'makeup', bidirectional: false, default: 0, icon: 'lip', scope: 'person', live: true },
   { id: 'makeup.blush', label: '腮紅', group: 'makeup', bidirectional: false, default: 0, icon: 'blush', scope: 'person', live: true },
+  { id: 'makeup.brow', label: '眉毛', group: 'makeup', bidirectional: false, default: 0, icon: 'brow', scope: 'person', live: true },
+  { id: 'makeup.eyeshadow', label: '眼影', group: 'makeup', bidirectional: false, default: 0, icon: 'eyeshadow', scope: 'person', live: true },
+  { id: 'makeup.liner', label: '眼線', group: 'makeup', bidirectional: false, default: 0, icon: 'liner', scope: 'person', live: true },
+  { id: 'makeup.lashes', label: '睫毛', group: 'makeup', bidirectional: false, default: 0, icon: 'lashes', scope: 'person', live: true },
+  { id: 'makeup.aegyo', label: '臥蠶', group: 'makeup', bidirectional: false, default: 0, icon: 'aegyo', scope: 'person', live: true },
+  { id: 'makeup.contour', label: '修容', group: 'makeup', bidirectional: false, default: 0, icon: 'contour', scope: 'person', live: true },
+  { id: 'makeup.highlight', label: '高光', group: 'makeup', bidirectional: false, default: 0, icon: 'highlight', scope: 'person', live: true },
+  { id: 'makeup.lens', label: '美瞳', group: 'makeup', bidirectional: false, default: 0, icon: 'lens', scope: 'person', live: true },
   // 調節 — photo-level and live; neutral by default and never part of a beauty preset (step-2 spec §3.1)
   { id: 'adjust.brightness', label: '亮度', group: 'adjust', bidirectional: true, default: 0.5, icon: 'brightness', scope: 'photo', live: true },
   { id: 'adjust.exposure', label: '曝光', group: 'adjust', bidirectional: true, default: 0.5, icon: 'exposure', scope: 'photo', live: true },
@@ -81,24 +95,88 @@ export const FILTERS: readonly FilterDef[] = [
   { id: 'mono', label: '黑白', defaultAmount: 1 },
 ];
 
-/** null shade = 原色 (GPUPixel's original texture colour); these are the tinted alternatives. */
-export const LIP_SHADES: readonly ShadeDef[] = [
-  { id: 'coral', label: '珊瑚', color: '#F06A5B' },
-  { id: 'bean', label: '豆沙', color: '#C9767A' },
-  { id: 'rose', label: '玫瑰', color: '#D8456B' },
-  { id: 'red', label: '正紅', color: '#D21F3C' },
-  { id: 'orange', label: '蜜橘', color: '#F08A4B' },
-];
+export const SPLIT_IDS: readonly SplitParamId[] = PARAM_DEFS.filter((d) => d.split).map((d) => d.id as SplitParamId);
 
-export const BLUSH_SHADES: readonly ShadeDef[] = [
-  { id: 'peach', label: '蜜桃', color: '#FF9E8A' },
-  { id: 'pink', label: '粉紅', color: '#FF8FB1' },
-  { id: 'apricot', label: '杏橘', color: '#FFB07A' },
-  { id: 'rose', label: '玫瑰', color: '#E77A93' },
-];
+export const SHADE_PARTS: readonly ShadePart[] = ['lip', 'blush', 'brow', 'eyeshadow', 'liner', 'lens'];
 
-/** intensity applied when a lip / blush shade is first picked from 0 */
-export const MAKEUP_PICK_DEFAULT = { lip: 0.5, blush: 0.4 } as const;
+/** Every colour is original to this project (LICENSES/NOTICE.txt). null shade = 原色 (S5 §3.2); 眼線 has none. */
+export const SHADES: Readonly<Record<ShadePart, readonly ShadeDef[]>> = {
+  lip: [
+    { id: 'coral', label: '珊瑚', color: '#F06A5B' },
+    { id: 'bean', label: '豆沙', color: '#C9767A' },
+    { id: 'rose', label: '玫瑰', color: '#D8456B' },
+    { id: 'red', label: '正紅', color: '#D21F3C' },
+    { id: 'orange', label: '蜜橘', color: '#F08A4B' },
+  ],
+  blush: [
+    { id: 'peach', label: '蜜桃', color: '#FF9E8A' },
+    { id: 'pink', label: '粉紅', color: '#FF8FB1' },
+    { id: 'apricot', label: '杏橘', color: '#FFB07A' },
+    { id: 'rose', label: '玫瑰', color: '#E77A93' },
+  ],
+  brow: [
+    { id: 'black', label: '自然黑', color: '#2E2824' },
+    { id: 'darkBrown', label: '深棕', color: '#4B3628' },
+    { id: 'greyBrown', label: '灰棕', color: '#6A5C55' },
+    { id: 'mocha', label: '摩卡', color: '#7B5B45' },
+    { id: 'chestnut', label: '栗棕', color: '#8A5636' },
+  ],
+  eyeshadow: [
+    { id: 'earth', label: '大地', color: '#A27A63' },
+    { id: 'peach', label: '蜜桃', color: '#EFA07F' },
+    { id: 'rose', label: '玫瑰', color: '#C76F7F' },
+    { id: 'coral', label: '珊瑚', color: '#E5806B' },
+    { id: 'milktea', label: '奶茶', color: '#B99686' },
+    { id: 'mauve', label: '紫霧', color: '#9A7FA6' },
+  ],
+  liner: [
+    { id: 'black', label: '黑', color: '#151313' },
+    { id: 'darkBrown', label: '深棕', color: '#3A2A22' },
+    { id: 'brown', label: '棕', color: '#6A4A37' },
+    { id: 'wine', label: '酒紅', color: '#6B2B34' },
+    { id: 'navy', label: '藏青', color: '#25304E' },
+  ],
+  lens: [
+    { id: 'black', label: '自然黑', color: '#231E1C' },
+    { id: 'choco', label: '巧克力', color: '#5B3B29' },
+    { id: 'amber', label: '琥珀', color: '#A9712F' },
+    { id: 'grey', label: '霧灰', color: '#7E8891' },
+    { id: 'blue', label: '冰藍', color: '#6E9AC6' },
+    { id: 'green', label: '薄荷綠', color: '#7EA788' },
+  ],
+};
+export const LIP_SHADES = SHADES.lip;
+export const BLUSH_SHADES = SHADES.blush;
+/** parts whose strip offers 原色 (S5 §3.2) */
+export const ORIG_PARTS: readonly ShadePart[] = ['lip', 'blush', 'brow', 'eyeshadow', 'lens'];
+/** what 原色 multiplies by on the procedural parts: 眉毛 grey 0.60, 眼影 a neutral skin-toned shadow (S5 §3.2) */
+export const ORIG_TINT = { brow: '#999999', eyeshadow: '#CCBDB6' } as const;
+/** fixed colours of the parts without shades (S5 §3.2) */
+export const MAKEUP_FIXED = {
+  lashes: '#141212',
+  aegyoLight: '#FFF1E8',
+  aegyoShade: '#B79F95',
+  contour: '#A8897A',
+  highlight: '#FFF3E3',
+} as const;
+
+/** intensity applied when a shade or 自然 is first picked from 0 (S5 §3.1) */
+export const MAKEUP_PICK_DEFAULT: Readonly<Record<MakeupPart, number>> = {
+  lip: 0.5,
+  blush: 0.4,
+  brow: 0.45,
+  eyeshadow: 0.45,
+  liner: 0.6,
+  lashes: 0.55,
+  aegyo: 0.5,
+  contour: 0.4,
+  highlight: 0.4,
+  lens: 0.6,
+};
+
+export function isShadePart(p: MakeupPart): p is ShadePart {
+  return (SHADE_PARTS as readonly string[]).includes(p);
+}
 
 export function neutralValue(def: ParamDef): number {
   return def.bidirectional ? 0.5 : 0;
@@ -291,9 +369,12 @@ export function signed(v: number): number {
   return (v - 0.5) * 2;
 }
 
-export function shadeColor(part: 'lip' | 'blush', shade: string | null): string | null {
-  if (!shade) return null;
-  return (part === 'lip' ? LIP_SHADES : BLUSH_SHADES).find((s) => s.id === shade)?.color ?? null;
+/** '#RRGGBB' of a shade, or null for 原色. 眼線 has no 原色: null (or an unknown id) reads as its first shade, 黑. */
+export function shadeColor(part: ShadePart, shade: string | null): string | null {
+  const list = SHADES[part];
+  const hit = shade ? list.find((s) => s.id === shade) : undefined;
+  if (part === 'liner') return (hit ?? list[0]).color;
+  return hit?.color ?? null;
 }
 
 /** Validate untrusted (stored) data, filling anything missing/invalid from defaults. */

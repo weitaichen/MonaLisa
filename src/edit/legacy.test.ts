@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { applyPreset, BLUSH_SHADES, defaultParams, FILTERS, LIP_SHADES, neutralValue, PARAM_DEFS, paramsInGroup, PRESETS, sanitizeParams } from '../engine/params';
 import type { BeautyParams } from '../types';
 import { editFromLegacy, legacyProjection, mergeLegacy, splitLegacy } from './legacy';
-import { defaultPhoto, editRotateLeft, neutralPerson } from './state';
+import { defaultPhoto, editRotateLeft, emptyShades, neutralPerson } from './state';
 
 /** presetAmount is dead data while custom (setPresetAmount ignores it, a preset tap overwrites it) */
 const canon = (p: BeautyParams): BeautyParams => (p.presetId === 'custom' ? { ...p, presetAmount: 1 } : p);
@@ -53,7 +53,7 @@ describe('splitLegacy / legacyProjection (RM §3.2)', () => {
       'body.legs', 'filter.amount', 'skin.sharpen', 'skin.whiten',
     ]);
     expect('skin.whiten' in person.values).toBe(false);
-    expect(person.shades).toEqual({ lip: 'bean', blush: 'peach' });
+    expect(person.shades).toEqual({ ...emptyShades(), lip: 'bean', blush: 'peach' });
     expect(person.preset).toEqual({ id: 'glow', amount: 1 });
     expect(photo.presetLink).toEqual({ id: 'glow', amount: 1 });
   });
@@ -116,5 +116,12 @@ describe('mergeLegacy: 0.3 edited a v2 entry after a rollback (S §5.3)', () => 
     expect(mergeLegacy(turned, by03(band), 'p0', all).photo.heightBand).toEqual(band);
     expect(mergeLegacy(turned, by03(moved), 'p0', all).photo.heightBand).toBeNull();
     expect(mergeLegacy(turned, by03(moved), 'p0', all).photo.geometry).toEqual(turned.photo.geometry);
+  });
+  it('step 5: keeps right and the four new shades, which 0.3 can neither show nor write', () => {
+    const e0 = editFromLegacy(applyPreset('glow', 1));
+    const p0 = { ...e0.persons.p0, right: { 'shape.faceSlim': 0.9 }, shades: { ...e0.persons.p0.shades, brow: 'mocha', lens: 'blue' } };
+    const m = mergeLegacy({ ...e0, persons: { p0 } }, applyPreset('refined', 1), 'p0', PARAM_DEFS.map((d) => d.id));
+    expect(m.persons.p0.right).toEqual({ 'shape.faceSlim': 0.9 });
+    expect(m.persons.p0.shades).toEqual({ ...emptyShades(), brow: 'mocha', lens: 'blue' });
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { BeautyParams, ParamGroup, ParamId, PresetId } from '../types';
+import type { BeautyParams, ParamGroup, ParamId, PresetId, ShadePart } from '../types';
 import {
   applyPreset,
   BLUSH_SHADES,
@@ -8,9 +8,13 @@ import {
   FILTERS,
   fromDisplay,
   hasValue,
+  isShadePart,
   LIP_SHADES,
+  MAKEUP_FIXED,
   MAKEUP_PICK_DEFAULT,
   neutralValue,
+  ORIG_PARTS,
+  ORIG_TINT,
   PARAM_DEFS,
   paramDef,
   paramsInGroup,
@@ -24,8 +28,11 @@ import {
   setParam,
   setPresetAmount,
   setShade,
+  SHADE_PARTS,
   shadeColor,
+  SHADES,
   signed,
+  SPLIT_IDS,
 } from './params';
 
 const PRESET_IDS: PresetId[] = ['original', 'natural', 'refined', 'glow'];
@@ -35,6 +42,11 @@ const BIDIRECTIONAL: ParamId[] = [
   'shape.forehead',
   'shape.mouthSize',
   'shape.eyeDistance',
+  'shape.temple',
+  'shape.hairline',
+  'shape.noseWing',
+  'shape.noseBridge',
+  'shape.mouthHeight',
   'body.hip',
   'adjust.brightness',
   'adjust.exposure',
@@ -57,9 +69,9 @@ function deepFreeze<T>(o: T): T {
 }
 
 describe('PARAM_DEFS schema (RB §5)', () => {
-  it('has the 44 params (16 face/colour + 10 美體 + 12 調節 + 6 膚質), unique ids, valid groups', () => {
-    expect(PARAM_DEFS).toHaveLength(44);
-    expect(new Set(PARAM_DEFS.map((d) => d.id)).size).toBe(44);
+  it('has the 58 params (30 face/colour + 10 美體 + 12 調節 + 6 膚質), unique ids, valid groups', () => {
+    expect(PARAM_DEFS).toHaveLength(58);
+    expect(new Set(PARAM_DEFS.map((d) => d.id)).size).toBe(58);
     for (const d of PARAM_DEFS) {
       expect(GROUPS).toContain(d.group);
       expect(d.id.startsWith(`${d.group}.`)).toBe(true);
@@ -70,7 +82,7 @@ describe('PARAM_DEFS schema (RB §5)', () => {
     }
   });
 
-  it('bidirectional params are exactly chin / forehead / mouth / eye distance / 美臀, the 9 bidirectional 調節 items and 膚色, neutral 0.5', () => {
+  it('bidirectional params are exactly chin / forehead / mouth / eye distance / 太陽穴 / 髮際線 / 鼻翼 / 山根 / 嘴高 / 美臀, the 9 bidirectional 調節 items and 膚色, neutral 0.5', () => {
     expect(PARAM_DEFS.filter((d) => d.bidirectional).map((d) => d.id).sort()).toEqual([...BIDIRECTIONAL].sort());
     for (const d of PARAM_DEFS) {
       expect(neutralValue(d)).toBe(d.bidirectional ? 0.5 : 0);
@@ -93,6 +105,13 @@ describe('PARAM_DEFS schema (RB §5)', () => {
       'shape.forehead': 0.5,
       'shape.noseSlim': 0.1,
       'shape.mouthSize': 0.5,
+      // step 5 美型 (face-detail spec §3.1): neutral by default
+      'shape.jawline': 0,
+      'shape.temple': 0.5,
+      'shape.hairline': 0.5,
+      'shape.noseWing': 0.5,
+      'shape.noseBridge': 0.5,
+      'shape.mouthHeight': 0.5,
       // 美體: neutral by default (never part of a preset)
       'body.legs': 0,
       'body.slim': 0,
@@ -107,6 +126,15 @@ describe('PARAM_DEFS schema (RB §5)', () => {
       'filter.amount': 0.5,
       'makeup.lip': 0,
       'makeup.blush': 0,
+      // step 5 美妝 (face-detail spec §3.1): the eight procedural parts, off by default
+      'makeup.brow': 0,
+      'makeup.eyeshadow': 0,
+      'makeup.liner': 0,
+      'makeup.lashes': 0,
+      'makeup.aegyo': 0,
+      'makeup.contour': 0,
+      'makeup.highlight': 0,
+      'makeup.lens': 0,
       // 調節: neutral by default (never part of a preset)
       'adjust.brightness': 0.5,
       'adjust.exposure': 0.5,
@@ -136,7 +164,10 @@ describe('PARAM_DEFS schema (RB §5)', () => {
     expect(() => paramDef('nope' as ParamId)).toThrow();
     expect(paramsInGroup('skin').map((d) => d.id)).toEqual(['skin.smooth', 'skin.whiten', 'skin.rosy', 'skin.sharpen']);
     expect(paramsInGroup('filter').map((d) => d.id)).toEqual(['filter.amount']);
-    expect(paramsInGroup('makeup').map((d) => d.id)).toEqual(['makeup.lip', 'makeup.blush']);
+    expect(paramsInGroup('makeup').map((d) => d.id)).toEqual([
+      'makeup.lip', 'makeup.blush', 'makeup.brow', 'makeup.eyeshadow', 'makeup.liner',
+      'makeup.lashes', 'makeup.aegyo', 'makeup.contour', 'makeup.highlight', 'makeup.lens',
+    ]);
     expect(paramsInGroup('body').map((d) => d.id)).toEqual([
       'body.legs', 'body.slim', 'body.waist', 'body.whr', 'body.hip',
       'body.legSlim', 'body.arms', 'body.shoulder', 'body.neck', 'body.head',
@@ -394,7 +425,7 @@ describe('setShade', () => {
     const b = setShade(defaultParams(), 'blush', 'pink');
     expect(b.blushShade).toBe('pink');
     expect(b.values['makeup.blush']).toBe(MAKEUP_PICK_DEFAULT.blush);
-    expect(MAKEUP_PICK_DEFAULT).toEqual({ lip: 0.5, blush: 0.4 });
+    expect(MAKEUP_PICK_DEFAULT).toMatchObject({ lip: 0.5, blush: 0.4 });
   });
 
   it('keeps a non-zero intensity when switching shades', () => {
@@ -703,5 +734,97 @@ describe('step 4 tone params (skin-cleanup spec §3.1)', () => {
 
   it('every beauty preset holds them neutral (C §3.4, §12 #31)', () => {
     for (const id of PRESET_IDS) for (const t of TONE) expect(presetDef(id).values[t]).toBe(neutralValue(paramDef(t)));
+  });
+});
+
+const STEP5_SHAPE: ParamId[] = ['shape.jawline', 'shape.temple', 'shape.hairline', 'shape.noseWing', 'shape.noseBridge', 'shape.mouthHeight'];
+const STEP5_MAKEUP: ParamId[] = [
+  'makeup.brow', 'makeup.eyeshadow', 'makeup.liner', 'makeup.lashes', 'makeup.aegyo', 'makeup.contour', 'makeup.highlight', 'makeup.lens',
+];
+
+describe('step-5 params (face-detail spec §3.1)', () => {
+  it('adds 14 person-level, live ids with neutral defaults and the spec labels and icons', () => {
+    const spec: Record<string, [label: string, bidirectional: boolean, icon: string]> = {
+      'shape.jawline': ['下頜線', false, 'jawline'],
+      'shape.temple': ['太陽穴', true, 'temple'],
+      'shape.hairline': ['髮際線', true, 'hairline'],
+      'shape.noseWing': ['鼻翼', true, 'noseWing'],
+      'shape.noseBridge': ['山根', true, 'noseBridge'],
+      'shape.mouthHeight': ['嘴高', true, 'mouthHeight'],
+      'makeup.brow': ['眉毛', false, 'brow'],
+      'makeup.eyeshadow': ['眼影', false, 'eyeshadow'],
+      'makeup.liner': ['眼線', false, 'liner'],
+      'makeup.lashes': ['睫毛', false, 'lashes'],
+      'makeup.aegyo': ['臥蠶', false, 'aegyo'],
+      'makeup.contour': ['修容', false, 'contour'],
+      'makeup.highlight': ['高光', false, 'highlight'],
+      'makeup.lens': ['美瞳', false, 'lens'],
+    };
+    for (const id of [...STEP5_SHAPE, ...STEP5_MAKEUP]) {
+      const [label, bidirectional, icon] = spec[id];
+      const d = paramDef(id);
+      expect(d).toMatchObject({ label, bidirectional, icon, scope: 'person', live: true });
+      expect(d.default).toBe(neutralValue(d));
+    }
+  });
+
+  it('split is exactly the six split-capable 美型 items, in strip order', () => {
+    const split = PARAM_DEFS.filter((d) => d.split).map((d) => d.id);
+    expect(split).toEqual(['shape.eyeEnlarge', 'shape.faceSlim', 'shape.faceV', 'shape.faceNarrow', 'shape.jawline', 'shape.temple']);
+    expect(SPLIT_IDS).toEqual(split);
+  });
+
+  it('美型 and 美妝 keep the RM §2.1 strip order', () => {
+    expect(paramsInGroup('shape').map((d) => d.id)).toEqual([
+      'shape.eyeEnlarge', 'shape.faceSlim', 'shape.faceV', 'shape.faceNarrow', 'shape.jawline', 'shape.temple',
+      'shape.chin', 'shape.forehead', 'shape.hairline', 'shape.noseSlim', 'shape.noseWing', 'shape.noseBridge',
+      'shape.mouthSize', 'shape.mouthHeight', 'shape.eyeDistance',
+    ]);
+    expect(paramsInGroup('makeup').map((d) => d.id)).toEqual(['makeup.lip', 'makeup.blush', ...STEP5_MAKEUP]);
+  });
+});
+
+describe('SHADES (face-detail spec §3.2)', () => {
+  const TABLE: Partial<Record<ShadePart, [string, string, string][]>> = {
+    brow: [['black', '自然黑', '#2E2824'], ['darkBrown', '深棕', '#4B3628'], ['greyBrown', '灰棕', '#6A5C55'], ['mocha', '摩卡', '#7B5B45'], ['chestnut', '栗棕', '#8A5636']],
+    eyeshadow: [['earth', '大地', '#A27A63'], ['peach', '蜜桃', '#EFA07F'], ['rose', '玫瑰', '#C76F7F'], ['coral', '珊瑚', '#E5806B'], ['milktea', '奶茶', '#B99686'], ['mauve', '紫霧', '#9A7FA6']],
+    liner: [['black', '黑', '#151313'], ['darkBrown', '深棕', '#3A2A22'], ['brown', '棕', '#6A4A37'], ['wine', '酒紅', '#6B2B34'], ['navy', '藏青', '#25304E']],
+    lens: [['black', '自然黑', '#231E1C'], ['choco', '巧克力', '#5B3B29'], ['amber', '琥珀', '#A9712F'], ['grey', '霧灰', '#7E8891'], ['blue', '冰藍', '#6E9AC6'], ['green', '薄荷綠', '#7EA788']],
+  };
+
+  it('lists the spec shades per part; ids unique per part; every hex valid', () => {
+    expect(SHADE_PARTS).toEqual(['lip', 'blush', 'brow', 'eyeshadow', 'liner', 'lens']);
+    for (const part of SHADE_PARTS) {
+      const want = TABLE[part];
+      if (want) expect(SHADES[part].map((s) => [s.id, s.label, s.color])).toEqual(want);
+      expect(new Set(SHADES[part].map((s) => s.id)).size).toBe(SHADES[part].length);
+      for (const s of SHADES[part]) expect(s.color).toMatch(/^#[0-9A-F]{6}$/);
+    }
+    expect(SHADES.lip).toBe(LIP_SHADES);
+    expect(SHADES.blush).toBe(BLUSH_SHADES);
+  });
+
+  it('shadeColor: null is 原色 except for 眼線, which reads as 黑; unknown ids', () => {
+    expect(shadeColor('brow', null)).toBeNull();
+    expect(shadeColor('eyeshadow', null)).toBeNull();
+    expect(shadeColor('lens', null)).toBeNull();
+    expect(shadeColor('lip', null)).toBeNull();
+    expect(shadeColor('liner', null)).toBe('#151313');
+    expect(shadeColor('liner', 'nope')).toBe('#151313');
+    expect(shadeColor('liner', 'wine')).toBe('#6B2B34');
+    expect(shadeColor('lens', 'blue')).toBe('#6E9AC6');
+    expect(shadeColor('brow', 'nope')).toBeNull();
+    expect(shadeColor('lip', 'rose')).toBe('#D8456B');
+  });
+
+  it('原色 parts, fixed tints and the per-part pick defaults', () => {
+    expect(ORIG_PARTS).toEqual(['lip', 'blush', 'brow', 'eyeshadow', 'lens']);
+    expect(ORIG_TINT).toEqual({ brow: '#999999', eyeshadow: '#CCBDB6' });
+    expect(MAKEUP_FIXED).toEqual({ lashes: '#141212', aegyoLight: '#FFF1E8', aegyoShade: '#B79F95', contour: '#A8897A', highlight: '#FFF3E3' });
+    expect(MAKEUP_PICK_DEFAULT).toEqual({
+      lip: 0.5, blush: 0.4, brow: 0.45, eyeshadow: 0.45, liner: 0.6, lashes: 0.55, aegyo: 0.5, contour: 0.4, highlight: 0.4, lens: 0.6,
+    });
+    expect(isShadePart('liner')).toBe(true);
+    expect(isShadePart('lashes')).toBe(false);
   });
 });

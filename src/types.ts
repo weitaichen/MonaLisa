@@ -19,6 +19,12 @@ export type ParamId =
   | 'shape.forehead'
   | 'shape.noseSlim'
   | 'shape.mouthSize'
+  | 'shape.jawline'
+  | 'shape.temple'
+  | 'shape.hairline'
+  | 'shape.noseWing'
+  | 'shape.noseBridge'
+  | 'shape.mouthHeight'
   | 'body.legs'
   | 'body.slim'
   | 'body.waist'
@@ -32,6 +38,14 @@ export type ParamId =
   | 'filter.amount'
   | 'makeup.lip'
   | 'makeup.blush'
+  | 'makeup.brow'
+  | 'makeup.eyeshadow'
+  | 'makeup.liner'
+  | 'makeup.lashes'
+  | 'makeup.aegyo'
+  | 'makeup.contour'
+  | 'makeup.highlight'
+  | 'makeup.lens'
   // 調節 (v0.4 step 2): photo-level, live, neutral by default, outside every beauty preset
   | 'adjust.brightness'
   | 'adjust.exposure'
@@ -70,6 +84,8 @@ export interface ParamDef {
   scope: ParamScope;
   /** offered in the live camera */
   live: boolean;
+  /** 左右分開: the item can be set per side of the face (face-detail spec §3.1); absent = both sides alike */
+  split?: true;
 }
 
 /** the 12 調節 items (v0.4 step-2 spec §3.1) */
@@ -172,7 +188,13 @@ export type SpotSize = 'S' | 'M' | 'L';
 
 export type PhotoParamId = Extract<ParamId, 'skin.whiten' | 'skin.sharpen' | 'filter.amount' | 'body.legs' | `adjust.${string}`>;
 export type PersonParamId = Exclude<ParamId, PhotoParamId>;
-export type ShadePart = 'lip' | 'blush';
+export type SplitParamId = Extract<
+  ParamId,
+  'shape.eyeEnlarge' | 'shape.faceSlim' | 'shape.faceV' | 'shape.faceNarrow' | 'shape.jawline' | 'shape.temple'
+>;
+export type ShadePart = 'lip' | 'blush' | 'brow' | 'eyeshadow' | 'liner' | 'lens';
+/** the ten 美妝 parts (face-detail spec §3.3); lives here (not in panelModel.ts) so engine code can use it */
+export type MakeupPart = ShadePart | 'lashes' | 'aegyo' | 'contour' | 'highlight';
 /**
  * 'f0'…'f5' a person first built from a face, 'b0'…'b3' from a body, 'p0' the implicit person while nobody is known,
  * 'live' the camera. Immutable once persisted (a person keeps its id when it gains a face or a body).
@@ -224,6 +246,9 @@ export interface PhotoParams {
 }
 export interface PersonParams {
   values: Record<PersonParamId, number>;
+  /** 左右分開 (face-detail spec §3.4): GPUPixel-right values of the split items; null = both sides alike */
+  right: Partial<Record<SplitParamId, number>> | null;
+  /** ShadeDef ids, or null for 原色 (眼線: null reads as 黑) */
   shades: Record<ShadePart, string | null>;
   preset: PresetRef | 'custom';
 }

@@ -1,7 +1,7 @@
 // The v0.4 edit of one photo (RM §3.2–3.4): an immutable EditState with a photo layer and a person layer. Every change
 // returns a new object and shares what it did not change, so UndoStack keeps states by reference ({clone: false}).
 import { isLookId } from '../engine/looks';
-import { applyPreset, BLUSH_SHADES, FILTERS, LIP_SHADES, neutralValue, PARAM_DEFS, paramsInGroup, PRESETS, sanitizeBand } from '../engine/params';
+import { applyPreset, FILTERS, neutralValue, PARAM_DEFS, paramsInGroup, PRESETS, sanitizeBand, SHADE_PARTS, SHADES as SHADE_DEFS } from '../engine/params';
 import { clampStraighten, cropConstrain, cropValid, flipView, IDENTITY_GEOMETRY, isIdentity, rotateLeft } from '../geometry/view';
 import { stableKey } from '../store/undo';
 import { remapSpotOwners, sanitizeSpots } from './spots';
@@ -33,12 +33,17 @@ export const PRESET_PERSON_IDS: readonly PersonParamId[] = PERSON_IDS.filter((id
 /** a beauty preset's photo part (besides filterId) */
 export const PRESET_PHOTO_IDS: readonly PhotoParamId[] = ['skin.whiten', 'skin.sharpen', 'filter.amount'];
 
+/** every 美妝 part at 原色 (眼線: 黑), the shades of a person nobody has picked a colour for */
+export function emptyShades(): Record<ShadePart, string | null> {
+  return { lip: null, blush: null, brow: null, eyeshadow: null, liner: null, lens: null };
+}
+
 /** the person part of preset `id` at 程度 `amount`, every 美體 item neutral */
 export function personFromPreset(id: PresetId, amount: number): PersonParams {
   const p = applyPreset(id, amount);
   const values = {} as Record<PersonParamId, number>;
   for (const k of PERSON_IDS) values[k] = p.values[k];
-  return { values, shades: { lip: p.lipShade, blush: p.blushShade }, preset: { id, amount: p.presetAmount } };
+  return { values, right: null, shades: { ...emptyShades(), lip: p.lipShade, blush: p.blushShade }, preset: { id, amount: p.presetAmount } };
 }
 
 /** 原圖: every value neutral (the template of persons the camera did not beautify) */
@@ -94,10 +99,9 @@ export function lookOf(edit: EditState): CameraLook {
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const PRESET_IDS: ReadonlySet<string> = new Set(PRESETS.map((p) => p.id));
-const SHADES: Record<ShadePart, ReadonlySet<string>> = {
-  lip: new Set(LIP_SHADES.map((s) => s.id)),
-  blush: new Set(BLUSH_SHADES.map((s) => s.id)),
-};
+const SHADES: Record<ShadePart, ReadonlySet<string>> = Object.fromEntries(
+  SHADE_PARTS.map((k): [ShadePart, ReadonlySet<string>] => [k, new Set(SHADE_DEFS[k].map((s) => s.id))]),
+) as Record<ShadePart, ReadonlySet<string>>;
 
 /**
  * The persons known now (display order) get their params (S §3.3 item 4): a person the edit has keeps its params; the
@@ -221,10 +225,10 @@ export function sanitizePerson(raw: unknown, fallback: PersonParams): PersonPara
     const s = rs[part];
     return typeof s === 'string' && SHADES[part].has(s) ? s : null;
   };
-  const shades = { lip: shade('lip'), blush: shade('blush') };
+  const shades = { ...emptyShades(), lip: shade('lip'), blush: shade('blush') };
   const ref = presetRefOf('preset' in r ? r.preset : fallback.preset);
-  const preset = ref && matchesPersonPreset({ values, shades, preset: ref }, ref) ? ref : 'custom';
-  return { values, shades, preset };
+  const preset = ref && matchesPersonPreset({ values, right: null, shades, preset: ref }, ref) ? ref : 'custom';
+  return { values, right: null, shades, preset };
 }
 
 /** A stored 質感 → a valid look (amount clamped) or null. */

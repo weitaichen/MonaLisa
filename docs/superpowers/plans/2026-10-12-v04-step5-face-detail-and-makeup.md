@@ -143,7 +143,7 @@ The 14 new ids, the split flag, the shade tables and the 17 icons, plus the type
   - `state.ts`: `emptyShades(): Record<ShadePart, string | null>`
   - icon keys `jawline`, `temple`, `hairline`, `noseWing`, `noseBridge`, `mouthHeight`, `brow`, `eyeshadow`, `liner`, `lashes`, `aegyo`, `contour`, `highlight`, `lens`, `split`, `parts`, `makeupOff`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/engine/params.test.ts` (add `isShadePart, MAKEUP_FIXED, ORIG_PARTS, ORIG_TINT, SHADE_PARTS, SHADES, SPLIT_IDS` to its import from `./params`, and `ShadePart` to the type import):
 
@@ -278,12 +278,12 @@ describe('step-5 icons (face-detail spec §3.1)', () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run src/engine/params.test.ts src/ui/panelModel.test.ts src/edit/legacy.test.ts`
 Expected: FAIL — `unknown param shape.jawline`, `SHADE_PARTS` / `SHADES` not exported, `expected false to be true` for the icon keys, and `emptyShades` not exported by `./state` (`legacy.test.ts`).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/types.ts` (CRLF): extend the `ParamId` union after `'shape.mouthSize'`
 
@@ -637,17 +637,17 @@ and add `MakeupPart` to the file's `import type { … } from '../types'` line (t
   ),
 ```
 
-- [ ] **Step 4: Run the tests and the typecheck**
+- [x] **Step 4: Run the tests and the typecheck**
 
 Run: `npx vitest run src/engine/params.test.ts src/ui/panelModel.test.ts src/edit && npm run typecheck`
 Expected: PASS; `tsc` prints no errors.
 
-- [ ] **Step 5: Run the whole unit suite**
+- [x] **Step 5: Run the whole unit suite**
 
 Run: `npm test`
 Expected: PASS. The new 美型 items are neutral, so no engine or panel assertion changes.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 file src/types.ts src/ui/panelModel.ts src/ui/icons.tsx src/ui/components/BeautyPanel.tsx src/engine/params.ts src/edit/state.ts src/edit/legacy.ts src/edit/lens.ts

@@ -388,7 +388,7 @@ Measured on the 3:4 frame (384 × 512 grid, 中 at zoom 1 = 28.7 texels) with th
   - `sanitizeStrokes(raw: unknown, frame: LiquifyFrame | null): Stroke[]`
 - Produces (`src/edit/strokeFixtures.ts`): `prng(seed: number): () => number`, `straightStroke(frame, kind, radius, a, b, id): Stroke[]`, `strokesS30(frame): Stroke[]`, `strokesCap(frame): Stroke[]`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/edit/liquify.test.ts`:
 
@@ -1083,12 +1083,12 @@ describe('stroke fixtures (tests/fixtures/strokes_*.json)', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run src/edit/liquify.test.ts`
 Expected: FAIL — `Failed to load url ./liquify` (the module does not exist yet; the stroke-fixture files do not exist either).
 
-- [ ] **Step 3: Write the stroke generators**
+- [x] **Step 3: Write the stroke generators**
 
 Create `src/edit/strokeFixtures.ts`:
 
@@ -1168,7 +1168,7 @@ export function strokesCap(frame: LiquifyFrame): Stroke[] {
 }
 ```
 
-- [ ] **Step 4: Write the module**
+- [x] **Step 4: Write the module**
 
 Create `src/edit/liquify.ts`:
 
@@ -2114,7 +2114,7 @@ Notes for the reviewer, each pinned by a test above:
 - The live path stamps from 2-point records built from the Float32-rounded points, so preview, commit and replay run identical arithmetic (`determinism` tests).
 - A gesture is refused a stamp when `records > MAX_STROKES` or `work + gesture work + this stamp's base work > workCap`; it then keeps only the points it stamped (`builder.stop(n)`), so its records replay exactly what was drawn.
 
-- [ ] **Step 5: Write the stroke fixtures, then run the tests**
+- [x] **Step 5: Write the stroke fixtures, then run the tests**
 
 Run: `WRITE_STROKE_FIXTURES=1 npx vitest run src/edit/liquify.test.ts -t "stroke fixtures"`
 Expected: PASS, 2 tests; `tests/fixtures/strokes_s30.json` and `tests/fixtures/strokes_cap.json` now exist (LF, one line each; S30 a few KB, SCAP some tens of KB).
@@ -2125,7 +2125,7 @@ Expected: PASS, 37 tests (about 16 s; the fuzz is about 12 s of it). Running it 
 Run: `npm run typecheck`
 Expected: no errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/edit/liquify.ts src/edit/strokeFixtures.ts src/edit/liquify.test.ts tests/fixtures/strokes_s30.json tests/fixtures/strokes_cap.json

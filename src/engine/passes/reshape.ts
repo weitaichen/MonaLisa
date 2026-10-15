@@ -13,7 +13,8 @@
 // limit, reports/美體修圖 背景扭曲 抑制技術.md stage 1 ②); v0.4: up to MAX_RENDER_FACES faces read from one face table
 // (texture or UBO), their displacements capped and summed, one 瘦臉 limit layer per face in an R16F array; step 3: the
 // V → O geometry, buffer tile and source window uniforms (uGeo, uTile, uWin) around the chain; step 5: 下頜線, 太陽穴,
-// 髮際線, 鼻翼, 山根 and 嘴高 warps, new shiftEllipse / squeezeAxis primitives, per-side strengths (左右分開).
+// 髮際線, 鼻翼, 山根 and 嘴高 warps, new shiftEllipse / squeezeAxis primitives, per-side strengths (左右分開); step 6:
+// the 推臉筆 RG16F field (uLiqDisp) sampled at O before the 美體 field.
 import { MAX_RENDER_FACES } from '../../config/limits';
 import { IDENTITY_MAT3 } from '../../geometry/view';
 import type { Face, FaceProtect, ParamId, PersonParams, SplitParamId } from '../../types';
@@ -442,10 +443,12 @@ export function displacementBound(face: Face, aspect: number, u: ReshapeUniforms
   return b;
 }
 
-/** texture units of P2 (S §4.8): src 0, body 1, protect array 2, face table 3 (texture carrier) */
+/** texture units of P2 (S §4.8): src 0, body 1, protect array 2, face table 3 (texture carrier), liquify 4 (step 6) */
 export const BODY_UNIT = 1;
 export const PROTECT_UNIT = 2;
 export const FACE_TABLE_UNIT = 3;
+/** texture unit of uLiqDisp: after BODY_UNIT 1, PROTECT_UNIT 2 and the face table on 3 (push-brush spec §4.4, C §4.3: 5 units in P2) */
+export const LIQUIFY_UNIT = 4;
 /** the std140 block binding of the UBO carrier */
 export const FACE_UBO_BINDING = 0;
 
@@ -547,6 +550,8 @@ in vec2 vUv;
 uniform sampler2D uSrc;
 uniform sampler2D uBodyDisp; // RG16F backward displacement in UV units, row 0 = image top
 uniform float uBodyOn;
+uniform sampler2D uLiqDisp; // RG16F 推臉筆 backward displacement in O UV units, row 0 = image top (LIQUIFY_UNIT)
+uniform float uLiqOn;
 uniform mediump sampler2DArray uProtArr; // R16F signed distance (iso units) per face layer, row 0 = window top
 uniform int uCount;
 uniform float uAspect;  // W/H
@@ -723,10 +728,12 @@ vec2 faceChain(int f, vec2 tc) {
 void main() {
   vec2 v = uTile.xy + vUv * uTile.zw;
   vec2 o = (uGeo * vec3(v, 1.0)).xy;
-  // Body first as a backward map (C §4.2 D_body), sampled at O = face first in forward terms: the face chains still see
-  // detected-landmark coordinates (O-space).
+  // 推臉筆 first (the outermost backward map, push-brush spec §4.1), then the body (C §4.2 D_body) sampled at the
+  // liquified point (at O when uLiqOn = 0) = face first in forward terms: the face chains still see detected-landmark
+  // coordinates (O-space).
   vec2 tcB = o;
-  if (uBodyOn != 0.0) tcB += uBodyOn * texture(uBodyDisp, o).xy;
+  if (uLiqOn != 0.0) tcB += texture(uLiqDisp, o).xy;
+  if (uBodyOn != 0.0) tcB += uBodyOn * texture(uBodyDisp, tcB).xy;
   vec2 acc = vec2(0.0);
   vec2 only = tcB;
   int hits = 0;
@@ -796,18 +803,19 @@ export interface ReshapePass {
    * size: the photo grid for one face, PROTECT_WINDOW² windows for ≥ 2; a malformed or mismatched layer is ignored and
    * its face drawn unlimited); `aspect` defaults to dst's (pass the image's for the ¼-res mask); `body` = RG16F
    * backward displacement texture (UV units), applied before the face chains; null = none. `view` = geometry / tile /
-   * window (step 3, ReshapeView); omitted = identity.
+   * window (step 3, ReshapeView); omitted = identity. `liquify` = RG16F 推臉筆 field (O UV units), the outermost map;
+   * null = none (push-brush spec §4.4).
    */
   drawFaces(
     src: Texture,
     dst: Framebuffer,
     faces: readonly TableFace[],
-    opts?: { aspect?: number; body?: Texture | null; protects?: readonly FaceProtect[]; view?: ReshapeView },
+    opts?: { aspect?: number; body?: Texture | null; protects?: readonly FaceProtect[]; view?: ReshapeView; liquify?: Texture | null },
   ): void;
   /**
    * One face with v0.3's signature (harnesses, pins, the pipeline until RenderInput v0.4): yaw attenuation applied
    * here, no cap; `face` / `u` null = no face warp (body only); `protect` = the 瘦臉 limit's data (uploaded by the pass);
-   * `view` is drawFaces' view (step 3), omitted = identity.
+   * `view` is drawFaces' view (step 3), omitted = identity; `liquify` is drawFaces' 推臉筆 field, omitted = none.
    */
   draw(
     src: Texture,
@@ -818,6 +826,7 @@ export interface ReshapePass {
     body?: Texture | null,
     protect?: FaceProtect | null,
     view?: ReshapeView,
+    liquify?: Texture | null,
   ): void;
   dispose(): void;
 }
@@ -829,6 +838,7 @@ export function createReshapePass(gl: GL, opts: { carrier?: 'texture' | 'ubo' } 
   gl.uniform1i(prog.u('uSrc'), 0);
   gl.uniform1i(prog.u('uBodyDisp'), BODY_UNIT);
   gl.uniform1i(prog.u('uProtArr'), PROTECT_UNIT);
+  gl.uniform1i(prog.u('uLiqDisp'), LIQUIFY_UNIT);
   const table = new Float32Array(FT.ROW * MAX_RENDER_FACES * 4);
   /** what the carrier holds (the packed rows of the last upload); null = nothing uploaded yet */
   let uploaded: Float32Array | null = null;
@@ -844,7 +854,7 @@ export function createReshapePass(gl: GL, opts: { carrier?: 'texture' | 'ubo' } 
     gl.bufferData(gl.UNIFORM_BUFFER, table.byteLength, gl.DYNAMIC_DRAW);
     gl.bindBuffer(gl.UNIFORM_BUFFER, null);
   }
-  // Bound on the body / protect units when there is no field / no limit, so a sampler never reads an empty unit.
+  // Bound on the body / liquify / protect units when there is no field / no limit, so a sampler never reads an empty unit.
   const zero = createTexture(gl, 1, 1);
   const zeroArr = createTextureArray(gl, 1, 1, 1, gl.R16F);
   let protArr: (Texture & { layers: number }) | null = null;
@@ -923,6 +933,8 @@ export function createReshapePass(gl: GL, opts: { carrier?: 'texture' | 'ubo' } 
     bindTexture(gl, 0, src);
     bindTexture(gl, BODY_UNIT, o.body ?? zero);
     gl.uniform1f(prog.u('uBodyOn'), o.body ? 1 : 0);
+    bindTexture(gl, LIQUIFY_UNIT, o.liquify ?? zero);
+    gl.uniform1f(prog.u('uLiqOn'), o.liquify ? 1 : 0);
     bindTextureArray(gl, PROTECT_UNIT, protArr && ok.includes(true) ? protArr.tex : zeroArr.tex);
     if (tableTex) bindTexture(gl, FACE_TABLE_UNIT, tableTex);
     else gl.bindBufferBase(gl.UNIFORM_BUFFER, FACE_UBO_BINDING, ubo);
@@ -930,6 +942,7 @@ export function createReshapePass(gl: GL, opts: { carrier?: 'texture' | 'ubo' } 
     gl.uniform1f(prog.u('uAspect'), aspect);
     drawFullscreen(gl);
     bindTexture(gl, BODY_UNIT, null);
+    bindTexture(gl, LIQUIFY_UNIT, null);
     bindTextureArray(gl, PROTECT_UNIT, null);
     if (tableTex) bindTexture(gl, FACE_TABLE_UNIT, null);
     else gl.bindBufferBase(gl.UNIFORM_BUFFER, FACE_UBO_BINDING, null);
@@ -938,9 +951,9 @@ export function createReshapePass(gl: GL, opts: { carrier?: 'texture' | 'ubo' } 
 
   return {
     drawFaces,
-    draw(src, dst, face, u, aspectIn, body, protect, view) {
+    draw(src, dst, face, u, aspectIn, body, protect, view, liquify) {
       const faces: TableFace[] = face && u ? [{ face, u: attenuate(u, face.yaw), layer: protect ? 0 : -1, window: protect?.window ?? WHOLE, centre: boxCentre(ovalBox(face)), cap: -1 }] : [];
-      drawFaces(src, dst, faces, { aspect: aspectIn, body, protects: protect ? [protect] : [], view });
+      drawFaces(src, dst, faces, { aspect: aspectIn, body, protects: protect ? [protect] : [], view, liquify });
     },
     dispose() {
       prog.dispose();

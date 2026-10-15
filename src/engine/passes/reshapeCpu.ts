@@ -5,9 +5,11 @@
 // output, bit-exact with v0.3 (reshapeCpuV03.ts). Step 5 (face-detail spec §4.5): 下頜線 / 太陽穴 / 髮際線 in the contour
 // part, 鼻翼 / 山根 after the nose, 嘴高 before 嘴型, and the split items' per-side strengths (左右分開; with right = null
 // every side equals the left value exactly, so the map stays bit-exact). Double precision throughout; the e2e reshape
-// pins compare the GPU with this port within 0.05 px. Imported by the app only for the editor's fold safety net
+// pins compare the GPU with this port within 0.05 px. Step 6 (push-brush spec §4.4): the 推臉筆 field, read f16-rounded
+// like its RG16F upload, is applied before the 美體 field, which is then sampled at the liquified point; with no
+// liquify field the map is unchanged. Imported by the app only for the editor's fold safety net
 // (src/edit/warpGuard.ts, on slider commits).
-import type { BodyField, Face, FaceProtect, Rect } from '../../types';
+import type { BodyField, Face, FaceProtect, LiquifyField, Rect } from '../../types';
 import { fieldAt } from '../../body/cpuWarp';
 import { attenuate, boxCentre, faceDrawn, influenceBox, ovalBox, WHOLE, type TableFace } from './faceCap';
 import {
@@ -81,6 +83,30 @@ export function protectAt(p: FaceProtect, u: number, v: number): number {
   const a = t(y0 * w + x0) * (1 - fx) + t(y0 * w + x1) * fx;
   const b = t(y1 * w + x0) * (1 - fx) + t(y1 * w + x1) * fx;
   return a * (1 - fy) + b * fy;
+}
+
+/**
+ * Bilinear, clamp-to-edge lookup of the 推臉筆 field at UV with every texel rounded to f16 first: what the shader
+ * reads back from the RG16F upload (push-brush spec §4.4), like protectAt.
+ */
+export function liquifyAt(f: LiquifyField, u: number, v: number): [number, number] {
+  const { width: w, height: h, data } = f;
+  const x = Math.max(0, Math.min(w - 1, u * w - 0.5));
+  const y = Math.max(0, Math.min(h - 1, v * h - 0.5));
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const x1 = Math.min(w - 1, x0 + 1);
+  const y1 = Math.min(h - 1, y0 + 1);
+  const fx = x - x0;
+  const fy = y - y0;
+  const out: [number, number] = [0, 0];
+  for (let c = 0; c < 2; c++) {
+    const t = (i: number) => f16(data[i * 2 + c]);
+    const a = t(y0 * w + x0) * (1 - fx) + t(y0 * w + x1) * fx;
+    const b = t(y1 * w + x0) * (1 - fx) + t(y1 * w + x1) * fx;
+    out[c] = a * (1 - fy) + b * fy;
+  }
+  return out;
 }
 
 /** the 瘦臉 limit's budget (reshape.ts budgetScale): Ln / L, or 1 when the budget does not bind */
@@ -175,7 +201,11 @@ function chainOf(face: Face, u: ReshapeUniforms, aspect: number, prot: FaceProte
 }
 
 /** The map drawFaces renders with: `faces` exactly as packed (attenuated, × weight), `protects` indexed by layer. */
-export function reshapeMapMulti(faces: readonly TableFace[], aspect: number, opts: { body?: BodyField | null; protects?: readonly FaceProtect[] } = {}): UvMap {
+export function reshapeMapMulti(
+  faces: readonly TableFace[],
+  aspect: number,
+  opts: { body?: BodyField | null; protects?: readonly FaceProtect[]; liquify?: LiquifyField | null } = {},
+): UvMap {
   const per = faces.map((t) => {
     if (!faceDrawn(t.u)) return null;
     const box = influenceBox(t, aspect);
@@ -184,11 +214,17 @@ export function reshapeMapMulti(faces: readonly TableFace[], aspect: number, opt
     return { t, box, kappa: PROTECT_SMOOTH * faceWidthIso(t.face, aspect), chain: chainOf(t.face, t.u, aspect, prot, t.window) };
   });
   const body = opts.body ?? null;
+  const liquify = opts.liquify ?? null;
   return (x, y) => {
     let tcB: V2 = [x, y];
+    // 推臉筆 first (the outermost map), then the 美體 field sampled at the liquified point (push-brush spec §4.1)
+    if (liquify) {
+      const d = liquifyAt(liquify, tcB[0], tcB[1]);
+      tcB = [tcB[0] + d[0], tcB[1] + d[1]];
+    }
     if (body) {
-      const d = fieldAt(body, x, y);
-      tcB = [x + d[0], y + d[1]];
+      const d = fieldAt(body, tcB[0], tcB[1]);
+      tcB = [tcB[0] + d[0], tcB[1] + d[1]];
     }
     let ax = 0;
     let ay = 0;
@@ -224,10 +260,17 @@ export function reshapeMapMulti(faces: readonly TableFace[], aspect: number, opt
  * One face as ReshapePass.draw renders it (v0.3's signature, kept for the straightness ratchet, faceProtect.test.ts and the
  * harnesses): yaw attenuation applied here, no cap, the limit (when given) as layer 0 over its window.
  */
-export function reshapeMapCpu(face: Face | null, uIn: ReshapeUniforms | null, aspect: number, body?: BodyField | null, protect?: FaceProtect | null): UvMap {
-  if (!face || !uIn) return reshapeMapMulti([], aspect, { body });
+export function reshapeMapCpu(
+  face: Face | null,
+  uIn: ReshapeUniforms | null,
+  aspect: number,
+  body?: BodyField | null,
+  protect?: FaceProtect | null,
+  liquify?: LiquifyField | null,
+): UvMap {
+  if (!face || !uIn) return reshapeMapMulti([], aspect, { body, liquify });
   const t: TableFace = { face, u: attenuate(uIn, face.yaw), layer: protect ? 0 : -1, window: protect?.window ?? WHOLE, centre: boxCentre(ovalBox(face)), cap: -1 };
-  return reshapeMapMulti([t], aspect, { body, protects: protect ? [protect] : [] });
+  return reshapeMapMulti([t], aspect, { body, protects: protect ? [protect] : [], liquify });
 }
 
 /**

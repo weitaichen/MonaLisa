@@ -16,7 +16,7 @@ import { syntheticPortrait } from '../../body/synthetic';
 import { buildFaceProtect } from '../../tracking/faceProtect';
 import { shaderHash } from '../shaderHash';
 
-const PINNED = '913c3d3b';
+const PINNED = '3ace9b9e';
 
 const lm = JSON.parse(readFileSync(new URL('../../../tests/fixtures/landmarks_sample_face.json', import.meta.url), 'utf8')) as {
   width: number;
@@ -707,5 +707,29 @@ describe('shiftEllipse and squeezeAxis ports (face-detail spec §4.2)', () => {
           expect(det).toBeLessThanOrEqual(hi + 1e-4);
         }
     }
+  });
+});
+
+describe('reshapeMapCpu with a 推臉筆 field', () => {
+  const liq = (dx: number) => ({ width: 2, height: 2, data: new Float32Array([dx, 0, dx, 0, dx, 0, dx, 0]), version: 1 });
+
+  it('a null liquify field is the identity of the old map', () => {
+    const u = reshapeUniforms(params(['shape.faceSlim']), 1);
+    const a = reshapeMapCpu(face, u, aspect, null, null, null)(0.5, 0.6);
+    const b = reshapeMapCpu(face, u, aspect)(0.5, 0.6);
+    expect(a).toEqual(b);
+  });
+
+  it('applies liquify first, then samples the body field at the liquified point (f16 texels)', () => {
+    const d = 0.01;
+    const f16 = (Math as { f16round?: (x: number) => number }).f16round ?? ((x: number) => x);
+    const dq = f16(d);
+    // a body field that varies along x, so where it is sampled matters
+    const body = { width: 4, height: 1, data: new Float32Array([0, 0, 0.004, 0, 0.008, 0, 0.012, 0]), version: 1 };
+    const map = reshapeMapCpu(null, null, aspect, body, null, liq(d));
+    const [x] = map(0.3, 0.5);
+    const shifted = reshapeMapCpu(null, null, aspect, body)(0.3 + dq, 0.5);
+    expect(x).toBeCloseTo(shifted[0], 12);
+    expect(x).not.toBeCloseTo(reshapeMapCpu(null, null, aspect, body)(0.3, 0.5)[0] + dq, 6);
   });
 });

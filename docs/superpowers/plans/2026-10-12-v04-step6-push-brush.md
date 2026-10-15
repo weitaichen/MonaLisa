@@ -2427,7 +2427,7 @@ The shader contract of PB §4.4 and C §4.2: `tc = o + L(o)`, then the body fiel
   - `liquifyAt(f: LiquifyField, u: number, v: number): [number, number]` (bilinear, clamp-to-edge, f16 texels).
   - `reshapeMapMulti(faces, aspect, opts?: { body?; protects?; liquify?: LiquifyField | null })`; `reshapeMapCpu(face, u, aspect, body?, protect?, liquify?)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/engine/passes/reshapeCpu.test.ts` (the file already defines `face`, `aspect`, `params` at `:27-30` and imports `reshapeUniforms` and `reshapeMapCpu`; keep using them):
 
@@ -2457,12 +2457,12 @@ describe('reshapeMapCpu with a 推臉筆 field', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run src/engine/passes/reshapeCpu.test.ts`
 Expected: FAIL — the second test: `x` equals the body-only map at 0.3 (the 6th argument is ignored), and TS reports "Expected 3-5 arguments, but got 6".
 
-- [ ] **Step 3: Port the CPU side**
+- [x] **Step 3: Port the CPU side**
 
 In `src/engine/passes/reshapeCpu.ts`:
 
@@ -2521,12 +2521,12 @@ export function reshapeMapCpu(face: Face | null, uIn: ReshapeUniforms | null, as
 
 with `const liquify = opts.liquify ?? null;` next to `const body = opts.body ?? null;` (`:186` at `d09e608`). With no liquify field `tcB` is still `(x, y)` where the body is sampled, so every existing CPU result is unchanged. (The one-face wrapper calls `reshapeMapMulti` on both of its returns at `d09e608`, so item 3 is its only change.)
 
-- [ ] **Step 4: Run the CPU tests**
+- [x] **Step 4: Run the CPU tests**
 
 Run: `npx vitest run src/engine/passes/reshapeCpu.test.ts`
 Expected: the two new tests PASS; the hash-pin test still passes (the shader text has not changed yet).
 
-- [ ] **Step 5: Change the shader**
+- [x] **Step 5: Change the shader**
 
 In `src/engine/passes/reshape.ts`:
 
@@ -2571,7 +2571,7 @@ and after `drawFullscreen(gl)`, next to `bindTexture(gl, BODY_UNIT, null);` (`:9
       bindTexture(gl, LIQUIFY_UNIT, null);
 ```
 
-- [ ] **Step 6: Re-set the hash pin**
+- [x] **Step 6: Re-set the hash pin**
 
 Run: `npx vitest run src/engine/passes/reshapeCpu.test.ts -t "pinned"`
 Expected: FAIL with `expected '<new hash>' to be '<old hash>'` (the old one is `'913c3d3b'` at `d09e608`). Copy `<new hash>` into the `PINNED` constant the test compares with (`const PINNED = '…';`, `reshapeCpu.test.ts:19`).
@@ -2579,12 +2579,12 @@ Expected: FAIL with `expected '<new hash>' to be '<old hash>'` (the old one is `
 Run: `npx vitest run src/engine/passes/reshapeCpu.test.ts`
 Expected: PASS.
 
-- [ ] **Step 7: Typecheck and run the engine tests**
+- [x] **Step 7: Typecheck and run the engine tests**
 
 Run: `npm run typecheck && npx vitest run src/engine`
 Expected: no errors; PASS. (`pipeline.ts` does not pass the new argument yet; it is optional.)
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/engine/passes/reshape.ts src/engine/passes/reshapeCpu.ts src/engine/passes/reshapeCpu.test.ts

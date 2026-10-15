@@ -12,7 +12,7 @@
 // P5 has two programs (step 2): the base composite and the 調節 one (質感 LUT + 調節 stages), compiled on first need.
 import { FACE_TABLE_CARRIER, HEAL_RING_SAMPLES } from '../config/limits';
 import { IDENTITY_MAT3 } from '../geometry/view';
-import type { BodyField, Face, FaceProtect, PhotoParams } from '../types';
+import type { BodyField, Face, FaceProtect, LiquifyField, PhotoParams } from '../types';
 import type { AdjustUniforms } from './adjustMath';
 import { createCompositePrograms, uploadAdjust } from './compositePrograms';
 import {
@@ -97,6 +97,8 @@ export interface FrameJob {
   maskClear: [number, number];
   /** 美體 backward displacement field (UV units); null = none. Not scaled by a face weight or yaw. */
   body: BodyField | null;
+  /** 推臉筆 backward field (O UV units), the outermost map of P2; null = no strokes. Not scaled by any weight. */
+  liquify: LiquifyField | null;
   photo: PhotoParams;
   skin: SkinUniforms;
   /** null until the GPUPixel LUTs are uploaded (whitening is skipped meanwhile) */
@@ -151,6 +153,8 @@ export interface PassPlanInput {
   reshapeActive: boolean;
   /** a valid body field will be applied */
   bodyOn: boolean;
+  /** a valid 推臉筆 field will be applied */
+  liquifyOn: boolean;
   /** the frame needs the 調節 program (FrameJob.adjust.on) */
   adjustOn: boolean;
   /** step 3: false → P2 runs (default true) */
@@ -188,7 +192,8 @@ export function planPasses(i: PassPlanInput): PassPlan {
     // step 5 (S5 §3.6): 口紅 / 腮紅 need the GPUPixel textures, the procedural parts the PMAKEUP program; either runs P1
     makeup: faceOn && ((i.makeupActive && i.makeupReady) || (i.procActive && i.procReady)),
     // step 3 (S §4.3): a geometry or a window always runs P2, the V ← O resample
-    reshape: (faceOn && i.reshapeActive) || i.bodyOn || i.geoIdentity === false || i.windowed === true,
+    // step 6 (push-brush spec §4.4): a strokes-only frame runs P2, and so maskWarp
+    reshape: (faceOn && i.reshapeActive) || i.bodyOn || i.liquifyOn || i.geoIdentity === false || i.windowed === true,
     mean,
     adjust: i.adjustOn,
   };
@@ -196,7 +201,8 @@ export function planPasses(i: PassPlanInput): PassPlan {
 
 /**
  * run()'s plan of a frame job (pure): the faces with weight > 0 drive the face passes, the clear keeps the mask on;
- * `proc` (step 5): the frame has procedural makeup geometry, and PMAKEUP compiled
+ * `proc` (step 5): the frame has procedural makeup geometry, and PMAKEUP compiled; `liquifyOn` (step 6): a 推臉筆 field
+ * is applied
  */
 export function planFrame(
   job: { faces: readonly Pick<FrameFace, 'weight' | 'makeup' | 'reshape'>[] } & Pick<FrameJob, 'maskClear' | 'matchGpupixel' | 'skin'> & {
@@ -205,6 +211,7 @@ export function planFrame(
   makeupReady: boolean,
   bodyOn: boolean,
   proc: { active: boolean; ready: boolean } = { active: false, ready: false },
+  liquifyOn = false,
 ): PassPlan {
   const live = job.faces.filter((f) => f.weight > 0);
   return planPasses({
@@ -216,6 +223,7 @@ export function planFrame(
     makeupReady,
     reshapeActive: live.some((f) => reshapeActive(f.reshape)),
     bodyOn,
+    liquifyOn,
     adjustOn: job.adjust.on,
     geoIdentity: job.geoIdentity,
     windowed: job.windowed,
@@ -404,6 +412,9 @@ export function createPipeline(gl: GL): Pipeline {
   let bodyTex: Texture | null = null;
   let bodyKey: BodyUploadKey | null = null;
   let bodyWarned = false;
+  let liqTex: Texture | null = null;
+  let liqKey: BodyUploadKey | null = null;
+  let liqWarned = false;
   let heal: HealPass | null = null;
   let toneMask: ToneMaskPass | null = null;
   let toneField: ToneFieldPass | null = null;
@@ -456,6 +467,41 @@ export function createPipeline(gl: GL): Pipeline {
     return bodyTex;
   }
 
+  /**
+   * The 推臉筆 field's texture: bodyTexture's upload rule without its finite scan (the model's stamps are bounded, so
+   * the field is finite by construction, push-brush spec §3.5; the scan would cost about 400 k calls per drawn frame).
+   * The texture is deleted when the strokes become empty (null field).
+   */
+  function liquifyTexture(f: LiquifyField | null): Texture | null {
+    if (!f) {
+      if (liqTex) deleteTexture(gl, liqTex);
+      liqTex = null;
+      liqKey = null;
+      return null;
+    }
+    if (!bodyFieldValid(f)) {
+      if (!liqWarned) console.warn('[engine] ignoring malformed liquify field', { width: f.width, height: f.height });
+      liqWarned = true;
+      return null;
+    }
+    if (!bodyUploadNeeded(liqKey, f)) return liqTex;
+    const n = f.width * f.height * 2;
+    const data = f.data.length === n ? f.data : f.data.subarray(0, n);
+    liqKey = { field: f, data: f.data, version: f.version, width: f.width, height: f.height, usable: true };
+    liqTex ??= createTexture(gl, 0, 0);
+    gl.bindTexture(gl.TEXTURE_2D, liqTex.tex);
+    setUnpackState(gl);
+    if (liqTex.width === f.width && liqTex.height === f.height) {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, f.width, f.height, gl.RG, gl.FLOAT, data);
+    } else {
+      // RG16F from FLOAT data: core WebGL2, filterable (LINEAR) without extensions
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG16F, f.width, f.height, 0, gl.RG, gl.FLOAT, data);
+      liqTex.width = f.width;
+      liqTex.height = f.height;
+    }
+    return liqTex;
+  }
+
   function getMakeup(): MakeupPass {
     if (!makeup) {
       const m = createMakeupPass(gl);
@@ -505,7 +551,8 @@ export function createPipeline(gl: GL): Pipeline {
       // PMAKEUP compiles on the first frame with a procedural item; a failure leaves 口紅 / 腮紅 and the warps alone
       const procReady = proc !== null && makeup !== null && makeup.ensureProc();
       const body = bodyTexture(job.body);
-      const plan = planFrame(job, makeupReady, body !== null, { active: proc !== null, ready: procReady });
+      const liq = liquifyTexture(job.liquify);
+      const plan = planFrame(job, makeupReady, body !== null, { active: proc !== null, ready: procReady }, liq !== null);
 
       let maskTex: Texture | null = null;
       if (plan.mask) {
@@ -582,18 +629,19 @@ export function createPipeline(gl: GL): Pipeline {
         // body-only frame draws no face chain; its limit is a layer only with a warp drawn (no upload otherwise)
         const t = tableFaces(job, aspect);
         const b = full('B', baseFb, job.size);
-        reshape.drawFaces(base, b, t.faces, { aspect, body, protects: t.protects, view });
+        reshape.drawFaces(base, b, t.faces, { aspect, body, protects: t.protects, view, liquify: liq });
         base = b.tex;
         baseFb = b;
         passes.push('reshape');
         if (body) passes.push('body');
+        if (liq) passes.push('liquify');
         if (maskTex) {
           // The mask is built from the detected landmarks but gates the warped image: push it through the same
           // backward map (every face, its cap, the body field), or 瘦臉/V臉/細腰 leave background inside the mask where
           // the contour moved in. Same program and table, the image's aspect (not the rounded ¼-res buffer's); all
           // channels pass through.
           const n = fb('N', maskBufferSize(job.size));
-          reshape.drawFaces(maskTex, n, t.faces, { aspect, body, protects: t.protects, view });
+          reshape.drawFaces(maskTex, n, t.faces, { aspect, body, protects: t.protects, view, liquify: liq });
           maskTex = n.tex;
           passes.push('maskWarp');
         }
@@ -719,6 +767,7 @@ export function createPipeline(gl: GL): Pipeline {
         reshape?.dispose();
         overlay?.dispose();
         deleteTexture(gl, bodyTex);
+        deleteTexture(gl, liqTex);
         heal?.dispose();
         toneMask?.dispose();
         toneField?.dispose();
@@ -727,6 +776,8 @@ export function createPipeline(gl: GL): Pipeline {
       mask = makeup = reshape = overlay = null;
       bodyTex = null;
       bodyKey = null;
+      liqTex = null;
+      liqKey = null;
       makeupReady = false;
       // the field's textures die with the FBOs: the next frame on a restored context rebuilds it (Review Focus 1)
       heal = null;

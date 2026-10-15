@@ -2609,7 +2609,7 @@ PB §4.4 "Pipeline": a strokes-only frame runs P2 and maskWarp; the field upload
 - Consumes: Task 1 `LiquifyField`, `RenderInput.liquify`; Task 4 `drawFaces(…, { …, liquify })`; `bodyFieldValid`, `bodyUploadNeeded`, `BodyUploadKey` (`pipeline.ts:283-360` at `d09e608`); step 1's `planFrame(job, makeupReady, bodyOn, proc = { active: false, ready: false })`, through which `run` plans (step 5 added `proc`); the two `reshape.drawFaces(…)` calls steps 1 and 3 left in `run` (the image draw and maskWarp, `:585`, `:596` at `d09e608`).
 - Produces: `FrameJob.liquify: LiquifyField | null`; `PassPlanInput.liquifyOn: boolean` (`reshape` is on when it is); `planFrame(job, makeupReady, bodyOn, proc?, liquifyOn = false)`; the pass name `'liquify'` in `RenderStats.passes` when the field is applied.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/engine/pipeline.test.ts` (`base` is the file's `PassPlanInput` fixture, `:23-36` at `d09e608`; steps 1–5 extended it; spread it as the other blocks do; `bodyFieldValid` and `MAX_BODY_FIELD_EDGE` are already imported):
 
@@ -2671,12 +2671,12 @@ describe('createEngine: 推臉筆 field', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run src/engine/pipeline.test.ts src/engine/index.test.ts`
 Expected: FAIL — `liquifyOn` is not part of `PassPlanInput` (reshape stays false) and `lastJob().liquify` is `undefined`.
 
-- [ ] **Step 3: Plan and upload**
+- [x] **Step 3: Plan and upload**
 
 In `src/engine/pipeline.ts` (CRLF):
 
@@ -2748,7 +2748,7 @@ and after `bodyTexture` (`:427-458` at `d09e608`):
 6. In `run`, next to `const body = bodyTexture(job.body);` (`:507` at `d09e608`): `const liq = liquifyTexture(job.liquify);`, and pass `liq !== null` as the new fifth argument of the `planFrame(job, makeupReady, body !== null, { active: proc !== null, ready: procReady })` call on the next line. Add `liquify: liq` to the options of **both** `reshape.drawFaces` calls (the image draw, `:585`, and maskWarp, `:596`), and after `if (body) passes.push('body');` (`:589`) add `if (liq) passes.push('liquify');`.
 7. In `dispose`, delete and reset it with the others: `deleteTexture(gl, liqTex);` next to `deleteTexture(gl, bodyTex);` in the `!lost` branch (`:721` at `d09e608`) and `liqTex = null; liqKey = null;` with `bodyTex = null; bodyKey = null;` (`:728-729`).
 
-- [ ] **Step 4: Forward it from the engine**
+- [x] **Step 4: Forward it from the engine**
 
 In `src/engine/index.ts` `job()` (`:310-375` at `d09e608`), after `body: input.body ?? null,` (`:353`):
 
@@ -2759,7 +2759,7 @@ In `src/engine/index.ts` `job()` (`:310-375` at `d09e608`), after `body: input.b
 
 Fix any other `FrameJob` literal `npm run typecheck` reports (test fakes) with `liquify: null`.
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `npx vitest run src/engine`
 Expected: PASS.
@@ -2767,7 +2767,7 @@ Expected: PASS.
 Run: `npm run typecheck`
 Expected: no errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/engine/pipeline.ts src/engine/pipeline.test.ts src/engine/index.ts src/engine/index.test.ts

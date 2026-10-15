@@ -149,6 +149,42 @@ describe('createEngine: 美體 field', () => {
   });
 });
 
+describe('createEngine: 推臉筆 field', () => {
+  // the 美體 block's two helpers (local to it)
+  const lastJob = (): FrameJob => {
+    const pipe = vi.mocked(createPipeline).mock.results.at(-1)!.value as { run: { mock: { calls: [FrameJob][] } } };
+    return pipe.run.mock.calls.at(-1)![0];
+  };
+  const input = () => ({ source: {} as TexImageSource, width: 640, height: 480, ...legacyFrame(defaultParams(), null, 0) });
+  const liquify = { width: 384, height: 512, data: new Float32Array(384 * 512 * 2), version: 3 };
+
+  it('passes RenderInput.liquify to the job of render and of renderToImageData (preview = export)', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    engine.render({ ...input(), liquify }, { still: true });
+    expect(lastJob().liquify).toBe(liquify);
+    expect(() => engine.renderToImageData({ ...input(), liquify }, { mirror: false })).toThrow('no output buffer');
+    expect(lastJob().liquify).toBe(liquify);
+    engine.render(input());
+    expect(lastJob().liquify).toBeNull();
+  });
+
+  it('the field reaches the job again after a context restore (a fresh pipeline uploads it, push-brush spec §7)', async () => {
+    const { canvas, fire } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    engine.render({ ...input(), liquify }, { still: true });
+    const pipelinesBefore = vi.mocked(createPipeline).mock.results.length;
+    fire('webglcontextlost');
+    fire('webglcontextrestored');
+    await engine.ready;
+    expect(vi.mocked(createPipeline).mock.results.length).toBeGreaterThan(pipelinesBefore); // a new pipeline: no upload key
+    engine.render({ ...input(), liquify }, { still: true });
+    expect(lastJob().liquify).toBe(liquify);
+  });
+});
+
 describe('createEngine: the frame job’s 調節 (step-2 spec §4.1)', () => {
   const lastJob = (): FrameJob => {
     const pipe = vi.mocked(createPipeline).mock.results.at(-1)!.value as { run: { mock: { calls: [FrameJob][] } } };

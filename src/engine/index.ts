@@ -351,6 +351,8 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       maskClear: m.clear,
       // preview and export share this path, so the 美體 field and every face's limit apply identically to both
       body: input.body ?? null,
+      // preview, export and every tile share this path, so the strokes are applied identically to all of them
+      liquify: input.liquify ?? null,
       photo: input.photo,
       skin: skinUniformsFor(input.photo, m.S, m.R, filterLut !== null),
       luts,

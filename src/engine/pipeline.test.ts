@@ -30,6 +30,7 @@ const base: PassPlanInput = {
   makeupReady: true,
   reshapeActive: true,
   bodyOn: false,
+  liquifyOn: false,
   adjustOn: false,
   procActive: false,
   procReady: false,
@@ -119,6 +120,11 @@ describe('planFrame (run()’s plan of a job)', () => {
     expect(planFrame(plain, true, false).makeup).toBe(false);
     expect(planFrame(plain, false, false, { active: true, ready: true }).makeup).toBe(true);
     expect(planFrame(plain, true, false, { active: true, ready: false }).makeup).toBe(false);
+  });
+
+  it('step 6: the fifth argument (a 推臉筆 field is applied) plans P2 for a frame without face warps; omitted, it plans as before', () => {
+    expect(planFrame(job([], [1, 1]), true, false).reshape).toBe(false);
+    expect(planFrame(job([], [1, 1]), true, false, undefined, true)).toEqual({ mask: false, makeup: false, reshape: true, mean: true, adjust: false });
   });
 });
 
@@ -285,5 +291,21 @@ describe('planPasses with procedural makeup (face-detail spec §3.6)', () => {
   });
   it('needs a face', () => {
     expect(planPasses({ ...base, anyFace: false, procActive: true, procReady: true }).makeup).toBe(false);
+  });
+});
+
+describe('planPasses with a 推臉筆 field (push-brush spec §4.4)', () => {
+  it('a strokes-only frame runs reshape (and so maskWarp) and nothing else face-related', () => {
+    const off = planPasses({ ...base, liquifyOn: false, bodyOn: false, reshapeActive: false });
+    expect(off.reshape).toBe(false);
+    const on = planPasses({ ...base, liquifyOn: true, bodyOn: false, reshapeActive: false });
+    expect(on.reshape).toBe(true);
+    expect({ ...on, reshape: false }).toEqual(off);
+  });
+
+  it('liquify fields use the body field validity rule (same layout, MAX_BODY_FIELD_EDGE)', () => {
+    const f = { width: 384, height: 512, data: new Float32Array(384 * 512 * 2), version: 1 };
+    expect(bodyFieldValid(f)).toBe(true);
+    expect(bodyFieldValid({ ...f, width: MAX_BODY_FIELD_EDGE + 1 })).toBe(false);
   });
 });

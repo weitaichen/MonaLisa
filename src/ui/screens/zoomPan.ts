@@ -1,6 +1,7 @@
 // Pinch-zoom / pan / double-tap-to-fit for the editor canvas. Transforms are written straight to the
 // layer's style (no re-render per pointer move).
 import { useEffect, useRef } from 'preact/hooks';
+import { BRUSH_IDLE, brushGesture, brushMoveAction, brushPointers, type BrushEffect, type BrushGestureState } from '../brushGesture';
 
 export interface View {
   s: number;
@@ -73,6 +74,24 @@ export interface ZoomPanOptions {
   spotTap?(uv: [number, number], layer: DOMRect): void;
   /** 裁切 open: zoom and pan back to identity */
   resetWhen?: boolean;
+  /** step 6 (推臉筆): brush mode — one finger draws, two fingers pinch and pan; onTap and spotTap are not called */
+  brush?: BrushHooks | null;
+}
+
+/** What brush mode (推臉筆) needs from the editor (push-brush spec §2.5). */
+export interface BrushHooks {
+  /** the first finger went down at a client point: start a live stroke there */
+  start(p: { x: number; y: number }): void;
+  /** client points of the drawing finger, coalesced events included, oldest first */
+  move(ps: readonly { x: number; y: number }[]): void;
+  /** finger up, a late second finger, pointercancel: commit the live stroke */
+  commit(): void;
+  /** a second finger within PINCH_GRACE_MS: cancel the live stroke (no undo step) */
+  cancel(): void;
+  /** the live stroke applied a stamp (queued points are applied first); false = it was a tap */
+  stamped(): boolean;
+  /** pinching started (true) or ended (false): the ring hides while pinching */
+  pinch(on: boolean): void;
 }
 
 export function useZoomPan(
@@ -130,8 +149,73 @@ export function useZoomPan(
       }
     };
 
+    // ── 推臉筆 brush mode (push-brush spec §2.5): the reducer decides; one finger never pans ──
+    let bstate: BrushGestureState = BRUSH_IDLE;
+    let bhooks: BrushHooks | null = null;
+    const brushFx = (fx: BrushEffect[], b: BrushHooks, e: PointerEvent) => {
+      for (const f of fx) {
+        if (f === 'strokeStart') b.start({ x: e.clientX, y: e.clientY });
+        else if (f === 'strokeCommit') b.commit();
+        else if (f === 'strokeCancel') b.cancel();
+        else if (f === 'pinchStart') {
+          begin();
+          b.pinch(true);
+        } else if (f === 'pinchEnd') b.pinch(false);
+        else if (f === 'fit') apply({ s: 1, x: 0, y: 0 }, true);
+      }
+    };
+    /** the hooks of this event; a new hooks object (mode re-entered) restarts the reducer */
+    const brushOf = (): BrushHooks | null => {
+      const b = optsRef.current?.brush ?? null;
+      if (b !== bhooks) {
+        bhooks = b;
+        bstate = BRUSH_IDLE;
+      }
+      return b;
+    };
+    const brushDown = (e: PointerEvent, b: BrushHooks) => {
+      stage.setPointerCapture(e.pointerId);
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const r = brushGesture(bstate, { type: 'down', id: e.pointerId, t: performance.now() });
+      bstate = r.state;
+      const keep = brushPointers(bstate); // a third finger is forgotten at once
+      for (const id of [...pts.keys()]) if (!keep.includes(id)) pts.delete(id);
+      brushFx(r.effects, b, e);
+    };
+    const brushMove = (e: PointerEvent, b: BrushHooks) => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const act = brushMoveAction(bstate, e.pointerId);
+      if (act === 'feed') {
+        const list = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+        b.move(list.length ? list.map((c) => ({ x: c.clientX, y: c.clientY })) : [{ x: e.clientX, y: e.clientY }]);
+      } else if (act === 'pinch' && pts.size >= 2) {
+        const t = twoPoint();
+        apply(pinchView(start, m0, t.mid, t.dist / d0));
+      }
+    };
+    const brushEnd = (e: PointerEvent, b: BrushHooks, cancelled: boolean) => {
+      if (!pts.has(e.pointerId)) return;
+      const drawing = bstate.kind === 'stroke' && bstate.id === e.pointerId;
+      const r = brushGesture(
+        bstate,
+        cancelled
+          ? { type: 'cancel', id: e.pointerId }
+          : { type: 'up', id: e.pointerId, t: performance.now(), stamped: drawing ? b.stamped() : false },
+      );
+      bstate = r.state;
+      pts.delete(e.pointerId);
+      brushFx(r.effects, b, e);
+    };
+
     const down = (e: PointerEvent) => {
       if ((e.target as Element).closest('button, .slider-row, .status')) return;
+      const b = brushOf();
+      if (b) {
+        if (e.pointerType === 'mouse' && e.button !== 0) return; // the mouse's primary button draws (PB §2.5)
+        brushDown(e, b);
+        return;
+      }
       stage.setPointerCapture(e.pointerId);
       if (pts.size === 0) gesture = [];
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -139,6 +223,11 @@ export function useZoomPan(
       begin();
     };
     const move = (e: PointerEvent) => {
+      const b = brushOf();
+      if (b) {
+        brushMove(e, b);
+        return;
+      }
       if (!pts.has(e.pointerId)) return;
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
       record('move', e);
@@ -151,6 +240,11 @@ export function useZoomPan(
       }
     };
     const end = (e: PointerEvent) => {
+      const b = brushOf();
+      if (b) {
+        brushEnd(e, b, e.type === 'pointercancel');
+        return;
+      }
       if (!pts.delete(e.pointerId)) return;
       record(e.type === 'pointercancel' ? 'cancel' : 'up', e);
       if (pts.size === 0) {

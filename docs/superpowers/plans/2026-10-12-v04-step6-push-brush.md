@@ -3055,7 +3055,7 @@ PB §2.5: in brush mode zoomPan's own listener arbitrates (so a pinch never lose
   - `BRUSH_DOUBLE_TAP_MS = 300`; `type BrushGestureState`; `type BrushGestureEvent = { type: 'down'; id; t } | { type: 'up'; id; t; stamped: boolean } | { type: 'cancel'; id }`; `type BrushEffect = 'strokeStart' | 'strokeCommit' | 'strokeCancel' | 'pinchStart' | 'pinchEnd' | 'fit'`; `BRUSH_IDLE`; `brushGesture(s, e): { state; effects }`; `brushMoveAction(s, id): 'feed' | 'pinch' | 'none'`; `brushPointers(s): number[]`.
   - `interface BrushHooks { start(p: {x,y}): void; move(ps: readonly {x,y}[]): void; commit(): void; cancel(): void; stamped(): boolean; pinch(on: boolean): void }` exported from `zoomPan.ts`; `ZoomPanOptions.brush?: BrushHooks | null`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/ui/brushGesture.test.ts`:
 
@@ -3156,12 +3156,12 @@ describe('brushGesture (push-brush spec §2.5)', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run src/ui/brushGesture.test.ts`
 Expected: FAIL — `Failed to load url ./brushGesture`.
 
-- [ ] **Step 3: Write the reducer**
+- [x] **Step 3: Write the reducer**
 
 Create `src/ui/brushGesture.ts`:
 
@@ -3235,12 +3235,12 @@ export function brushPointers(s: BrushGestureState): number[] {
 }
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `npx vitest run src/ui/brushGesture.test.ts`
 Expected: PASS, 8 tests.
 
-- [ ] **Step 5: Wire brush mode into zoomPan**
+- [x] **Step 5: Wire brush mode into zoomPan**
 
 In `src/ui/screens/zoomPan.ts` (CRLF):
 
@@ -3364,12 +3364,12 @@ At the top of `move`: `const b = brushOf(); if (b) { brushMove(e, b); return; }`
 
 The registrations stay as step 4 left them. In brush mode neither `onTap` nor `spotTap` is ever called and no tap is recorded (the brush branch returns before step 4's `record` / `tapOutcome`), and one finger never pans (the single-pointer pan in `move` is not reached).
 
-- [ ] **Step 6: Typecheck and run the UI tests**
+- [x] **Step 6: Typecheck and run the UI tests**
 
 Run: `npm run typecheck && npx vitest run src/ui`
 Expected: no errors; PASS (`ui.test.ts` still covers `clampView` / `pinchView`; the brush branch is exercised end to end by Task 14).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/ui/brushGesture.ts src/ui/brushGesture.test.ts src/ui/screens/zoomPan.ts

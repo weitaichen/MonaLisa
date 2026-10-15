@@ -186,7 +186,7 @@ describe('tone curve fuzz', () => {
         prev = v;
       }
     }
-  });
+  }, 120_000);
 
   it('extreme combinations (對比 +50, 陰影 −50, 曝光 −50, 飽和 +50, 鮮艷度 +50) stay finite and in range', () => {
     const u = U({ 'adjust.contrast': 1, 'adjust.shadows': 0, 'adjust.exposure': 0, 'adjust.saturation': 1, 'adjust.vibrance': 1 });

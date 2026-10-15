@@ -6910,7 +6910,7 @@ S5 §8.3 items 5, 6 and 7 on the production build: 左右分開 on `sample_face.
 - Consumes: everything above through the UI; the e2e helpers in `tests/e2e/fixtures.ts`: `SAMPLE_FACE` (v0.3), step 1's `GROUP_FACES`, `importFixture(page, path)`, `selectPerson(page, n: number)` (`n = 0` is 全部; steps 3 and 4 use it too), `regionDiff(a, b, r: Rect /* fractions of the image */): { inside: number /* mean |a − b| inside */; outsideMax: number }`, `debugState` with `faces`, `boxes` (V-normalized `{ id, x, y, w, h }`, equal to the O boxes at identity geometry, in cache order, not screen order), `detectCalls`; step 3's `closeFallback(page)` and its `exportFile` flow (the `.topbar .pill` 儲存 pill, the 「分享」 second tap of a slow export, S3 §4.6), 裁切 tab with 翻轉, `Prefs.exportFormat` / `exportSize` (`'png'`, `'standard'`); `mad` (pixel `Rect`), `decodeDataUrl`, `dragSlider`, `grab` (`fixtures.ts`); `adapt` (`src/tracking/adapter111.ts`) for the fixture's contour points; step 1's `tests/fixtures/group_faces.png` (B mirrored at x 0.55, RM §8.3).
 - Produces: e2e coverage only.
 
-- [ ] **Step 1: Write the tests**
+- [x] **Step 1: Write the tests**
 
 Append to `tests/e2e/shape-makeup.spec.ts`, merging the imports into its existing lines (Task 12 already has `decodeDataUrl, expect, test, type Pixels` from `./fixtures`, `mkdirSync, writeFileSync` from `node:fs` and `resolve` from `node:path`): add `closeFallback, debugState, dragSlider, grab, GROUP_FACES, importFixture, mad, regionDiff, SAMPLE_FACE, selectPerson, type Rect` to the `./fixtures` import, `readFileSync` to the `node:fs` import, and the lines `import type { Page } from '@playwright/test';` and `import { adapt } from '../../src/tracking/adapter111';`. Step 3's `exportFile(page)` returns only the size and type of the export, so this file reads the pixels with its own `exportPng`, which follows the same flow and reads the image back through a canvas as step 2's `exportPixels` (`tests/e2e/adjust.spec.ts:92-107`) does (the CSP `connect-src 'self'` blocks a `fetch()` of the fallback's `blob:` URL, `fixtures.ts:341-342`):
 
@@ -7136,17 +7136,17 @@ test('美妝 and 左右分開 in the camera (S5 §2.5, §8.3 item 7)', async ({ 
 });
 ```
 
-- [ ] **Step 2: Run them against the build**
+- [x] **Step 2: Run them against the build**
 
 Run: `npm run build && npx playwright test tests/e2e/shape-makeup.spec.ts`
 Expected: PASS — the five app tests plus Tasks 7 and 12's engine tests (the `@sheet` case is skipped without `SHEET=1`). The helpers above are the landed `fixtures.ts` names (checked at the step base); the assertions stay.
 
-- [ ] **Step 3: Run the e2e suites the new UI touches**
+- [x] **Step 3: Run the e2e suites the new UI touches**
 
 Run: `npx playwright test tests/e2e/editor.spec.ts tests/e2e/camera.spec.ts tests/e2e/persons.spec.ts tests/e2e/crop.spec.ts`
 Expected: PASS with their assertions unchanged (原色 is still the first visible 美妝 option, the 美型 no-face note still dims every option).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests/e2e/shape-makeup.spec.ts
@@ -7160,6 +7160,8 @@ v0.4 step 5: e2e for 左右分開, per-person makeup and the 美妝 flows
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
+
+**Landed deviations** (test measurements only; no app code changed, and every UI assertion above stays): (1) Face B's 左右分開 case measured the two halves of B's debug box, and failed (screen-left 24.9, screen-right 11.1, under 3×). The halves also take in the nose, mouth and chin, and a one-sided 瘦臉 moves those too: the chin anchor is shared (`SLIM_SIDE` .5), and B's nose lies right of its box centre. The diff shows B's screen-right cheek unchanged. The case now measures the cheek contour patches, as on `sample_face.png`: pts111 3/7/10 against 29/25/22 of B, from `group_faces.landmarks.json` through `adapt` (B is the middle face by p46 x). The patches are 20 px, because B is about 200 px wide, and 左 is the side whose eye (p74 / p77) has the smaller x (S5 §2.2). Measured: 14.28 against 1.76. (2) 眼影 on person 2 averages 0.103 over B's padded box: a 200 px face at the pick default 0.45, all outside pixels exact (outside max 0). The `inside` bound is 0.05, not 0.2. (3) `mad(reopened, brows) < 0.05` cannot hold, because 最近編輯 keeps the original as a JPEG (q 0.9, as `adjust.spec.ts` notes): the round trip alone puts the reopened export mean 0.60 away (max 62) over the photo content. The reopen half now also checks 自然黑 under 全部 on 眉毛. It exports, applies 卸妝 under 全部, and exports again. Then, face by face over the padded boxes, it compares that change pixel by pixel with base → brows (`changeErr` = Σ|Δa − Δb| / Σ|Δa| < 0.2). Measured: 11.3 / 14.5 / 11.5 %. A lost 眼影 on face 2 would be 26 % off, and a lost 眉毛 75–100 %.
 
 ### Task 18: Step-5 bench rows
 

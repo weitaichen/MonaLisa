@@ -1,8 +1,26 @@
 // v0.4 step 5 (face-detail spec §8.3): the new warps and 左右分開 against the CPU port, the procedural makeup against its
 // CPU port and its regions, and the editor / camera flows.
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { decodeDataUrl, expect, test, type Pixels } from './fixtures';
+import type { Page } from '@playwright/test';
+import { adapt } from '../../src/tracking/adapter111';
+import {
+  closeFallback,
+  debugState,
+  decodeDataUrl,
+  dragSlider,
+  expect,
+  grab,
+  GROUP_FACES,
+  importFixture,
+  mad,
+  regionDiff,
+  SAMPLE_FACE,
+  selectPerson,
+  test,
+  type Pixels,
+  type Rect,
+} from './fixtures';
 
 const DEV_URL = 'http://127.0.0.1:5190';
 
@@ -171,4 +189,269 @@ test('contact sheet @sheet', async ({ page }) => {
   mkdirSync(dir, { recursive: true });
   for (const s of sheet) writeFileSync(resolve(dir, `${s.name}.png`), Buffer.from(s.png.slice(s.png.indexOf(',') + 1), 'base64'));
   console.log(`contact sheet: ${sheet.length} images in ${dir}`);
+});
+
+/** lossless exports, at the working size, so pixel regions compare exactly */
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('meiyan.prefs.v1', JSON.stringify({ exportFormat: 'png', exportSize: 'standard' })));
+});
+
+/** step 3's exportFile flow (the 儲存 pill; a slow export's second tap shares, S3 §4.6), returning the exported pixels */
+async function exportPng(page: Page): Promise<Pixels> {
+  await page.locator('.topbar .pill').click();
+  const fallback = page.getByRole('dialog', { name: '儲存照片' });
+  const shareAgain = page.locator('.topbar .pill', { hasText: '分享' });
+  await expect(fallback.or(shareAgain)).toBeVisible({ timeout: 300_000 });
+  if (!(await fallback.isVisible())) await shareAgain.click();
+  await expect(fallback).toBeVisible({ timeout: 30_000 });
+  const img = fallback.getByRole('img', { name: '編輯結果' });
+  await expect.poll(() => img.evaluate((i: HTMLImageElement) => i.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
+  const url = await img.evaluate((i: HTMLImageElement) => {
+    const c = document.createElement('canvas');
+    c.width = i.naturalWidth;
+    c.height = i.naturalHeight;
+    c.getContext('2d')!.drawImage(i, 0, 0);
+    return c.toDataURL('image/png');
+  });
+  await closeFallback(page);
+  return decodeDataUrl(url);
+}
+
+const lm = JSON.parse(readFileSync(resolve(import.meta.dirname, '../fixtures/landmarks_sample_face.json'), 'utf8')) as { width: number; height: number; points: number[] };
+const P = adapt({ points: new Float32Array(lm.points) }, lm.width, lm.height).pts111;
+const patch = (i: number): Rect => ({ x: Math.round(P[i * 2] * lm.width) - 15, y: Math.round(P[i * 2 + 1] * lm.height) - 15, w: 30, h: 30 });
+const meanPatch = (a: Pixels, b: Pixels, ids: number[]) => ids.reduce((s, i) => s + mad(a, b, patch(i)), 0) / ids.length;
+/** face B of group_faces.png from the fixture's landmarks: the middle face by nose tip (p46) x */
+const glm = JSON.parse(readFileSync(resolve(import.meta.dirname, '../fixtures/group_faces.landmarks.json'), 'utf8')) as { width: number; height: number; faces: number[][] };
+const PB = glm.faces.map((f) => adapt({ points: new Float32Array(f) }, glm.width, glm.height).pts111).sort((a, b) => a[46 * 2] - b[46 * 2])[1];
+const tab = (page: Page, name: string) => page.getByRole('tab', { name, exact: true }).click();
+/** a strip item by its label; a split item's accessible name may carry its 「左右」 badge while 左右分開 is on */
+const optionNamed = (page: Page, name: string) => page.getByRole('option', { name: new RegExp(`^${name}(\\s*左右)?$`) });
+const option = (page: Page, name: string) => optionNamed(page, name).click();
+/** the debug face boxes left to right (the cache order is MediaPipe's; persons are numbered left to right) */
+const boxesLtr = async (page: Page) => [...(await debugState(page)).boxes].sort((a, b) => a.x - b.x);
+/** how far the change b0 → b1 is from the change a0 → a1 inside r (fractions of the image): Σ|Δa − Δb| / Σ|Δa| */
+const changeErr = (a0: Pixels, a1: Pixels, b0: Pixels, b1: Pixels, r: Rect) => {
+  const x0 = Math.round(r.x * a0.width);
+  const y0 = Math.round(r.y * a0.height);
+  const x1 = x0 + Math.round(r.w * a0.width);
+  const y1 = y0 + Math.round(r.h * a0.height);
+  let off = 0;
+  let sum = 0;
+  for (let y = y0; y < y1; y++)
+    for (let x = x0; x < x1; x++)
+      for (let c = 0, i = (y * a0.width + x) * 4; c < 3; c++, i++) {
+        const da = a1.data[i] - a0.data[i];
+        off += Math.abs(da - (b1.data[i] - b0.data[i]));
+        sum += Math.abs(da);
+      }
+  return off / sum;
+};
+
+test('左右分開: 左 moves only the screen-left cheek; 翻轉 swaps the chips; ↶ of the toggle restores one value (S5 §8.3 item 5)', async ({ page }) => {
+  await importFixture(page, SAMPLE_FACE);
+  await tab(page, '美型');
+  await option(page, '瘦臉');
+  await dragSlider(page, -400);
+  const both0 = await exportPng(page);
+  await option(page, '左右分開');
+  await expect(page.getByText('已開啟左右分開：左、右以螢幕上看到的方向為準')).toBeVisible();
+  const chips = page.getByRole('radiogroup', { name: '瘦臉：左右' });
+  await expect(chips).toBeVisible();
+  await expect(chips.getByRole('radio', { name: '左' })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.locator('.item', { hasText: '瘦臉' }).getByText('左右')).toBeVisible();
+  await dragSlider(page, 400);
+  await expect(page.getByRole('slider', { name: '瘦臉（左）' })).toHaveAttribute('aria-valuenow', '100');
+  const left100 = await exportPng(page);
+  const left = meanPatch(both0, left100, [3, 7, 10]);
+  const right = meanPatch(both0, left100, [29, 25, 22]);
+  console.log(`左右分開: screen-left cheek ${left.toFixed(2)}, screen-right ${right.toFixed(2)}`);
+  expect(left).toBeGreaterThan(2);
+  expect(right).toBeLessThan(0.25 * left);
+
+  // 翻轉: stored values stay, labels follow the screen
+  await tab(page, '裁切');
+  await option(page, '翻轉');
+  await tab(page, '美型');
+  await option(page, '瘦臉');
+  await expect(page.getByRole('slider', { name: '瘦臉（左）' })).toHaveAttribute('aria-valuenow', '0');
+  await chips.getByRole('radio', { name: '右' }).click();
+  await expect(page.getByRole('slider', { name: '瘦臉（右）' })).toHaveAttribute('aria-valuenow', '100');
+
+  // ↶ flip, ↶ drag, ↶ toggle: one value again, no chips, no badges
+  for (let i = 0; i < 3; i++) await page.getByRole('button', { name: '復原' }).click();
+  await option(page, '瘦臉');
+  await expect(page.getByRole('radiogroup', { name: '瘦臉：左右' })).toHaveCount(0);
+  await expect(page.locator('.item', { hasText: '瘦臉' }).getByText('左右')).toHaveCount(0);
+});
+
+test('左右分開 on the mirrored face B of group_faces.png still moves its screen-left cheek', async ({ page }) => {
+  await importFixture(page, GROUP_FACES);
+  await expect.poll(async () => (await debugState(page)).faces).toBe(3);
+  await selectPerson(page, 2);
+  await tab(page, '美型');
+  await option(page, '瘦臉');
+  const before = await exportPng(page);
+  await option(page, '左右分開');
+  await dragSlider(page, 400);
+  const after = await exportPng(page);
+  // the cheek contour patches, as on sample_face.png (20 px: B is about 200 px wide); 左 is the side whose eye has the
+  // smaller screen x (S5 §2.2). Not the halves of B's box: they also take in the nose, mouth and chin, which a one-sided
+  // 瘦臉 moves too (the chin anchor is shared, SLIM_SIDE .5), and B's nose lies right of its box centre
+  const leftEye = PB[74 * 2] < PB[77 * 2];
+  const patchB = (i: number): Rect => ({ x: Math.round(PB[i * 2] * after.width) - 10, y: Math.round(PB[i * 2 + 1] * after.height) - 10, w: 20, h: 20 });
+  const meanB = (ids: number[]) => ids.reduce((s, i) => s + mad(before, after, patchB(i)), 0) / ids.length;
+  const l = meanB(leftEye ? [3, 7, 10] : [29, 25, 22]);
+  const r = meanB(leftEye ? [29, 25, 22] : [3, 7, 10]);
+  console.log(`face B: screen-left cheek ${l.toFixed(2)}, screen-right ${r.toFixed(2)}`);
+  expect(l).toBeGreaterThan(2);
+  expect(l).toBeGreaterThan(3 * r);
+});
+
+test('per person: 眼影 on person 2 only, 眉毛 under 全部 on everyone; reopen restores them with no detection (S5 §8.3 item 6)', async ({ page }) => {
+  await importFixture(page, GROUP_FACES);
+  await expect.poll(async () => (await debugState(page)).faces).toBe(3);
+  const base = await exportPng(page);
+  const boxes = await boxesLtr(page); // [A, B, C] = persons 1, 2, 3
+  await selectPerson(page, 2);
+  await tab(page, '美妝');
+  await page.getByRole('button', { name: /^切換部位（目前：/ }).click();
+  await option(page, '眼影');
+  await option(page, '大地');
+  await tab(page, '美型');
+  await option(page, '左右分開');
+  const shadow = await exportPng(page);
+  /** a face box padded by 15 % on each side, in fractions of the image (regionDiff's unit) */
+  const padded = (k: number): Rect => {
+    const b = boxes[k];
+    return { x: b.x - 0.15 * b.w, y: b.y - 0.15 * b.h, w: 1.3 * b.w, h: 1.3 * b.h };
+  };
+  const onB = regionDiff(base, shadow, padded(1));
+  console.log(`眼影 on person 2: inside ${onB.inside.toFixed(3)}, outside max ${onB.outsideMax}`);
+  expect(onB.outsideMax, '眼影 on person 2 changes nothing outside face B').toBeLessThanOrEqual(2);
+  // the lids of a 200 px face at the pick default 0.45, averaged over the padded box: measured 0.10
+  expect(onB.inside).toBeGreaterThan(0.05);
+
+  await selectPerson(page, 0); // 全部
+  await tab(page, '美妝');
+  await page.getByRole('button', { name: /^切換部位（目前：/ }).click();
+  await option(page, '眉毛');
+  await option(page, '自然黑');
+  const brows = await exportPng(page);
+  for (const k of [0, 1, 2]) {
+    const d = regionDiff(shadow, brows, padded(k)).inside;
+    console.log(`眉毛 under 全部: face ${k + 1} inside ${d.toFixed(3)}`);
+    expect(d, `face ${k + 1}`).toBeGreaterThan(0.1);
+  }
+
+  const calls = (await debugState(page)).detectCalls;
+  await page.getByRole('button', { name: '關閉' }).click();
+  await expect.poll(async () => (await debugState(page)).screen).toBe('home');
+  await page.getByRole('button', { name: '開啟編輯' }).first().click();
+  await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 60_000 });
+  expect((await debugState(page)).detectCalls).toBe(calls);
+  await selectPerson(page, 2);
+  await tab(page, '美妝');
+  await page.getByRole('button', { name: /^切換部位（目前：/ }).click();
+  await option(page, '眼影');
+  await expect(optionNamed(page, '大地')).toHaveAttribute('aria-selected', 'true');
+  await tab(page, '美型');
+  await option(page, '瘦臉');
+  await expect(page.getByRole('radiogroup', { name: '瘦臉：左右' })).toBeVisible();
+  await selectPerson(page, 0);
+  await tab(page, '美妝');
+  await page.getByRole('button', { name: /^切換部位（目前：/ }).click();
+  await option(page, '眉毛');
+  await expect(optionNamed(page, '自然黑')).toHaveAttribute('aria-selected', 'true');
+  const reopened = await exportPng(page);
+  // 最近編輯 keeps the original as a JPEG (q 0.9, adjust.spec.ts), so the reopened photo is not the imported PNG and
+  // `reopened` is not `brows` (mean ≈ 0.6 apart): compare the makeup itself, i.e. what 卸妝 under 全部 takes off the
+  // reopened edit against what 眼影 and 眉毛 put on before closing, pixel by pixel, face by face. Measured: 11–15 % off
+  // (the JPEG under the multiply); a lost 眼影 on face 2 would be 26 % off, a lost 眉毛 75–100 %
+  await page.getByRole('button', { name: /^切換部位（目前：/ }).click();
+  await option(page, '卸妝');
+  const bare = await exportPng(page);
+  for (const k of [0, 1, 2]) {
+    const err = changeErr(base, brows, bare, reopened, padded(k));
+    console.log(`reopen: face ${k + 1} makeup change off by ${(100 * err).toFixed(1)} %`);
+    expect(err, `face ${k + 1}`).toBeLessThan(0.2);
+  }
+});
+
+test('美妝 flow in the editor: part list, 眼影 大地, ↶, 卸妝 (S5 §8.3 item 7)', async ({ page }) => {
+  await importFixture(page, SAMPLE_FACE);
+  await tab(page, '美妝');
+  const lead = page.getByRole('button', { name: '切換部位（目前：口紅）' });
+  await expect(lead).toBeVisible();
+  await expect(page.getByRole('option', { name: '原色', exact: true })).toBeVisible();
+  await lead.click();
+  for (const p of ['口紅', '腮紅', '眉毛', '眼影', '眼線', '睫毛', '臥蠶', '修容', '高光', '美瞳']) await expect(page.getByRole('option', { name: p, exact: true })).toBeVisible();
+  await expect(page.getByRole('option', { name: '卸妝', exact: true })).toBeVisible();
+  await option(page, '眼影');
+  await option(page, '大地');
+  await expect(page.getByRole('slider')).toHaveAttribute('aria-label', '眼影');
+  await expect(page.getByRole('option', { name: '大地', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('button', { name: '復原' }).click();
+  await expect(page.getByRole('option', { name: '無', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await option(page, '大地');
+  await page.getByRole('button', { name: '切換部位（目前：眼影）' }).click();
+  await option(page, '睫毛');
+  await option(page, '自然');
+  await page.getByRole('button', { name: '切換部位（目前：睫毛）' }).click();
+  await expect(page.locator('.item.has-value', { hasText: '眼影' })).toHaveCount(1);
+  await option(page, '卸妝');
+  await expect(page.locator('.item.has-value')).toHaveCount(0);
+});
+
+test('美妝 and 左右分開 in the camera (S5 §2.5, §8.3 item 7)', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: /拍攝/ }).click();
+  await page.getByRole('button', { name: '點擊開啟相機' }).click();
+  await expect
+    .poll(async () => {
+      const d = await debugState(page);
+      return d.cameraState === 'live' && d.face === true && d.fps > 0;
+    }, { timeout: 90_000, intervals: [500] })
+    .toBe(true);
+  const frame = page.locator('.cam-stage .frame');
+  await tab(page, '美妝');
+  const a1 = await grab(frame);
+  await page.waitForTimeout(700);
+  const a2 = await grab(frame);
+  const jitter = mad(a1, a2);
+  // the face's eye band in the screenshot: the unmirrored video box, mirrored for the front camera, through `cover`
+  const box = (await debugState(page)).boxes[0];
+  const v = await page.evaluate(() => {
+    const el = document.querySelector('video')!;
+    return { w: el.videoWidth, h: el.videoHeight };
+  });
+  const fb = (await frame.boundingBox())!;
+  const s = Math.max(fb.width / v.w, fb.height / v.h);
+  const ox = (fb.width - v.w * s) / 2;
+  const oy = (fb.height - v.h * s) / 2;
+  const dpr = a1.width / fb.width;
+  const u0 = 1 - (box.x + box.w);
+  const band: Rect = {
+    x: Math.round((ox + u0 * v.w * s) * dpr),
+    y: Math.round((oy + (box.y + 0.25 * box.h) * v.h * s) * dpr),
+    w: Math.round(box.w * v.w * s * dpr),
+    h: Math.round(0.25 * box.h * v.h * s * dpr),
+  };
+  await page.getByRole('button', { name: /^切換部位（目前：/ }).click();
+  await option(page, '美瞳');
+  await option(page, '冰藍');
+  await page.waitForTimeout(800);
+  const b = await grab(frame);
+  const change = mad(a1, b, band);
+  console.log(`camera 美瞳: eye band change ${change.toFixed(2)}, jitter ${jitter.toFixed(2)}`);
+  expect(change).toBeGreaterThan(Math.max(0.5, 4 * jitter));
+
+  await tab(page, '美型');
+  await option(page, '左右分開');
+  await option(page, '大眼');
+  const chips = page.getByRole('radiogroup', { name: '大眼：左右' });
+  await expect(chips).toBeVisible();
+  await chips.getByRole('radio', { name: '右' }).click();
+  await expect(chips.getByRole('radio', { name: '右' })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.locator('.panel.collapsed')).toHaveCount(0);
 });

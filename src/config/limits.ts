@@ -63,3 +63,41 @@ export const MIN_CROP_PX = 64;
 export const SPOT_CAP = 100;
 /** 祛痘: ring samples per spot (skin-cleanup spec §4.5); measured fallback 24 (spacing 0.34 r) */
 export const HEAL_RING_SAMPLES = 32;
+
+// ── 推臉筆 (push-brush spec §3.3) ──
+/** liquify field long edge in texels (RM §4.4, §4.7) */
+export const LIQUIFY_LONG_EDGE = 512;
+/** brush radius on screen, CSS px, per size */
+export const BRUSH_PX = { s: 16, m: 28, l: 44 } as const;
+/** largest brush radius in S units (fractions of the frame's short edge) */
+export const R_MAX = 0.25;
+/** stamp spacing, × radius */
+export const STAMP_SPACING = 0.25;
+/** content at the brush centre moves ¾ of a short drag */
+export const PUSH_GAIN = 0.75;
+/** per-stamp restore factor at the centre */
+export const RESTORE_GAIN = 0.5;
+/** a restored texel below this |L| (O UV) becomes exactly 0 */
+export const SNAP = 2e-5;
+/** fold-guard floor for strokes (the body field's MIN_DET in src/body/field.ts is 0.35) */
+export const LIQUIFY_MIN_DET = 0.2;
+/** per-stamp bisection steps */
+export const GUARD_STEPS = 6;
+/** points per stroke record */
+export const MAX_STROKE_POINTS = 256;
+/** records per photo (RM §5.3) */
+export const MAX_STROKES = 120;
+/** replay work cap, texel-stamps (≈ 1 s of replay on the test iPhone; Phase 0 rescales it) */
+export const LIQUIFY_WORK_CAP = 12_000_000;
+/** a rebuild above this many texel-stamps runs in slices */
+export const LIQUIFY_SYNC_WORK = 1_500_000;
+/** one slice of a chunked rebuild, ms */
+export const LIQUIFY_SLICE_MS = 24;
+/** undo patch ring, bytes */
+export const PATCH_BUDGET = 1 << 20;
+/** copy-on-write tile edge, texels */
+export const PATCH_TILE = 32;
+/** a second finger within this many ms cancels the stroke */
+export const PINCH_GRACE_MS = 200;
+/** stamps applied per animation frame while drawing, ms */
+export const STAMP_FRAME_MS = 6;

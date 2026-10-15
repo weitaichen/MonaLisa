@@ -228,6 +228,24 @@ export interface Geometry {
 
 /** integer pixel rectangle (tile planner, readback) */
 export type PxRect = Rect;
+/** C §3.2 / push-brush spec §3.2. Immutable once committed. */
+export interface Stroke {
+  /** unique within the photo; also the stroke's equality key in editKey (C §3.4) */
+  id: string;
+  kind: 'push' | 'restore';
+  /** brush radius, fraction of the frame's short edge (S units), clamped to [rMin(frame), R_MAX] */
+  radius: number;
+  /** per-stamp gain: PUSH_GAIN or RESTORE_GAIN when it was drawn, stored so retuning the constants never changes old photos */
+  strength: number;
+  /**
+   * O-frame (x, y) pairs, 2…MAX_STROKE_POINTS pairs. Consecutive points are radius/4 apart in S units (to Float32
+   * rounding), except the last gap, which is in [radius/8, radius/4). A continuation record starts with its
+   * predecessor's last point.
+   */
+  points: Float32Array;
+}
+export type BrushKind = Stroke['kind'];
+export type BrushSize = 's' | 'm' | 'l';
 export interface PhotoParams {
   values: Record<PhotoParamId, number>;
   filterId: string;
@@ -404,6 +422,13 @@ export interface BodyField {
   /** increment whenever data changes (engine re-uploads on change) */
   version: number;
 }
+/** 推臉筆 field (push-brush spec §3.1): the BodyField layout, backward displacement in O UV units, row 0 = image top */
+export type LiquifyField = BodyField;
+/** the pixel size whose aspect and short edge the liquify grid is built on (push-brush spec §3.3) */
+export interface LiquifyFrame {
+  width: number;
+  height: number;
+}
 
 /**
  * 瘦臉 background limit (src/tracking/faceProtect.ts): signed distance from each texel centre to the person (mask ∪ face
@@ -542,6 +567,8 @@ export interface RenderInput {
   photo: PhotoParams;
   /** body displacement field (美體); null/undefined = none */
   body?: BodyField | null;
+  /** O-space backward map of the 推臉筆 strokes, the outermost map of P2 (push-brush spec §4.1); null / absent = none */
+  liquify?: LiquifyField | null;
   /** step 2: the picture rectangle (source UV) that vignette and grain treat as V — the camera's ratio crop; default the whole source */
   pictureFrame?: Rect;
   /** step 2: grain seed; 0 in the editor and exports, a frame counter in the camera */
@@ -763,6 +790,8 @@ export interface DebugState {
   lastError: string | null;
   /** 有新版本 state (ui/updateModel.ts); absent until a service worker reports one */
   update?: 'idle' | 'available' | 'applying';
+  /** 推臉筆 (push-brush spec §3.2): written by the editor on commit, sync and rebuild end, not per stamp */
+  liquify?: { strokes: number; version: number; work: number; maxDisp: number; pending: boolean };
   /** display frames the still session drew (engine FBO exports do not count): e2e checks 裁切 gestures draw none */
   renderCount?: number;
   /** the last export of the editor, or null while one runs / after an abort */

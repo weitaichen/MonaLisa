@@ -122,7 +122,7 @@ The shared names every later task uses, plus the one change to the body field mo
   - `src/config/limits.ts`: `LIQUIFY_LONG_EDGE`, `BRUSH_PX`, `R_MAX`, `STAMP_SPACING`, `PUSH_GAIN`, `RESTORE_GAIN`, `SNAP`, `LIQUIFY_MIN_DET`, `GUARD_STEPS`, `MAX_STROKE_POINTS`, `MAX_STROKES`, `LIQUIFY_WORK_CAP`, `LIQUIFY_SYNC_WORK`, `LIQUIFY_SLICE_MS`, `PATCH_BUDGET`, `PATCH_TILE`, `PINCH_GRACE_MS`, `STAMP_FRAME_MS`.
   - `src/body/field.ts`: `fieldMinJacobianRect(f: BodyField, x0: number, y0: number, x1: number, y1: number): number` over cells `x0 ≤ x < x1`, `y0 ≤ y < y1`, clipped to the grid, `Infinity` when no cell is left; `fieldMinJacobian(f)` = `fieldMinJacobianRect(f, 0, 0, w − 1, h − 1)` (1 when `w ≤ 1` or `h ≤ 1`, as today).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/body/fieldRect.test.ts`:
 
@@ -185,12 +185,12 @@ describe('fieldMinJacobianRect (push-brush spec §4.3)', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run src/body/fieldRect.test.ts`
 Expected: FAIL — `SyntaxError: The requested module './field' does not provide an export named 'fieldMinJacobianRect'` (or the TS equivalent "has no exported member").
 
-- [ ] **Step 3: Split `fieldMinJacobian` into the windowed function**
+- [x] **Step 3: Split `fieldMinJacobian` into the windowed function**
 
 In `src/body/field.ts`, replace the whole `fieldMinJacobian` function (`field.ts:342-368` at `d09e608`, starting at the comment `/** Smallest Jacobian determinant of the backward map …`) with:
 
@@ -236,7 +236,7 @@ export function fieldMinJacobianRect(f: BodyField, x0: number, y0: number, x1: n
 
 (Keep the file's existing line endings. Step 1's multi-person builder keeps calling `fieldMinJacobian(field)`; nothing else changes.)
 
-- [ ] **Step 4: Add the shared types**
+- [x] **Step 4: Add the shared types**
 
 In `src/types.ts` (CRLF), first check what steps 1–5 already added:
 
@@ -293,7 +293,7 @@ In `interface DebugState`, after `update?: …` (`types.ts:765` at `d09e608`):
 
 (`PhotoParams.strokes` is added in Task 3 together with the code that fills it.)
 
-- [ ] **Step 5: Add the constants**
+- [x] **Step 5: Add the constants**
 
 Append to `src/config/limits.ts` (keep its line endings):
 
@@ -337,7 +337,7 @@ export const PINCH_GRACE_MS = 200;
 export const STAMP_FRAME_MS = 6;
 ```
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 Run: `npx vitest run src/body/fieldRect.test.ts src/body/field.test.ts src/body/straightness.test.ts`
 Expected: PASS (every existing `fieldMinJacobian` assertion is unchanged).
@@ -345,7 +345,7 @@ Expected: PASS (every existing `fieldMinJacobian` assertion is unchanged).
 Run: `npm run typecheck`
 Expected: no errors.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/types.ts src/config/limits.ts src/body/field.ts src/body/fieldRect.test.ts

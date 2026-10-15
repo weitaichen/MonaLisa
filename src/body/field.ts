@@ -341,14 +341,24 @@ export function buildBodyFieldV1(measure: BodyMeasure | null, params: BeautyPara
 
 /** Smallest Jacobian determinant of the backward map (debug / tests: must stay > 0.3, i.e. no fold-over). */
 export function fieldMinJacobian(f: BodyField): number {
+  return f.width > 1 && f.height > 1 ? fieldMinJacobianRect(f, 0, 0, f.width - 1, f.height - 1) : 1;
+}
+
+/**
+ * fieldMinJacobian over the cells x0 ≤ x < x1, y0 ≤ y < y1 (cell (x, y) spans texels x…x+1, y…y+1), clipped to the
+ * grid; Infinity when no cell is left. The 推臉筆 fold guard checks only the cells a stamp can have changed.
+ */
+export function fieldMinJacobianRect(f: BodyField, x0: number, y0: number, x1: number, y1: number): number {
   const { width: w, height: h, data } = f;
   // the engine samples the field bilinearly, so per cell det J is bilinear in the cell and its extremes are at the
   // corners: evaluating the four corner combinations of the cell's edge vectors is exact for that map
   let min = Infinity;
   const mx = (x: number, y: number) => x + data[(y * w + x) * 2] * w;
   const my = (x: number, y: number) => y + data[(y * w + x) * 2 + 1] * h;
-  for (let y = 0; y + 1 < h; y++) {
-    for (let x = 0; x + 1 < w; x++) {
+  const xb = Math.min(w - 1, x1);
+  const yb = Math.min(h - 1, y1);
+  for (let y = Math.max(0, y0); y < yb; y++) {
+    for (let x = Math.max(0, x0); x < xb; x++) {
       const ax0 = mx(x + 1, y) - mx(x, y);
       const ay0 = my(x + 1, y) - my(x, y);
       const ax1 = mx(x + 1, y + 1) - mx(x, y + 1);
@@ -364,7 +374,7 @@ export function fieldMinJacobian(f: BodyField): number {
       min = Math.min(min, d00, d01, d10, d11);
     }
   }
-  return w > 1 && h > 1 ? min : 1;
+  return min;
 }
 
 // ───────────────────────── local fields ─────────────────────────

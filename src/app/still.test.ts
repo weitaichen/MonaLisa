@@ -467,6 +467,54 @@ describe('createStillSession', () => {
     s.exportImageData(frame);
     expect(engine.renderToImageData.mock.calls[0][0].faces[0].protect).toBe(prot);
   });
+
+  /** a frame without faces: the strokes are photo-level and need none */
+  const naturalFrame: StillFrame = { faces: [], obstacles: [], globalSkin: null, photo: defaultPhoto() };
+  const liq = (v = 1) => ({ width: 384, height: 512, data: new Float32Array(384 * 512 * 2), version: v });
+
+  it('setLiquify: the 推臉筆 field reaches every render and export (preview = export); null removes it', () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, fakeTracker(), bitmap());
+    expect(s.liquify).toBeNull();
+    s.render(naturalFrame);
+    vi.advanceTimersByTime(16);
+    expect(engine.lastInput()!.liquify ?? null).toBeNull();
+    const f = liq();
+    s.setLiquify(f);
+    expect(s.liquify).toBe(f);
+    vi.advanceTimersByTime(16); // setLiquify alone redraws
+    expect(engine.lastInput()!.liquify).toBe(f);
+    s.exportImageData(naturalFrame);
+    expect(engine.renderToImageData.mock.calls.at(-1)![0].liquify).toBe(f);
+    s.setLiquify(null);
+    vi.advanceTimersByTime(16);
+    expect(engine.lastInput()!.liquify).toBeNull();
+  });
+
+  it('tile inputs carry the snapshot; bounds carry the liquify term only when given', () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, fakeTracker(), bitmap(), { liquify: liq(1) });
+    const snap = liq(2);
+    expect(s.tileInput(naturalFrame, undefined, snap).liquify).toBe(snap);
+    expect(s.tileInput(naturalFrame).liquify).toBe(s.liquify);
+    const m = (_r: { x: number; y: number; w: number; h: number }) => 0.01;
+    expect(s.bounds(naturalFrame, undefined, m).liquifyMaxDisp).toBe(m);
+    expect(s.bounds(naturalFrame).liquifyMaxDisp).toBeUndefined();
+  });
+
+  it('an export takes the snapshot it is given, while the preview keeps the live field', () => {
+    const engine = fakeEngine();
+    const live = liq(1);
+    const s = createStillSession(engine, fakeTracker(), bitmap(), { liquify: live });
+    s.render(naturalFrame);
+    const snap = liq(1);
+    s.exportImageData(naturalFrame, undefined, snap);
+    expect(engine.renderToImageData.mock.calls.at(-1)![0].liquify).toBe(snap);
+    s.exportImageData(naturalFrame, undefined, null);
+    expect(engine.renderToImageData.mock.calls.at(-1)![0].liquify).toBeNull();
+    vi.advanceTimersByTime(16);
+    expect(engine.lastInput()!.liquify).toBe(live); // a replacement session draws the strokes on its first frame
+  });
 });
 
 describe('濾鏡 and 質感 LUTs in the still session (step-2 spec §3.5)', () => {

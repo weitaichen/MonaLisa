@@ -596,7 +596,7 @@ export interface RenderOutput {
 }
 
 /** What a still session renders: the frame without its source, size and body field (the session adds those, S1). */
-export type StillFrame = Omit<RenderInput, 'source' | 'width' | 'height' | 'body'>;
+export type StillFrame = Omit<RenderInput, 'source' | 'width' | 'height' | 'body' | 'liquify'>;
 
 export interface RenderStats {
   /** CPU-side time spent issuing the frame, ms */

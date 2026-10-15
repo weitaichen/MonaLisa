@@ -22,6 +22,7 @@ import type {
   Engine,
   EngineAssetsProgress,
   HistoryEntry,
+  LiquifyField,
   LutKind,
   LutState,
   Prefs,
@@ -278,6 +279,7 @@ function fakeStill(
   let last: StillFrame | null = null;
   let compare = false;
   let body = opts.body ?? null;
+  let liquify: LiquifyField | null = null;
   const input = (f: StillFrame): RenderInput => ({ source: bitmap, width: bitmap.width, height: bitmap.height, ...f });
   const paint = () => {
     raf = 0;
@@ -316,6 +318,13 @@ function fakeStill(
     },
     setBody(f) {
       body = f; // the 2D fake engine cannot warp: the field is only recorded
+      if (!raf) raf = requestAnimationFrame(paint);
+    },
+    get liquify() {
+      return liquify;
+    },
+    setLiquify(f) {
+      liquify = f;
       if (!raf) raf = requestAnimationFrame(paint);
     },
     prepareExport: (f) => (f.photo.filterId === 'none' ? Promise.resolve() : engine.loadFilter(f.photo.filterId).catch(() => undefined)),

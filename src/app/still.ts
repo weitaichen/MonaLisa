@@ -7,7 +7,7 @@ import { photoLuts } from '../engine/looks';
 import { IDENTITY_GEOMETRY, snapCrop, viewSize } from '../geometry/view';
 import type { TileInputBase } from '../media/exportFull';
 import { faceBoundsFor, spotBounds, type TileBounds } from '../media/exportPlan';
-import type { BodyField, CachedFace, CachedObstacle, Engine, Face, Geometry, Rect, RenderInput, RenderStats, Size, StillFrame, Tracker } from '../types';
+import type { BodyField, CachedFace, CachedObstacle, Engine, Face, Geometry, LiquifyField, Rect, RenderInput, RenderStats, Size, StillFrame, Tracker } from '../types';
 import { debugState, reportError } from './debug';
 
 export interface SessionFace {
@@ -45,6 +45,13 @@ export interface StillSession {
   /** the field set last (a replacement session is seeded with it) */
   readonly body: BodyField | null;
   /**
+   * 推臉筆 field (null = no strokes), applied to every later render and export like the body field. The editor's
+   * LiquifyModel refills it in place (new `version`): pass the same object again and it redraws.
+   */
+  setLiquify(field: LiquifyField | null): void;
+  /** the field set last (a replacement session is seeded with it) */
+  readonly liquify: LiquifyField | null;
+  /**
    * Resolves once what an export of `frame` needs is resident (the 濾鏡 and 質感 LUTs may still be downloading:
    * no SW, Lockdown Mode, slow network). Never rejects: a LUT that fails to load is skipped by the preview
    * too, so the export then matches it without that LUT.
@@ -59,9 +66,10 @@ export interface StillSession {
    * full-resolution export of `frame`, never mirrored (synchronous; call prepareExport first so it matches the
    * preview). `frame` (with each face's 瘦臉 limit) and `body` are what the caller captured when the export was asked
    * for (a 美體 edit while it waits for a filter LUT must not leak into it); `body` omitted → the field set last. The
-   * filter LUT is the session's at export time, as the settled preview draws it.
+   * filter LUT is the session's at export time, as the settled preview draws it. `liquify` as `body`: the snapshot
+   * taken when the export was asked for; omitted → the field set last.
    */
-  exportImageData(frame: StillFrame, body?: BodyField | null): ImageData;
+  exportImageData(frame: StillFrame, body?: BodyField | null, liquify?: LiquifyField | null): ImageData;
   /** V pixel size of `g` at the working density (the editor frame's aspect) */
   viewSizeFor(g: Geometry): Size;
   /**
@@ -71,10 +79,13 @@ export interface StillSession {
   setViewMode(mode: ViewMode): void;
   /** held during a tiled export: no display frame at all (the last one stays on screen); lifting it draws once */
   pauseDisplay(on: boolean): void;
-  /** the tile runner's input: the frame plus the session's body field, the working aspect and (step 4) the working bitmap as toneSource, geometry unsnapped */
-  tileInput(frame: StillFrame, body?: BodyField | null): TileInputBase;
-  /** the planner's displacement bounds for this frame, with step 4's spot windows and GL budget hooks */
-  bounds(frame: StillFrame, body?: BodyField | null): TileBounds;
+  /**
+   * the tile runner's input: the frame plus the session's body and 推臉筆 fields (`liquify` as `body`: undefined → the
+   * field set last, null → none), the working aspect and (step 4) the working bitmap as toneSource, geometry unsnapped
+   */
+  tileInput(frame: StillFrame, body?: BodyField | null, liquify?: LiquifyField | null): TileInputBase;
+  /** the planner's displacement bounds for this frame, with step 4's spot windows and GL budget hooks, and the 推臉筆 term when given */
+  bounds(frame: StillFrame, body?: BodyField | null, liquifyMaxDisp?: (rectO: Rect) => number): TileBounds;
   /**
    * The screen is closing but an export is still pending: stop drawing to the shared display canvas (another
    * screen owns it now). prepareExport / exportImageData keep working until dispose.
@@ -126,6 +137,8 @@ export interface StillSessionOptions {
   obstacles?: readonly CachedObstacle[];
   /** 美體 field to start with (a replacement session keeps the edit on its first frame) */
   body?: BodyField | null;
+  /** 推臉筆 field to start with (a replacement session draws the strokes on its first frame) */
+  liquify?: LiquifyField | null;
 }
 
 /** prepareExport re-waits after a loss + restore during its wait at most this often (repeated cycles cannot loop) */
@@ -160,6 +173,7 @@ export function createStillSession(
 
   let frame: StillFrame | null = null;
   let body: BodyField | null = opts.body ?? null;
+  let liquify: LiquifyField | null = opts.liquify ?? null;
   let compare = false;
   let raf = 0;
   let disposed = false;
@@ -171,13 +185,14 @@ export function createStillSession(
   const viewGeometry = (f: StillFrame) => (mode === 'crop' ? IDENTITY_GEOMETRY : snapCrop(f.geometry ?? IDENTITY_GEOMETRY, oSize));
 
   // exports and thumbnails: V, the crop snapped to whole working pixels
-  const input = (f: StillFrame, b: BodyField | null = body): RenderInput => ({
+  const input = (f: StillFrame, b: BodyField | null = body, l: LiquifyField | null = liquify): RenderInput => ({
     source: bitmap,
     width,
     height,
     ...f,
     geometry: snapCrop(f.geometry ?? IDENTITY_GEOMETRY, oSize),
     body: b,
+    liquify: l,
   });
 
   function schedule(): void {
@@ -328,6 +343,14 @@ export function createStillSession(
       body = field;
       schedule();
     },
+    get liquify() {
+      return liquify;
+    },
+    setLiquify(field) {
+      if (disposed) return;
+      liquify = field;
+      schedule();
+    },
     prepareExport(f) {
       return prepare(f, PREPARE_RETRIES);
     },
@@ -339,10 +362,10 @@ export function createStillSession(
         return s === 'ready' || s === 'failed';
       });
     },
-    exportImageData(f, b) {
+    exportImageData(f, b, l) {
       if (disposed) throw new Error('StillSession: disposed');
       ensureLuts(f.photo);
-      const img = engine.renderToImageData(input(f, b === undefined ? body : b), { mirror: false });
+      const img = engine.renderToImageData(input(f, b === undefined ? body : b, l === undefined ? liquify : l), { mirror: false });
       // the display keeps showing the last frame; redraw in case the offscreen render disturbed it. Not in 裁切 mode: the
       // debounced autosave after a gesture must draw no engine frame (S §6.3)
       if (mode !== 'crop') schedule();
@@ -364,18 +387,23 @@ export function createStillSession(
         raf = 0;
       } else schedule();
     },
-    tileInput(f, b) {
-      // the runner sets source, size, window and output per tile
-      const all: Partial<RenderInput> = { ...input(f, b === undefined ? body : b) };
+    tileInput(f, b, l) {
+      // the runner sets source, size, window and output per tile; the 推臉筆 field is the export's snapshot
+      const all: Partial<RenderInput> = { ...input(f, b === undefined ? body : b, l === undefined ? liquify : l) };
       delete all.source;
       delete all.width;
       delete all.height;
       // skin-cleanup spec §4.6: every tile carries the working image, so a tile engine without the preview's tone field rebuilds it
       return { ...(all as TileInputBase), geometry: f.geometry ?? IDENTITY_GEOMETRY, oAspect: width / height, toneSource: { source: bitmap, width, height } };
     },
-    bounds(f, b) {
-      // step 4 (skin-cleanup spec §4.6): B at window size while a 膚質 pass runs, and the spot windows
-      return { body: b === undefined ? body : b, faces: faceBoundsFor(f.faces, width / height), ...spotBounds(f, { width, height }) };
+    bounds(f, b, liquifyMaxDisp) {
+      // step 4 (skin-cleanup spec §4.6): B at window size while a 膚質 pass runs, and the spot windows; step 6: the strokes' reach
+      return {
+        body: b === undefined ? body : b,
+        faces: faceBoundsFor(f.faces, width / height),
+        ...spotBounds(f, { width, height }),
+        ...(liquifyMaxDisp ? { liquifyMaxDisp } : {}),
+      };
     },
     stopDisplay() {
       displayOff = true;

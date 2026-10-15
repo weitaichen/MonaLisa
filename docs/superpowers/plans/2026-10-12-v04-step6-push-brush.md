@@ -2793,7 +2793,7 @@ PB §3.7 row `src/app/still.ts`: `setLiquify`, `liquify`, the seed option for a 
 - Consumes: Task 1 `LiquifyField`; step 1's `StillFrame = Omit<RenderInput, 'source' | 'width' | 'height' | 'body'>` (`src/types.ts`), `render(frame)`, `exportImageData(frame, body?)` and the builder `input(f, b)` (PS §3.4 S1); step 3's `tileInput(frame: StillFrame, body?: BodyField | null): TileInputBase` and `bounds(frame: StillFrame, body?: BodyField | null): TileBounds` (step-3 plan Task 11), and `TileBounds.liquifyMaxDisp?: (rectO: Rect) => number` (step-3 plan Task 9).
 - Produces: `StillSession.setLiquify(field: LiquifyField | null): void`, `readonly liquify: LiquifyField | null`, `StillSessionOptions.liquify?: LiquifyField | null`, `exportImageData(frame, body?, liquify?)` (`undefined` = the field set last, `null` = none), `tileInput(frame, body?, liquify?)` (same rule), `bounds(frame, body?, liquifyMaxDisp?: (rectO: Rect) => number)`; `StillFrame` also omits `'liquify'`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append inside `describe('createStillSession', …)` in `src/app/still.test.ts` (it already imports `defaultPhoto` from `'../edit/state'` and `StillFrame` from `'../types'`, `still.test.ts:5`, `:10`):
 
@@ -2847,12 +2847,12 @@ Append inside `describe('createStillSession', …)` in `src/app/still.test.ts` (
   });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run src/app/still.test.ts`
 Expected: FAIL — `s.liquify` is `undefined` / `s.setLiquify is not a function`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/app/still.ts`:
 
@@ -2906,12 +2906,12 @@ and change `exportImageData` to `exportImageData(frame: StillFrame, body?: BodyF
     },
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/app/still.test.ts && npm run typecheck`
 Expected: PASS; no errors (callers that ignore the new optional arguments compile unchanged; fix any other fake of `StillSession` that `typecheck` reports the same way as item 9).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/types.ts src/app/still.ts src/app/still.test.ts tests/harness/t7/fakes.ts

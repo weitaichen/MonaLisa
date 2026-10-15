@@ -261,6 +261,8 @@ export interface PhotoParams {
   geometry: Geometry;
   /** 祛痘 spots, at most SPOT_CAP (skin-cleanup spec §3.2, C §5.3) */
   spots: readonly Spot[];
+  /** 推臉筆 records in replay order (push-brush spec §3.2); photo-level, one may cross several persons */
+  strokes: readonly Stroke[];
 }
 export interface PersonParams {
   values: Record<PersonParamId, number>;

@@ -2162,7 +2162,7 @@ Strokes become part of the undoable, persisted edit (C §3.2, §3.4, §5; PB §3
   - `EditorSource.frame: LiquifyFrame` (a reopen: `openState(...).frame`; a new import or camera shot: the decoded bitmap's size, set by `freshSource`, which the first `addEntry` stores as `width × height`, `writeHistory`, `Editor.tsx:739-770` at `d09e608`).
   - `normalizeEntry` sanitizes a stored v2 edit with the record's own `{ width, height }` as `oSize`, so `getEntry` / `listEntries` keep the strokes (and step 3's geometry) instead of dropping them for want of a frame.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/edit/state.test.ts` (merge the imports into the file's existing import lines):
 
@@ -2309,12 +2309,12 @@ describe('v2 entries with strokes (push-brush spec §5.1, §5.2)', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run src/edit/state.test.ts src/edit/migrate.test.ts src/store/history.test.ts`
 Expected: FAIL — `withStrokes` / `clearStrokes` are not exported, `defaultPhoto().strokes` is `undefined`, `st.frame` is `undefined`, the history read has no strokes at all (`sanitizePhoto`'s literal does not copy the field yet) (and TS errors on `photo.strokes`).
 
-- [ ] **Step 3: Add `strokes` to `PhotoParams`**
+- [x] **Step 3: Add `strokes` to `PhotoParams`**
 
 In `src/types.ts`, in `interface PhotoParams` (C §3.2), after the last field steps 1–5 added (`spots` from step 4):
 
@@ -2323,7 +2323,7 @@ In `src/types.ts`, in `interface PhotoParams` (C §3.2), after the last field st
   strokes: readonly Stroke[];
 ```
 
-- [ ] **Step 4: Implement the state helpers**
+- [x] **Step 4: Implement the state helpers**
 
 In `src/edit/state.ts`:
 
@@ -2361,7 +2361,7 @@ export function editKey(edit: EditState): string {
 
 5. `sanitizeEditState(raw, personIds, oSize?)` needs no edit of its own: it returns `{ v: 2, photo: sanitizePhoto(r.photo, new Set(Object.keys(persons)), oSize), persons, template, primaryInit }` (`state.ts:322` at `d09e608`), so item 2's line sanitizes the strokes on `oSize`. Without `oSize` (the camera look, and any caller without an entry size) the strokes are always `[]` (PB §4.5 row Camera).
 
-- [ ] **Step 5: Return the frame from `openState`; sanitize stored edits on their own frame**
+- [x] **Step 5: Return the frame from `openState`; sanitize stored edits on their own frame**
 
 In `src/edit/migrate.ts`:
 
@@ -2379,7 +2379,7 @@ In `src/edit/migrate.ts`:
 
 `src/store/history.ts` needs no change: `normalizeEntry` already sanitizes the stored edit on the entry's own size (`if (isEditStateRecord(r.edit)) entry.edit = sanitizeEditState(r.edit, null, { width, height });`, step 3, `history.ts:214` at `d09e608`), so `getEntry` / `listEntries` keep the strokes once `sanitizePhoto` reads them; the history tests below pin it.
 
-- [ ] **Step 6: Carry the frame to the editor**
+- [x] **Step 6: Carry the frame to the editor**
 
 In `src/ui/state.ts`, in `interface EditorSource` (after steps 1 and 3 it holds `edit`, `detect`, `source`, …), add:
 
@@ -2390,7 +2390,7 @@ In `src/ui/state.ts`, in `interface EditorSource` (after steps 1 and 3 it holds 
 
 In `src/ui/flows.ts` (step 1): `freshSource(bitmap, edit, returnTo, faceSeed)` adds `frame: { width: bitmap.width, height: bitmap.height }` to the source it returns (a new import, and a camera shot whose 編輯 opens the shot's own bitmap), and `openInEditor`'s entry branch (`source = { ...freshSource(bitmap, o.edit, opts.returnTo), historyId: entry.id, detect: o.detect, … }`) adds `frame: o.frame`, so a reopen uses the stored size. Fix every other `EditorSource` literal `npm run typecheck` reports (tests and the t7 harness fakes included) with `frame: { width: bitmap.width, height: bitmap.height }`.
 
-- [ ] **Step 7: Run the tests**
+- [x] **Step 7: Run the tests**
 
 Run: `npx vitest run src/edit src/store src/ui`
 Expected: PASS.
@@ -2398,7 +2398,7 @@ Expected: PASS.
 Run: `npm run typecheck`
 Expected: no errors.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/types.ts src/edit/state.ts src/edit/state.test.ts src/edit/legacy.ts src/edit/migrate.ts src/edit/migrate.test.ts src/ui/state.ts src/ui/flows.ts src/store/history.test.ts

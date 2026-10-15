@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { applyPreset, neutralValue, PARAM_DEFS, paramDef, SHADE_PARTS, SHADES, SPLIT_IDS } from '../engine/params';
 import { cropConstrain, cropValid, IDENTITY_GEOMETRY, rotateLeft } from '../geometry/view';
-import type { EditState, Geometry, ParamId, PersonParams } from '../types';
+import type { EditState, Geometry, ParamId, PersonParams, Stroke } from '../types';
 import { legacyProjection } from './legacy';
-import { lensFor } from './lens';
+import { lensFor, P0_INFO } from './lens';
 import {
   assignPersons,
   cameraEdit,
+  clearStrokes,
   defaultPhoto,
   editFlipView,
   editKey,
@@ -25,6 +26,7 @@ import {
   sanitizeEditState,
   sanitizeGeometry,
   withPersons,
+  withStrokes,
 } from './state';
 
 describe('scope table (RM §3.1, step-1 subset)', () => {
@@ -431,5 +433,64 @@ describe('step-5 fields in the edit state (S5 §3.5)', () => {
   it('legacyProjection writes the GPUPixel-left (values) side of a split item', () => {
     const p = { ...naturalPerson(), values: { ...naturalPerson().values, 'shape.faceSlim': 0.3 }, right: { 'shape.faceSlim': 0.9 } };
     expect(legacyProjection(editOf(p), 'f0').values['shape.faceSlim']).toBe(0.3);
+  });
+});
+
+describe('strokes in EditState (push-brush spec §3.4, §5)', () => {
+  const rec = (id: string, x = 0.3): Stroke => ({ id, kind: 'push', radius: 0.05, strength: 0.75, points: Float32Array.of(x, 0.3, x + 0.0125, 0.3) });
+  const SIZE = { width: 1536, height: 2048 };
+
+  it('defaultPhoto has no strokes; withStrokes appends and shares the records already there', () => {
+    expect(defaultPhoto().strokes).toEqual([]);
+    const e0 = base();
+    expect(withStrokes(e0, [])).toBe(e0);
+    const a = rec('a');
+    const e1 = withStrokes(e0, [a]);
+    const e2 = withStrokes(e1, [rec('b'), rec('c')]);
+    expect(e2.photo.strokes.map((s) => s.id)).toEqual(['a', 'b', 'c']);
+    expect(e2.photo.strokes[0]).toBe(a); // shared, never copied
+    expect(e0.photo.strokes).toEqual([]); // immutable
+  });
+
+  it('clearStrokes empties the list and returns the same object when there is nothing to clear', () => {
+    const e0 = base();
+    expect(clearStrokes(e0)).toBe(e0);
+    const e1 = clearStrokes(withStrokes(e0, [rec('a')]));
+    expect(e1.photo.strokes).toEqual([]);
+    expect(editKey(e1)).toBe(editKey(e0));
+  });
+
+  it('editKey compares strokes by id: equal for the same ids with other points, different for other ids', () => {
+    const e0 = base();
+    const a1 = withStrokes(e0, [rec('a', 0.3)]);
+    const a2 = withStrokes(e0, [rec('a', 0.6)]);
+    const b = withStrokes(e0, [rec('b', 0.3)]);
+    expect(editKey(a1)).toBe(editKey(a2));
+    expect(editKey(a1)).not.toBe(editKey(b));
+    expect(editKey(a1)).not.toBe(editKey(e0));
+    expect(editKey(a1)).not.toContain('0.30000001'); // no point is ever serialized
+  });
+
+  it('sanitizeEditState keeps valid strokes with the O size and drops them without one (the camera look)', () => {
+    const raw = withStrokes(base(), [rec('ok'), { ...rec('bad'), kind: 'twirl' } as unknown as Stroke]);
+    const withSize = sanitizeEditState(structuredClone(raw), ['p0'], SIZE);
+    expect(withSize.photo.strokes.map((s) => s.id)).toEqual(['ok']);
+    expect(withSize.photo.strokes[0].points).toBeInstanceOf(Float32Array);
+    expect(sanitizeEditState(structuredClone(raw), ['p0']).photo.strokes).toEqual([]);
+    // an entry written before step 6 has no `strokes` field at all
+    const old = structuredClone(base()) as unknown as { photo: Record<string, unknown> };
+    delete old.photo.strokes;
+    expect(sanitizeEditState(old, ['p0'], SIZE).photo.strokes).toEqual([]);
+  });
+
+  it('presets and ⊘ never touch strokes (C §3.4); 重置 clears them (defaultPhoto has none)', () => {
+    const e = withStrokes(base(), [rec('a')]);
+    const lens = lensFor(e, { kind: 'person', id: 'p0' }, P0_INFO, 'p0');
+    expect(lens.applyPreset('refined', 1).photo.strokes).toBe(e.photo.strokes);
+    expect(lens.applyPreset('original', 1).photo.strokes).toBe(e.photo.strokes);
+    expect(lens.resetGroup('shape').photo.strokes).toBe(e.photo.strokes);
+    expect(lens.resetGroup('body').photo.strokes).toBe(e.photo.strokes);
+    expect(defaultPhoto().strokes).toHaveLength(0);
+    expect(resetAll(e).photo.strokes).toEqual([]); // 重置 is one undo step that removes every stroke
   });
 });

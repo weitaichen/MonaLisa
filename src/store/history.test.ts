@@ -4,11 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { withBodies } from '../detect/cache';
 import { cacheBody, makeCache } from '../detect/testCaches';
 import { editFromLegacy, legacyProjection } from '../edit/legacy';
+import { rMin } from '../edit/liquify';
 import { openState } from '../edit/migrate';
 import { assignPersons, defaultPhoto, naturalPerson, neutralPerson, renamePersons } from '../edit/state';
 import { applyPreset, defaultParams, PARAM_DEFS, sanitizeParams, setParam } from '../engine/params';
 import { cropConstrain } from '../geometry/view';
-import type { BeautyParams, BodyDetection, DetectionCache, EditState, HistoryEntry } from '../types';
+import type { BeautyParams, BodyDetection, DetectionCache, EditState, HistoryEntry, Stroke } from '../types';
 import {
   addEntry,
   closeHistory,
@@ -938,5 +939,36 @@ describe('the rollback check reads the stored params, never the sanitized ones (
     expect(await rawGet(id)).not.toHaveProperty('legacyEdited');
     // without a key (v1, or a v2 written before paramsKey) nothing is checked
     expect(normalizeEntry({ ...validRecord('v1', 1), params: setParam(defaultParams(), 'skin.whiten', 0.9) })!.legacyEdited).toBeUndefined();
+  });
+});
+
+describe('v2 entries with strokes (push-brush spec §5.1, §5.2)', () => {
+  const edit = (strokes: Stroke[]): EditState => ({
+    v: 2,
+    photo: { ...defaultPhoto(), strokes },
+    persons: { p0: naturalPerson() },
+    template: neutralPerson(),
+    primaryInit: null,
+  });
+
+  it('round-trips the stroke records with their Float32Array points', async () => {
+    const points = Float32Array.of(0.3, 0.3, 0.3125, 0.3, 0.325, 0.31);
+    const id = await addEntry({ ...entry('s'), schema: 2, edit: edit([{ id: 'k1', kind: 'push', radius: 0.05, strength: 0.75, points }]) });
+    const got = await getEntry(id);
+    const s = got!.edit!.photo.strokes[0];
+    expect(s.points).toBeInstanceOf(Float32Array);
+    expect(Array.from(s.points)).toEqual(Array.from(points));
+    expect(s.id).toBe('k1');
+  });
+
+  it("drops a corrupt record on read and sanitizes on the entry's own width × height", async () => {
+    const ok = (id: string, radius = 0.05): Stroke => ({ id, kind: 'push', radius, strength: 0.75, points: Float32Array.of(0.3, 0.3, 0.3125, 0.3) });
+    const bad = { ...ok('x'), points: Float32Array.of(0.3, NaN, 0.31, 0.3) };
+    // entry('s') is 1536 × 2048: a radius of 0 clamps to rMin of exactly that frame (4 texels of its 384-wide grid)
+    const id = await addEntry({ ...entry('s'), schema: 2, edit: edit([ok('a'), bad, ok('b', 0)]) });
+    const got = (await getEntry(id))!.edit!.photo.strokes;
+    expect(got.map((s) => s.id)).toEqual(['a', 'b']);
+    expect(got[1].radius).toBe(rMin({ width: 1536, height: 2048 }));
+    expect((await listEntries())[0].edit!.photo.strokes).toHaveLength(2);
   });
 });

@@ -4,7 +4,7 @@ import { splitLegacy } from '../edit/legacy';
 import { DEFAULT_PREFS } from '../store/settings';
 import type { V1Bodies } from '../edit/migrate';
 import type { SourceInfo } from '../media/exportPlan';
-import type { CameraLook, DetectionCache, EditState, FaceSeed, PersonId, PersonMask, Prefs, Rect } from '../types';
+import type { CameraLook, DetectionCache, EditState, FaceSeed, LiquifyFrame, PersonId, PersonMask, Prefs, Rect } from '../types';
 import { deps } from './deps';
 import { debug, reportError } from './debug';
 import { createStore } from './store';
@@ -58,6 +58,8 @@ export interface EditorSource {
   source?: SourceInfo;
   /** a new import's picked file: kept as HistoryEntry.source only when shouldKeepSource accepts it */
   picked?: File;
+  /** the size the 推臉筆 grid is built on: the entry's stored width × height, or the imported bitmap's size (push-brush spec §3.3) */
+  frame: LiquifyFrame;
   returnTo: 'home' | 'camera';
 }
 

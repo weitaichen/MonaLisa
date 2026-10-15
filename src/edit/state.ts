@@ -4,6 +4,7 @@ import { isLookId } from '../engine/looks';
 import { applyPreset, FILTERS, neutralValue, PARAM_DEFS, paramsInGroup, PRESETS, sanitizeBand, SHADE_PARTS, SHADES as SHADE_DEFS } from '../engine/params';
 import { clampStraighten, cropConstrain, cropValid, flipView, IDENTITY_GEOMETRY, isIdentity, rotateLeft } from '../geometry/view';
 import { stableKey } from '../store/undo';
+import { sanitizeStrokes } from './liquify';
 import { sanitizeRight } from './sides';
 import { remapSpotOwners, sanitizeSpots } from './spots';
 import type {
@@ -21,6 +22,7 @@ import type {
   PresetRef,
   ShadePart,
   Size,
+  Stroke,
 } from '../types';
 
 export const P0: PersonId = 'p0';
@@ -62,12 +64,12 @@ export function defaultPhoto(): PhotoParams {
   const p = applyPreset('natural', 1);
   const values = {} as Record<PhotoParamId, number>;
   for (const k of PHOTO_IDS) values[k] = p.values[k];
-  return { values, filterId: p.filterId, look: null, presetLink: { id: 'natural', amount: 1 }, bodyProtect: true, heightBand: null, legsAnchor: null, geometry: IDENTITY_GEOMETRY, spots: [] };
+  return { values, filterId: p.filterId, look: null, presetLink: { id: 'natural', amount: 1 }, bodyProtect: true, heightBand: null, legsAnchor: null, geometry: IDENTITY_GEOMETRY, spots: [], strokes: [] };
 }
 
-/** The output de-dupe and undo key (RM §3.4; step 6 replaces stroke points by stroke ids here). */
+/** the undo / output de-dupe key: stableKey with every stroke reduced to its id (C §3.4) */
 export function editKey(edit: EditState): string {
-  return stableKey(edit);
+  return stableKey({ ...edit, photo: { ...edit.photo, strokes: edit.photo.strokes.map((s) => s.id) } });
 }
 
 /** a person's params, or the template for a person the edit does not list yet */
@@ -191,6 +193,17 @@ export function editResetGeometry(edit: EditState): EditState {
   return isIdentity(edit.photo.geometry) ? edit : editSetGeometry(edit, IDENTITY_GEOMETRY);
 }
 
+/** one 推臉筆 gesture (one undo step): append its records; the records already there are shared, never copied (push-brush spec §5.4) */
+export function withStrokes(edit: EditState, recs: readonly Stroke[]): EditState {
+  if (!recs.length) return edit;
+  return { ...edit, photo: { ...edit.photo, strokes: [...edit.photo.strokes, ...recs] } };
+}
+
+/** 全部清除 (one undo step); the same object when there is nothing to clear */
+export function clearStrokes(edit: EditState): EditState {
+  return edit.photo.strokes.length ? { ...edit, photo: { ...edit.photo, strokes: [] } } : edit;
+}
+
 /** the person part of `ref` (face items within 1e-6, every shade, 左右分開 off) is what `p` holds (RM §3.4 matching, S5 §3.5) */
 export function matchesPersonPreset(p: PersonParams, ref: PresetRef): boolean {
   const q = personFromPreset(ref.id, ref.amount);
@@ -267,7 +280,8 @@ export function sanitizeGeometry(raw: unknown, oSize?: Size | null): Geometry {
 
 /**
  * Untrusted photo layer → valid; `persons` (when known) bounds the 長腿 anchor; a link survives only while it matches.
- * `oSize` (the entry's O size) validates the geometry; without it the geometry is identity (S D13).
+ * `oSize` (the entry's O size) validates the geometry and is the 推臉筆 frame; without it the geometry is identity (S D13)
+ * and there are no strokes (push-brush spec §5.2).
  */
 export function sanitizePhoto(raw: unknown, persons: ReadonlySet<PersonId> | null = null, oSize?: Size | null): PhotoParams {
   const base = defaultPhoto();
@@ -289,6 +303,7 @@ export function sanitizePhoto(raw: unknown, persons: ReadonlySet<PersonId> | nul
     legsAnchor: typeof la === 'string' && PERSON_ID.test(la) && (!persons || persons.has(la)) ? la : null,
     geometry: sanitizeGeometry(r.geometry, oSize),
     spots: sanitizeSpots(r.spots, persons, !!oSize),
+    strokes: sanitizeStrokes(r.strokes, oSize ?? null),
   };
   if (photo.presetLink && !matchesPhotoLink(photo, photo.presetLink)) photo.presetLink = null;
   return photo;
@@ -304,7 +319,8 @@ export function isEditStateRecord(raw: unknown): boolean {
  * id kept only while the values match it. `personIds` (the detection cache's persons) drops persons not in it and
  * adds missing ones from the template; null (no cache, or one dropped for a rematch) keeps every valid person.
  * `oSize` is the O size the geometry is validated against (HistoryEntry.width/height); without it (the camera look) the
- * geometry is identity (step-3 spec D13).
+ * geometry is identity (step-3 spec D13), and it is the frame the strokes are sanitized on: without it they are all
+ * dropped (push-brush spec §5.2).
  */
 export function sanitizeEditState(raw: unknown, personIds: readonly PersonId[] | null, oSize?: Size): EditState {
   const r = isRecord(raw) ? raw : {};

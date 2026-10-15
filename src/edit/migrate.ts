@@ -5,8 +5,9 @@
 import { addFaceScan, aspectFits, boxScore, buildCache, cachedFits, noFaceCache, poseBox, rematchByIoU, withBodies, withFaces } from '../detect/cache';
 import { adaptCached, EMPTY_PREPARED, type PreparedFaces } from '../detect/faces';
 import { seedPrimary } from '../detect/persons';
-import type { BodyDetections, CachedBody, CameraLook, DetectionCache, EditState, FaceSeed, HistoryEntry, PersonId, PersonParams, Rect } from '../types';
+import type { BodyDetections, CachedBody, CameraLook, DetectionCache, EditState, FaceSeed, HistoryEntry, LiquifyFrame, PersonId, PersonParams, Rect } from '../types';
 import { editFromLegacy, mergeLegacy } from './legacy';
+import { sanitizeStrokes } from './liquify';
 import { assignPersons, neutralPerson, P0, renamePersons, sanitizeEditState, sanitizeGeometry, withPersons } from './state';
 
 export interface V1Bodies {
@@ -24,6 +25,8 @@ export interface OpenedState {
   v1Body: V1Bodies | null;
   /** the cache was dropped or lost persons: toast 已重新偵測臉部，部分人物的設定已重設 after the re-detect */
   cacheDropped: boolean;
+  /** the size the 推臉筆 grid is built on: the entry's stored width × height (push-brush spec §3.3), never the decode size */
+  frame: LiquifyFrame;
 }
 
 /**
@@ -48,6 +51,7 @@ function boxesOf(cache: DetectionCache): Record<PersonId, Rect> {
 }
 
 export function openState(entry: HistoryEntry, size: { width: number; height: number }): OpenedState {
+  const frame: LiquifyFrame = { width: entry.width, height: entry.height };
   const v2Edit = entry.schema === 2 ? entry.edit : undefined;
   const d = entry.detect;
   const fits = !!d && cachedFits(d, size.width, size.height);
@@ -56,14 +60,16 @@ export function openState(entry: HistoryEntry, size: { width: number; height: nu
     if (d && fits) {
       // defensive: 0.4 always writes `edit` together with `detect`
       const ids = d.persons.map((p) => p.id);
-      return { edit: assignPersons(edit, ids, d.primary), detect: d, rematch: null, v1Body: null, cacheDropped: false };
+      return { edit: assignPersons(edit, ids, d.primary), detect: d, rematch: null, v1Body: null, cacheDropped: false, frame };
     }
-    return { edit, detect: null, rematch: null, v1Body: v1BodiesOf(entry, size), cacheDropped: false };
+    return { edit, detect: null, rematch: null, v1Body: v1BodiesOf(entry, size), cacheDropped: false, frame };
   }
-  // the geometry is validated against the stored size of `original` (step-3 spec §5, D13: never the decode size) on
-  // every v2 path, the ones that hand the stored edit back as it is included
-  const oSize = { width: entry.width, height: entry.height };
-  let edit: EditState = { ...v2Edit, photo: { ...v2Edit.photo, geometry: sanitizeGeometry(v2Edit.photo.geometry, oSize) } };
+  // the geometry and the strokes are validated against the stored size of `original` (step-3 spec §5, D13; push-brush
+  // spec §3.3: never the decode size) on every v2 path, the ones that hand the stored edit back as it is included
+  let edit: EditState = {
+    ...v2Edit,
+    photo: { ...v2Edit.photo, geometry: sanitizeGeometry(v2Edit.photo.geometry, frame), strokes: sanitizeStrokes(v2Edit.photo.strokes, frame) },
+  };
   if (entry.legacyEdited) {
     // 0.3 edited this entry after a rollback (normalizeEntry checked paramsKey against the stored params): what it
     // stored wins for the photo and the primary person. A cache that does not fit still names the primary its params
@@ -72,17 +78,18 @@ export function openState(entry: HistoryEntry, size: { width: number; height: nu
   }
   if (d && fits) {
     return {
-      edit: sanitizeEditState(edit, d.persons.map((p) => p.id), oSize),
+      edit: sanitizeEditState(edit, d.persons.map((p) => p.id), frame),
       detect: d,
       rematch: null,
       v1Body: null,
       cacheDropped: entry.detectLost === true,
+      frame,
     };
   }
   if (d || entry.staleBoxes) {
-    return { edit, detect: null, rematch: d ? boxesOf(d) : (entry.staleBoxes ?? {}), v1Body: null, cacheDropped: true };
+    return { edit, detect: null, rematch: d ? boxesOf(d) : (entry.staleBoxes ?? {}), v1Body: null, cacheDropped: true, frame };
   }
-  return { edit, detect: null, rematch: null, v1Body: v1BodiesOf(entry, size), cacheDropped: false };
+  return { edit, detect: null, rematch: null, v1Body: v1BodiesOf(entry, size), cacheDropped: false, frame };
 }
 
 /** An imported photo starts from the camera look for everyone (RM §3.7, §12 Q2). */

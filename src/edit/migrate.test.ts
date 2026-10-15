@@ -8,7 +8,7 @@ import { cacheBody, makeCache } from '../detect/testCaches';
 import { IDENTITY_GEOMETRY } from '../geometry/view';
 import { normalizeEntry } from '../store/history';
 import { stableKey } from '../store/undo';
-import type { BeautyParams, EditState, Face, HistoryEntry, Landmarks478, ParamId, Pose33 } from '../types';
+import type { BeautyParams, EditState, Face, HistoryEntry, Landmarks478, ParamId, Pose33, Stroke } from '../types';
 import { editFromLegacy, legacyProjection, splitLegacy } from './legacy';
 import { bodyAnswer, cameraShotEdit, firstAnswer, importEdit, openState } from './migrate';
 import { assignPersons, defaultPhoto, editFlipView, naturalPerson, neutralPerson, personFromPreset, withPersons } from './state';
@@ -389,5 +389,34 @@ describe('bodyAnswer (S §3.4 P4, §7): a 美體 detection joined to the persons
     expect(e2.persons.b1).toEqual(e.template);
     expect(e2.persons.f0).toEqual(e.persons.f0);
     expect(e2.persons.f0.values['body.waist']).toBe(0);
+  });
+});
+
+describe('openState: the liquify frame (push-brush spec §3.3, §5)', () => {
+  const rec = (id: string): Stroke => ({ id, kind: 'push', radius: 0.05, strength: 0.75, points: Float32Array.of(0.3, 0.3, 0.3125, 0.3) });
+  const withStrokesEntry = (strokes: unknown[]): HistoryEntry => {
+    const edit = { v: 2, photo: { ...defaultPhoto(), strokes }, persons: { p0: naturalPerson() }, template: neutralPerson(), primaryInit: null } as unknown as EditState;
+    return { id: 'e1', createdAt: 1, updatedAt: 1, original: new Blob(['o']), thumb: new Blob(['t']), width: 1536, height: 2048, params: defaultParams(), schema: 2, edit } as HistoryEntry;
+  };
+
+  it('frame comes from the entry, not the decode (a tier-L reopen decodes at 1440)', () => {
+    const st = openState(withStrokesEntry([rec('a')]), { width: 1080, height: 1440 });
+    expect(st.frame).toEqual({ width: 1536, height: 2048 });
+    expect(st.edit.photo.strokes.map((s) => s.id)).toEqual(['a']);
+  });
+
+  // PB §5.2 is normative: a malformed record drops alone (rules 1–4); only the caps (rule 5) drop everything after them.
+  // (PB §7's row "along with every later record" contradicts §5.2; this plan follows §5.2.)
+  it('drops only the corrupt record and keeps the replay order of the rest', () => {
+    const bad = { ...rec('x'), points: Float32Array.of(0.3, NaN, 0.31, 0.3) };
+    const st = openState(withStrokesEntry([rec('a'), bad, rec('b')]), { width: 1536, height: 2048 });
+    expect(st.edit.photo.strokes.map((s) => s.id)).toEqual(['a', 'b']);
+  });
+
+  it('a v1 entry has no strokes', () => {
+    const v1Entry = { id: 'e0', createdAt: 1, updatedAt: 1, original: new Blob(['o']), thumb: new Blob(['t']), width: 1536, height: 2048, params: defaultParams() } as HistoryEntry;
+    const st = openState(v1Entry, { width: 1536, height: 2048 });
+    expect(st.edit.photo.strokes).toEqual([]);
+    expect(st.frame).toEqual({ width: 1536, height: 2048 });
   });
 });

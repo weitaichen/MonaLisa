@@ -3394,7 +3394,7 @@ PB §3.5 "Editor wiring": pointer points are queued and one animation frame drai
   - `interface BrushQueueDeps { add(o: {x,y}): boolean; changed(): void; now(): number; raf(cb: () => void): number; cancelRaf(id: number): void }`; `class BrushQueue { constructor(deps, budgetMs = STAMP_FRAME_MS); readonly size: number; push(o): void; drain(): void; finish(): void; clear(): void }`.
   - `interface ClientRect { left: number; top: number; width: number; height: number }`; `clientToO(c: {x,y}, layer: ClientRect, g: Geometry, oSize: LiquifyFrame): {x,y}`; `brushAt(c: {x,y}, size: BrushSize, layer: ClientRect, g: Geometry, oSize: LiquifyFrame): { o: {x,y}; radius: number; ringPx: number }`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/ui/brushQueue.test.ts`:
 
@@ -3548,12 +3548,12 @@ describe('client → V → O for brush points (push-brush spec §3.1, §8.1 view
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run src/ui/brushQueue.test.ts src/ui/brushMapping.test.ts`
 Expected: FAIL — `Failed to load url ./brushQueue` and `./brushMapping`.
 
-- [ ] **Step 3: Write the queue**
+- [x] **Step 3: Write the queue**
 
 Create `src/ui/brushQueue.ts`:
 
@@ -3627,7 +3627,7 @@ export class BrushQueue {
 }
 ```
 
-- [ ] **Step 4: Write the mapping**
+- [x] **Step 4: Write the mapping**
 
 Create `src/ui/brushMapping.ts`:
 
@@ -3669,12 +3669,12 @@ export function brushAt(
 }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `npx vitest run src/ui/brushQueue.test.ts src/ui/brushMapping.test.ts && npm run typecheck`
 Expected: PASS (4 + 4 tests); no errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/ui/brushQueue.ts src/ui/brushQueue.test.ts src/ui/brushMapping.ts src/ui/brushMapping.test.ts

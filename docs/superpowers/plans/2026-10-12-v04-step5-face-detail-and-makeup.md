@@ -7437,32 +7437,32 @@ Everything green on a clean tree, plus the equivalence checks the roadmap asks o
 
 Every command below that needs the base of step 5 computes it itself (the shell keeps no variables between commands): `BASE="$(git log --format=%H --grep='^v0.4 step 5' --reverse | head -1)~1"`, the parent of the first step-5 commit. The first one is `v0.4 step 5: reconcile plan`; its parent `db1f468` holds the rest of the plan reconciliation under a stale step-3 subject. Both change only this plan, so `BASE` = `db1f468` has the step base `3aebedf`'s code.
 
-- [ ] **Step 1: Clean tree and the base of step 5**
+- [x] **Step 1: Clean tree and the base of step 5**
 
 Run: `git status --short && BASE="$(git log --format=%H --grep='^v0.4 step 5' --reverse | head -1)~1" && git log --oneline "$BASE"..HEAD | cat`
 Expected: no uncommitted changes; on `feat/meiyan-pwa`, the `v0.4 step 5: reconcile plan` commit (on top of `db1f468`), then one local `v0.4 step 5 task <N>: …` commit per task 1–18 (plus any `v0.4 step 5 task <N> fix: …` commits). Task 5's code is `0692964` under a stale step-2 subject; its `v0.4 step 5 task 5 fix:` commit records that (see Task 5). Task 9's code is `a9b761f`, also under a stale step-2 subject; its `v0.4 step 5 task 9 fix:` commit records that (see Task 9). Task 12's code is `e338242`, also under a stale step-2 subject; its `v0.4 step 5 task 12 fix:` commit records that (see Task 12).
 
-- [ ] **Step 2: Typecheck**
+- [x] **Step 2: Typecheck**
 
 Run: `npm run typecheck`
 Expected: exit 0, no output from `tsc`.
 
-- [ ] **Step 3: Unit suite**
+- [x] **Step 3: Unit suite**
 
 Run: `npm test`
 Expected: every test file passes (Vitest prints `Test Files  N passed`, `Tests  M passed`, no failures), including `reshapeCpu.test.ts` (hash pin, bit-identity with the v0.3 port, the step-5 warps), `makeupProcCpu.test.ts` (pin `'f76b819e'`), `makeupProc.test.ts`, `eyeFrame.test.ts`, the edit/lens/panel tests and `tests/harness/t5/assets.test.mjs` (lashes texture).
 
-- [ ] **Step 4: Production build**
+- [x] **Step 4: Production build**
 
 Run: `npm run build`
 Expected: `tsc -p tsconfig.build.json` clean and `vite build` succeeds; `dist/makeup/own/lashes.png` exists and the service-worker precache manifest lists it: `grep -c "makeup/own/lashes.png" dist/sw.js` prints `1` or more.
 
-- [ ] **Step 5: The whole e2e suite**
+- [x] **Step 5: The whole e2e suite**
 
 Run: `npm run test:e2e`
 Expected: every project and spec passes, among them `shape-makeup.spec.ts` (2 × 13 warp pins, 14 PMAKEUP kinds, regions, blink, the lashes failure, the context loss, 左右分開, per person, editor and camera flows; `@sheet` skipped), `reshape.spec.ts` (its 3 cases unchanged), `parity.spec.ts`, `engine.spec.ts`, `editor.spec.ts`, `camera.spec.ts`, `persons.spec.ts`, `export.spec.ts` (with the three step-5 tile cases), `crop.spec.ts`, `tone.spec.ts`, `adjust.spec.ts`, `camera-group.spec.ts` in the `chromium-group` project (`@bench` skipped).
 
-- [ ] **Step 6: v0.3 equivalence and the step-5 invariant**
+- [x] **Step 6: v0.3 equivalence and the step-5 invariant**
 
 1. Parity goldens (RM §1.1, §8.3: one person, v0.3 items only, ≤ 1/255 per channel and mean < 0.02/255): `npx playwright test tests/e2e/parity.spec.ts` — Expected: PASS.
 2. New items neutral and 左右分開 off ⇒ the reshape map is bit-identical (S5 §1.2): `npx vitest run src/engine/passes/reshapeCpu.test.ts -t "bit-identical"` — Expected: PASS.
@@ -7473,14 +7473,16 @@ Expected: every project and spec passes, among them `shape-makeup.spec.ts` (2 ×
 6. Version unchanged, nothing pushed: `node -p "require('./package.json').version"` — Expected: `0.3.0`. `git status -sb | head -1` — the branch is ahead of its upstream by the local commits; do not push.
 7. Line endings: `BASE="$(git log --format=%H --grep='^v0.4 step 5' --reverse | head -1)~1"; git diff --name-only "$BASE"..HEAD | xargs file | grep "CRLF, LF"` — Expected: no output (no mixed file). Then `file src/types.ts src/ui/panelModel.ts src/ui/components/BeautyPanel.tsx src/ui/components/Slider.tsx src/ui/icons.tsx src/ui/state.ts src/ui/theme.css src/ui/screens/Camera.tsx src/ui/screens/Review.tsx src/engine/passes/makeup.ts src/engine/passes/reshape.test.ts src/engine/pipeline.ts src/engine/index.ts src/bench/main.ts src/app/testFakes.ts tests/harness/t2/main.ts | grep -v "with CRLF line terminators"` — Expected: no output (every CRLF working copy of the Global Constraints is still CRLF throughout).
 
-- [ ] **Step 7: Contact sheet for the hand-off (S5 §8.4)**
+- [x] **Step 7: Contact sheet for the hand-off (S5 §8.4)**
 
 Run: `SHEET=1 npx playwright test tests/e2e/shape-makeup.spec.ts --grep @sheet`
 Expected: `contact sheet: N images in …/test-results/makeup-sheet` (every part × shade at 50 and 100, every new warp at ±50, sample face and group faces). It is not committed (`test-results/` is ignored); point the user at the folder for visual tuning.
 
-- [ ] **Step 8: Hand-off note**
+- [x] **Step 8: Hand-off note**
 
 Report to the user: the commit range (`BASE="$(git log --format=%H --grep='^v0.4 step 5' --reverse | head -1)~1"; git log --oneline "$BASE"..HEAD`), the gate results above, the desktop bench numbers of Task 18 against S5 §6.1 (the iPhone rows need a preview deploy, which waits for the user's go-ahead), the contact-sheet folder, and that nothing was pushed and the version is still 0.3.0. Step 6 (推臉筆) is next; the 0.4.0 bump belongs to step 6's final release task.
+
+(Gate run at `8ff97d5`, no code changed: typecheck clean; Vitest 106 files / 1879 tests passed; build clean, `lashes.png` in `dist/` and once in `sw.js`; Playwright 104 passed, 2 skipped (`@sheet`, `@bench`); parity 5 cases max 0/255; the two invariant unit cases pass; every removed test line is a port named above or in a task's landed note (Tasks 2, 7, 12); storage, version and line endings as expected. Step 1's range also holds `6502bf2` and `1aaa05c`, Tasks 2 and 3's code under stale step-4 subjects, which `c0f7312` and `aaced28` record. Contact sheet: 77 images in `test-results/makeup-sheet/`.)
 
 ---
 

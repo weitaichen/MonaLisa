@@ -6773,7 +6773,7 @@ Connects the model to the editor and the camera (S5 §2.2, §2.4, §2.5, §3.4):
 - Consumes: Task 3 `mirrorSides`, `screenLeftIsGpLeft`; Task 4 `PersonInfo.screenSwap`; Task 5 `eyeNoteInfo`; Task 11 `Engine.procMakeupFailed`; Task 14 `makeupNote`; Task 15 `SliderRow` `onSel`, `BeautyPanel` `makeupNote`; step 1's `CameraLook`, `Shot.look` / `Shot.faceSeed`, `cameraShotEdit(look, seed)` (`src/edit/migrate.ts`), `freshSource(bitmap, edit, returnTo, faceSeed?)` (`src/ui/flows.ts`), Review's `edit()` (`go({ name: 'editor', source: freshSource(shot.original, cameraShotEdit(shot.look, …), 'camera', …) })`), the camera lens `lensOf = (l) => lensFor(cameraEdit(l), { kind: 'person', id: LIVE }, LIVE_PERSONS, LIVE)` with `LIVE_PERSONS = [{ id: 'live', face: true, body: false }]` (`src/edit/lens.ts`), the Editor's per-photo person selection, `personInfos(cache: DetectionCache | null): PersonInfo[]` (`src/detect/cache.ts`; `DetectionCache.persons: PersonInfoCached { id; face: string | null /* face id */; body }`) and the session's `faces: SessionFace[]` (`{ id, face, box, lm }`); in `Camera.tsx` the `snap` state (`snap.facing`) and `bundle?.engine`; in `Editor.tsx` (as landed) the cache `detect` (`useState<DetectionCache | null>`, `:155`), `const infos = useMemo(() => personInfos(detect), [detect])` (`:164`), the selection `selected: Selection` (`:172`; there is no `personSel`), `bound?.engine` and `session = bound.s` (`:305`), `g = edit.photo.geometry` (`:309`), the O size `photo` (`{ width, height }` of the working bitmap, `:286`), `sessionFaces: readonly SessionFace[] | null` (`:332`), `lensOf = (e) => lensFor(e, selected, infos, primary, { available })` (`:374`), and a local `view` (`:1611`, the V size) that a new name must not shadow; step 3's `oToV(g, oSize)` and `apply` (`src/geometry/view.ts`).
 - Produces: `sides.ts`: `handOverLook(look: CameraLook, mirrored: boolean): CameraLook`, `cameraScreenSwap(facing: Facing): boolean`; `Shot.mirrored: boolean`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `src/edit/sides.test.ts` (import `handOverLook`, `cameraScreenSwap`; `defaultPhoto` from `./state`; the `CameraLook` type):
 
@@ -6796,12 +6796,12 @@ describe('camera → 編輯 hand-over (face-detail spec §3.4)', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run src/edit/sides.test.ts`
 Expected: FAIL — `handOverLook` is not exported.
 
-- [ ] **Step 3: Implement the helpers**
+- [x] **Step 3: Implement the helpers**
 
 Append to `src/edit/sides.ts` (add `CameraLook`, `Facing` to the type import):
 
@@ -6822,7 +6822,7 @@ export function cameraScreenSwap(facing: Facing): boolean {
 }
 ```
 
-- [ ] **Step 4: Wire the screens**
+- [x] **Step 4: Wire the screens**
 
 `src/ui/state.ts` (CRLF), in `Shot`:
 
@@ -6878,12 +6878,12 @@ where `selected` is the editor's resolved person selection (`:172`; with one per
 - `<SliderRow … onSel={setSel} />` and `<BeautyPanel … makeupNote={mkNote} />`.
 - Imports: `oToV` merged into the `../../geometry/view` import (`:48`, which already has `apply`); `screenLeftIsGpLeft` from `../../edit/sides`; `eyeNoteInfo` from `../../engine/passes/eyeFrame`; `makeupNote` merged into the `../panelModel` import; `type PersonInfo` merged into `import { lensFor } from '../../edit/lens'` (`:39`); `Face` merged into the `../../types` type import (`:37`, which already has `PersonId`).
 
-- [ ] **Step 5: Run the unit suite, typecheck and the app e2e that touch these screens**
+- [x] **Step 5: Run the unit suite, typecheck and the app e2e that touch these screens**
 
 Run: `npm test && npm run typecheck && npm run build && npx playwright test tests/e2e/camera.spec.ts tests/e2e/editor.spec.ts`
 Expected: PASS — `camera.spec.ts:33` still finds 原色 on 美妝 (level 2 of 口紅 is the default view), `editor.spec.ts:140-160` keeps its no-face note on 美型 and 美妝.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 file src/ui/state.ts src/ui/screens/Camera.tsx src/ui/screens/Review.tsx src/ui/screens/Editor.tsx src/edit/sides.ts

@@ -2,6 +2,7 @@
 // capture so 儲存 can call the share sheet synchronously inside the tap (RB §1 #10).
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { cameraShotEdit } from '../../edit/migrate';
+import { handOverLook } from '../../edit/sides';
 import { errorText, reportError } from '../debug';
 import { deps } from '../deps';
 import { freshSource } from '../flows';
@@ -91,7 +92,7 @@ export function Review({ shot }: { shot: Shot }) {
       return;
     }
     handedOff.current = true;
-    go({ name: 'editor', source: freshSource(shot.original, cameraShotEdit(shot.look, shot.faceSeed), 'camera', shot.faceSeed) });
+    go({ name: 'editor', source: freshSource(shot.original, cameraShotEdit(handOverLook(shot.look, shot.mirrored), shot.faceSeed), 'camera', shot.faceSeed) });
   };
 
   const busy = !file && !encodeErr;

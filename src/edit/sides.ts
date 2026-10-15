@@ -2,7 +2,7 @@
 // half of a split item (pts111 0–15, 52–57, 72–74: MediaPipe's RIGHT_*), PersonParams.right the GPUPixel-right half;
 // the midline p16 takes the mean. Labels are screen-sided: 左 is the half whose eye shows on the left of the screen.
 import { SPLIT_IDS } from '../engine/params';
-import type { Face, PersonParams, SplitParamId } from '../types';
+import type { CameraLook, Face, Facing, PersonParams, SplitParamId } from '../types';
 
 /** an on-screen side */
 export type Side = 'L' | 'R';
@@ -79,4 +79,19 @@ export function sanitizeRight(raw: unknown): PersonParams['right'] {
 export function screenLeftIsGpLeft(face: Face, toScreen: (p: [number, number]) => [number, number]): boolean {
   const P = face.pts111;
   return toScreen([P[74 * 2], P[74 * 2 + 1]])[0] < toScreen([P[77 * 2], P[77 * 2 + 1]])[0];
+}
+
+/** Shot → 編輯 (S5 §3.4): a shot saved mirrored puts each cheek on the other GPUPixel half; swap the split values. */
+export function handOverLook(look: CameraLook, mirrored: boolean): CameraLook {
+  if (!mirrored) return look;
+  const person = mirrorSides(look.person);
+  return person === look.person ? look : { ...look, person };
+}
+
+/**
+ * The camera detects on the unmirrored frame and shows the front camera mirrored (live.ts:160), so an upright face's
+ * GPUPixel-left half shows on the right exactly when facing === 'user' (S5 §3.4: toScreen is x → 1 − x there).
+ */
+export function cameraScreenSwap(facing: Facing): boolean {
+  return facing === 'user';
 }

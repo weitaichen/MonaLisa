@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { SPLIT_IDS } from '../engine/params';
 import { apply, oToV } from '../geometry/view';
 import { blankEyes } from '../tracking/adapter111';
-import type { Face, Geometry, PersonParams } from '../types';
-import { naturalPerson } from './state';
-import { isSplitId, mirrorSides, readSide, sanitizeRight, screenLeftIsGpLeft, slotFor, splitOff, splitOn, writeSide } from './sides';
+import type { CameraLook, Face, Geometry, PersonParams } from '../types';
+import { defaultPhoto, naturalPerson } from './state';
+import { cameraScreenSwap, handOverLook, isSplitId, mirrorSides, readSide, sanitizeRight, screenLeftIsGpLeft, slotFor, splitOff, splitOn, writeSide } from './sides';
 
 const eyes = (l: [number, number], r: [number, number]): Face => {
   const pts111 = new Float32Array(222);
@@ -98,5 +98,22 @@ describe('slots (S5 §3.4)', () => {
     expect(sanitizeRight({})).toBeNull();
     expect(sanitizeRight([0.5])).toBeNull();
     expect(sanitizeRight('x')).toBeNull();
+  });
+});
+
+describe('camera → 編輯 hand-over (face-detail spec §3.4)', () => {
+  it('a shot saved mirrored swaps the split halves so each value stays on the same cheek', () => {
+    const p = writeSide(splitOn(naturalPerson()), 'shape.faceSlim', 0.9, 'right');
+    const look: CameraLook = { photo: defaultPhoto(), person: p };
+    const handed = handOverLook(look, true).person;
+    expect(handed.values['shape.faceSlim']).toBe(0.9);
+    expect(handed.right?.['shape.faceSlim']).toBe(p.values['shape.faceSlim']);
+    expect(handOverLook(look, false)).toBe(look);
+    const plain: CameraLook = { photo: defaultPhoto(), person: naturalPerson() };
+    expect(handOverLook(plain, true).person).toBe(plain.person);
+  });
+  it('the camera preview mirrors the front camera only', () => {
+    expect(cameraScreenSwap('user')).toBe(true);
+    expect(cameraScreenSwap('environment')).toBe(false);
   });
 });

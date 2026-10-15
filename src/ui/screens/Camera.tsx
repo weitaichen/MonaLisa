@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { cameraTapAction, ChipGate, coverTapUv, type TrackId } from '../../app/faceTracks';
 import type { LiveLoop, LiveStats } from '../../app/live';
 import type { CameraController, CameraSnapshot, EditState } from '../../types';
-import { lensFor, LIVE_PERSONS } from '../../edit/lens';
+import { lensFor, LIVE_PERSONS, type PersonInfo } from '../../edit/lens';
+import { cameraScreenSwap } from '../../edit/sides';
 import { cameraEdit, LIVE, lookOf } from '../../edit/state';
 import { cameraErrorCopy } from '../cameraErrors';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
@@ -20,7 +21,7 @@ import { deps } from '../deps';
 import { openInEditor, pickPhoto } from '../flows';
 import { Icon } from '../icons';
 import { cropImageData, grabOriginalFrame, normalizedCropRect, shotSeed } from '../imaging';
-import { CAMERA_BODY, INITIAL_SELECTION, sliderFor, type BodyContext, type PanelSelection } from '../panelModel';
+import { CAMERA_BODY, INITIAL_SELECTION, makeupNote, sliderFor, type BodyContext, type PanelSelection } from '../panelModel';
 import { haptic, isStandalone } from '../platform';
 import { ensureEngine, getCamera, stopCamera, svc } from '../services';
 import { app, go, RATIO_VALUE, RATIOS, setLook, TIMERS, toast } from '../state';
@@ -70,7 +71,9 @@ export function Camera() {
   const lookRef = useRef(look);
   lookRef.current = look;
   /** the camera is one person, 'live' (RM §3.7): the panel uses the editor's lens and code */
-  const lensOf = (l: typeof look) => lensFor(cameraEdit(l), { kind: 'person', id: LIVE }, LIVE_PERSONS, LIVE);
+  // 左／右 follow the preview mirror (S5 §3.4): a front ↔ back flip re-maps the side chips on the next render (S5 §7)
+  const livePersons: PersonInfo[] = [{ ...LIVE_PERSONS[0], screenSwap: cameraScreenSwap(snap?.facing ?? 'user') }];
+  const lensOf = (l: typeof look) => lensFor(cameraEdit(l), { kind: 'person', id: LIVE }, livePersons, LIVE);
   const setEdit = (e: EditState) => setLook(lookOf(e));
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
@@ -240,7 +243,7 @@ export function Camera() {
       original?.close();
       return;
     }
-    go({ name: 'review', shot: { image, file, original, look: lookRef.current, faceSeed } });
+    go({ name: 'review', shot: { image, file, original, look: lookRef.current, faceSeed, mirrored: mirror } });
   };
 
   const shutter = () => {
@@ -311,6 +314,8 @@ export function Camera() {
   // basic mode only: the live no-face state comes and goes (the badge covers it), the panel must not flicker
   const faceNote = ready && bundle?.basic ? '基本模式不支援臉型與美妝' : null;
   const faceOff = !!faceNote && FACE_TABS.includes(sel.tab);
+  // the 美妝 note (S5 §2.5): no closed-eye or small-face note in the camera, they change every frame
+  const mkNote = makeupNote(sel, { lensClosed: false, lashesClosed: false, lashesSmall: false, procFailed: !!bundle?.engine.procMakeupFailed });
 
   useEffect(() => {
     if (ready) return;
@@ -434,6 +439,7 @@ export function Camera() {
             binding={faceOff ? null : binding}
             onChange={(v) => binding && setEdit(binding.apply(lensOf(lookRef.current), v))}
             onCommit={(v) => binding && setEdit(binding.apply(lensOf(lookRef.current), v))}
+            onSel={setSel}
           />
         )}
         {live && collapsed && !overlay && (
@@ -466,6 +472,7 @@ export function Camera() {
         body={cameraBody}
         lookFailed={(id) => bundle?.engine.lutState('look', id) === 'failed'}
         onRetryLook={(id) => bundle && requestLut(bundle.engine, 'look', id)}
+        makeupNote={mkNote}
       />
 
       <div class="cam-controls">

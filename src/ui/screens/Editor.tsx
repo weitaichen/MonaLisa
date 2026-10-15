@@ -28,24 +28,26 @@ import { hitPerson } from '../../detect/persons';
 import { backMapCpu } from '../../engine/backMapCpu';
 import { backMapFrameOf } from '../../engine/backMapFrame';
 import { sanitizeParams } from '../../engine/params';
+import { eyeNoteInfo } from '../../engine/passes/eyeFrame';
 import { earOf, mouthOpen } from '../../engine/passes/toneGeometry';
 import { abortable } from '../../media/exportFull';
 import { EXPORT_COPY, NO_SOURCE, planExport, sourceSizeRecord, type ExportPlan, type SourceInfo } from '../../media/exportPlan';
 import { takePersonsHint } from '../../store/settings';
 import { stableKey } from '../../store/undo';
 import { buildFaceProtect } from '../../tracking/faceProtect';
-import type { BodyDetection, BodyField, DetectionCache, EditState, Engine, FaceProtect, LookId, PersonId, PersonMask, Rect, Selection, SpotSize } from '../../types';
+import type { BodyDetection, BodyField, DetectionCache, EditState, Engine, Face, FaceProtect, LookId, PersonId, PersonMask, Rect, Selection, SpotSize } from '../../types';
 import { buildFrame } from '../../edit/frame';
-import { lensFor } from '../../edit/lens';
+import { lensFor, type PersonInfo } from '../../edit/lens';
 import { legacyProjection } from '../../edit/legacy';
 import { bodyAnswer, firstAnswer } from '../../edit/migrate';
 import { patchPlan, readPatch } from '../../edit/patch';
+import { screenLeftIsGpLeft } from '../../edit/sides';
 import { addSpot, clearScope, clearSpots, ownerAt, ownerCtxOf, planSpot, regionAt, spotRadius, spotsInScope, type PlanResult } from '../../edit/spots';
 import { editKey, editSetGeometry, P0 } from '../../edit/state';
 import { TONE_COPY } from '../../edit/toneCopy';
 import { createWarpGuard } from '../../edit/warpGuard';
 import { bodiesUToO, faceOToU, fieldUToO, maskOToU, maskUToO, poseOToU, upCanvas, upImage, upTracker } from '../../geometry/upFrame';
-import { apply, chipTransform, cropModeLayout, cssTurn, eYAt, isIdentity, lockFor, ovalViewBox, snapCrop, upQuarter, viewSize, vToO, type Quarter } from '../../geometry/view';
+import { apply, chipTransform, cropModeLayout, cssTurn, eYAt, isIdentity, lockFor, oToV, ovalViewBox, snapCrop, upQuarter, viewSize, vToO, type Quarter } from '../../geometry/view';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
 import { FaceBoxes, type FaceBoxItem } from '../components/FaceBoxes';
 import { BandPlane, HeightBandOverlay } from '../components/HeightBandOverlay';
@@ -104,6 +106,7 @@ import {
   clearTap,
   faceAnswer,
   INITIAL_SELECTION,
+  makeupNote,
   personNumber,
   photoScoped,
   photoTabLabel,
@@ -371,7 +374,19 @@ export function Editor({ source }: { source: EditorSource }) {
   };
   const measuresRef = useRef(measures);
   measuresRef.current = measures;
-  const lensOf = (e: EditState) => lensFor(e, selected, infos, primary, { available: (p, id) => measuredAvailable(measuresRef.current, p, id, paramAvailability) });
+  // 左／右 follow the screen per face (S5 §2.2): through the view, so 翻轉 and 旋轉 move the labels, never the values
+  const oView = oToV(g, photo);
+  const toScreen = (p: [number, number]): [number, number] => apply(oView, p);
+  /** the adapted Face of a person (its cache face id → the session face), or null for a body-only person */
+  const faceOfPerson = (pid: PersonId): Face | null => {
+    const fid = detect?.persons.find((c) => c.id === pid)?.face ?? null;
+    return (fid !== null && sessionFaces?.find((f) => f.id === fid)?.face) || null;
+  };
+  const lensPersons: PersonInfo[] = infos.map((p) => {
+    const face = faceOfPerson(p.id);
+    return face ? { ...p, screenSwap: !screenLeftIsGpLeft(face, toScreen) } : p;
+  });
+  const lensOf = (e: EditState) => lensFor(e, selected, lensPersons, primary, { available: (p, id) => measuredAvailable(measuresRef.current, p, id, paramAvailability) });
   /** every face's 瘦臉 limit by face id (absent = unlimited): every render and export draws with them */
   const [protects, setProtects] = useState<ReadonlyMap<string, FaceProtect>>(() => new Map());
   const protectsRef = useRef(protects);
@@ -1607,6 +1622,10 @@ export function Editor({ source }: { source: EditorSource }) {
     else faceNote = '臉部偵測失敗，臉型與美妝暫不套用';
   }
   const faceOff = !!faceNote && FACE_TABS.includes(sel.tab);
+  // S5 §2.4: closed eyes and small faces only for one selected person (not under 全部); the program failure always
+  const selFace = selected.kind === 'person' ? faceOfPerson(selected.id) : null;
+  const eyes = selFace ? eyeNoteInfo(selFace, photo.width / photo.height) : { lensClosed: false, lashesClosed: false, lashesSmall: false };
+  const mkNote = makeupNote(sel, { ...eyes, procFailed: !!bound?.engine.procMakeupFailed });
   // the frame takes the V aspect (S §2.2)
   const view = session ? session.viewSizeFor(g) : { width: source.bitmap.width, height: Math.max(1, source.bitmap.height) };
   const ratio = view.width / view.height || 0.75;
@@ -1754,6 +1773,7 @@ export function Editor({ source }: { source: EditorSource }) {
             onChange={(v) => (cropMode ? straightenTo(v, false) : binding && slide(binding, v, false))}
             onCommit={(v) => (cropMode ? straightenTo(v, true) : binding && slide(binding, v, true))}
             emptyText={session && !faceOff ? sliderEmptyText(lens, sel) : null}
+            onSel={setSel}
           />
         )}
         <BeautyPanel
@@ -1768,6 +1788,7 @@ export function Editor({ source }: { source: EditorSource }) {
           lookFailed={(id) => bundle?.engine.lutState('look', id) === 'failed'}
           onRetryLook={retryLook}
           crop={{ geometry: g, lock: sel.crop, oSize: photo, onAction: onCropAction }}
+          makeupNote={mkNote}
         />
       </div>
       <div class="editor-bottom-pad" />

@@ -28,6 +28,8 @@ export interface Shot {
   look: CameraLook;
   /** camera → editor (C2): the beautified face's centre in the saved image, 'all', or null */
   faceSeed: FaceSeed;
+  /** saved mirrored (front camera with 鏡像儲存): the shot's GPUPixel halves are the live look's swapped (S5 §3.4) */
+  mirrored: boolean;
 }
 
 export interface EditorSource {

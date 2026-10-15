@@ -44,3 +44,13 @@ test('reshape CPU port == RESHAPE_FS under geometry and windows (uGeo, uTile, uW
     expect(c.maxErrPx, `${c.name}: ${JSON.stringify(c.samples.slice(0, 4))}`).toBeLessThan(0.05);
   }
 });
+
+test('reshape CPU port == RESHAPE_FS with a 推臉筆 field as the outermost map (push + half restore, body, contour)', async ({ page }) => {
+  await page.goto(`${DEV_URL}/tests/e2e/pages/reshape.html`);
+  await page.waitForFunction(() => typeof window.runReshapePinLiquify === 'function');
+  const [c] = await page.evaluate(() => window.runReshapePinLiquify!());
+  console.log(`${c.name}: ${c.n} px compared, ${c.moved} moved > 1 px, max |GPU − CPU| = ${c.maxErrPx.toFixed(4)} px`);
+  expect(c.n).toBeGreaterThan(30_000);
+  expect(c.moved).toBeGreaterThan(1_000);
+  expect(c.maxErrPx, JSON.stringify(c.samples.slice(0, 4))).toBeLessThan(0.05);
+});

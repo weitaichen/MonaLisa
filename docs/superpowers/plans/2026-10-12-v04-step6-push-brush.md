@@ -2937,7 +2937,7 @@ PB §8.2: render RESHAPE_FS on the coordinate texture with a field built by `src
 - Consumes: Task 2 `LiquifyModel`, `straightStroke`, `liquifyGrid`; Task 4 `ReshapePass.draw(src, dst, face, u, aspect?, body?, protect?, view?, liquify?)`, `reshapeMapCpu(face, u, aspect, body?, protect?, liquify?)`; the page's module-level `PinCase` and imports (`landmarks`, `createReshapePass`, `reshapeUniforms`, `reshapeMapCpu`, `applyPreset`, `setParam`, `adapt`, `BodyField`, `ParamId`; `pages/reshape.ts:1-36` at `d09e608`) and its helpers `context()`, `floatTex(gl, w, h, internal, format, data)` and `rig(gl)` (`{ src, dst, compare(name, map): PinCase, dispose() }` over a 200 × 300 RGBA32F target; `:44-110`). The new entry point builds its own GL state with them, as step 3's `runReshapePinView` does, so it does not depend on how `runReshapePin` is structured.
 - Produces: `window.runReshapePinLiquify(): PinCase[]` (one case).
 
-- [ ] **Step 1: Add the failing spec test**
+- [x] **Step 1: Add the failing spec test**
 
 Append to `tests/e2e/reshape.spec.ts` (leave the three existing tests, which still expect their own cases, untouched; the file defines `DEV_URL`):
 
@@ -2953,12 +2953,12 @@ test('reshape CPU port == RESHAPE_FS with a 推臉筆 field as the outermost map
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx playwright test tests/e2e/reshape.spec.ts`
 Expected: FAIL — `waitForFunction` times out (`runReshapePinLiquify` is undefined).
 
-- [ ] **Step 3: Add the harness case**
+- [x] **Step 3: Add the harness case**
 
 In `tests/e2e/pages/reshape.ts`:
 
@@ -3025,12 +3025,12 @@ window.runReshapePinLiquify = () => {
 
 (`context()`, `floatTex(gl, …)` and `rig(gl)` are the page's helpers, `pages/reshape.ts:44-110` at `d09e608`; `rig`'s `compare` reads the target back and counts `n`, `moved` and `maxErrPx` exactly as `runReshapePin` does. `createReshapePass(gl)` takes no required options there.)
 
-- [ ] **Step 4: Run it**
+- [x] **Step 4: Run it**
 
 Run: `npx playwright test tests/e2e/reshape.spec.ts`
 Expected: PASS (the three existing tests and the new one), and the log line shows `max |GPU − CPU|` below 0.05 px.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/e2e/pages/reshape.ts tests/e2e/reshape.spec.ts

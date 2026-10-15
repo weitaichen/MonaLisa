@@ -10,7 +10,9 @@ import { applyPreset, neutralValue, PARAM_DEFS, paramsInGroup, setParam } from '
 import { adapt } from '../../../src/tracking/adapter111';
 import { glMat3, IDENTITY_GEOMETRY, setStraighten, vToO } from '../../../src/geometry/view';
 import { buildFaceProtect, protectWindow } from '../../../src/tracking/faceProtect';
-import type { BodyField, Face, FaceProtect, ParamId, PersonParams } from '../../../src/types';
+import { LiquifyModel, liquifyGrid } from '../../../src/edit/liquify';
+import { straightStroke } from '../../../src/edit/strokeFixtures';
+import type { BodyField, Face, FaceProtect, LiquifyField, ParamId, PersonParams } from '../../../src/types';
 import type { Framebuffer, GL, Texture } from '../../../src/engine/gl/gl';
 
 export interface PinCase {
@@ -33,6 +35,8 @@ declare global {
     runProtectPinMulti?: (carrier: 'texture' | 'ubo') => PinCase[];
     /** step 5 (face-detail spec §8.3 item 1): 13 cases per face-table carrier */
     runReshapePinFaceDetail?: (carrier: 'texture' | 'ubo') => PinCase[];
+    /** step 6 (push-brush spec §8.2): the 推臉筆 field as the outermost map */
+    runReshapePinLiquify?: () => PinCase[];
   }
 }
 
@@ -326,4 +330,53 @@ window.runReshapePinFaceDetail = (carrier) => {
     { name: `every 美型 item at max (${carrier})`, faces: one(U(all15)) },
   ];
   return pinCases(gl, cases, aspect, carrier);
+};
+
+/** A field from a fixed record list on the photo's own frame: a 大 push across the left cheek contour, a 大 restore over half of it. */
+function liquifyCase(W: number, H: number): LiquifyField {
+  const frame = { width: W, height: H };
+  const g = liquifyGrid(frame);
+  const R = (44 / 28) * (28.7 / g.F);
+  const m = new LiquifyModel(frame, { now: () => 0, syncWork: Infinity });
+  const push = straightStroke(frame, 'push', R, { x: 0.3, y: 0.55 }, { x: 0.3 + (1.5 * R) / g.ax, y: 0.55 }, 'pin-push');
+  const half = straightStroke(frame, 'restore', R, { x: 0.3, y: 0.5 }, { x: 0.3 + (1.5 * R) / g.ax, y: 0.5 }, 'pin-restore');
+  m.sync([...push, ...half]);
+  const f = m.snapshot()!;
+  m.dispose();
+  return f;
+}
+
+/** runReshapePin's 'body field + contour' case with the 推臉筆 field as the outermost map (push-brush spec §8.2). */
+window.runReshapePinLiquify = () => {
+  // the page's own GL context, identity source, 200 × 300 RGBA32F target and GPU/CPU comparison (context, rig)
+  const gl = context();
+  const r = rig(gl);
+  const { width: W, height: H } = landmarks;
+  const aspect = W / H;
+  // the same smooth body field as runReshapePin, RG16F from FLOAT data like the engine
+  const bw = 24;
+  const bh = 36;
+  const bd = new Float32Array(bw * bh * 2);
+  for (let y = 0; y < bh; y++)
+    for (let x = 0; x < bw; x++) {
+      bd[(y * bw + x) * 2] = 0.012 * Math.sin((x / bw) * 6) * Math.cos((y / bh) * 4);
+      bd[(y * bw + x) * 2 + 1] = 0.008 * Math.cos((x / bw) * 5);
+    }
+  const bodyTex = floatTex(gl, bw, bh, gl.RG16F, gl.RG, bd);
+  const bodyField: BodyField = { width: bw, height: bh, data: bd, version: 1 };
+  // the 推臉筆 field, uploaded RG16F like pipeline.ts liquifyTexture; the CPU port rounds its texels to f16 the same way
+  const liqField = liquifyCase(W, H);
+  const liqTex = floatTex(gl, liqField.width, liqField.height, gl.RG16F, gl.RG, liqField.data);
+  const face = adapt({ points: new Float32Array(landmarks.points) }, W, H);
+  const at = (ids: ParamId[]) => ids.reduce((p, k) => setParam(p, k, 1), applyPreset('original', 1)).values;
+  const u = reshapeUniforms(at(['shape.faceSlim', 'shape.faceV', 'shape.faceNarrow']), 1);
+  const pass = createReshapePass(gl);
+  // runReshapePin's one-face draw (protect null, view undefined = identity) plus the liquify texture as the new last argument
+  pass.draw(r.src, r.dst, face, u, aspect, bodyTex, null, undefined, liqTex);
+  const res = [r.compare('liquify + body field + contour', reshapeMapCpu(face, u, aspect, bodyField, null, liqField))];
+  pass.dispose();
+  gl.deleteTexture(bodyTex.tex);
+  gl.deleteTexture(liqTex.tex);
+  r.dispose();
+  return res;
 };

@@ -2921,6 +2921,8 @@ git commit -m "feat(liquify): StillSession carries the field into renders, expor
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
+Landed as `a5257db`, which carries a stale step-2 subject (`v0.4 step 2 task 6: The 調節 composite variant, its CPU port and the hash pins`, from a leftover message file in the scratchpad). Its content is this task's four files and its ticks. The `v0.4 step 6 task 6 fix:` commit on top of it records this note, and no commit was amended.
+
 ---
 
 ### Task 7: The GPU reshape matches the CPU port with a liquify field

@@ -398,6 +398,14 @@ const P: Record<string, JSX.Element> = {
       <circle cx="9" cy="17" r="2" />
     </>
   ),
+  /** 推臉筆: a fingertip pushing content sideways (our own line icon, DS §7.1) */
+  brush: (
+    <>
+      <circle cx="9" cy="12" r="4.6" />
+      <path d="M13.6 12h6.6M17.6 9.4l2.6 2.6-2.6 2.6" />
+      <path d="M4.4 7.2c-1.2 1.4-1.6 3-1.6 4.8s.4 3.4 1.6 4.8" />
+    </>
+  ),
   // ── 裁切 (v0.4 step 3; the ratio rectangles are BeautyPanel's RatioIcon) ──
   rotateLeft: (
     <>

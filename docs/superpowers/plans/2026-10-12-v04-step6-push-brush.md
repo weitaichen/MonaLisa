@@ -3703,7 +3703,7 @@ PB §2.2 (the bar that replaces the slider row: 推 · 恢復, 小 · 中 · 大
   - `hintText(kind: BrushKind): string`; `BRUSH_HINT_MS = 2800`; `BrushHint(props: { kind: BrushKind })`.
   - icon key `brush`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/ui/brushUi.test.ts`:
 
@@ -3740,12 +3740,12 @@ describe('brush UI (push-brush spec §2.2–§2.4)', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run src/ui/brushUi.test.ts`
 Expected: FAIL — `Failed to load url ./components/BrushBar`.
 
-- [ ] **Step 3: Write the components**
+- [x] **Step 3: Write the components**
 
 Create `src/ui/components/BrushBar.tsx`:
 
@@ -3885,7 +3885,7 @@ export function BrushHint({ kind }: { kind: BrushKind }) {
 }
 ```
 
-- [ ] **Step 4: Add the icon**
+- [x] **Step 4: Add the icon**
 
 In `src/ui/icons.tsx` (CRLF), in the `// ── panel extras ──` block after `custom` (`:394-400` at `d09e608`, before the `// ── 裁切` block):
 
@@ -3900,7 +3900,7 @@ In `src/ui/icons.tsx` (CRLF), in the `// ── panel extras ──` block after
   ),
 ```
 
-- [ ] **Step 5: Add the styles**
+- [x] **Step 5: Add the styles**
 
 In `src/ui/theme.css` (CRLF), after the `.editor-bottom-pad` rule (`:1980-1983` at `d09e608`):
 
@@ -3997,12 +3997,12 @@ In `src/ui/theme.css` (CRLF), after the `.editor-bottom-pad` rule (`:1980-1983` 
 
 Width at 375 pt: 100 (2 × 48 + 4) + 136 (3 × 44 + 4) + 88 = 324 ≤ 343 (375 − 2 × 16), so `space-between` leaves about 9 pt between the groups.
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 Run: `npx vitest run src/ui/brushUi.test.ts && npm run typecheck`
 Expected: PASS (3 tests); no errors.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/ui/components/BrushBar.tsx src/ui/components/BrushOverlay.tsx src/ui/components/BrushHint.tsx src/ui/brushUi.test.ts src/ui/icons.tsx src/ui/theme.css

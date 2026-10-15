@@ -13,6 +13,7 @@ import {
   exportCapped,
   hasSavedSettings,
   loadLook,
+  loadMakeupPartsSeen,
   loadParams,
   loadPrefs,
   LOOK_KEY,
@@ -23,8 +24,10 @@ import {
   readExportGuard,
   sanitizePrefs,
   saveLook,
+  saveMakeupPartsSeen,
   saveParams,
   savePrefs,
+  SEEN_MAKEUP_PARTS_KEY,
   takePersonsHint,
   writeExportGuard,
 } from './settings';
@@ -440,5 +443,20 @@ describe('export prefs and keys (step 3)', () => {
     expect(exportCapped()).toBe(false);
     expect(readExportDebug()).toEqual({});
     expect(() => clearExportCap()).not.toThrow();
+  });
+});
+
+describe('美妝 part-list seen flag (face-detail spec §2.3)', () => {
+  it('is false until saved, then true, under its own new key', () => {
+    expect(SEEN_MAKEUP_PARTS_KEY).toBe('meiyan.seen.makeupParts.v1');
+    expect(loadMakeupPartsSeen()).toBe(false);
+    saveMakeupPartsSeen();
+    expect(store.getItem(SEEN_MAKEUP_PARTS_KEY)).toBe('true');
+    expect(loadMakeupPartsSeen()).toBe(true);
+  });
+  it('blocked storage reads as not seen and never throws', () => {
+    stubThrowingGetter();
+    expect(loadMakeupPartsSeen()).toBe(false);
+    expect(() => saveMakeupPartsSeen()).not.toThrow();
   });
 });

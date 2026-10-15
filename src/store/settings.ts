@@ -146,6 +146,19 @@ export function hasSavedSettings(): boolean {
   }
 }
 
+// ───────────── the 美妝 part list was opened on this device (face-detail spec §2.3) ─────────────
+
+export const SEEN_MAKEUP_PARTS_KEY = 'meiyan.seen.makeupParts.v1';
+
+/** false until the part list has been opened once (the leading tile shows an accent dot meanwhile) */
+export function loadMakeupPartsSeen(): boolean {
+  return readJson(SEEN_MAKEUP_PARTS_KEY) === true;
+}
+
+export function saveMakeupPartsSeen(): void {
+  writeJson(SEEN_MAKEUP_PARTS_KEY, true);
+}
+
 // ───────────── one-time hints ─────────────
 
 export const PERSONS_HINT_KEY = 'meiyan.hint.persons.v1';

@@ -2,9 +2,10 @@
 // horizontal item strip. The value slider (and the 增高 band overlay) are rendered by the screen (floating in Camera,
 // docked in Editor).
 import { Fragment } from 'preact';
-import { useLayoutEffect, useRef } from 'preact/hooks';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { Lens } from '../../edit/lens';
 import { isIdentity, type CropLock } from '../../geometry/view';
+import { loadMakeupPartsSeen, saveMakeupPartsSeen } from '../../store/settings';
 import type { EditState, Geometry, LookId, Size } from '../../types';
 import { cropItems, type CropAction } from '../cropPanel';
 import { Icon } from '../icons';
@@ -14,6 +15,7 @@ import {
   EDITOR_TABS,
   itemsFor,
   leadChip,
+  makeupLeadItem,
   partButtons,
   partHasValue,
   personNote,
@@ -21,6 +23,8 @@ import {
   selectPart,
   selectTab,
   skinNote,
+  SPLIT_BADGE,
+  splitJointNotice,
   tabHasValue,
   TABS,
   tapToast,
@@ -64,16 +68,24 @@ interface Props {
   crop?: { geometry: Geometry; lock: CropLock; oSize: Size; onAction(a: CropAction): void };
   /** 膚質 context; the editor passes it, the camera never does */
   skin?: SkinPanelContext;
+  /** the 美妝 level-2 note (face-detail spec §2.4); never dims the strip or blocks the slider */
+  makeupNote?: string | null;
   id?: string;
 }
 
 /** tabs whose effects need a detected face */
 export const FACE_TABS: readonly TabId[] = ['shape', 'makeup'];
 
-export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, body, photoTouched, lookFailed, onRetryLook, crop, skin, id }: Props) {
+/** the 「{label}左右一起調整」 toast shows once per session (face-detail spec §2.2) */
+let jointToastShown = false;
+
+export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, body, photoTouched, lookFailed, onRetryLook, crop, skin, makeupNote, id }: Props) {
   const stripRef = useRef<HTMLDivElement>(null);
+  // switching the 美妝 level or part scrolls the strip back to its start, as switching tabs does (S5 §2.3)
   const stripKey =
-    sel.tab === 'makeup' ? `makeup.${sel.makeupPart}` : sel.tab === 'preset' ? `preset.${sel.presetPart}` : sel.tab;
+    sel.tab === 'makeup' ? `makeup.${sel.makeupView}.${sel.makeupPart}` : sel.tab === 'preset' ? `preset.${sel.presetPart}` : sel.tab;
+  // the 美妝 part list was opened once on this device: the lead tile drops its accent dot
+  const [seen, setSeen] = useState(loadMakeupPartsSeen);
 
   // new tab → start of strip, then bring the selected item into view
   useLayoutEffect(() => {
@@ -114,6 +126,15 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
       crop.onAction(item.action.crop);
       return;
     }
+    const joint = splitJointNotice(item, lens, sel);
+    if (joint && !jointToastShown) {
+      jointToastShown = true;
+      toast(joint, 2600);
+    }
+    if (item.action.type === 'parts' && !seen) {
+      saveMakeupPartsSeen();
+      setSeen(true);
+    }
     const r = activate(item, lens, sel, { lookFailed });
     const text = tapToast(item, lens, r, photoTouched);
     // a notice keeps its longer stay; the first-touch line alone stays as long as the slider's (toast's default)
@@ -121,7 +142,18 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
     if (r.retryLook) onRetryLook?.(r.retryLook);
     if (!r.changed) return;
     const a = item.action.type;
-    if (a === 'preset' || a === 'reset' || a === 'protect' || a === 'look') haptic();
+    if (
+      a === 'preset' ||
+      a === 'reset' ||
+      a === 'protect' ||
+      a === 'look' ||
+      a === 'parts' ||
+      a === 'part' ||
+      a === 'makeupReset' ||
+      a === 'makeupOn' ||
+      a === 'split'
+    )
+      haptic();
     if (r.sel !== sel) onSel(r.sel);
     if (r.edit !== lens.edit) onEdit(r.edit);
   };
@@ -152,6 +184,17 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
             </p>
           )}
           {note && <StripBodyNote note={note} />}
+          {sel.tab === 'makeup' && makeupNote && !faceOff && (
+            <p class="strip-note makeup-note" role="note">
+              {makeupNote}
+            </p>
+          )}
+          {sel.tab === 'makeup' && sel.makeupView === 'shades' && (
+            <>
+              <LeadTile item={makeupLeadItem(sel)} seen={seen} onTap={tapItem} />
+              <span class="strip-divider" />
+            </>
+          )}
           {parts && (
             <>
               {parts.map((p) => (
@@ -197,7 +240,7 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
                 aria-selected={item.selected}
                 aria-disabled={faceOff || item.disabled ? 'true' : undefined}
                 aria-pressed={item.pressed}
-                aria-description={item.disabled ? (item.reason ?? undefined) : item.badge ? '整張照片' : undefined}
+                aria-description={item.disabled ? (item.reason ?? undefined) : item.badge === SPLIT_BADGE ? '左右分開' : item.badge ? '整張照片' : undefined}
                 class={`item${item.selected ? ' selected' : ''}${item.hasValue ? ' has-value' : ''}${item.disabled ? ' disabled' : ''}${
                   item.pressed === undefined ? '' : item.pressed ? ' switchable on' : ' switchable'
                 }`}
@@ -283,13 +326,35 @@ function StripBodyNote({ note }: { note: BodyNote }) {
   );
 }
 
+/** 美妝 level 2's leading tile: the active part; ‹ opens the part list; an accent dot until it was opened once */
+function LeadTile({ item, seen, onTap }: { item: PanelItem; seen: boolean; onTap(item: PanelItem): void }) {
+  return (
+    <button type="button" class="item part lead" aria-label={`切換部位（目前：${item.label}）`} onClick={() => onTap(item)}>
+      <span class="item-tile">
+        <ItemVisual item={item} />
+        <i class="part-back" aria-hidden="true">
+          ‹
+        </i>
+        {!seen && <i class="seen-dot" aria-hidden="true" />}
+      </span>
+      <span class="item-label">{item.label}</span>
+      <span class="item-dot" />
+    </button>
+  );
+}
+
 function ItemVisual({ item }: { item: PanelItem }) {
   const v = item.visual;
   if (v.kind === 'thumb') return <Thumb src={v.src} fallback={v.fallback ?? 'filter'} />;
   if (v.kind === 'swatch')
     return <span class={`swatch${v.color ? '' : ' orig'}`} style={v.color ? { background: v.color } : undefined} />;
   if (v.kind === 'ratio') return <RatioIcon aspect={v.aspect} />;
-  return <Icon name={v.icon} />;
+  return (
+    <>
+      <Icon name={v.icon} />
+      {v.mini && <i class="mini-swatch" style={{ background: v.mini }} aria-hidden="true" />}
+    </>
+  );
 }
 
 /** a rectangle drawn with the ratio's aspect; 自由 is the dashed-square `free` icon */

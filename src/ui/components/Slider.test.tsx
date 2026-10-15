@@ -4,8 +4,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { render } from 'preact';
 import { act } from 'preact/test-utils';
-import type { SliderBinding, SliderView } from '../panelModel';
-import { SliderRow, valueText } from './Slider';
+import { INITIAL_SELECTION, type PanelSelection, type SliderBinding, type SliderView } from '../panelModel';
+import { sideCaption, SliderRow, sliderAriaLabel, valueText } from './Slider';
 
 class FakeNode {
   childNodes: FakeNode[] = [];
@@ -64,6 +64,8 @@ class FakeElement extends FakeNode {
   onpointerup = null;
   onpointercancel = null;
   onkeydown = null;
+  // Preact attaches `onClick` as 'click' (its proxy then looks the handler up by e.type) when the property exists
+  onclick = null;
   constructor(name: string) {
     super(1, name);
   }
@@ -235,5 +237,83 @@ describe('valueText (膚色 ends, skin-cleanup spec §2.2)', () => {
     expect(root.all().find((e) => e.attrs.role === 'slider')?.attrs['aria-valuetext']).toBe('−20 冷');
     expect(mount(warmth({ mixed: true })).all().find((e) => e.attrs.role === 'slider')?.attrs['aria-valuetext']).toBe('−20 冷，各人不同');
     expect(mount(eye()).find('slider-ends')).toBeUndefined();
+  });
+});
+
+const b = (over: Partial<SliderBinding>): SliderBinding => ({
+  key: 'k',
+  param: 'shape.faceSlim',
+  label: '瘦臉',
+  bidirectional: false,
+  value: 0.3,
+  mixed: false,
+  defaultValue: 0.15,
+  apply: (l) => l.set('shape.faceSlim', 0),
+  ...over,
+});
+
+describe('左｜右 slider helpers (face-detail spec §2.2)', () => {
+  it('captions the other side, signed for bidirectional items', () => {
+    expect(sideCaption(b({}))).toBeNull();
+    expect(sideCaption(b({ sides: { active: 'L', other: 0.3, select: () => ({}) as never } }))).toBe('右 30');
+    expect(sideCaption(b({ label: '太陽穴', bidirectional: true, sides: { active: 'R', other: 0.62, select: () => ({}) as never } }))).toBe('左 +12');
+  });
+  it('names the side in the slider aria-label', () => {
+    expect(sliderAriaLabel(b({}))).toBe('瘦臉');
+    expect(sliderAriaLabel(b({ sides: { active: 'L', other: 0, select: () => ({}) as never } }))).toBe('瘦臉（左）');
+    expect(sliderAriaLabel(b({ sides: { active: 'R', other: 0, select: () => ({}) as never } }))).toBe('瘦臉（右）');
+  });
+  it('keeps step 1’s target suffix after the side', () => {
+    expect(sliderAriaLabel(b({ aria: '瘦臉，人物 2', sides: { active: 'L', other: 0, select: () => ({}) as never } }))).toBe('瘦臉（左），人物 2');
+    expect(sliderAriaLabel(b({ aria: '瘦臉，全部', sides: { active: 'R', other: 0, select: () => ({}) as never } }))).toBe('瘦臉（右），全部');
+    expect(sliderAriaLabel(b({ aria: '瘦臉，人物 2' }))).toBe('瘦臉，人物 2');
+  });
+});
+
+describe('SliderRow 左｜右 chips (face-detail spec §2.2)', () => {
+  const split = (active: 'L' | 'R', over: Partial<SliderBinding> = {}): SliderBinding =>
+    b({ key: `k:${active}`, sides: { active, other: 0.3, select: (s) => ({ ...INITIAL_SELECTION, tab: 'shape', side: s }) }, ...over });
+  const mountSel = (binding: SliderBinding) => {
+    const root = new FakeElement('div');
+    const sels: PanelSelection[] = [];
+    act(() => {
+      render(<SliderRow binding={binding} onChange={() => undefined} onCommit={() => undefined} onSel={(s) => sels.push(s)} />, root as unknown as Element);
+    });
+    return { root, sels };
+  };
+  const radios = (root: FakeElement) => root.all().filter((e) => e.attrs.role === 'radio');
+
+  it('replace the label: a radiogroup of 左 and 右 with the chosen side checked', () => {
+    const { root } = mountSel(split('L'));
+    expect(root.find('slider-label')).toBeUndefined();
+    const group = root.find('side-chips')!;
+    expect(group.attrs.role).toBe('radiogroup');
+    expect(group.attrs['aria-label']).toBe('瘦臉：左右');
+    expect(radios(root).map((r) => [r.text, r.attrs['aria-checked'], r.attrs.class])).toEqual([
+      ['左', 'true', 'side-chip on'],
+      ['右', 'false', 'side-chip'],
+    ]);
+    expect(root.all().find((e) => e.attrs.role === 'slider')?.attrs['aria-label']).toBe('瘦臉（左）');
+  });
+  it('captions the other side under the track; no chips and no caption without sides', () => {
+    expect(mountSel(split('L')).root.find('side-caption')?.text).toBe('右 30');
+    expect(mountSel(split('R', { bidirectional: true, value: 0.5, defaultValue: 0.5, sides: { active: 'R', other: 0.62, select: () => INITIAL_SELECTION } })).root.find('side-caption')?.text).toBe('左 +12');
+    const plain = mountSel(b({})).root;
+    expect(plain.find('side-chips')).toBeUndefined();
+    expect(plain.find('side-caption')).toBeUndefined();
+    expect(plain.find('slider-label')?.text).toBe('瘦臉');
+  });
+  it('a chip tap is a selection change: onSel gets the side’s selection', () => {
+    const { root, sels } = mountSel(split('L'));
+    const right = radios(root)[1];
+    act(() => {
+      right.listeners.click.call(right, { type: 'click', currentTarget: right, target: right });
+    });
+    expect(sels).toEqual([{ ...INITIAL_SELECTION, tab: 'shape', side: 'R' }]);
+  });
+  it('keeps 「各人不同」 next to the chips under 全部', () => {
+    const root = mountSel(split('L', { mixed: true, aria: '瘦臉，全部' })).root;
+    expect(root.find('slider-mixed')?.text).toBe('各人不同');
+    expect(root.all().find((e) => e.attrs.role === 'slider')?.attrs['aria-label']).toBe('瘦臉（左），全部');
   });
 });

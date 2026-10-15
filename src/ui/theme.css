@@ -544,6 +544,38 @@ button:focus-visible {
   background: var(--accent-ink);
   transform: translateX(6px);
 }
+/* 美妝 (face-detail spec §2.3): the leading part tile (‹, first-run dot) and the level-1 shade swatch */
+.item.part.lead .item-tile {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.part-back {
+  position: absolute;
+  left: 4px;
+  top: 2px;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 12px;
+  color: var(--accent);
+}
+.seen-dot {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+.mini-swatch {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 5px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
 .body-note {
   width: 126px;
   min-height: 50px;
@@ -748,6 +780,47 @@ button:focus-visible {
 .slider-value {
   text-align: right;
   color: var(--text);
+}
+/* 左右分開 (face-detail spec §2.2): the side chips replace the slider label; the other side's value under the track */
+.side-chips {
+  position: relative;
+  flex: none;
+  display: flex;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.side-chip {
+  appearance: none;
+  border: 0;
+  width: 44px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  color: #d1d1d6;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+}
+.side-chip.on {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+/* 「各人不同」 beside the chips (under 全部): a flex item of its own, kept on one line */
+.side-chips + .slider-mixed {
+  position: relative;
+  flex: none;
+  margin-left: -4px;
+  white-space: nowrap;
+}
+.side-caption {
+  position: absolute;
+  left: 0;
+  bottom: 1px;
+  font-size: 10px;
+  line-height: 12px;
+  color: var(--text-2);
+  pointer-events: none;
 }
 .slider {
   position: relative;

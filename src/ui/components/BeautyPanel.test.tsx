@@ -166,6 +166,7 @@ function mount(
     skin?: SkinPanelContext;
     body?: BodyContext;
     collapsed?: boolean;
+    makeupNote?: string | null;
   } = {},
 ): Mounted {
   const root = new FakeElement('div');
@@ -249,9 +250,101 @@ describe('一鍵: the part row 美顏／質感 (step-2 spec §2.2)', () => {
     expect(haptic).toHaveBeenCalledTimes(1);
   });
 
-  it('美妝 has no part row', () => {
+  it('美妝 leads with the active part’s tile (icon lip)', () => {
     const { strip } = mount(lensOf(editOf()), sel({ tab: 'makeup' }));
-    expect(sequence(strip).slice(0, 2)).toEqual(['無', '原色']);
+    expect(sequence(strip).slice(0, 3)).toEqual(['口紅', '│', '無']);
+    expect(shape(button(strip, '口紅').find('item-tile')!.elements[0])).toBe(iconShape('lip'));
+    expect(button(strip, '口紅').attrs['aria-label']).toBe('切換部位（目前：口紅）');
+  });
+});
+
+describe('美妝 lead tile, seen dot, part list and note (face-detail spec §2.3–2.4)', () => {
+  let stored: Map<string, string>;
+  beforeEach(() => {
+    stored = new Map();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => stored.get(k) ?? null,
+      setItem: (k: string, v: string) => void stored.set(k, String(v)),
+      removeItem: (k: string) => void stored.delete(k),
+    });
+  });
+  afterAll(() => {
+    vi.stubGlobal('localStorage', undefined);
+  });
+  const lead = (strip: FakeElement) => strip.elements.find((e) => e.classes.includes('lead'))!;
+
+  it('the lead tile wears ‹ and, until the part list was opened once, the accent dot', () => {
+    const m = mount(lensOf(editOf()), sel({ tab: 'makeup' }));
+    expect(lead(m.strip).classes).toEqual(['item', 'part', 'lead']);
+    expect(lead(m.strip).find('part-back')?.text).toBe('‹');
+    expect(lead(m.strip).find('seen-dot')).toBeDefined();
+    click(lead(m.strip));
+    expect(m.onSel).toHaveBeenCalledTimes(1);
+    expect(m.onSel.mock.calls[0][0]).toMatchObject({ tab: 'makeup', makeupView: 'parts', makeupPart: 'lip' });
+    expect(haptic).toHaveBeenCalledTimes(1);
+    expect(stored.get('meiyan.seen.makeupParts.v1')).toBe('true');
+    expect(lead(m.strip).find('seen-dot')).toBeUndefined();
+    // a later panel reads the flag
+    expect(lead(mount(lensOf(editOf()), sel({ tab: 'makeup', makeupPart: 'brow' })).strip).find('seen-dot')).toBeUndefined();
+  });
+
+  it('the lead tile names the active part and follows it', () => {
+    const { strip } = mount(lensOf(editOf()), sel({ tab: 'makeup', makeupPart: 'lens' }));
+    expect(sequence(strip).slice(0, 3)).toEqual(['美瞳', '│', '無']);
+    expect(lead(strip).attrs['aria-label']).toBe('切換部位（目前：美瞳）');
+  });
+
+  it('level 1: 卸妝 │ the ten parts, no lead tile; a part on with a shade shows its swatch', () => {
+    const e = lensOf(editOf()).setShade('lip', 'coral');
+    const { strip } = mount(lensOf(e), sel({ tab: 'makeup', makeupView: 'parts' }));
+    expect(sequence(strip)).toEqual(['卸妝', '│', '口紅', '腮紅', '眉毛', '眼影', '眼線', '睫毛', '臥蠶', '修容', '高光', '美瞳']);
+    expect(strip.elements.some((x) => x.classes.includes('lead'))).toBe(false);
+    const swatch = button(strip, '口紅').find('mini-swatch')!;
+    expect(swatch.style.background).toBe('#F06A5B');
+    expect(swatch.attrs['aria-hidden']).toBe('true');
+    expect(button(strip, '腮紅').find('mini-swatch')).toBeUndefined();
+  });
+
+  it('a part tap on level 1 opens its shades with a haptic', () => {
+    const m = mount(lensOf(editOf()), sel({ tab: 'makeup', makeupView: 'parts' }));
+    click(button(m.strip, '眼影'));
+    expect(m.onSel.mock.calls[0][0]).toMatchObject({ makeupView: 'shades', makeupPart: 'eyeshadow' });
+    expect(haptic).toHaveBeenCalledTimes(1);
+  });
+
+  it('the 美妝 note leads level 2; the face note (no face) replaces it', () => {
+    const m = mount(lensOf(editOf()), sel({ tab: 'makeup', makeupPart: 'lashes' }), { makeupNote: '臉部太小，睫毛不會套用' });
+    expect(sequence(m.strip).slice(0, 4)).toEqual(['¶', '睫毛', '│', '無']);
+    const note = m.strip.elements[0];
+    expect(note.classes).toEqual(['strip-note', 'makeup-note']);
+    expect(note.attrs.role).toBe('note');
+    expect(note.text).toBe('臉部太小，睫毛不會套用');
+    const off = mount(lensOf(editOf()), sel({ tab: 'makeup', makeupPart: 'lashes' }), { makeupNote: '臉部太小，睫毛不會套用', faceNote: '照片中未偵測到臉部' });
+    expect(off.strip.findAll('strip-note').map((n) => n.text)).toEqual(['照片中未偵測到臉部']);
+  });
+});
+
+describe('美型 while 左右分開 is on (face-detail spec §2.1–2.2)', () => {
+  const splitLens = () => lensOf(lensOf(editOf()).setSplit(true, 'L'));
+  it('a split item tells its 「左右」 badge apart from 「整張」', () => {
+    const { strip } = mount(splitLens(), sel({ tab: 'shape' }));
+    expect(button(strip, '瘦臉').attrs['aria-description']).toBe('左右分開');
+    expect(button(strip, '下巴').attrs['aria-description']).toBeUndefined();
+  });
+  it('the first non-split item of the session toasts 「{label}左右一起調整」 once; the 左右分開 tap buzzes', async () => {
+    const { app } = await import('../state');
+    app.set({ toast: null });
+    const m = mount(splitLens(), sel({ tab: 'shape' }));
+    click(button(m.strip, '瘦臉'));
+    expect(app.get().toast).toBeNull();
+    click(button(m.strip, '下巴'));
+    expect(app.get().toast?.text).toBe('下巴左右一起調整');
+    app.set({ toast: null });
+    click(button(m.strip, '額頭'));
+    expect(app.get().toast).toBeNull();
+    haptic.mockClear();
+    click(button(m.strip, '左右分開'));
+    expect(haptic).toHaveBeenCalledTimes(1);
   });
 });
 

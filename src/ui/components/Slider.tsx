@@ -4,7 +4,7 @@
 // resets to the default. No haptics here — slider movement must never buzz (RB §1 #18). A binding's `scale` (拉直:
 // −45.0°…+45.0°, step 0.1°, snap ±0.5°) replaces the display units; without one the output is v0.3's exactly.
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { SliderScale, SliderView } from '../panelModel';
+import type { PanelSelection, SliderScale, SliderView } from '../panelModel';
 
 const SNAP = 3; // display units
 const TAP_SLOP = 6; // px
@@ -34,6 +34,23 @@ export function formatDisplay(bidirectional: boolean, v: number, scale?: SliderS
   if (n === 0) return `0${scale.suffix}`;
   if (!bidirectional) return `${n.toFixed(d)}${scale.suffix}`;
   return n > 0 ? `+${n.toFixed(d)}${scale.suffix}` : `−${(-n).toFixed(d)}${scale.suffix}`;
+}
+
+/** under a split item's slider: the other on-screen side's value, e.g. 「右 +12」 or 「左 30」 (S5 §2.2) */
+export function sideCaption(b: SliderView): string | null {
+  if (!b.sides) return null;
+  return `${b.sides.active === 'L' ? '右' : '左'} ${formatDisplay(b.bidirectional, b.sides.other)}`;
+}
+
+/**
+ * the slider's accessible name: step 1's `aria` (「{label}，人物 {n}」 / 「{label}，全部」, set by decorate with ≥ 2 persons) or the
+ * label, with the chosen side right after the item name while a side is chosen: 「瘦臉（左）」, 「瘦臉（左），人物 2」
+ */
+export function sliderAriaLabel(b: SliderView): string {
+  const base = b.aria ?? b.label;
+  if (!b.sides) return base;
+  const side = `（${b.sides.active === 'L' ? '左' : '右'}）`;
+  return base.startsWith(b.label) ? `${b.label}${side}${base.slice(b.label.length)}` : `${base}${side}`;
 }
 
 /** aria-valuetext: the value, plus the end it leans to when the slider has end captions (「−20 冷」, 「+15 暖」) */
@@ -71,9 +88,11 @@ interface Props {
   float?: boolean;
   /** shown in the empty row (程度 under 全部 with different presets) */
   emptyText?: string | null;
+  /** 左｜右 chips: a side change is a selection change (view state, never an undo step) */
+  onSel?(sel: PanelSelection): void;
 }
 
-export function SliderRow({ binding, onChange, onCommit, float, emptyText }: Props) {
+export function SliderRow({ binding, onChange, onCommit, float, emptyText, onSel }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ id: number; x0: number; v0: number; moved: boolean; snapped: boolean } | null>(null);
   const lastTap = useRef(0);
@@ -180,15 +199,36 @@ export function SliderRow({ binding, onChange, onCommit, float, emptyText }: Pro
   const text = formatDisplay(bi, v, sc);
   return (
     <div class={`slider-row${float ? ' float' : ''}`}>
-      <span class="slider-label">
-        {binding.label}
-        {binding.mixed && <small class="slider-mixed">各人不同</small>}
-      </span>
+      {binding.sides ? (
+        <>
+          <div class="side-chips" role="radiogroup" aria-label={`${binding.label}：左右`}>
+            {(['L', 'R'] as const).map((s) => (
+              <button
+                key={s}
+                type="button"
+                role="radio"
+                aria-checked={binding.sides!.active === s}
+                class={`side-chip${binding.sides!.active === s ? ' on' : ''}`}
+                onClick={() => onSel?.(binding.sides!.select(s))}
+              >
+                {s === 'L' ? '左' : '右'}
+              </button>
+            ))}
+          </div>
+          {/* under 全部 `mixed` compares the chosen side (S5 §3.4) */}
+          {binding.mixed && <small class="slider-mixed">各人不同</small>}
+        </>
+      ) : (
+        <span class="slider-label">
+          {binding.label}
+          {binding.mixed && <small class="slider-mixed">各人不同</small>}
+        </span>
+      )}
       <div
         class={`slider${dragV !== null ? ' dragging' : ''}`}
         ref={sliderRef}
         role="slider"
-        aria-label={binding.aria ?? binding.label}
+        aria-label={sliderAriaLabel(binding)}
         aria-valuemin={sc ? sc.min : bi ? -50 : 0}
         aria-valuemax={sc ? sc.max : bi ? 50 : 100}
         aria-valuenow={displayOf(bi, v, sc)}
@@ -224,6 +264,7 @@ export function SliderRow({ binding, onChange, onCommit, float, emptyText }: Pro
             <span>{binding.ends[1]}</span>
           </div>
         )}
+        {binding.sides && <span class="side-caption num">{sideCaption(binding)}</span>}
       </div>
       <span class="slider-value num">{text}</span>
     </div>

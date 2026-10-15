@@ -6461,7 +6461,7 @@ The Preact side of Tasks 13–14 (S5 §2.1–2.4): the 美妝 leading part tile 
   - `Slider.tsx`: `sideCaption(b: SliderView): string | null`, `sliderAriaLabel(b: SliderView): string` (a `SliderBinding` is a `SliderView`); `SliderRow` prop `onSel?(sel: PanelSelection): void`
   - `BeautyPanel` prop `makeupNote?: string | null`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/store/settings.test.ts` (import `loadMakeupPartsSeen, saveMakeupPartsSeen, SEEN_MAKEUP_PARTS_KEY` from `./settings`):
 
@@ -6515,12 +6515,12 @@ describe('左｜右 slider helpers (face-detail spec §2.2)', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run src/store/settings.test.ts src/ui/components/Slider.test.tsx`
 Expected: FAIL — `loadMakeupPartsSeen` / `sideCaption` not exported.
 
-- [ ] **Step 3: Implement the store flag and the slider**
+- [x] **Step 3: Implement the store flag and the slider**
 
 `src/store/settings.ts`, after the version helpers:
 
@@ -6670,7 +6670,7 @@ and after `.item.switchable.on .item-switch::after { … }`:
 }
 ```
 
-- [ ] **Step 4: Implement the panel**
+- [x] **Step 4: Implement the panel**
 
 `src/ui/components/BeautyPanel.tsx` (CRLF; on top of steps 1–4):
 
@@ -6737,12 +6737,12 @@ Haptics: `parts`, `part`, `makeupReset`, `makeupOn` and `split` are taps like `p
 
 `src/ui/components/BeautyPanel.test.tsx` (LF): Task 14's 「美妝 has no part row」 case now meets the lead tile; make it 「美妝 leads with the active part's tile (icon lip)」: `expect(sequence(strip).slice(0, 3)).toEqual(['口紅', '│', '無']);`, `expect(shape(button(strip, '口紅').find('item-tile')!.elements[0])).toBe(iconShape('lip'));` and `expect(button(strip, '口紅').attrs['aria-label']).toBe('切換部位（目前：口紅）');`.
 
-- [ ] **Step 5: Run the tests, typecheck, build**
+- [x] **Step 5: Run the tests, typecheck, build**
 
 Run: `npx vitest run src/store src/ui && npm run typecheck && npm run build`
 Expected: PASS; the production build succeeds.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 file src/ui/components/BeautyPanel.tsx src/ui/components/Slider.tsx src/ui/theme.css src/store/settings.ts

@@ -10,10 +10,31 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-12-push-brush-design.md` (called **PB** below) and the contract `docs/superpowers/specs/2026-10-12-v04-roadmap.md` (**C**; status accepted, every §12 default adopted: #40 no 背景保護 on strokes, #41 恢復 only reverts strokes, #42 gain ¾ and no 力度 slider, #43 radii 16/28/44 px). Names consumed from steps 1–5 come from `2026-10-12-face-person-select-design.md` (**PS**), `2026-10-12-crop-and-fullres-export-design.md` (**CR**), `2026-10-12-skin-cleanup-tools-design.md` (**SK**) and `2026-10-12-face-detail-and-makeup-design.md` (**FD**).
 
+## Reconciliation (step 6)
+
+Checked against the code at the step base `d09e608` (steps 1–5 committed with their fixes); no code was changed. Every consumed name exists as the plan uses it unless an item below says otherwise, every file in the Global Constraints' CRLF / LF lists still has those line endings (`git ls-files --eol`), and nothing of step 6 exists yet (no `Stroke`, `liquify` or `brush*` name or file). These edits were made:
+
+- **Anchors:** where a task needed one, its **Files** line or step now cites the `d09e608` line ("at `d09e608`"). The other `file:N` anchors are still v0.3's (`892ea61`): locate those by the name given, as the Global Constraints say.
+- **Base:** the step base is `d09e608`. The `v0.4 step 6: reconcile plan` commit on top of it changes only this plan, so `STEP6_BASE` (`git rev-parse HEAD` before Task 1) has the step base's code.
+- **Task 3:** step 3 moved `oSize` into `sanitizePhoto(raw, persons, oSize)`, so the strokes are sanitized in its literal (`r.strokes`), and `sanitizeEditState` needs no change of its own. `openState` re-validates only the geometry on the v2 paths that hand the stored edit back (no cache, a dropped one); the strokes are re-sanitized there too, or the migrate test 「drops only the corrupt record」 (an entry without a cache) keeps the corrupt record. `normalizeEntry` already passes `{ width, height }` (step 3, `history.ts:214`), so `history.ts` is unchanged. `splitLegacy`'s photo literal (`src/edit/legacy.ts:16`) gains `strokes: []`.
+- **Task 4:** the protect unit's uniform is `uProtArr`; `reshapeCpu.ts` already defines `f16` (`:67`), which `liquifyAt` reuses; the hash pin is the `PINNED` constant (`reshapeCpu.test.ts:19`).
+- **Task 5:** `run` plans through step 1's `planFrame(job, makeupReady, bodyOn, proc)`, which gains a fifth parameter `liquifyOn = false` that it forwards to `planPasses`. The `index.test.ts` 美體 block's `lastJob` / `input` are local to it: the new block declares its own copies.
+- **Task 6:** `StillFrame` lives in `src/types.ts:570` (CRLF), which this task edits; `still.test.ts` already imports `defaultPhoto` and `StillFrame`; the t7 harness's `fakeStill` (`tests/harness/t7/fakes.ts`) gains `liquify` / `setLiquify`, or `typecheck` fails.
+- **Task 7:** the entry point uses the page's `context()`, `floatTex()` and `rig()` helpers, as `runReshapePinView` does.
+- **Task 11:** `sliderFor`'s shared case reads `const id = sel[sel.tab]`, and its `'body'` case gates with `bodyItemGate(lens, body, sel.body)`.
+- **Task 12:** the Editor has no StillFrame ref: `frameOf(e, s)` builds the frame, and `planFor`, `encode`, `runWorking` and `runTiled` take the `EditState`. The encode effect's guard uses `exportBusy`, `save`'s guard is `if (!session || lost) return;`, and `setSel` keeps its `setDragging(false)`. `runTiled`'s working-size fallback passes `liq` on (which also keeps `noUnusedParameters` green before Task 13). Removing `body.spec.ts`'s `emptyPng` also removes its `PNG` import, and `darkestRow` moves to Task 14, its first user (`noUnusedLocals`). The `.editor-panel` snippet shows the landed `SpotControls` / `SliderRow` props.
+- **Task 13:** the person tap maps `apply(vToO(g, photo), uv)` inline; the snippet now spells that out. `tapSpot` passes `geometry: shown`; `planFor` calls `s.bounds(frameOf(e, s), field, …)`.
+- **Task 14:** defines `darkestRow` (moved from Task 12).
+- **Task 15:** `buildFrame` has a required fifth parameter `primary`: `'p0'`. The new imports join `main.ts`'s existing `../edit/frame` and `../edit/state` lines (`Engine` is already imported). `liquifyOut` gets its own class (`liquify-note`), because `bench.spec.ts` pins `.gate .note` and `.panel .note` to one element each.
+- **Task 16:** face A keeps the step-5 cases' `c.faceDetail ? step5Person() : person` as its base. Step 4 feeds the planner through `spotBounds(frame, oSize)` (an O-normalized `spotWindowGrowth` plus `oSpacePasses`), so the case spreads `spotBounds({ faces, photo }, decode)`; `Rect` is already imported by Task 13. `vite.config.ts` reads the version at `:37-44`.
+- **Task 17:** the kept-assertions check also expects import declarations that gained names and `body.spec.ts`'s removed `PNG` import.
+- **Commits:** the workflow's message format replaces the plan's `git commit -m` blocks: `v0.4 step 6 task <N>: <title>`, fixes `v0.4 step 6 task <N> fix: …`, then a blank line and the `Co-Authored-By` trailer, written to a file and committed with `git commit -F <file>` (heredocs break in this shell). A block's `git add` list shows the task's files; also stage every file this reconciliation adds to a task's **Files**.
+- **Imports:** put new names into a file's existing import declarations; never import a name twice.
+
 ## Global Constraints
 
 - **Base:** this plan runs after steps 1–5 are merged on `feat/meiyan-pwa`. Line anchors written `file:N` are at `892ea61` (v0.3.0, identical to `1f0273d` for `src/`); "after step N" names code that earlier steps reshape. Where step 1–5 code is edited, locate it by the name given here, not by the v0.3 line number.
-- **Version:** `package.json` stays `"version": "0.3.0"` until Task 16 bumps it to `0.4.0` (C §1.3; `src/version.ts:6` and `vite.config.ts:58` read it). Nothing else hard-codes the version.
+- **Version:** `package.json` stays `"version": "0.3.0"` until Task 16 bumps it to `0.4.0` (C §1.3; `src/version.ts:6` and `vite.config.ts:37-44` read it). Nothing else hard-codes the version.
 - **Git:** commits are LOCAL ONLY on `feat/meiyan-pwa`. Never `git push`, never deploy, never open a PR. End every commit message with the line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Before Task 1, record the base in a file inside `.git` (shell variables do not survive between tool calls or subagents): `git rev-parse HEAD > "$(git rev-parse --git-dir)/STEP6_BASE"`. Task 17 reads it back with `STEP6_BASE=$(cat "$(git rev-parse --git-dir)/STEP6_BASE")`.
 - **Line endings:** every edited file keeps its own line endings. CRLF today, among the files this plan edits: `src/types.ts`, `src/ui/panelModel.ts`, `src/ui/screens/zoomPan.ts`, `src/ui/components/BeautyPanel.tsx`, `src/ui/icons.tsx`, `src/ui/theme.css`, `src/ui/state.ts`, `src/ui/flows.ts`, `src/ui/screens/Home.tsx`, `src/ui/screens/Review.tsx`, `src/engine/pipeline.ts`, `src/engine/index.ts`, `src/engine/passes/reshape.test.ts`, `src/app/testFakes.ts`, `src/bench/main.ts`, `vite.config.ts`, `docs/superpowers/specs/2026-10-07-meiyan-pwa-design.md`. LF: `src/ui/screens/Editor.tsx`, `src/app/still.ts`, `src/engine/passes/reshape.ts`, `reshapeCpu.ts`, `src/body/field.ts`, `src/store/history.ts`, `tests/e2e/*`, `docs/superpowers/specs/2026-10-12-v04-roadmap.md`. Check any other file with `git ls-files --eol <path>` before editing (`w/crlf` = keep CRLF; `.gitattributes` is `* text=auto eol=lf`, `core.autocrlf=true`). New files are LF.
 - **Dependencies:** no new npm packages. MediaPipe stays `@mediapipe/tasks-vision` 0.10.35. CSP stays `connect-src 'self'`; no network access added.
@@ -43,22 +64,24 @@
 | File | Status | Responsibility |
 |---|---|---|
 | `src/config/limits.ts` | modify (step 1 created it) | The PB §3.3 constants |
-| `src/types.ts` | modify | `Stroke` (if step 1 left it out), `LiquifyField`, `LiquifyFrame`, `BrushKind`, `BrushSize`, `PhotoParams.strokes`, `RenderInput.liquify`, `DebugState.liquify` |
+| `src/types.ts` | modify | `Stroke` (if step 1 left it out), `LiquifyField`, `LiquifyFrame`, `BrushKind`, `BrushSize`, `PhotoParams.strokes`, `RenderInput.liquify`, `DebugState.liquify`; `StillFrame` also omits `'liquify'` (Task 6) |
 | `src/body/field.ts` | modify | `fieldMinJacobianRect` (cell window); `fieldMinJacobian` becomes its full-rect call |
 | `src/body/fieldRect.test.ts` | create | Rect version equals v0.3's full scan |
 | `src/edit/liquify.ts` | create | Grid/units, `StrokeBuilder`, stamp operators, guard, `LiquifyModel`, `strokeWork`, `sanitizeStrokes`, `makeStrokeId`, `brushRadius` |
 | `src/edit/strokeFixtures.ts` | create | Seeded `strokesS30`, `strokesCap`, `straightStroke` (tests and bench) |
 | `tests/fixtures/strokes_s30.json`, `tests/fixtures/strokes_cap.json` | create | PB §8.4 / C §8.3 stroke fixtures: the generators' output on the 3:4 measuring frame, written by `liquify.test.ts` and pinned to the generators (our own data, no NOTICE line) |
 | `src/edit/liquify.test.ts` | create | PB §8.1 unit tests |
-| `src/edit/state.ts`, `state.test.ts` | modify | `defaultPhoto().strokes`, `withStrokes`, `clearStrokes`, `editKey` by stroke id, `sanitizeEditState` → `sanitizeStrokes` |
-| `src/edit/migrate.ts`, `migrate.test.ts` | modify | `openState(...).frame` |
+| `src/edit/state.ts`, `state.test.ts` | modify | `defaultPhoto().strokes`, `withStrokes`, `clearStrokes`, `editKey` by stroke id, `sanitizePhoto` (so `sanitizeEditState`) → `sanitizeStrokes` |
+| `src/edit/legacy.ts` | modify | `splitLegacy`'s photo literal gains `strokes: []` |
+| `src/edit/migrate.ts`, `migrate.test.ts` | modify | `openState(...).frame`; the strokes re-sanitized with the geometry on every v2 path |
 | `src/ui/state.ts`, `src/ui/flows.ts` | modify | `EditorSource.frame` |
-| `src/store/history.ts`, `history.test.ts` | modify | `normalizeEntry` sanitizes the stored edit on the entry's own `width × height` (else every stroke is dropped at read time); v2 round trip with stroke `Float32Array`s |
+| `src/store/history.test.ts` | modify | v2 round trip with stroke `Float32Array`s; a corrupt record dropped on read (`history.ts`'s `normalizeEntry` already sanitizes on the entry's own `width × height`, step 3) |
 | `src/engine/passes/reshape.ts` | modify | `uLiqDisp`/`uLiqOn`, `LIQUIFY_UNIT = 4`, body lookup at the liquified coordinate, `draw(..., liquify)` |
 | `src/engine/passes/reshapeCpu.ts`, `reshapeCpu.test.ts` | modify | `liquifyAt` (f16 texels), `liquify` argument applied first, hash pin re-set |
-| `src/engine/pipeline.ts`, `pipeline.test.ts` | modify | `FrameJob.liquify`, `PassPlanInput.liquifyOn`, `liquifyTexture()` |
+| `src/engine/pipeline.ts`, `pipeline.test.ts` | modify | `FrameJob.liquify`, `PassPlanInput.liquifyOn`, `planFrame(…, liquifyOn)`, `liquifyTexture()` |
 | `src/engine/index.ts`, `index.test.ts` | modify | `job()` forwards `RenderInput.liquify` |
 | `src/app/still.ts`, `still.test.ts` | modify | `setLiquify`, `liquify`, `StillSessionOptions.liquify`, `exportImageData(frame, body?, liquify?)`, `tileInput` |
+| `tests/harness/t7/fakes.ts` | modify | the t7 `fakeStill` gains `liquify` / `setLiquify` |
 | `tests/e2e/pages/reshape.ts`, `tests/e2e/reshape.spec.ts` | modify | GPU = CPU port with a liquify field |
 | `src/ui/brushGesture.ts`, `brushGesture.test.ts` | create | PB §2.5 reducer |
 | `src/ui/screens/zoomPan.ts` | modify | `opts.brush` hooks: one finger draws, two pinch, locked state |
@@ -87,13 +110,13 @@
 The shared names every later task uses, plus the one change to the body field module the fold guard needs: a Jacobian check restricted to the cells a stamp can have changed (PB §4.3; PB §3.7 row `src/body/field.ts:166-192`).
 
 **Files:**
-- Modify: `src/types.ts` (CRLF; v0.3 anchors `173-180` BodyField, `276-292` RenderInput, `409-421` DebugState)
-- Modify: `src/config/limits.ts` (created by step 1, PS §3.5)
-- Modify: `src/body/field.ts:166-192` (`fieldMinJacobian`)
+- Modify: `src/types.ts` (CRLF; at `d09e608`: `399-408` BodyField, `524-559` RenderInput, `231-246` PhotoParams, `741-777` DebugState)
+- Modify: `src/config/limits.ts` (created by step 1, PS §3.5; LF)
+- Modify: `src/body/field.ts:342-368` at `d09e608` (`fieldMinJacobian`)
 - Create: `src/body/fieldRect.test.ts`
 
 **Interfaces:**
-- Consumes: `BodyField` (`types.ts:173-180`); step 1's `Rect` (`{ x, y, w, h }`, PS §3.2) and `RenderInput` v0.4 (C §4.1); step 1's `src/config/limits.ts`.
+- Consumes: `BodyField` (`types.ts:399-408` at `d09e608`); step 1's `Rect` (`{ x, y, w, h }`, PS §3.2) and `RenderInput` v0.4 (C §4.1); step 1's `src/config/limits.ts`.
 - Produces:
   - `src/types.ts`: `interface Stroke { id: string; kind: 'push' | 'restore'; radius: number; strength: number; points: Float32Array }` (C §3.2, added here only if steps 1–5 did not), `type LiquifyField = BodyField`, `interface LiquifyFrame { width: number; height: number }`, `type BrushKind = Stroke['kind']`, `type BrushSize = 's' | 'm' | 'l'`, `RenderInput.liquify?: LiquifyField | null`, `DebugState.liquify?: { strokes: number; version: number; work: number; maxDisp: number; pending: boolean }`.
   - `src/config/limits.ts`: `LIQUIFY_LONG_EDGE`, `BRUSH_PX`, `R_MAX`, `STAMP_SPACING`, `PUSH_GAIN`, `RESTORE_GAIN`, `SNAP`, `LIQUIFY_MIN_DET`, `GUARD_STEPS`, `MAX_STROKE_POINTS`, `MAX_STROKES`, `LIQUIFY_WORK_CAP`, `LIQUIFY_SYNC_WORK`, `LIQUIFY_SLICE_MS`, `PATCH_BUDGET`, `PATCH_TILE`, `PINCH_GRACE_MS`, `STAMP_FRAME_MS`.
@@ -169,7 +192,7 @@ Expected: FAIL — `SyntaxError: The requested module './field' does not provide
 
 - [ ] **Step 3: Split `fieldMinJacobian` into the windowed function**
 
-In `src/body/field.ts`, replace the whole `fieldMinJacobian` function (v0.3 `field.ts:166-192`, starting at the comment `/** Smallest Jacobian determinant of the backward map …`) with:
+In `src/body/field.ts`, replace the whole `fieldMinJacobian` function (`field.ts:342-368` at `d09e608`, starting at the comment `/** Smallest Jacobian determinant of the backward map …`) with:
 
 ```ts
 /** Smallest Jacobian determinant of the backward map (debug / tests: must stay > 0.3, i.e. no fold-over). */
@@ -219,7 +242,7 @@ In `src/types.ts` (CRLF), first check what steps 1–5 already added:
 
 Run: `grep -n "export interface Stroke\|LiquifyField\|LiquifyFrame\|liquify?" src/types.ts`
 
-Add each item below that the grep did not find. Directly after `interface BodyField { … }` (v0.3 `types.ts:173-180`):
+Add each item below that the grep did not find. Directly after `interface BodyField { … }` (`types.ts:399-408` at `d09e608`):
 
 ```ts
 /** 推臉筆 field (push-brush spec §3.1): the BodyField layout, backward displacement in O UV units, row 0 = image top */
@@ -261,7 +284,7 @@ In `interface RenderInput` (after step 3 it holds `geometry`, `sourceWindow`, `o
   liquify?: LiquifyField | null;
 ```
 
-In `interface DebugState`, after `update?: …` (v0.3 `types.ts:420`):
+In `interface DebugState`, after `update?: …` (`types.ts:765` at `d09e608`):
 
 ```ts
   /** 推臉筆 (push-brush spec §3.2): written by the editor on commit, sync and rebuild end, not per stamp */
@@ -2032,7 +2055,7 @@ export class LiquifyModel {
     return { x: o.x + t[0], y: o.y + t[1] };
   }
 
-  /** a copy of the field for an export asked for now (like snapshotField, Editor.tsx:538) */
+  /** a copy of the field for an export asked for now (like the Editor's snapshotField) */
   snapshot(): LiquifyField | null {
     const f = this._field;
     return f ? { ...f, data: f.data.slice() } : null;
@@ -2118,12 +2141,13 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 Strokes become part of the undoable, persisted edit (C §3.2, §3.4, §5; PB §3.3, §3.7 rows `state.ts`, `migrate.ts`, `ui/state.ts`, `flows.ts`; PB §5). The grid is built on the history entry's stored size, never the decode size, so a tier-L reopen replays bit for bit (PB §3.3, §7; PB §8.1's history row).
 
 **Files:**
-- Modify: `src/types.ts` (`PhotoParams`, created by step 1 from C §3.2)
-- Modify: `src/edit/state.ts`, `src/edit/state.test.ts` (step 1)
-- Modify: `src/edit/migrate.ts`, `src/edit/migrate.test.ts` (step 1, PS §5.3)
-- Modify: `src/ui/state.ts` (CRLF; `EditorSource`, v0.3 `state.ts:27-40`, reshaped by steps 1 and 3)
-- Modify: `src/ui/flows.ts` (CRLF; `freshSource` / `openInEditor`, v0.3 `flows.ts:16-45`)
-- Modify: `src/store/history.ts` (LF; `normalizeEntry`, v0.3 `:161-180`, where step 1 added `entry.edit = sanitizeEditState(r.edit, null)`)
+- Modify: `src/types.ts` (CRLF; `PhotoParams`, created by step 1 from C §3.2; `types.ts:231-246` at `d09e608`)
+- Modify: `src/edit/state.ts`, `src/edit/state.test.ts` (step 1; LF; at `d09e608`: `defaultPhoto` `:61-66`, `editKey` `:69-71`, `sanitizePhoto` `:272-295`, `sanitizeEditState` `:309-323`)
+- Modify: `src/edit/legacy.ts` (LF; `splitLegacy`'s photo literal, `:16` at `d09e608`)
+- Modify: `src/edit/migrate.ts`, `src/edit/migrate.test.ts` (step 1, PS §5.3; LF; `OpenedState` `:17-28`, `openState` `:50-86` at `d09e608`)
+- Modify: `src/ui/state.ts` (CRLF; `EditorSource`, `state.ts:35-62` at `d09e608`)
+- Modify: `src/ui/flows.ts` (CRLF; `freshSource` / `openInEditor`, `flows.ts:16-53` at `d09e608`)
+- Unchanged: `src/store/history.ts` (LF; `normalizeEntry` already sanitizes with `sanitizeEditState(r.edit, null, { width, height })`, step 3, `:214` at `d09e608`)
 - Modify: `src/store/history.test.ts`
 
 **Interfaces:**
@@ -2135,7 +2159,7 @@ Strokes become part of the undoable, persisted edit (C §3.2, §3.4, §5; PB §3
   - `editKey(edit)` serializes each stroke as its `id` (never its points).
   - `sanitizeEditState(raw, personIds, oSize?)` sets `photo.strokes = sanitizeStrokes(raw.photo.strokes, oSize ?? null)`.
   - `OpenedState.frame: LiquifyFrame` = `{ width: entry.width, height: entry.height }` (the same object step 3 passes to `sanitizeEditState`).
-  - `EditorSource.frame: LiquifyFrame` (a reopen: `openState(...).frame`; a new import or camera shot: the decoded bitmap's size, set by `freshSource`, which the first `addEntry` stores as `width × height`, `Editor.tsx:299-318`).
+  - `EditorSource.frame: LiquifyFrame` (a reopen: `openState(...).frame`; a new import or camera shot: the decoded bitmap's size, set by `freshSource`, which the first `addEntry` stores as `width × height`, `writeHistory`, `Editor.tsx:739-770` at `d09e608`).
   - `normalizeEntry` sanitizes a stored v2 edit with the record's own `{ width, height }` as `oSize`, so `getEntry` / `listEntries` keep the strokes (and step 3's geometry) instead of dropping them for want of a frame.
 
 - [ ] **Step 1: Write the failing tests**
@@ -2288,7 +2312,7 @@ describe('v2 entries with strokes (push-brush spec §5.1, §5.2)', () => {
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run src/edit/state.test.ts src/edit/migrate.test.ts src/store/history.test.ts`
-Expected: FAIL — `withStrokes` / `clearStrokes` are not exported, `defaultPhoto().strokes` is `undefined`, `st.frame` is `undefined`, the history read keeps the corrupt record (nothing sanitizes strokes yet) (and TS errors on `photo.strokes`).
+Expected: FAIL — `withStrokes` / `clearStrokes` are not exported, `defaultPhoto().strokes` is `undefined`, `st.frame` is `undefined`, the history read has no strokes at all (`sanitizePhoto`'s literal does not copy the field yet) (and TS errors on `photo.strokes`).
 
 - [ ] **Step 3: Add `strokes` to `PhotoParams`**
 
@@ -2304,7 +2328,13 @@ In `src/types.ts`, in `interface PhotoParams` (C §3.2), after the last field st
 In `src/edit/state.ts`:
 
 1. Add `import { sanitizeStrokes } from './liquify';` and `Stroke` to the type import from `'../types'`.
-2. In `defaultPhoto()` and in `sanitizePhoto(raw, persons)`'s photo literal, add `strokes: [],` (`sanitizePhoto` also builds the camera look's photo layer, which never has strokes). Add `strokes: []` to any other `PhotoParams` literal `npm run typecheck` reports (most spread `defaultPhoto()` and need nothing).
+2. In `defaultPhoto()`'s literal add `strokes: []`. In `sanitizePhoto(raw, persons, oSize)`'s photo literal (step 3 gave it the `oSize` parameter; `r` is the raw photo record there), next to step 3's `geometry: sanitizeGeometry(r.geometry, oSize),` and step 4's `spots: …` line, add:
+
+```ts
+    strokes: sanitizeStrokes(r.strokes, oSize ?? null),
+```
+
+(`sanitizePhoto` also builds the camera look's photo layer, `settings.ts:52`, without an `oSize`, so the look never has strokes.) In `src/edit/legacy.ts`, `splitLegacy`'s photo literal (`:16`) gets `strokes: []`. Add `strokes: []` to any other `PhotoParams` literal `npm run typecheck` reports (the rest spread `defaultPhoto()` and need nothing).
 3. Add, next to the other edit-state reducers (step 3 put `rotateLeft` / `flipView` wrappers there):
 
 ```ts
@@ -2329,29 +2359,25 @@ export function editKey(edit: EditState): string {
 }
 ```
 
-5. In `sanitizeEditState(raw, personIds, oSize?)`: step 1 returns `{ v: 2, photo: sanitizePhoto(r.photo, new Set(Object.keys(persons))), persons, template, primaryInit }`, and step 3 added `geometry: sanitizeGeometry(rawPhoto.geometry, oSize)` where that photo is built (`rawPhoto` = the raw `photo` record). Next to step 3's `geometry` line, add the strokes the same way:
-
-```ts
-    strokes: sanitizeStrokes(rawPhoto.strokes, oSize ?? null),
-```
-
-Without `oSize` (the camera look, and any caller without an entry size) the strokes are always `[]` (PB §4.5 row Camera).
+5. `sanitizeEditState(raw, personIds, oSize?)` needs no edit of its own: it returns `{ v: 2, photo: sanitizePhoto(r.photo, new Set(Object.keys(persons)), oSize), persons, template, primaryInit }` (`state.ts:322` at `d09e608`), so item 2's line sanitizes the strokes on `oSize`. Without `oSize` (the camera look, and any caller without an entry size) the strokes are always `[]` (PB §4.5 row Camera).
 
 - [ ] **Step 5: Return the frame from `openState`; sanitize stored edits on their own frame**
 
 In `src/edit/migrate.ts`:
 
 1. `interface OpenedState` gains `/** the size the 推臉筆 grid is built on: the entry's stored width × height (push-brush spec §3.3) */ frame: LiquifyFrame;` (import `LiquifyFrame` from `'../types'`).
-2. In `openState(entry, size)`, compute `const frame: LiquifyFrame = { width: entry.width, height: entry.height };` at the top, pass `frame` as the `oSize` argument of every `sanitizeEditState` call in the function (step 3 passes a `{ width: entry.width, height: entry.height }` literal there: replace it with `frame`), and add `frame` to every object the function returns.
-
-In `src/store/history.ts` (LF), `normalizeEntry` (step 1, step-1 plan Task 8) sanitizes the stored edit with `if (isEditStateRecord(r.edit)) entry.edit = sanitizeEditState(r.edit, null);`. Without a size that call drops every stroke (no frame, PB §5.2) and resets step 3's geometry, before `openState` ever sees the entry. `width` and `height` are already validated a few lines above (positive finite numbers), so pass them:
+2. In `openState(entry, size)`, compute `const frame: LiquifyFrame = { width: entry.width, height: entry.height };` at the top of the function. Step 3's v2 path already builds the same size as `const oSize = { width: entry.width, height: entry.height };` and passes it to `sanitizeGeometry` and to the one `sanitizeEditState(edit, d.persons.map((p) => p.id), oSize)` call: replace that literal with `frame` (`const oSize = frame;`, or use `frame` in both places). Step 3 re-validates the geometry on every v2 path, the ones that hand the stored edit back as it is included (`let edit: EditState = { ...v2Edit, photo: { ...v2Edit.photo, geometry: sanitizeGeometry(v2Edit.photo.geometry, oSize) } };`); re-sanitize the strokes in that same photo, so those paths drop a malformed record too:
 
 ```ts
-  // the entry's own frame (push-brush spec §3.3; crop spec D13): strokes and geometry are sanitized on it
-  if (isEditStateRecord(r.edit)) entry.edit = sanitizeEditState(r.edit, null, { width, height });
+  let edit: EditState = {
+    ...v2Edit,
+    photo: { ...v2Edit.photo, geometry: sanitizeGeometry(v2Edit.photo.geometry, frame), strokes: sanitizeStrokes(v2Edit.photo.strokes, frame) },
+  };
 ```
 
-(If step 3 already passes a size there, leave its call as it is.)
+(import `sanitizeStrokes` from `'./liquify'`). Then add `frame` to every object the function returns, the v1 paths included.
+
+`src/store/history.ts` needs no change: `normalizeEntry` already sanitizes the stored edit on the entry's own size (`if (isEditStateRecord(r.edit)) entry.edit = sanitizeEditState(r.edit, null, { width, height });`, step 3, `history.ts:214` at `d09e608`), so `getEntry` / `listEntries` keep the strokes once `sanitizePhoto` reads them; the history tests below pin it.
 
 - [ ] **Step 6: Carry the frame to the editor**
 
@@ -2375,7 +2401,7 @@ Expected: no errors.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/types.ts src/edit/state.ts src/edit/state.test.ts src/edit/migrate.ts src/edit/migrate.test.ts src/ui/state.ts src/ui/flows.ts src/store/history.ts src/store/history.test.ts
+git add src/types.ts src/edit/state.ts src/edit/state.test.ts src/edit/legacy.ts src/edit/migrate.ts src/edit/migrate.test.ts src/ui/state.ts src/ui/flows.ts src/store/history.test.ts
 git add -u
 git commit -m "feat(liquify): strokes in EditState, keyed by id, sanitized on the entry's frame
 
@@ -2389,9 +2415,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 The shader contract of PB §4.4 and C §4.2: `tc = o + L(o)`, then the body field at `tc`, then the face chains; one resample. With no strokes (`uLiqOn = 0`) the body lookup coordinate is exactly the old one, so v0.3 output is bit-identical. The CPU port reads each texel f16-rounded (what RG16F gives back), and the hash pin is re-set in the same commit (C §8.2).
 
 **Files:**
-- Modify: `src/engine/passes/reshape.ts` (RESHAPE_FS `214-319`, `createReshapePass` `345-412`; steps 1, 3, 5 rewrote `main()` and `draw`)
-- Modify: `src/engine/passes/reshapeCpu.ts` (`33-47` `protectAt`, `53-143` the map; steps 1 and 3 added the N-face port and the geometry)
-- Modify: `src/engine/passes/reshapeCpu.test.ts` (hash pin at v0.3 `:32`, re-set by steps 1, 3, 5)
+- Modify: `src/engine/passes/reshape.ts` (LF; at `d09e608`: units `445-448`, `reshapeFs` `542-755` with `main()` `723-755`, `ReshapePass` `792-823`, `createReshapePass` `825-958`)
+- Modify: `src/engine/passes/reshapeCpu.ts` (LF; at `d09e608`: `f16` `:67`, `protectAt` `69-84`, `reshapeMapMulti` `177-222`, `reshapeMapCpu` `227-231`)
+- Modify: `src/engine/passes/reshapeCpu.test.ts` (LF; the hash pin is the `PINNED` constant, `:19` at `d09e608`, re-set by steps 1, 3, 5)
 
 **Interfaces:**
 - Consumes: Task 1 `LiquifyField`. From the step-1 plan (Tasks 16–17) and the step-3 plan (Task 7): the shader text lives in `reshapeFs(carrier: 'texture' | 'ubo')` (`RESHAPE_FS = reshapeFs('texture')`), whose `main()` after step 3 starts `vec2 v = uTile.xy + vUv * uTile.zw; vec2 o = (uGeo * vec3(v, 1.0)).xy; vec2 tcB = o; if (uBodyOn != 0.0) tcB += uBodyOn * texture(uBodyDisp, o).xy;` and ends `outColor = texture(uSrc, (tc - uWin.xy) / uWin.zw);`; `ReshapePass.drawFaces(src, dst, faces: readonly TableFace[], opts?: { aspect?: number; body?: Texture | null; protects?: readonly FaceProtect[]; view?: ReshapeView })`; the one-face wrapper `ReshapePass.draw(src, dst, face, u, aspect?, body?, protect?, view?)` that calls `drawFaces`; `BODY_UNIT = 1`, `PROTECT_UNIT = 2`, the face table on unit 3 (PS §4.8). CPU: `reshapeMapMulti(faces: readonly TableFace[], aspect: number, opts?: { body?: BodyField | null; protects?: readonly FaceProtect[] }): UvMap` (the N-face port, whose map starts `let tcB: V2 = [x, y]; if (body) { const d = fieldAt(body, x, y); … }`) and the one-face wrapper `reshapeMapCpu(face, u, aspect, body?, protect?)`; step 3's `withView(map, view)` (geometry around any `UvMap`).
@@ -2403,7 +2429,7 @@ The shader contract of PB §4.4 and C §4.2: `tc = o + L(o)`, then the body fiel
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `src/engine/passes/reshapeCpu.test.ts` (the file already defines `face`, `aspect`, `params` at v0.3 `:19-26`; keep using them):
+Append to `src/engine/passes/reshapeCpu.test.ts` (the file already defines `face`, `aspect`, `params` at `:27-30` and imports `reshapeUniforms` and `reshapeMapCpu`; keep using them):
 
 ```ts
 describe('reshapeMapCpu with a 推臉筆 field', () => {
@@ -2441,7 +2467,7 @@ Expected: FAIL — the second test: `x` equals the body-only map at 0.3 (the 6th
 In `src/engine/passes/reshapeCpu.ts`:
 
 1. Add `LiquifyField` to the type import from `'../../types'`.
-2. Directly below `protectAt` (v0.3 `:33-47`), add:
+2. Directly below `protectAt` (`:69-84` at `d09e608`; the file's `const f16` at `:67`, which `protectAt` uses, serves `liquifyAt` too: do not declare it again), add:
 
 ```ts
 /**
@@ -2493,7 +2519,7 @@ export function reshapeMapCpu(face: Face | null, uIn: ReshapeUniforms | null, as
     }
 ```
 
-with `const liquify = opts.liquify ?? null;` next to `const body = opts.body ?? null;`. With no liquify field `tcB` is still `(x, y)` where the body is sampled, so every existing CPU result is unchanged. If the one-face wrapper still has its own v0.3 body (`reshapeCpu.ts:115-120`) instead of calling `reshapeMapMulti`, make the same change there.
+with `const liquify = opts.liquify ?? null;` next to `const body = opts.body ?? null;` (`:186` at `d09e608`). With no liquify field `tcB` is still `(x, y)` where the body is sampled, so every existing CPU result is unchanged. (The one-face wrapper calls `reshapeMapMulti` on both of its returns at `d09e608`, so item 3 is its only change.)
 
 - [ ] **Step 4: Run the CPU tests**
 
@@ -2504,21 +2530,21 @@ Expected: the two new tests PASS; the hash-pin test still passes (the shader tex
 
 In `src/engine/passes/reshape.ts`:
 
-1. Below `export const PROTECT_UNIT = 2;` (v0.3 `:183`; step 1 may have renamed it for the protect array — put it next to whatever constants hold units 1–3):
+1. Below `export const FACE_TABLE_UNIT = 3;` (`:448` at `d09e608`, after `BODY_UNIT = 1` and `PROTECT_UNIT = 2`):
 
 ```ts
 /** texture unit of uLiqDisp: after BODY_UNIT 1, PROTECT_UNIT 2 and the face table on 3 (push-brush spec §4.4, C §4.3: 5 units in P2) */
 export const LIQUIFY_UNIT = 4;
 ```
 
-2. In the shader text (`reshapeFs`, so both face-table carriers get it), after the `uBodyOn` uniform (v0.3 `:230`):
+2. In the shader text (`reshapeFs`, so both face-table carriers get it), after the `uBodyOn` uniform (`:549` at `d09e608`):
 
 ```glsl
 uniform sampler2D uLiqDisp; // RG16F 推臉筆 backward displacement in O UV units, row 0 = image top (LIQUIFY_UNIT)
 uniform float uLiqOn;
 ```
 
-3. In `main()`, the two lines step 3 wrote after `vec2 o = …` become three, so the body field is sampled at the liquified coordinate (step 3 samples it at `o`; with `uLiqOn = 0` `tcB` equals `o` there, so the output is bit-identical):
+3. In `main()`, the two lines step 3 wrote after `vec2 o = …` and its comment (`vec2 tcB = o;` and `if (uBodyOn != 0.0) tcB += uBodyOn * texture(uBodyDisp, o).xy;`, `:728-729` at `d09e608`) become three, so the body field is sampled at the liquified coordinate (step 3 samples it at `o`; with `uLiqOn = 0` `tcB` equals `o` there, so the output is bit-identical):
 
 ```glsl
   vec2 tcB = o;
@@ -2526,20 +2552,20 @@ uniform float uLiqOn;
   if (uBodyOn != 0.0) tcB += uBodyOn * texture(uBodyDisp, tcB).xy;
 ```
 
-4. In `createReshapePass`, after `gl.uniform1i(prog.u('uFaceProt'), PROTECT_UNIT);` (v0.3 `:350`; step 1 replaced it with the protect-array unit):
+4. In `createReshapePass`, after `gl.uniform1i(prog.u('uProtArr'), PROTECT_UNIT);` (`:831` at `d09e608`; step 1's protect array replaced v0.3's `uFaceProt`):
 
 ```ts
   gl.uniform1i(prog.u('uLiqDisp'), LIQUIFY_UNIT);
 ```
 
-5. Add `liquify?: Texture | null` to `drawFaces`' options type (doc: `RG16F 推臉筆 field (O UV units), the outermost map; null = none`) and as the last parameter of the one-face `ReshapePass.draw(src, dst, face, u, aspect?, body?, protect?, view?, liquify?)`, which forwards it in the options it passes to `drawFaces`. In `drawFaces`, next to the body-texture binding (v0.3 `:372-373`, `o` = the options argument):
+5. Add `liquify?: Texture | null` to `drawFaces`' options type in `interface ReshapePass` (doc: `RG16F 推臉筆 field (O UV units), the outermost map; null = none`) and as the last parameter of the one-face `ReshapePass.draw(src, dst, face, u, aspect?, body?, protect?, view?, liquify?)` (interface and implementation, `:941-944` at `d09e608`), which forwards it in the options it passes to `drawFaces`. In `drawFaces`, next to the body-texture binding (`:924-925` at `d09e608`, `o` = the options argument):
 
 ```ts
       bindTexture(gl, LIQUIFY_UNIT, o.liquify ?? zero);
       gl.uniform1f(prog.u('uLiqOn'), o.liquify ? 1 : 0);
 ```
 
-and after `drawFullscreen(gl)`, next to `bindTexture(gl, BODY_UNIT, null);` (v0.3 `:403`):
+and after `drawFullscreen(gl)`, next to `bindTexture(gl, BODY_UNIT, null);` (`:932` at `d09e608`):
 
 ```ts
       bindTexture(gl, LIQUIFY_UNIT, null);
@@ -2548,7 +2574,7 @@ and after `drawFullscreen(gl)`, next to `bindTexture(gl, BODY_UNIT, null);` (v0.
 - [ ] **Step 6: Re-set the hash pin**
 
 Run: `npx vitest run src/engine/passes/reshapeCpu.test.ts -t "pinned"`
-Expected: FAIL with `expected '<new hash>' to be '<old hash>'`. Copy `<new hash>` into the `toBe('…')` of that test (v0.3 `reshapeCpu.test.ts:32`).
+Expected: FAIL with `expected '<new hash>' to be '<old hash>'` (the old one is `'913c3d3b'` at `d09e608`). Copy `<new hash>` into the `PINNED` constant the test compares with (`const PINNED = '…';`, `reshapeCpu.test.ts:19`).
 
 Run: `npx vitest run src/engine/passes/reshapeCpu.test.ts`
 Expected: PASS.
@@ -2574,18 +2600,18 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 PB §4.4 "Pipeline": a strokes-only frame runs P2 and maskWarp; the field uploads as RG16F on version change, deleted when it becomes null; no full-buffer finite scan (the model is finite by construction, PB §3.5).
 
 **Files:**
-- Modify: `src/engine/pipeline.ts` (CRLF; `FrameJob` `53-75`, `PassPlanInput`/`planPasses` `83-112`, `bodyTexture` `257-287`, `run` `360-468`, `dispose` `492-511`; steps 1 and 3 extended all of them)
-- Modify: `src/engine/pipeline.test.ts`
-- Modify: `src/engine/index.ts` (CRLF; `job()` `174-194`)
-- Modify: `src/engine/index.test.ts`
+- Modify: `src/engine/pipeline.ts` (CRLF; at `d09e608`: `FrameJob` `85-132`, `PassPlanInput` `142-163`, `planPasses` `182-195`, `planFrame` `201-225`, `let bodyTex …` `404-406`, `bodyTexture` `427-458`, `run`'s `const body = bodyTexture(job.body);` / `planFrame(…)` `507-508` and its two `reshape.drawFaces(…)` calls `585`, `596`, `dispose` `710-735`)
+- Modify: `src/engine/pipeline.test.ts` (LF; the `base` fixture `:23-36`)
+- Modify: `src/engine/index.ts` (CRLF; `job()` `310-375` at `d09e608`, `body: input.body ?? null,` `:353`)
+- Modify: `src/engine/index.test.ts` (LF; the 美體 block `:116-150`)
 
 **Interfaces:**
-- Consumes: Task 1 `LiquifyField`, `RenderInput.liquify`; Task 4 `drawFaces(…, { …, liquify })`; `bodyFieldValid`, `bodyUploadNeeded`, `BodyUploadKey` (`pipeline.ts:136-205`); the two `reshape.drawFaces(…)` calls steps 1 and 3 left in `run` (the image draw and maskWarp, v0.3 `:409`, `:420`).
-- Produces: `FrameJob.liquify: LiquifyField | null`; `PassPlanInput.liquifyOn: boolean` (`reshape` is on when it is); the pass name `'liquify'` in `RenderStats.passes` when the field is applied.
+- Consumes: Task 1 `LiquifyField`, `RenderInput.liquify`; Task 4 `drawFaces(…, { …, liquify })`; `bodyFieldValid`, `bodyUploadNeeded`, `BodyUploadKey` (`pipeline.ts:283-360` at `d09e608`); step 1's `planFrame(job, makeupReady, bodyOn, proc = { active: false, ready: false })`, through which `run` plans (step 5 added `proc`); the two `reshape.drawFaces(…)` calls steps 1 and 3 left in `run` (the image draw and maskWarp, `:585`, `:596` at `d09e608`).
+- Produces: `FrameJob.liquify: LiquifyField | null`; `PassPlanInput.liquifyOn: boolean` (`reshape` is on when it is); `planFrame(job, makeupReady, bodyOn, proc?, liquifyOn = false)`; the pass name `'liquify'` in `RenderStats.passes` when the field is applied.
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `src/engine/pipeline.test.ts` (`base` is the file's `PassPlanInput` fixture, v0.3 `:19-28`; step 1/3 extended it with `anyFace`, `geoIdentity`, `windowed`; spread it as the other blocks do):
+Append to `src/engine/pipeline.test.ts` (`base` is the file's `PassPlanInput` fixture, `:23-36` at `d09e608`; steps 1–5 extended it; spread it as the other blocks do; `bodyFieldValid` and `MAX_BODY_FIELD_EDGE` are already imported):
 
 ```ts
 describe('planPasses with a 推臉筆 field (push-brush spec §4.4)', () => {
@@ -2605,10 +2631,16 @@ describe('planPasses with a 推臉筆 field (push-brush spec §4.4)', () => {
 });
 ```
 
-Append to `src/engine/index.test.ts` inside a new `describe` next to `'createEngine: 美體 field'` (v0.3 `:96-135`; reuse that block's `lastJob` and `input` helpers, which step 1 ported to RenderInput v0.4 — move them to the file's top level if they are local to that block):
+Append to `src/engine/index.test.ts` a new `describe` right after `'createEngine: 美體 field'` (`:116-150` at `d09e608`). That block's `lastJob` and `input` helpers are local to it, so the new block declares the same two (leave the 美體 block as it is):
 
 ```ts
 describe('createEngine: 推臉筆 field', () => {
+  // the 美體 block's two helpers (local to it)
+  const lastJob = (): FrameJob => {
+    const pipe = vi.mocked(createPipeline).mock.results.at(-1)!.value as { run: { mock: { calls: [FrameJob][] } } };
+    return pipe.run.mock.calls.at(-1)![0];
+  };
+  const input = () => ({ source: {} as TexImageSource, width: 640, height: 480, ...legacyFrame(defaultParams(), null, 0) });
   const liquify = { width: 384, height: 512, data: new Float32Array(384 * 512 * 2), version: 3 };
 
   it('passes RenderInput.liquify to the job of render and of renderToImageData (preview = export)', async () => {
@@ -2663,10 +2695,10 @@ In `src/engine/pipeline.ts` (CRLF):
   liquifyOn: boolean;
 ```
 
-and add `liquifyOn: false,` to the `base: PassPlanInput` fixture of `src/engine/pipeline.test.ts` (v0.3 `:19-28`) and to any other `PassPlanInput` literal `npm run typecheck` reports.
+and add `liquifyOn: false,` to the `base: PassPlanInput` fixture of `src/engine/pipeline.test.ts` (`:23-36` at `d09e608`) and to any other `PassPlanInput` literal `npm run typecheck` reports.
 
-4. In `planPasses`, add `|| i.liquifyOn` to the `reshape` expression (v0.3 `:109`, after step 3: `(faceOn && i.reshapeActive) || i.bodyOn || !i.geoIdentity || i.windowed`).
-5. In `createPipeline`, next to `let bodyTex …` (v0.3 `:250-252`):
+4. In `planPasses`, add `|| i.liquifyOn` to the `reshape` expression (`:191` at `d09e608`: `(faceOn && i.reshapeActive) || i.bodyOn || i.geoIdentity === false || i.windowed === true`). `planFrame` (`:201-225`) builds the `PassPlanInput` literal for `run`: give it a fifth parameter `liquifyOn = false` after `proc` and pass `liquifyOn,` in that literal (its existing callers, `pipeline.test.ts` and `src/app/faceTracks.test.ts:207`, keep compiling with the default).
+5. In `createPipeline`, next to `let bodyTex …` (`:404-406` at `d09e608`):
 
 ```ts
   let liqTex: Texture | null = null;
@@ -2674,7 +2706,7 @@ and add `liquifyOn: false,` to the `base: PassPlanInput` fixture of `src/engine/
   let liqWarned = false;
 ```
 
-and after `bodyTexture` (v0.3 `:257-287`):
+and after `bodyTexture` (`:427-458` at `d09e608`):
 
 ```ts
   /**
@@ -2713,12 +2745,12 @@ and after `bodyTexture` (v0.3 `:257-287`):
   }
 ```
 
-6. In `run`, next to `const body = bodyTexture(job.body);` (v0.3 `:370`): `const liq = liquifyTexture(job.liquify);` and pass `liquifyOn: liq !== null` to `planPasses`. Add `liquify: liq` to the options of **both** `reshape.drawFaces` calls (the image draw, v0.3 `:409`, and maskWarp, v0.3 `:420`), and after `if (body) passes.push('body');` add `if (liq) passes.push('liquify');`.
-7. In `dispose`, delete and reset it with the others: `deleteTexture(gl, liqTex);` in the `!lost` branch (v0.3 `:501-502`) and `liqTex = null; liqKey = null;` with `bodyTex = null` (v0.3 `:505-506`).
+6. In `run`, next to `const body = bodyTexture(job.body);` (`:507` at `d09e608`): `const liq = liquifyTexture(job.liquify);`, and pass `liq !== null` as the new fifth argument of the `planFrame(job, makeupReady, body !== null, { active: proc !== null, ready: procReady })` call on the next line. Add `liquify: liq` to the options of **both** `reshape.drawFaces` calls (the image draw, `:585`, and maskWarp, `:596`), and after `if (body) passes.push('body');` (`:589`) add `if (liq) passes.push('liquify');`.
+7. In `dispose`, delete and reset it with the others: `deleteTexture(gl, liqTex);` next to `deleteTexture(gl, bodyTex);` in the `!lost` branch (`:721` at `d09e608`) and `liqTex = null; liqKey = null;` with `bodyTex = null; bodyKey = null;` (`:728-729`).
 
 - [ ] **Step 4: Forward it from the engine**
 
-In `src/engine/index.ts` `job()` (v0.3 `:174-194`), after `body: input.body ?? null,`:
+In `src/engine/index.ts` `job()` (`:310-375` at `d09e608`), after `body: input.body ?? null,` (`:353`):
 
 ```ts
       // preview, export and every tile share this path, so the strokes are applied identically to all of them
@@ -2749,19 +2781,21 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ### Task 6: StillSession carries the field into every render, export and tile
 
-PB §3.7 row `src/app/still.ts`: `setLiquify`, `liquify`, the seed option for a replacement session, and the export snapshot parameter, the same shape as the body field (`still.ts:20-26, 60-72, 109-118, 247-250, 267-274`).
+PB §3.7 row `src/app/still.ts`: `setLiquify`, `liquify`, the seed option for a replacement session, and the export snapshot parameter, the same shape as the body field (at `d09e608`: `StillSession` `still.ts:21-85`, `StillSessionOptions` `117-129`, `let body` `162`, `input` `174-181`, `get body` / `setBody` `323-330`, `exportImageData` `342-350`, `tileInput` `367-375`, `bounds` `376-379`).
 
 **Files:**
+- Modify: `src/types.ts` (CRLF; `StillFrame`, `:570` at `d09e608`: step 1 put it there, `still.ts` imports it)
 - Modify: `src/app/still.ts`
 - Modify: `src/app/still.test.ts`
+- Modify: `tests/harness/t7/fakes.ts` (LF; `fakeStill`, `:270-340` at `d09e608`: a `StillSession` object literal, so it needs the two new members)
 
 **Interfaces:**
-- Consumes: Task 1 `LiquifyField`; step 1's `StillFrame = Omit<RenderInput, 'source' | 'width' | 'height' | 'body'>`, `render(frame)`, `exportImageData(frame, body?)` and the builder `input(f, b)` (PS §3.4 S1); step 3's `tileInput(frame: StillFrame, body?: BodyField | null): TileInputBase` and `bounds(frame: StillFrame, body?: BodyField | null): TileBounds` (step-3 plan Task 11), and `TileBounds.liquifyMaxDisp?: (rectO: Rect) => number` (step-3 plan Task 9).
+- Consumes: Task 1 `LiquifyField`; step 1's `StillFrame = Omit<RenderInput, 'source' | 'width' | 'height' | 'body'>` (`src/types.ts`), `render(frame)`, `exportImageData(frame, body?)` and the builder `input(f, b)` (PS §3.4 S1); step 3's `tileInput(frame: StillFrame, body?: BodyField | null): TileInputBase` and `bounds(frame: StillFrame, body?: BodyField | null): TileBounds` (step-3 plan Task 11), and `TileBounds.liquifyMaxDisp?: (rectO: Rect) => number` (step-3 plan Task 9).
 - Produces: `StillSession.setLiquify(field: LiquifyField | null): void`, `readonly liquify: LiquifyField | null`, `StillSessionOptions.liquify?: LiquifyField | null`, `exportImageData(frame, body?, liquify?)` (`undefined` = the field set last, `null` = none), `tileInput(frame, body?, liquify?)` (same rule), `bounds(frame, body?, liquifyMaxDisp?: (rectO: Rect) => number)`; `StillFrame` also omits `'liquify'`.
 
 - [ ] **Step 1: Write the failing tests**
 
-Append inside `describe('createStillSession', …)` in `src/app/still.test.ts` (add `import { defaultPhoto } from '../edit/state';` and `type StillFrame` to the import from `'./still'`):
+Append inside `describe('createStillSession', …)` in `src/app/still.test.ts` (it already imports `defaultPhoto` from `'../edit/state'` and `StillFrame` from `'../types'`, `still.test.ts:5`, `:10`):
 
 ```ts
   /** a frame without faces: the strokes are photo-level and need none */
@@ -2822,8 +2856,8 @@ Expected: FAIL — `s.liquify` is `undefined` / `s.setLiquify is not a function`
 
 In `src/app/still.ts`:
 
-1. Import `LiquifyField`. Make `StillFrame` omit `'liquify'` too: `Omit<RenderInput, 'source' | 'width' | 'height' | 'body' | 'liquify'>`.
-2. In `interface StillSession`, after `readonly body: BodyField | null;` (v0.3 `:26`):
+1. Add `LiquifyField` to `still.ts`'s type import from `'../types'`. In `src/types.ts` (CRLF), make `StillFrame` omit `'liquify'` too: `export type StillFrame = Omit<RenderInput, 'source' | 'width' | 'height' | 'body' | 'liquify'>;`.
+2. In `interface StillSession`, after `readonly body: BodyField | null;` (`:46` at `d09e608`):
 
 ```ts
   /**
@@ -2836,16 +2870,16 @@ In `src/app/still.ts`:
 ```
 
 and change `exportImageData` to `exportImageData(frame: StillFrame, body?: BodyField | null, liquify?: LiquifyField | null): ImageData;` with the doc line `` `liquify` as `body`: the snapshot taken when the export was asked for; omitted → the field set last ``.
-3. In `StillSessionOptions`, after `body?` (v0.3 `:69`):
+3. In `StillSessionOptions`, after `body?` (`:128` at `d09e608`):
 
 ```ts
   /** 推臉筆 field to start with (a replacement session draws the strokes on its first frame) */
   liquify?: LiquifyField | null;
 ```
 
-4. Next to `let body: BodyField | null = opts.body ?? null;` (v0.3 `:102`): `let liquify: LiquifyField | null = opts.liquify ?? null;`
-5. Give `input` a third parameter and pass it into the `RenderInput` (v0.3 `:109-118`): `const input = (f: StillFrame, b: BodyField | null = body, l: LiquifyField | null = liquify): RenderInput => ({ …, body: b, liquify: l })`.
-6. In the returned object, next to `get body()` / `setBody` (v0.3 `:244-251`):
+4. Next to `let body: BodyField | null = opts.body ?? null;` (`:162` at `d09e608`): `let liquify: LiquifyField | null = opts.liquify ?? null;`
+5. Give `input` a third parameter and pass it into the `RenderInput` (`:174-181` at `d09e608`; the display path `engine.render({ ...input(frame), geometry: viewGeometry(frame) }, …)` then draws the field set last): `const input = (f: StillFrame, b: BodyField | null = body, l: LiquifyField | null = liquify): RenderInput => ({ …, body: b, liquify: l })`.
+6. In the returned object, next to `get body()` / `setBody` (`:323-330` at `d09e608`):
 
 ```ts
     get liquify() {
@@ -2858,18 +2892,29 @@ and change `exportImageData` to `exportImageData(frame: StillFrame, body?: BodyF
     },
 ```
 
-7. In `exportImageData(f, b, l)` (v0.3 `:267-274`): `engine.renderToImageData(input(f, b === undefined ? body : b, l === undefined ? liquify : l), { mirror: false })`.
-8. Step 3's `tileInput(f, b)` builds its result from `input(f, b === undefined ? body : b)` (step 4 adds `toneSource` to it): give it a third parameter `l?: LiquifyField | null` and pass `l === undefined ? liquify : l` as `input`'s third argument, so the tile input carries the export snapshot (Task 13 wires the caller). Step 3's `bounds(f, b)` gains a third parameter `liquifyMaxDisp?: (rectO: Rect) => number` and spreads `...(liquifyMaxDisp ? { liquifyMaxDisp } : {})` into the object it already returns (keep every field steps 3 and 4 put there: `body`, `faces`, and step 4's spot / O-space terms if it set them in `bounds`).
+7. In `exportImageData(f, b, l)` (`:342-350` at `d09e608`): `engine.renderToImageData(input(f, b === undefined ? body : b, l === undefined ? liquify : l), { mirror: false })`.
+8. Step 3's `tileInput(f, b)` (`:367-375`) builds its result from `input(f, b === undefined ? body : b)` (step 4 adds `toneSource` to it): give it a third parameter `l?: LiquifyField | null` and pass `l === undefined ? liquify : l` as `input`'s third argument, so the tile input carries the export snapshot (Task 13 wires the caller). Step 3's `bounds(f, b)` (`:376-379`, which returns `{ body: …, faces: faceBoundsFor(f.faces, width / height), ...spotBounds(f, { width, height }) }`) gains a third parameter `liquifyMaxDisp?: (rectO: Rect) => number` and spreads `...(liquifyMaxDisp ? { liquifyMaxDisp } : {})` into that object (keep every field steps 3 and 4 put there). Update the two interface signatures (`:75`, `:77`) to match.
+9. In `tests/harness/t7/fakes.ts`, `fakeStill` returns a `StillSession` object literal: next to its `let body = opts.body ?? null;` add `let liquify: LiquifyField | null = null;` (add `LiquifyField` to its type import from `'../../../src/types'`), and next to its `get body()` / `setBody(f)` members add the same pair for the field (the 2D fake engine cannot warp, so it is only recorded):
+
+```ts
+    get liquify() {
+      return liquify;
+    },
+    setLiquify(f) {
+      liquify = f;
+      if (!raf) raf = requestAnimationFrame(paint);
+    },
+```
 
 - [ ] **Step 4: Run the tests**
 
 Run: `npx vitest run src/app/still.test.ts && npm run typecheck`
-Expected: PASS; no errors (callers that ignore the new optional arguments compile unchanged; fix any test fake of `StillSession` that `typecheck` reports by adding `liquify: null` and `setLiquify: vi.fn()`).
+Expected: PASS; no errors (callers that ignore the new optional arguments compile unchanged; fix any other fake of `StillSession` that `typecheck` reports the same way as item 9).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/app/still.ts src/app/still.test.ts
+git add src/types.ts src/app/still.ts src/app/still.test.ts tests/harness/t7/fakes.ts
 git add -u
 git commit -m "feat(liquify): StillSession carries the field into renders, exports and tiles
 
@@ -2887,12 +2932,12 @@ PB §8.2: render RESHAPE_FS on the coordinate texture with a field built by `src
 - Modify: `tests/e2e/reshape.spec.ts`
 
 **Interfaces:**
-- Consumes: Task 2 `LiquifyModel`, `straightStroke`, `liquifyGrid`; Task 4 `ReshapePass.draw(src, dst, face, u, aspect?, body?, protect?, view?, liquify?)`, `reshapeMapCpu(face, u, aspect, body?, protect?, liquify?)`; the page's module-level `PinCase`, `N` and imports (`landmarks`, `createReshapePass`, `reshapeUniforms`, `reshapeMapCpu`, `applyPreset`, `setParam`, `adapt`, `BodyField`, `ParamId`, `Framebuffer`, `Texture`; `pages/reshape.ts:1-32`). The new entry point builds its own GL state, as step 3's `runReshapePinView` does, so it does not depend on how steps 1 and 3 restructured `runReshapePin`.
+- Consumes: Task 2 `LiquifyModel`, `straightStroke`, `liquifyGrid`; Task 4 `ReshapePass.draw(src, dst, face, u, aspect?, body?, protect?, view?, liquify?)`, `reshapeMapCpu(face, u, aspect, body?, protect?, liquify?)`; the page's module-level `PinCase` and imports (`landmarks`, `createReshapePass`, `reshapeUniforms`, `reshapeMapCpu`, `applyPreset`, `setParam`, `adapt`, `BodyField`, `ParamId`; `pages/reshape.ts:1-36` at `d09e608`) and its helpers `context()`, `floatTex(gl, w, h, internal, format, data)` and `rig(gl)` (`{ src, dst, compare(name, map): PinCase, dispose() }` over a 200 × 300 RGBA32F target; `:44-110`). The new entry point builds its own GL state with them, as step 3's `runReshapePinView` does, so it does not depend on how `runReshapePin` is structured.
 - Produces: `window.runReshapePinLiquify(): PinCase[]` (one case).
 
 - [ ] **Step 1: Add the failing spec test**
 
-Append to `tests/e2e/reshape.spec.ts` (leave the existing test, which still expects its own cases, untouched):
+Append to `tests/e2e/reshape.spec.ts` (leave the three existing tests, which still expect their own cases, untouched; the file defines `DEV_URL`):
 
 ```ts
 test('reshape CPU port == RESHAPE_FS with a 推臉筆 field as the outermost map (push + half restore, body, contour)', async ({ page }) => {
@@ -2915,12 +2960,11 @@ Expected: FAIL — `waitForFunction` times out (`runReshapePinLiquify` is undefi
 
 In `tests/e2e/pages/reshape.ts`:
 
-1. Add imports:
+1. Add imports (and `LiquifyField` to the page's existing type import from `'../../../src/types'`):
 
 ```ts
 import { LiquifyModel, liquifyGrid } from '../../../src/edit/liquify';
 import { straightStroke } from '../../../src/edit/strokeFixtures';
-import type { LiquifyField } from '../../../src/types';
 ```
 
 2. Extend the `Window` declaration with `runReshapePinLiquify?: () => PinCase[];`.
@@ -2943,35 +2987,11 @@ function liquifyCase(W: number, H: number): LiquifyField {
 
 /** runReshapePin's 'body field + contour' case with the 推臉筆 field as the outermost map (push-brush spec §8.2). */
 window.runReshapePinLiquify = () => {
-  const canvas = document.getElementById('gl') as HTMLCanvasElement;
-  const gl = canvas.getContext('webgl2');
-  if (!gl) throw new Error('no webgl2');
-  if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('EXT_color_buffer_float missing');
-  if (!gl.getExtension('OES_texture_float_linear')) throw new Error('OES_texture_float_linear missing');
-  const tex = (w: number, h: number, internal: number, format: number, data: Float32Array | null): Texture => {
-    const t = gl.createTexture();
-    if (!t) throw new Error('createTexture failed');
-    gl.bindTexture(gl.TEXTURE_2D, t);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, gl.FLOAT, data);
-    for (const p of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, p, gl.LINEAR);
-    for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, p, gl.CLAMP_TO_EDGE);
-    return { tex: t, width: w, height: h };
-  };
-  const id = new Float32Array(N * N * 4);
-  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) id.set([(x + 0.5) / N, (y + 0.5) / N, 0, 1], (y * N + x) * 4);
-  const src = tex(N, N, gl.RGBA32F, gl.RGBA, id);
+  // the page's own GL context, identity source, 200 × 300 RGBA32F target and GPU/CPU comparison (context, rig)
+  const gl = context();
+  const r = rig(gl);
   const { width: W, height: H } = landmarks;
   const aspect = W / H;
-  const ow = 200;
-  const oh = 300;
-  const out = tex(ow, oh, gl.RGBA32F, gl.RGBA, null);
-  const fbo = gl.createFramebuffer();
-  if (!fbo) throw new Error('createFramebuffer failed');
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, out.tex, 0);
-  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('RGBA32F framebuffer incomplete');
-  const dst: Framebuffer = { fbo, tex: out, internalFormat: gl.RGBA32F, width: ow, height: oh };
   // the same smooth body field as runReshapePin, RG16F from FLOAT data like the engine
   const bw = 24;
   const bh = 36;
@@ -2981,51 +3001,32 @@ window.runReshapePinLiquify = () => {
       bd[(y * bw + x) * 2] = 0.012 * Math.sin((x / bw) * 6) * Math.cos((y / bh) * 4);
       bd[(y * bw + x) * 2 + 1] = 0.008 * Math.cos((x / bw) * 5);
     }
-  const bodyTex = tex(bw, bh, gl.RG16F, gl.RG, bd);
+  const bodyTex = floatTex(gl, bw, bh, gl.RG16F, gl.RG, bd);
   const bodyField: BodyField = { width: bw, height: bh, data: bd, version: 1 };
   // the 推臉筆 field, uploaded RG16F like pipeline.ts liquifyTexture; the CPU port rounds its texels to f16 the same way
   const liqField = liquifyCase(W, H);
-  const liqTex = tex(liqField.width, liqField.height, gl.RG16F, gl.RG, liqField.data);
+  const liqTex = floatTex(gl, liqField.width, liqField.height, gl.RG16F, gl.RG, liqField.data);
   const face = adapt({ points: new Float32Array(landmarks.points) }, W, H);
   const at = (ids: ParamId[]) => ids.reduce((p, k) => setParam(p, k, 1), applyPreset('original', 1)).values;
   const u = reshapeUniforms(at(['shape.faceSlim', 'shape.faceV', 'shape.faceNarrow']), 1);
   const pass = createReshapePass(gl);
-  // one-face draw with step 1's and step 3's parameters (protect null, view undefined = identity), plus the liquify texture
-  pass.draw(src, dst, face, u, aspect, bodyTex, null, undefined, liqTex);
-  const px = new Float32Array(ow * oh * 4);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-  gl.readPixels(0, 0, ow, oh, gl.RGBA, gl.FLOAT, px); // FBO row 0 = vUv.y 0 = image top
-  const map = reshapeMapCpu(face, u, aspect, bodyField, null, liqField);
-  const lo = 0.5 / N;
-  const hi = 1 - 0.5 / N;
-  let n = 0;
-  let moved = 0;
-  let maxErr = 0;
-  const samples: number[][] = [];
-  for (let y = 0; y < oh; y++)
-    for (let x = 0; x < ow; x++) {
-      const uu = (x + 0.5) / ow;
-      const vv = (y + 0.5) / oh;
-      const s = map(uu, vv);
-      if (s[0] < lo || s[1] < lo || s[0] > hi || s[1] > hi) continue; // clamped by the texture edge
-      const gu = px[(y * ow + x) * 4];
-      const gv = px[(y * ow + x) * 4 + 1];
-      n++;
-      if (Math.hypot((s[0] - uu) * ow, (s[1] - vv) * oh) > 1) moved++;
-      maxErr = Math.max(maxErr, Math.hypot((gu - s[0]) * ow, (gv - s[1]) * oh));
-      if (x % 50 === 25 && y % 60 === 30) samples.push([uu, vv, gu, gv, s[0], s[1]]);
-    }
+  // runReshapePin's one-face draw (protect null, view undefined = identity) plus the liquify texture as the new last argument
+  pass.draw(r.src, r.dst, face, u, aspect, bodyTex, null, undefined, liqTex);
+  const res = [r.compare('liquify + body field + contour', reshapeMapCpu(face, u, aspect, bodyField, null, liqField))];
   pass.dispose();
-  return [{ name: 'liquify + body field + contour', n, moved, maxErrPx: maxErr, samples }];
+  gl.deleteTexture(bodyTex.tex);
+  gl.deleteTexture(liqTex.tex);
+  r.dispose();
+  return res;
 };
 ```
 
-(If step 1 made `createReshapePass` take a required options argument, pass the same value its `runReshapePin` passes. If step 3's harness already factored this setup into a shared helper, call that helper instead of repeating it, with the same body field and target size.)
+(`context()`, `floatTex(gl, …)` and `rig(gl)` are the page's helpers, `pages/reshape.ts:44-110` at `d09e608`; `rig`'s `compare` reads the target back and counts `n`, `moved` and `maxErrPx` exactly as `runReshapePin` does. `createReshapePass(gl)` takes no required options there.)
 
 - [ ] **Step 4: Run it**
 
 Run: `npx playwright test tests/e2e/reshape.spec.ts`
-Expected: PASS (both tests), and the log line shows `max |GPU − CPU|` below 0.05 px.
+Expected: PASS (the three existing tests and the new one), and the log line shows `max |GPU − CPU|` below 0.05 px.
 
 - [ ] **Step 5: Commit**
 
@@ -3040,11 +3041,11 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ### Task 8: Brush gestures: the reducer and zoomPan's brush mode
 
-PB §2.5: in brush mode zoomPan's own listener arbitrates (so a pinch never loses its first finger to an overlay), through a pure reducer with states `idle → stroke → pinch → locked`: one finger draws from the first move; a second finger within `PINCH_GRACE_MS` cancels the stroke, later it commits it, then pinches; one finger left after a pinch neither pans nor draws; `pointercancel` commits; a third finger is ignored; only a stamp-free tap pair fits the view. The hooks are read through a ref, so the effect still keys only on `enabled` (`zoomPan.ts:125`).
+PB §2.5: in brush mode zoomPan's own listener arbitrates (so a pinch never loses its first finger to an overlay), through a pure reducer with states `idle → stroke → pinch → locked`: one finger draws from the first move; a second finger within `PINCH_GRACE_MS` cancels the stroke, later it commits it, then pinches; one finger left after a pinch neither pans nor draws; `pointercancel` commits; a third finger is ignored; only a stamp-free tap pair fits the view. The hooks are read through a ref, so the effect still keys only on `enabled` (`zoomPan.ts:189` at `d09e608`).
 
 **Files:**
 - Create: `src/ui/brushGesture.ts`, `src/ui/brushGesture.test.ts`
-- Modify: `src/ui/screens/zoomPan.ts` (CRLF; `33-126` as steps 1, 3 and 4 left them: step 1's `opts` read through a ref, step 3's crop-mode options, step 4's `ZoomPanOptions`, `tapOutcome` and the shared `end` handler)
+- Modify: `src/ui/screens/zoomPan.ts` (CRLF; at `d09e608`: `ZoomPanOptions` `66-76`, `useZoomPan` `78-201` with `optsRef` `:86-87`, `twoPoint` / `begin` `118-131`, `down` `133-140` (target check `:134`), `move` `141-152`, the shared `end` `153-180`, the effect's `[enabled]` `:189`)
 
 **Interfaces:**
 - Consumes: Task 1 `PINCH_GRACE_MS`; step 1's `useZoomPan(stage, layer, enabled, opts?)` with the options read through a ref (`optsRef`, PS §2.3); step 4's `export interface ZoomPanOptions { onTap?(uv): void; spotTap?(uv): void }` (step 3 adds `resetWhen` to it) and its handlers `down`, `move` and `end` (`end` is registered for both `pointerup` and `pointercancel` and tells them apart by `e.type`; step-4 plan Task 15).
@@ -3275,7 +3276,7 @@ export interface BrushHooks {
 ```
 
 Keep reading it through the same ref (`optsRef.current`); the effect still depends only on `[enabled]`.
-4. Inside the effect, after `twoPoint` / `begin` (v0.3 `:66-79`), add the brush branch:
+4. Inside the effect, after `twoPoint` / `begin` (`:118-131` at `d09e608`), add the brush branch:
 
 ```ts
     // ── 推臉筆 brush mode (push-brush spec §2.5): the reducer decides; one finger never pans ──
@@ -3338,7 +3339,7 @@ Keep reading it through the same ref (`optsRef.current`); the effect still depen
     };
 ```
 
-5. Route step 4's three handlers through it. At the top of `down`, **after** the button / `.slider-row` / `.status` target check (v0.3 `:82`, so 重置 and 按住對比 never start a stroke — Review Focus 4) and before step 4's gesture recording:
+5. Route step 4's three handlers through it. At the top of `down`, **after** the button / `.slider-row` / `.status` target check (`:134` at `d09e608`, so 重置 and 按住對比 never start a stroke — Review Focus 4) and before its `stage.setPointerCapture` and step 4's gesture recording:
 
 ```ts
       const b = brushOf();
@@ -3689,8 +3690,8 @@ PB §2.2 (the bar that replaces the slider row: 推 · 恢復, 小 · 中 · 大
 **Files:**
 - Create: `src/ui/components/BrushBar.tsx`, `src/ui/components/BrushOverlay.tsx`, `src/ui/components/BrushHint.tsx`
 - Create: `src/ui/brushUi.test.ts`
-- Modify: `src/ui/icons.tsx` (CRLF; the "panel extras" block, v0.3 `:211-242`)
-- Modify: `src/ui/theme.css` (CRLF; after the Editor block that ends with `.editor-bottom-pad`, v0.3 `:1677-1684`)
+- Modify: `src/ui/icons.tsx` (CRLF; the "panel extras" block, `:369-400` at `d09e608`, `custom` at `:394-400`; no `brush` key exists yet)
+- Modify: `src/ui/theme.css` (CRLF; after the Editor block that ends with `.editor-bottom-pad`, `:1976-1983` at `d09e608`)
 
 **Interfaces:**
 - Consumes: `Segmented` (`src/ui/components/Controls.tsx:47-74`), `haptic` (`src/ui/platform.ts`), Task 1 `BRUSH_PX`, `BrushKind`, `BrushSize`; Task 2 `LiveStroke['state']`; step 4's `CLEAR_CONFIRM_MS = 3000` (`src/ui/panelModel.ts`, the 祛痘 全部清除 window: both clears share it, C §12 #30).
@@ -3751,7 +3752,7 @@ Create `src/ui/components/BrushBar.tsx`:
 // 推／恢復 and the size are remembered by the editor for the app session; neither is an undo step.
 import { useEffect, useState } from 'preact/hooks';
 import type { BrushKind, BrushSize } from '../../types';
-// 全部清除 → 確定清除？ stays armed this long: step 4's constant, shared with the 祛痘 clear (the 重置 pattern, Editor.tsx:756-769)
+// 全部清除 → 確定清除？ stays armed this long: step 4's constant, shared with the 祛痘 clear (the 重置 pattern in Editor.tsx)
 import { CLEAR_CONFIRM_MS } from '../panelModel';
 import { haptic } from '../platform';
 import { Segmented } from './Controls';
@@ -3884,7 +3885,7 @@ export function BrushHint({ kind }: { kind: BrushKind }) {
 
 - [ ] **Step 4: Add the icon**
 
-In `src/ui/icons.tsx` (CRLF), in the `// ── panel extras ──` block after `custom` (v0.3 `:236-242`):
+In `src/ui/icons.tsx` (CRLF), in the `// ── panel extras ──` block after `custom` (`:394-400` at `d09e608`, before the `// ── 裁切` block):
 
 ```tsx
   /** 推臉筆: a fingertip pushing content sideways (our own line icon, DS §7.1) */
@@ -3899,7 +3900,7 @@ In `src/ui/icons.tsx` (CRLF), in the `// ── panel extras ──` block after
 
 - [ ] **Step 5: Add the styles**
 
-In `src/ui/theme.css` (CRLF), after the `.editor-bottom-pad` rule (v0.3 `:1680-1683`):
+In `src/ui/theme.css` (CRLF), after the `.editor-bottom-pad` rule (`:1980-1983` at `d09e608`):
 
 ```css
 /* ───────────── 推臉筆 (push-brush spec §2.2, §2.3) ───────────── */
@@ -4015,12 +4016,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 PB §2.1: last item of both strips (after step 5's 左右分開 in 美型, after 背景保護 in 美體), **never gated** (no face, 基本模式, body-only person, 美體 loading / none / error), has-value dot when the photo has strokes (tab dots do not count strokes), `sliderFor` returns null in brush mode, and the module-level `lastSel` never stores `'brush'` (it keeps the item selected before the brush, so the next photo never opens in brush mode).
 
 **Files:**
-- Modify: `src/ui/panelModel.ts` (CRLF; `25`, `41-47`, `175-178`, `194-204`, `258-299`, `301-385`, `400-455`, `480-544` at v0.3, ported by step 1 to `(lens, sel, ctx)`)
-- Modify: `src/ui/panelModel.test.ts`
-- Modify: `src/ui/components/BeautyPanel.tsx` (CRLF; `63`, `67-75`, `121-142`)
+- Modify: `src/ui/panelModel.ts` (CRLF; at `d09e608`: `BodySel` `:14`, `PanelSelection` `66-80`, `showsHeightBand` `306-309`, `ItemAction` `328-354`, `bodyItems` `420-461`, `rememberable` `559-562`, `itemsFor` `992-1058` (shared `'skin'` / `'shape'` case `1012-1035`, `'body'` `1036-1037`), `activate` `1077-1153` (`'height'` case `1121-1122`), `sliderFor` `1226-1276` (shared case `1242-1250`, `'body'` `1251-1255`))
+- Modify: `src/ui/panelModel.test.ts` (LF)
+- Modify: `src/ui/components/BeautyPanel.tsx` (CRLF; at `d09e608`: `faceOff` `:112`, `tapItem` `121-157` (its haptic list `141-151`), the items map `233-262`)
 
 **Interfaces:**
-- Consumes (step-1 plan Task 10, step-4 plan Tasks 16–17): `itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext, skin?: SkinPanelContext): PanelItem[]` (step 4 added `skin`, which the camera never passes), `activate(item, lens, sel): ActivateResult` with `ActivateResult { edit: EditState; sel; changed; notice? }` and its local `done(next = edit, nextSel = sel, notice?)` (the `'height'` case is `return done(edit, sel.body === 'height' ? sel : { ...sel, body: 'height' });`), `sliderFor(lens, sel, body?, skin?)` (step 4's shared `'skin'` / `'shape'` case computes `const id = sel.tab === 'skin' ? sel.skin : sel.shape` and returns null for its own `'spot'`), `Lens.edit`; `lensFor`, `CAMERA_BODY` (`panelModel.ts:103-107`, what the camera passes as `body`), `INITIAL_SELECTION`, `PanelSelection` (step 4: `skin: SkinSel`), `BodySel`; step 4's `rememberable(sel)` (lastSel never keeps `'spot'`); step 5's 左右分開 toggle item at the end of the 美型 strip (FD §2.2); Task 3's `withStrokes`, `defaultPhoto`; Task 10's `brush` icon.
+- Consumes (step-1 plan Task 10, step-4 plan Tasks 16–17): `itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext, skin?: SkinPanelContext): PanelItem[]` (step 4 added `skin`, which the camera never passes), `activate(item, lens, sel, ctx?): ActivateResult` with `ActivateResult { edit: EditState; sel; changed; notice?; retryLook? }` and its local `done(next = edit, nextSel = sel, notice?)` (the `'height'` case is `return done(edit, sel.body === 'height' ? sel : { ...sel, body: 'height' });`; `makeupAction` answers first and returns null for every non-美妝 action, and the switch has no `default`, so `'brush'` needs its own case), `sliderFor(lens, sel, body?, skin?)` (the shared `'skin'` / `'shape'` case starts `const id = sel[sel.tab]; if (id === 'spot') return null;`, and the `'body'` case starts `if (!bodyItemGate(lens, body, sel.body).ok) return null;`), `Lens.edit`; `lensFor`, `CAMERA_BODY` (`panelModel.ts:141-145` at `d09e608`, what the camera passes as `body`), `INITIAL_SELECTION`, `PanelSelection` (step 4: `skin: SkinSel`), `BodySel`; step 4's `rememberable(sel)` (lastSel never keeps `'spot'`); step 5's 左右分開 toggle item at the end of the 美型 strip (FD §2.2); Task 3's `withStrokes`, `defaultPhoto`; Task 10's `brush` icon.
 - Produces:
   - `PanelSelection.shape: ParamId | 'brush'`, `PanelSelection.body: BodySel | 'brush'`; `ItemAction` gains `{ type: 'brush' }`.
   - `BRUSH_KEY = 'brush'`, `BRUSH_LABEL = '推臉筆'`; `brushItem(sel: PanelSelection, strokes: number): PanelItem`; `showsBrush(sel: PanelSelection): boolean`; `brushSel(sel: PanelSelection): PanelSelection`; `rememberSel(next: PanelSelection, last: PanelSelection): PanelSelection` (composed with step 4's `rememberable` by the Editor, Task 12).
@@ -4121,7 +4122,7 @@ Expected: FAIL — `brushItem` / `showsBrush` / `rememberSel` are not exported.
 
 In `src/ui/panelModel.ts` (CRLF):
 
-1. Selection and action types (v0.3 `:41-47`, `:194-204`):
+1. Selection and action types (`PanelSelection` `:66-80` and `ItemAction` `:328-354` at `d09e608`):
 
 ```ts
   shape: ParamId | 'brush';
@@ -4135,7 +4136,7 @@ and in `ItemAction`:
   | { type: 'brush' };
 ```
 
-2. Next to `showsHeightBand` (v0.3 `:175-178`):
+2. Next to `showsHeightBand` (`:306-309` at `d09e608`):
 
 ```ts
 export const BRUSH_KEY = 'brush';
@@ -4159,7 +4160,7 @@ export function brushItem(sel: PanelSelection, strokes: number): PanelItem {
   };
 }
 
-/** What the module-level lastSel keeps (Editor.tsx:66): never 'brush', so the next photo never opens in brush mode. */
+/** What the module-level lastSel keeps (Editor.tsx lastSel): never 'brush', so the next photo never opens in brush mode. */
 export function rememberSel(next: PanelSelection, last: PanelSelection): PanelSelection {
   if (next.shape !== 'brush' && next.body !== 'brush') return next;
   return { ...next, shape: next.shape === 'brush' ? last.shape : next.shape, body: next.body === 'brush' ? last.body : next.body };
@@ -4175,17 +4176,18 @@ function withBrush(items: PanelItem[], lens: Lens, sel: PanelSelection, body: Bo
 }
 ```
 
-4. In `itemsFor`: the shared `case 'skin': case 'shape':` returns one array literal (step 1's `[RESET_ITEM(), …paramsInGroup(sel.tab).map(…)]`, extended by step 4's tone and 祛痘 items for `'skin'` and step 5's 左右分開 toggle for `'shape'`). Bind that literal, unchanged, to a constant and close only the 美型 strip with the brush, so it comes after the toggle and `'skin'` gets none:
+4. In `itemsFor`: the shared `case 'skin': case 'shape':` (`:1012-1035` at `d09e608`) builds `defs` and returns one array literal, `[RESET_ITEM(), ...(sel.tab === 'shape' ? decorateShapeItems(defs, lens) : defs), ...(sel.tab === 'skin' && skin ? [...toneItems(lens, sel, skin), spotItem(sel, skin)] : [])]` (step 5's `decorateShapeItems` ends the 美型 items with the 左右分開 switch). Bind that literal, unchanged, to a constant and close only the 美型 strip with the brush, so it comes after the switch and `'skin'` gets none:
 
 ```ts
     case 'skin':
     case 'shape': {
+      const defs = /* … step 1's paramsInGroup(sel.tab).map(…), unchanged … */;
       const items: PanelItem[] = [/* … the literal steps 1, 4 and 5 left here, unchanged … */];
       return sel.tab === 'shape' ? withBrush(items, lens, sel, body) : items;
     }
 ```
 
-and in `case 'body':` return `withBrush(bodyItems(lens, sel, body), lens, sel, body)` (after 背景保護). The item never goes through `gated(…)` or any per-person or 美體 gating. (If an earlier step already split `'skin'` and `'shape'` into separate cases, wrap only the `'shape'` return.)
+and in `case 'body':` return `withBrush(bodyItems(lens, sel, body), lens, sel, body)` (after 背景保護). The item never goes through `gated(…)` or any per-person or 美體 gating.
 5. Below `rememberSel`:
 
 ```ts
@@ -4195,7 +4197,7 @@ export function brushSel(sel: PanelSelection): PanelSelection {
 }
 ```
 
-In `activate`, add a case directly after step 1's `'height'` case (`case 'height': return done(edit, sel.body === 'height' ? sel : { ...sel, body: 'height' });`):
+In `activate`, add a case directly after step 1's `'height'` case (`case 'height': return done(edit, sel.body === 'height' ? sel : { ...sel, body: 'height' });`, `:1121-1122` at `d09e608`; `makeupAction`'s `default` returns null for `'brush'`, so the switch reaches it):
 
 ```ts
     case 'brush':
@@ -4204,26 +4206,26 @@ In `activate`, add a case directly after step 1's `'height'` case (`case 'height
 ```
 
 With the brush already selected the selection is returned unchanged, so `changed` is false.
-6. In `sliderFor`, return null for the brush before anything reads the selection as a `ParamId`. Step 4 rewrote the shared case to start `case 'skin': case 'shape': { const id = sel.tab === 'skin' ? sel.skin : sel.shape;` followed by its `'spot'` and tone guards; add one line right after that `id`:
+6. In `sliderFor`, return null for the brush before anything reads the selection as a `ParamId`. The shared case starts `case 'skin': case 'shape': { const id = sel[sel.tab]; if (id === 'spot') return null;` (`:1242-1245` at `d09e608`), followed by the tone and `usable` guards; add one line right after the `'spot'` line:
 
 ```ts
-        if (id === 'brush') return null; // the brush bar replaces the slider row (push-brush spec §2.2)
+      if (id === 'brush') return null; // the brush bar replaces the slider row (push-brush spec §2.2)
 ```
 
-(TypeScript then narrows `id` for the `paramBinding(lens, id)` below, next to step 4's own narrowing of `'spot'`.) In `case 'body':` the existing first line becomes:
+(TypeScript then narrows `id` to `ParamId` for `isToneId`, `paramBinding(lens, id)` and `withSides(…, id)` below, next to step 4's own narrowing of `'spot'`.) In `case 'body':` the existing first line (`:1253`) becomes:
 
 ```ts
-      if (sel.body === 'brush' || !bodyGate(body, sel.body).ok) return null;
+      if (sel.body === 'brush' || !bodyItemGate(lens, body, sel.body).ok) return null;
 ```
 
-7. `npm run typecheck` now reports every place that still treats `sel.shape` / `sel.body` as a `ParamId` (for example `paramDef(sel[sel.tab])`, the 美型 item `selected` test, Editor's contour check). Narrow each with the brush check above; none of them may run for `'brush'`.
+7. `npm run typecheck` now reports every place that still treats `sel.shape` / `sel.body` as a `ParamId` (at `d09e608` the readers are `panelModel.ts` itself, with `sliderFor` covered by item 6, and Editor's `ruler: sel.tab === 'body' && sel.body === 'body.legs' …`, which compiles as is). Narrow each one it reports with the brush check above; none of them may run for `'brush'`.
 
 - [ ] **Step 4: Exempt the item from the face-off dimming**
 
 In `src/ui/components/BeautyPanel.tsx` (CRLF):
-1. Import `BRUSH_KEY` from `'../panelModel'`.
-2. In the items map (v0.3 `:121-142`): `aria-disabled={(faceOff && item.key !== BRUSH_KEY) || item.disabled ? 'true' : undefined}` and add `${item.key === BRUSH_KEY ? ' brush-item' : ''}` to the item's class list (Task 10's `.strip.face-off .item.brush-item` keeps it bright).
-3. In `tapItem` (v0.3 `:72`): add `a === 'brush'` to the actions that call `haptic()`.
+1. Add `BRUSH_KEY` to the existing import from `'../panelModel'`.
+2. In the items map (`:233-262` at `d09e608`): `aria-disabled={(faceOff && item.key !== BRUSH_KEY) || item.disabled ? 'true' : undefined}` (`:241`) and add `${item.key === BRUSH_KEY ? ' brush-item' : ''}` to the item's class list (`:244`; Task 10's `.strip.face-off .item.brush-item` keeps it bright).
+3. In `tapItem` (`:121-157`): add `a === 'brush'` to the actions that call `haptic()` (the `a === 'preset' || … || a === 'split'` list, `:141-151`).
 
 - [ ] **Step 5: Run the tests**
 
@@ -4247,12 +4249,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 PB §3.5 "Editor wiring", §2.5 (commit before anything that ends the editing context), §3.6 (caps and the toast), §2.1–§2.4 (bar in place of the slider row, also when `faceOff`; ring and hint; face boxes hidden, person strip dimmed with 「整張照片」; no person selection by tap), §5 (one gesture = one undo step, autosave carries the whole `EditState`). The test for this task is the first end-to-end test of `tests/e2e/liquify.spec.ts`: it fails until the editor draws.
 
 **Files:**
-- Modify: `src/ui/screens/Editor.tsx` (v0.3 anchors: `66` lastSel, `77-79` state, `152-180` undo / update, `163-166` setSel, `191-256` session, `343-398` flush, `395-415` unmount, `602-609` render effect, `615-669` encode / autosave, `679` zoomPan, `700-737` save, `739-754` undo / redo, `756-769` 重置, `789-797` faceNote, `830-877` JSX; all reshaped by steps 1–5)
-- Modify: `tests/e2e/fixtures.ts` (LF), `tests/e2e/body.spec.ts` (LF; `emptyPng` moves out, `:43-57`)
+- Modify: `src/ui/screens/Editor.tsx` (LF; anchors at `d09e608`: `143` lastSel, `154-156` `edit` / `editRef`, `402-405` `frameOf`, `407-416` `planFor`, `444-453` undo, `455-461` setSel, `467-487` update, `554-642` session (its `deps.createStillSession(…)` options `602-607`), `771-812` flushHistory, `814-831` visibilitychange, `833-860` unmount, `970-975` snapshotField, `1075-1082` render effect, `1095-1100` encode, `1109-1178` encode / autosave effect, `1180-1186` hold, `1212-1247` save, `1262-1283` runWorking, `1290-1342` runTiled, `1355-1388` undo / redo, `1389-1402` 重置, `1485-1541` tapSpot, `1555-1564` onPersonTap, `1566-1570` zoomPan, `1588` scope, `1613` showBoxes, `1616-1624` faceNote / faceOff, `1633-1658` overlay chain, `1660-1797` JSX)
+- Modify: `tests/e2e/fixtures.ts` (LF), `tests/e2e/body.spec.ts` (LF; `emptyPng` moves out, `:44-58` at `d09e608`, and with it the file's only use of `PNG`, `:10`)
 - Create: `tests/e2e/liquify.spec.ts`
 
 **Interfaces:**
-- Consumes: Task 2 `LiquifyModel`, `LiveStroke`, `makeStrokeId`; Task 3 `withStrokes`, `clearStrokes`, `editKey`, `EditorSource.frame`; Task 6 `StillSession.setLiquify / liquify`, `StillSessionOptions.liquify`, `exportImageData(frame, body?, liquify?)`; Task 8 `BrushHooks`, `useZoomPan(…, { onTap, brush })`; Task 9 `BrushQueue`, `brushAt`, `clientToO`; Task 10 `BrushBar`, `BrushOverlay`, `RingHandle`, `ringLook`, `BrushHint`, `BRUSH_HINT_MS`; Task 11 `showsBrush`, `rememberSel`. From step 1 (PS §3.3, §3.4 U1–U5): the `edit` state and `editRef` (step 1's renames of `params` / `paramsRef`, v0.3 `:77-79`; use its names if they differ), `update(edit, commit)`, `UndoStack<EditState>` with `{ clone: false, key: editKey }`, `setSel`, the `Selection` state, `buildFrame` → `session.render(frame)`, `OutputStamp.key = editKey(edit)`, the `FaceBoxes` / `PersonStrip` components with their photo-level flag (A11), the person-tap handler (`onPersonTap`, as step 4 names it). From step 4 (step-4 plan Task 17): `spotMode`, `tapSpot`, `setSel` storing `lastSel = rememberable(s)`, the `{spotMode ? <SpotControls …/> : <SliderRow …/>}` ternary in `.editor-panel`, and its `useZoomPan(…, { onTap: spotMode ? undefined : onPersonTap, spotTap: spotMode ? tapSpot : undefined })`. From step 3 (step-3 plan Tasks 14 and 17): `cropMode = sel.tab === 'crop'`; `useZoomPan(stageRef, layerRef, !!session && !cropMode, { onTap, resetWhen: cropMode })`; the StillFrame ref `frameRef` (the frame `buildFrame` produced, used by every export); `planFor(s, e, src, field)` → `planExport(…, s.bounds(frameRef.current, field), …)`; `encode(s, f, field, plan)`; `runWorking(s, frame, field, plan, key, gen, t0)` and `runTiled(s, frame, field, plan, key, gen, t0)` (which calls `deps.runTiledExport(engine, blob, plan, s.tileInput(frame, field), …)`); the debounced encode effect that computes `plan` with `planFor`. (This task's DOM ref for the `.frame` element is therefore called `frameEl`, not `frameRef`.)
+- Consumes: Task 2 `LiquifyModel`, `LiveStroke`, `makeStrokeId`; Task 3 `withStrokes`, `clearStrokes`, `editKey`, `EditorSource.frame`; Task 6 `StillSession.setLiquify / liquify`, `StillSessionOptions.liquify`, `exportImageData(frame, body?, liquify?)`; Task 8 `BrushHooks`, `useZoomPan(…, { onTap, brush })`; Task 9 `BrushQueue`, `brushAt`, `clientToO`; Task 10 `BrushBar`, `BrushOverlay`, `RingHandle`, `ringLook`, `BrushHint`, `BRUSH_HINT_MS`; Task 11 `showsBrush`, `rememberSel`. From step 1 (PS §3.3, §3.4 U1–U5): the `edit` state and `editRef` (`:154-156` at `d09e608`), `update(e, commit, user = true)`, `UndoStack<EditState>` with `{ clone: false, key: editKey }`, `setSel`, the `Selection` state, `buildFrame` → `session.render(frame)`, `OutputStamp.key = editKey(edit)`, the `FaceBoxes` / `PersonStrip` components with their photo-level flag (A11), the person-tap handler (`onPersonTap`, as step 4 names it). From step 4 (step-4 plan Task 17): `spotMode`, `tapSpot`, `setSel` storing `lastSel = rememberable(s)`, the `{spotMode ? <SpotControls …/> : <SliderRow …/>}` ternary in `.editor-panel`, and its `useZoomPan(…, { onTap: spotMode ? undefined : onPersonTap, spotTap: spotMode ? tapSpot : undefined })`. From step 3 (step-3 plan Tasks 14 and 17), as landed: `cropMode = sel.tab === 'crop'`; `useZoomPan(stageRef, layerRef, !!session && !cropMode, { onTap, spotTap, resetWhen: cropMode })`; no StillFrame ref: `frameOf(e: EditState, s = sessionRef.current)` builds the frame session `s` renders and exports for `e` (`buildFrame(…)`), and every export takes the `EditState`: `planFor(s, e, src, field)` → `planExport(…, s.bounds(frameOf(e, s), field), …)`; `encode(s, e, field, plan)` (renders `s.exportImageData(frameOf(e, s), field)`); `runWorking(s, e, field, plan, key, gen, t0)` and `runTiled(s, e, field, plan, key, gen, t0)` (which takes `const frame = frameOf(e, s)` and calls `deps.runTiledExport(engine, blob, plan, s.tileInput(frame, field), …)`, and on a failure falls back to `runWorking(sessionRef.current ?? s, e, field, working, key, gen, t0)`); `snapshotField()` and `settleField()`; the debounced encode effect that computes `plan` with `planFor`, guarded by `exportBusy` (a tiled export runs). (This task's DOM ref for the `.frame` element is called `frameEl`.)
 - Produces: `window.__meiyan.liquify` = `{ strokes, version, work, maxDisp, pending }` (written on mount, sync, commit, cancel and rebuild end); e2e helpers `emptyPng`, `LINE`, `linePng`, `liquifyState`, `brushDrag`, `touch`, `savedPixels` in `tests/e2e/fixtures.ts`.
 
 - [ ] **Step 1: Add the e2e helpers**
@@ -4344,7 +4346,7 @@ export async function savedPixels(page: Page): Promise<Pixels> {
 }
 ```
 
-In `tests/e2e/body.spec.ts`, delete the local `emptyPng` (v0.3 `:42-57`) and add `emptyPng` to the import from `'./fixtures'`.
+In `tests/e2e/body.spec.ts`, delete the local `emptyPng` (its doc comment and function, `:44-58` at `d09e608`), add `emptyPng` to the import from `'./fixtures'`, and delete `import { PNG } from 'pngjs';` (`:10`): `emptyPng` was its only user, and `noUnusedLocals` would fail `typecheck` on it.
 
 - [ ] **Step 2: Write the failing e2e test**
 
@@ -4389,24 +4391,6 @@ function darkestColumn(p: Pixels, [y0, y1]: [number, number], [x0, x1]: [number,
     if (s < bestV) {
       bestV = s;
       best = x;
-    }
-  }
-  return best;
-}
-
-/** The row (grab px) with the lowest mean luma over columns x0…x1, searched within rows y0…y1. */
-function darkestRow(p: Pixels, [x0, x1]: [number, number], [y0, y1]: [number, number]): number {
-  let best = y0;
-  let bestV = Infinity;
-  for (let y = Math.max(0, y0); y <= Math.min(p.height - 1, y1); y++) {
-    let s = 0;
-    for (let x = x0; x <= x1; x++) {
-      const i = (y * p.width + x) * 4;
-      s += 0.299 * p.data[i] + 0.587 * p.data[i + 1] + 0.114 * p.data[i + 2];
-    }
-    if (s < bestV) {
-      bestV = s;
-      best = y;
     }
   }
   return best;
@@ -4482,9 +4466,9 @@ import type { BrushHooks } from './zoomPan';
 import { debug } from '../debug';
 ```
 
-(merge with the existing import lines.)
+(merge with the existing import lines: `Editor.tsx` already imports `debug` from `'../debug'`, `editKey` / `editSetGeometry` / `P0` from `'../../edit/state'`, a type list from `'../../types'` and a long list from `'../panelModel'`; add the new names to those declarations.)
 
-2. Module level, next to `let lastSel` (v0.3 `:66`):
+2. Module level, next to `let lastSel` (`:143` at `d09e608`):
 
 ```ts
 /** 推／恢復 and the size: remembered for the app session, never persisted, never undo steps (push-brush spec §2.2) */
@@ -4492,7 +4476,7 @@ let lastBrushKind: BrushKind = 'push';
 let lastBrushSize: BrushSize = 'm';
 ```
 
-3. `setSel` (v0.3 `:163-166`, step 1 kept it module-level for the panel selection, U4; step 4 made it store `lastSel = rememberable(s)`) becomes:
+3. `setSel` (`:455-461` at `d09e608`; step 4 made it store `lastSel = rememberable(s)`, and it ends with `setDragging(false)`) becomes:
 
 ```ts
   const setSel = (s: PanelSelection) => {
@@ -4500,12 +4484,14 @@ let lastBrushSize: BrushSize = 'm';
     // never 'spot' (step 4) and never 'brush': the next photo opens in neither mode; the brush falls back to the item before it
     lastSel = rememberSel(rememberable(s), lastSel);
     setSelState(s);
+    // another item's slider: a drag of the old one can no longer commit (its row was replaced)
+    setDragging(false);
   };
 ```
 
 (`rememberable` comes from `'../panelModel'`, already imported by step 4.)
 
-4. Inside the component, after the `edit` state and `editRef` (step 1's replacement of `params` / `paramsRef`, v0.3 `:77-79`):
+4. Inside the component, after the `edit` state and `editRef` (`:154-156` at `d09e608`):
 
 ```ts
   // ── 推臉筆 (push-brush spec §3.5) ──
@@ -4522,7 +4508,7 @@ let lastBrushSize: BrushSize = 'm';
   const [brushSize, setBrushSizeState] = useState<BrushSize>(lastBrushSize);
   const [hint, setHint] = useState<{ kind: BrushKind; gen: number } | null>(null);
   const ring = useRef<RingHandle | null>(null);
-  const frameEl = useRef<HTMLDivElement>(null); // the .frame element (step 3's frameRef is the StillFrame)
+  const frameEl = useRef<HTMLDivElement>(null); // the .frame element (frameOf builds the StillFrame)
   /** the live stroke; `kind` is the one it started with (a 推／恢復 switch mid-stroke applies to the next stroke) */
   const live = useRef<{ stroke: LiveStroke; kind: BrushKind; queue: BrushQueue; ringPx: number; last: { x: number; y: number }; capToast: boolean } | null>(null);
 
@@ -4590,11 +4576,11 @@ Below `publishLiquify`:
   cancelRef.current = cancelLive;
 ```
 
-At the very top of `update(edit, commit)` (step 1's version of v0.3 `:169-180`), add `commitLive();` (a no-op unless a stroke is live; `commitLive` clears `live.current` before it calls `update`, so there is no recursion). This covers 重置, 全部清除, presets and every other edit made with a second finger while the first one draws.
+At the very top of `update(e, commit, user = true)` (`:467-487` at `d09e608`, before its `dropFinished()`), add `commitLive();` (a no-op unless a stroke is live; `commitLive` clears `live.current` before it calls `update`, so there is no recursion). This covers 重置, 全部清除, presets and every other edit made with a second finger while the first one draws.
 
 - [ ] **Step 6: The brush hooks and brush mode**
 
-Place this block after `const hold = useHold(…)` (v0.3 `:671-677`), because `brushOn` reads `hold.held`, and before the `useZoomPan(…)` call (v0.3 `:679`), which takes `brushHooks`. The hooks object is memoized on `brushOn` only, so it calls the latest `commitLive` / `cancelLive` through Step 5's `commitRef` / `cancelRef`:
+Place this block after `const hold = useHold(…)` (`:1180-1186` at `d09e608`), because `brushOn` reads `hold.held`, and before the `useZoomPan(…)` call (`:1566-1570`), which takes `brushHooks`; right after `hold` is a good place, since `showBoxes` (`:1613`) and `scope` (`:1588`) read `brushOn` too (Step 10). The hooks object is memoized on `brushOn` only, so it calls the latest `commitLive` / `cancelLive` through Step 5's `commitRef` / `cancelRef`:
 
 ```ts
   const brushOn = !!session && !fatal && !lost && !hold.held && showsBrush(sel);
@@ -4710,7 +4696,7 @@ Place this block after `const hold = useHold(…)` (v0.3 `:671-677`), because `b
 
 (The 700 ms is PB §2.2's preview duration.)
 
-Pass the hooks to zoomPan (v0.3 `:679`). The call keeps every option steps 1, 3 and 4 give it, under their names, and gains `brush`; the person tap is also left out in brush mode (PB §2.5 last row: no person selection by tap):
+Pass the hooks to zoomPan (`:1566-1570` at `d09e608`, which passes `onTap: spotMode ? undefined : onPersonTap`, `spotTap: spotMode ? tapSpot : undefined` and `resetWhen: cropMode`). The call keeps every option steps 1, 3 and 4 give it, under their names, and gains `brush`; the person tap is also left out in brush mode (PB §2.5 last row: no person selection by tap):
 
 ```ts
   useZoomPan(stageRef, layerRef, !!session && !cropMode, {
@@ -4725,7 +4711,7 @@ Pass the hooks to zoomPan (v0.3 `:679`). The call keeps every option steps 1, 3 
 
 - [ ] **Step 7: Sync before render; hold the render while a rebuild is pending**
 
-Directly **above** the render effect (v0.3 `:602-609`; after step 1 it renders `buildFrame(…)`), add:
+Directly **above** the render effect (`:1075-1082` at `d09e608`: `if (!session) return; … session.render(frameOf(edit, session)) …`, deps `[session, edit, protects, detect]`), add:
 
 ```ts
   // the field follows the committed strokes (undo, redo, 全部清除, 重置, reopen). Declared before the render effect, so a
@@ -4749,13 +4735,13 @@ In the render effect, return early while a rebuild is pending (the canvas keeps 
     if (!session || liquify.pending) return;
 ```
 
-In the session creation (v0.3 `:229-235`, `deps.createStillSession(…, { ownsBitmap: false, …, body: fieldMemo.field })`), seed the strokes so a replacement session (engine swap, re-detect) draws them on its first frame:
+In the session creation (`:602-607` at `d09e608`, `deps.createStillSession(…, { ownsBitmap: false, faces: …, obstacles: …, body: fieldMemo.field })`), seed the strokes so a replacement session (engine swap, re-detect) draws them on its first frame:
 
 ```ts
               liquify: liquify.field,
 ```
 
-In the overlay chain (v0.3 `:800-815`), before `else if (lost)`:
+In the overlay chain (`:1633-1658` at `d09e608`), after the `exporting` branch and before `else if (lost)`:
 
 ```ts
   } else if (liquifyBusy) {
@@ -4764,7 +4750,7 @@ In the overlay chain (v0.3 `:800-815`), before `else if (lost)`:
 
 - [ ] **Step 8: Exports always match the committed strokes**
 
-1. **flushHistory** (v0.3 `:343-384`): insert at its very top, before its guard `if (!s || fatalRef.current) return;`:
+1. **flushHistory** (`:771-812` at `d09e608`): insert at its very top, before `const s = sessionRef.current;` and its guard `if (!s || fatalRef.current) return;`:
 
 ```ts
     // through the ref: the visibilitychange and unmount effects hold the first render's flushHistory
@@ -4773,16 +4759,16 @@ In the overlay chain (v0.3 `:800-815`), before `else if (lost)`:
     sessionRef.current?.setLiquify(liquify.field);
 ```
 
-and every `s.exportImageData(frame, field)` in it passes `liquify.snapshot()` as the third argument (take one snapshot next to `snapshotField()` and reuse it for the corrected thumbnail). `flushHistory` reads the edit from `editRef.current` (step 1), which `commitLive` has already set to the state with the new records, so the flushed key, params and thumbnail include the stroke.
-2. **encode** (step 3: `encode(s, f, field, plan)`) gains a last parameter `liq: LiquifyField | null` and renders with `s.exportImageData(f, field, liq)` (import `LiquifyField` from `'../../types'`).
-3. **The encode / autosave effect** (v0.3 `:626-669`, after step 3): return early while a stroke is live or a rebuild is pending, and re-arm when either ends:
+and both of its `s.exportImageData(frameOf(e, s), field)` calls (the synchronous thumbnail and the corrected one) pass `liq` as the third argument, from one `const liq = liquify.snapshot();` taken next to its `const field = snapshotField();`. `flushHistory` reads the edit from `editRef.current`, which `commitLive` has already set to the state with the new records, so the flushed key, params and thumbnail include the stroke.
+2. **encode** (`encode(s, e, field, plan)`, `:1095-1100` at `d09e608`) gains a last parameter `liq: LiquifyField | null` and renders with `s.exportImageData(frameOf(e, s), field, liq)` (add `LiquifyField` to the type import from `'../../types'`).
+3. **The encode / autosave effect** (`:1109-1178` at `d09e608`, whose guard is `if (!session || lost || exportBusy) return;`): return early while a stroke is live or a rebuild is pending, and re-arm when either ends:
 
 ```ts
-    if (!session || lost || exporting || drawing || liquify.pending) return;
+    if (!session || lost || exportBusy || drawing || liquify.pending) return;
 ```
 
-add `drawing` and `liquifyTick` to its dependency list (the `drawing` flip cancels a debounce timer that was armed before the stroke, so a debounced export can never fire mid-stroke and cache half a stroke under the pre-stroke `editKey` — Review Focus 1). Inside the timer, next to `const field = snapshotField();`, take `const liq = liquify.snapshot();` and pass it to every `encode(…)` / `s.exportImageData(…)` the effect makes.
-4. **save** (step 3's version): directly after its guard `if (!session || pill === 'preparing' || lost) return;`, insert
+add `drawing` and `liquifyTick` to its dependency list (`[session, edit, lost, fieldTick, protectTick, exportBusy, prefs]`; the `drawing` flip cancels a debounce timer that was armed before the stroke, so a debounced export can never fire mid-stroke and cache half a stroke under the pre-stroke `editKey` — Review Focus 1). Inside the timer, next to `const field = snapshotField();`, take `const liq = liquify.snapshot();` and pass it to every export the effect makes: `encode(s, edit, field, plan, liq)` and both `s.exportImageData(frameOf(edit, s), field, liq)`.
+4. **save** (`:1212-1247` at `d09e608`): directly after its guard `if (!session || lost) return;`, insert
 
 ```ts
     commitLive();
@@ -4790,27 +4776,27 @@ add `drawing` and `liquifyTick` to its dependency list (the `drawing` flip cance
     sessionRef.current?.setLiquify(liquify.field);
 ```
 
-next to `const field = snapshotField();` add `const liq = liquify.snapshot();` (the user's strokes at the tap, the `snapshotField` rule, `Editor.tsx:533-541`), and give `runWorking` and `runTiled` a last parameter `liq: LiquifyField | null`: `runWorking` passes it to `encode(x, frame, field, plan, liq)`; `runTiled` is wired in Task 13. Call both with `liq`.
+next to `const field = snapshotField();` add `const liq = liquify.snapshot();` (the user's strokes at the tap, the `snapshotField` rule, `Editor.tsx:965-975` at `d09e608`), and give `runWorking` and `runTiled` a last parameter `liq: LiquifyField | null`: `runWorking` passes it to `encode(x, e, field, plan, liq)` (its `exportOnLatest(s, (x) => encode(x, e, field, plan), …)`); `runTiled` passes it to its working-size fallback, `runWorking(sessionRef.current ?? s, e, field, working, key, gen, t0, liq)`, and its tiles are wired in Task 13. `save` calls both with `liq`.
 
 - [ ] **Step 9: Undo, redo and unmount**
 
-1. ↶ ↷ are disabled while a stroke is live (PB §2.5): the two `IconButton`s (v0.3 `:822-823`) get `disabled={!undo?.canUndo || drawing}` / `disabled={!undo?.canRedo || drawing}`, and `doUndo` / `doRedo` (v0.3 `:739-754`) start with `if (drawing) return;`.
-2. In the unmount cleanup (v0.3 `:395-415`), after `flushHistory()` (which commits and snapshots), dispose the model inside `release` so its buffers go with the session: `const release = () => { s?.dispose(); liquify.dispose(); … }`. Also clear a live queue first: `live.current?.queue.clear(); live.current = null;` at the top of the cleanup, after `flushHistory()`.
+1. ↶ ↷ are disabled while a stroke is live (PB §2.5): the two `IconButton`s (`:1665-1666` at `d09e608`) get `disabled={!undo?.canUndo || drawing}` / `disabled={!undo?.canRedo || drawing}`, and `doUndo` / `doRedo` (`:1355-1388`) start with `if (drawing) return;`.
+2. In the unmount cleanup (`:833-860` at `d09e608`), after `flushHistory()` (which commits and snapshots), dispose the model inside `release` so its buffers go with the session: `const release = () => { s?.dispose(); liquify.dispose(); … }`. Also clear a live queue first: `live.current?.queue.clear(); live.current = null;` right after `flushHistory()`.
 
 - [ ] **Step 10: Render the brush UI**
 
-In the JSX (v0.3 `:830-877`, after steps 1–5):
-1. Add `ref={frameEl}` to `<div class="frame" …>`.
-2. Inside `.frame`, **outside** `.zoom-layer` (next to the `.corner-label`, v0.3 `:842`):
+In the JSX (`:1660-1797` at `d09e608`):
+1. Add `ref={frameEl}` to the `.frame` div (`:1674`, the one whose class also takes ` crop-mode` in 裁切).
+2. Inside `.frame`, **outside** `.zoom-layer` (next to the `.corner-label`s, `:1735-1736`):
 
 ```tsx
           {brushOn && <BrushOverlay handle={ring} />}
           {brushOn && hint && <BrushHint key={hint.gen} kind={hint.kind} />}
 ```
 
-3. Hide step 1's face boxes in brush mode (C §2.2: "hidden … in 祛痘, 推臉筆 and 裁切 modes"): step 1's `FaceBoxes` visibility condition (which step 4 extended with `&& !spotMode`) gains `&& !brushOn`.
-4. Dim step 1's person strip with 「整張照片」 in brush mode (PB §1.2, C §2.2): the photo-level flag step 1 computes for `PersonStrip` (A11: dims the chips on photo-level tabs and items, shows the caption) becomes `(… step 1's expression …) || brushOn`.
-5. In `.editor-panel` (v0.3 `:864-868`; step 4 made it `{spotMode ? <SpotControls …/> : <SliderRow …/>}`), put the brush bar first, so it takes the slider row's place also when `faceOff` (the brush is never gated):
+3. Hide step 1's face boxes in brush mode (C §2.2: "hidden … in 祛痘, 推臉筆 and 裁切 modes"): `const showBoxes = … && !spotMode;` (`:1613` at `d09e608`) gains `&& !brushOn`.
+4. Dim step 1's person strip with 「整張照片」 in brush mode (PB §1.2, C §2.2): the photo-level flag `PersonStrip` gets as `photoScope` (A11: dims the chips, shows the caption), `const scope = multi && photoScoped(sel, lens);` (`:1588`), becomes `const scope = multi && (photoScoped(sel, lens) || brushOn);`.
+5. In `.editor-panel` (`:1757-1795` at `d09e608`; step 4 made it `{spotMode ? <SpotControls …/> : <SliderRow …/>}`), put the brush bar first, so it takes the slider row's place also when `faceOff` (the brush is never gated):
 
 ```tsx
         {brushOn ? (
@@ -4827,21 +4813,23 @@ In the JSX (v0.3 `:830-877`, after steps 1–5):
           <SpotControls
             size={spotSize}
             onSize={setSpotSize}
-            label={clearLabel(inScope, scope !== 'all', confirmUntil > 0)}
+            label={clearLabel(inScope, clearSc !== 'all', confirmUntil > 0)}
             disabled={inScope === 0}
             confirming={confirmUntil > 0}
             onClear={onClear}
           />
         ) : (
           <SliderRow
-            binding={session && !faceOff ? binding : null}
-            onChange={(v) => binding && slide(binding, v, false)}
-            onCommit={(v) => binding && slide(binding, v, true)}
+            binding={session && !faceOff ? (cropMode ? straightenView(g) : binding) : null}
+            onChange={(v) => (cropMode ? straightenTo(v, false) : binding && slide(binding, v, false))}
+            onCommit={(v) => (cropMode ? straightenTo(v, true) : binding && slide(binding, v, true))}
+            emptyText={session && !faceOff ? sliderEmptyText(lens, sel) : null}
+            onSel={setSel}
           />
         )}
 ```
 
-Only the outer `brushOn ?` level is new. The `SpotControls` and `SliderRow` elements shown are step 4's (step-4 plan Task 17) and v0.3's; move the ones in the file as they are, with every prop steps 1–5 gave them (for example step 3's slider `scale`), rather than retyping them from here.
+Only the outer `brushOn ?` level is new. The `SpotControls` and `SliderRow` elements shown are the ones at `d09e608` (steps 2–5 gave the slider row its 裁切 binding, `emptyText` and `onSel`); move the ones in the file as they are, with every prop they have, rather than retyping them from here.
 
 6. Nothing to pass for the item's dot: `BeautyPanel` already gets step 1's `lens`, and the item reads `lens.edit.photo.strokes` (Task 11).
 
@@ -4872,11 +4860,11 @@ Three consumers of P2's backward map must apply the liquify field first, exactly
 - step 3's tile planner already has the hook (`TileBounds.liquifyMaxDisp`, step-3 plan Task 9): it multiplies the value by the decode's long edge, adds it to the window pad and grows every face's "near" test by it, which is PB §4.4's dilation (the body term is the field's global maximum, so it needs no dilation). This task feeds the hook from the model and renders every tile with the export snapshot.
 
 **Files:**
-- Modify: `src/ui/screens/Editor.tsx` (step 1's person-tap handler; step 4's `tapSpot`; step 3's `planFor` and `runTiled`)
-- Modify: `src/engine/backMapFrame.ts`, `src/engine/backMapFrame.test.ts` (step 4)
-- Modify: `src/engine/backMapCpu.test.ts`, `src/media/exportPlan.test.ts` (step 3)
+- Modify: `src/ui/screens/Editor.tsx` (at `d09e608`: `onPersonTap` `1555-1564`; `tapSpot` `1485-1541`; `planFor` `407-416` and `runTiled` `1290-1342`)
+- Modify: `src/engine/backMapFrame.ts` (LF; `BackMapInput` `:13-18`, the `reshapeMapMulti` call `:45` at `d09e608`), `src/engine/backMapFrame.test.ts` (step 4)
+- Modify: `src/engine/backMapCpu.test.ts`, `src/media/exportPlan.test.ts` (step 3; `describe('planTiles (S §4.4)', …)` `:140-237` at `d09e608`)
 - Create: `tests/e2e/pages/strokeCases.ts`
-- Modify: `tests/e2e/pages/export.ts`, `tests/e2e/export.spec.ts` (step 3's tile-equivalence harness, step-3 plan Task 9)
+- Modify: `tests/e2e/pages/export.ts` (LF; `cases` `:77-86`, the per-case loop `:87-151` at `d09e608`), `tests/e2e/export.spec.ts` (step 3's tile-equivalence harness, step-3 plan Task 9; the name list `:11-19`)
 
 **Interfaces:**
 - Consumes: Task 2 `LiquifyModel` (`backward`, `maxDisp` in long-edge units, `snapshot`), `straightStroke`, `liquifyGrid`; Task 4 `liquifyAt`, `reshapeMapCpu(face, u, aspect, body?, protect?, liquify?)`, `reshapeMapMulti(faces, aspect, { body, protects, liquify })`; Task 6 `tileInput(frame, body?, liquify?)`, `bounds(frame, body?, liquifyMaxDisp?)`; Task 12's `liq` snapshot in `save` / `runTiled`. Step 3 (plan Task 9): `backMapCpu(v: Vec2, frame: BackMapFrame): [number, number]` with `BackMapFrame { geometry; oSize; oMap: UvMap }`, `backMapperCpu(frame)`, `planTiles(grid: TileGrid, bounds: TileBounds, T)`, `TileBounds { body; faces; liquifyMaxDisp? }`, `displacementBound`, `reshapeGeometry`, the imports of its coverage test in `exportPlan.test.ts`; the harness `window.runExportTiles(): Promise<TileCheck[]>` whose `cases` entries are `{ name; w; h; geometry(size) }` and whose per-case loop builds `photo`, `base: Omit<RenderInput, 'source' | 'width' | 'height'>` and `bounds = { body, faces }`; `tests/e2e/export.spec.ts`, which asserts the list of case names. Step 1: `hitPerson(uv, ctx: HitCtx)` (it adds the body field at `uv` first) and the editor's person-tap handler (`onPersonTap`). Step 4 (plan Task 17): `interface BackMapInput { faces: readonly RenderFace[]; obstacles?; body?: BodyField | null; geometry: Geometry }`, `backMapFrameOf(input, oSize): BackMapFrame` (`src/engine/backMapFrame.ts`) and its test file's `FACE`, `O_SIZE`; the editor's `tapSpot`, which calls `backMapCpu(v, backMapFrameOf({ faces, obstacles, body: s.body, geometry }, photo))` (SK §3.4).
@@ -4884,7 +4872,7 @@ Three consumers of P2's backward map must apply the liquify field first, exactly
 
 - [ ] **Step 1: Write the unit tests**
 
-Append to `src/engine/backMapCpu.test.ts` (it already defines `oSize`, `face`, `values` and imports `IDENTITY_GEOMETRY`, `reshapeUniforms`, `reshapeMapCpu`, `backMapCpu`):
+Append to `src/engine/backMapCpu.test.ts` (it already defines `oSize`, `face`, `values` and imports `IDENTITY_GEOMETRY`, `reshapeUniforms`, `reshapeMapCpu`, `backMapCpu`; `liquifyAt` joins its existing `import { reshapeMapCpu, withView } from './passes/reshapeCpu';`):
 
 ```ts
 import { liquifyAt } from './passes/reshapeCpu';
@@ -4917,7 +4905,7 @@ describe('backMapCpu with a 推臉筆 field (push-brush spec §4.4, §4.5)', () 
 });
 ```
 
-Append to `src/engine/backMapFrame.test.ts` (step 4's file: it defines `FACE` and `O_SIZE` and imports `backMapCpu`, `backMapFrameOf`, `IDENTITY_GEOMETRY`, `neutralPerson`):
+Append to `src/engine/backMapFrame.test.ts` (step 4's file: it defines `FACE` and `O_SIZE` and imports `backMapCpu`, `backMapFrameOf`, `IDENTITY_GEOMETRY`, `neutralPerson`; `liquifyAt` joins its existing `import { reshapeMapCpu } from './passes/reshapeCpu';`):
 
 ```ts
 import { liquifyAt } from './passes/reshapeCpu';
@@ -5023,18 +5011,19 @@ Expected: PASS.
 - [ ] **Step 3: Wire the editor**
 
 In `src/ui/screens/Editor.tsx`:
-1. **Person taps** (step 1's `onTap(uv)` handler, PS §2.3): after the tap is mapped V → O through the geometry and before `hitPerson`, map the point through the strokes, so the hit test sees P2's map without the face chains (step 1's names for the mapped point and the context are `o` and `hitCtx` here; keep its names):
+1. **Person taps** (`onPersonTap`, `:1555-1564` at `d09e608`, PS §2.3): it maps the tap V → O inline and hit-tests at once, `const hit = hitPerson(apply(vToO(g, photo), uv), hitCtxOf(d, sel.tab === 'body', fieldMemo.field, rect));`. Between the two, map the point through the strokes, so the hit test sees P2's map without the face chains:
 
 ```ts
-      const s = liquify.backward({ x: o[0], y: o[1] }); // 推臉筆 first (push-brush spec §4.5); hitPerson then adds the body field
-      const who = hitPerson([s.x, s.y], hitCtx);
+        const o = apply(vToO(g, photo), uv);
+        const lq = liquify.backward({ x: o[0], y: o[1] }); // 推臉筆 first (push-brush spec §4.5); hitPerson then adds the body field
+        const hit = hitPerson([lq.x, lq.y], hitCtxOf(d, sel.tab === 'body', fieldMemo.field, rect));
 ```
 
-2. **Spot taps** (step 4's `tapSpot`, SK §3.4): its `backMapFrameOf({ faces: …, obstacles: …, body: s.body, geometry: cur.photo.geometry }, photo)` argument gains `liquify: liquify.field`, so a spot tapped after strokes lands on what the finger touched (PB §4.5 row 祛痘 spots).
-3. **Tiled export** (step 3's `planFor` and `runTiled`): in `planFor`, the bounds become
+2. **Spot taps** (step 4's `tapSpot`, `:1485-1541` at `d09e608`, SK §3.4): its `backMapFrameOf({ faces: f.faces, obstacles: f.obstacles, body: s.body, geometry: shown }, photo)` argument (`:1501`) gains `liquify: liquify.field`, so a spot tapped after strokes lands on what the finger touched (PB §4.5 row 祛痘 spots).
+3. **Tiled export** (`planFor` `:407-416` and `runTiled` `:1290-1342` at `d09e608`): in `planFor`, the bounds argument `s.bounds(frameOf(e, s), field)` becomes
 
 ```ts
-      s.bounds(frameRef.current, field, liquify.field ? (r) => liquify.maxDisp(r) : undefined),
+      s.bounds(frameOf(e, s), field, liquify.field ? (r) => liquify.maxDisp(r) : undefined),
 ```
 
 and in `runTiled` (with Task 12's `liq` parameter) the runner gets `s.tileInput(frame, field, liq)`.
@@ -5113,13 +5102,13 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ### Task 14: End-to-end: 恢復, persistence, two fingers, 美型 and 全部清除, no face, a person, the export rules
 
-The rest of PB §8.3 (tests 2 and 4–8), the four Review Focus cases that only a real pointer stream exercises (1–4), the 美體 entry on a person photo while body detection runs (PB §2.1: "never gated by `bodyGate`"), and C §2.2's brush mode on a group photo (the strip reads 「整張照片」, a tap selects nobody). All tests append to `tests/e2e/liquify.spec.ts` from Task 12 and reuse its helpers (`openPhoto`, `enterBrush`, `darkestColumn`, `darkestRow`, `photoToClient`, `strokes`).
+The rest of PB §8.3 (tests 2 and 4–8), the four Review Focus cases that only a real pointer stream exercises (1–4), the 美體 entry on a person photo while body detection runs (PB §2.1: "never gated by `bodyGate`"), and C §2.2's brush mode on a group photo (the strip reads 「整張照片」, a tap selects nobody). All tests append to `tests/e2e/liquify.spec.ts` from Task 12 and reuse its helpers (`openPhoto`, `enterBrush`, `darkestColumn`, `photoToClient`, `strokes`); `darkestRow`, whose first user is the no-face test here, is added with them (in Task 12 it would be an unused local, which `noUnusedLocals` rejects).
 
 **Files:**
 - Modify: `tests/e2e/liquify.spec.ts`
 
 **Interfaces:**
-- Consumes: Task 12's helpers in `tests/e2e/fixtures.ts` (`brushDrag`, `touch`, `liquifyState`, `savedPixels`, `emptyPng`, `linePng`, `LINE`) and in `liquify.spec.ts`; `debugState`, `SAMPLE_FACE` (`fixtures.ts`); step 1's debug fields `__meiyan.detectCalls`, `persons`, `selected` (PS §3.2) and fixture `tests/fixtures/group_faces.png` (PS §8.3); the v0.3 no-face note 「未偵測到臉部，臉型與美妝不會套用」 (`Editor.tsx:792`, kept by step 1, PS §2.6).
+- Consumes: Task 12's helpers in `tests/e2e/fixtures.ts` (`brushDrag`, `touch`, `liquifyState`, `savedPixels`, `emptyPng`, `linePng`, `LINE`) and in `liquify.spec.ts`; `debugState`, `SAMPLE_FACE` (`fixtures.ts`); step 1's debug fields `__meiyan.detectCalls`, `persons`, `selected` (PS §3.2) and fixture `tests/fixtures/group_faces.png` (PS §8.3); the v0.3 no-face note 「未偵測到臉部，臉型與美妝不會套用」 (`Editor.tsx:1619` at `d09e608`, kept by step 1, PS §2.6).
 - Produces: nothing new (tests only).
 
 - [ ] **Step 1: Write the tests**
@@ -5129,6 +5118,24 @@ Extend the import from `'./fixtures'` in `tests/e2e/liquify.spec.ts` with `debug
 ```ts
 const GROUP = resolve(import.meta.dirname, '../fixtures/group_faces.png');
 const FULLBODY_LINES = resolve(import.meta.dirname, '../fixtures/fullbody_lines.jpg');
+
+/** The row (grab px) with the lowest mean luma over columns x0…x1, searched within rows y0…y1. */
+function darkestRow(p: Pixels, [x0, x1]: [number, number], [y0, y1]: [number, number]): number {
+  let best = y0;
+  let bestV = Infinity;
+  for (let y = Math.max(0, y0); y <= Math.min(p.height - 1, y1); y++) {
+    let s = 0;
+    for (let x = x0; x <= x1; x++) {
+      const i = (y * p.width + x) * 4;
+      s += 0.299 * p.data[i] + 0.587 * p.data[i + 1] + 0.114 * p.data[i + 2];
+    }
+    if (s < bestV) {
+      bestV = s;
+      best = y;
+    }
+  }
+  return best;
+}
 
 /** push the line right by 24 CSS px at photo row 450 with the current brush; returns the measurement inputs */
 async function pushLine(page: Page) {
@@ -5443,10 +5450,10 @@ PB §6.2: `liquify.stamp` (ns per texel-stamp for push, bisecting push and resto
 
 **Files:**
 - Create: `src/bench/liquifyBench.ts`, `src/bench/liquifyBench.test.ts`
-- Modify: `src/bench/main.ts` (CRLF; buttons `163-205`, gate `167-176`, panel `231-243`, `copyResults` `684-702`; step 1 added Phase 0 rows)
+- Modify: `src/bench/main.ts` (CRLF; at `d09e608`: imports `9-58`, `let busy` `:124`, `const bodyRows` / `faceDetailRows` `:126-129`, `gateBodyBtn` `:202`, `gate` `:206-219`, `bodyBtn` `:245`, `panel` `:282-292` (the button row `:287`), `nextPaint` `:648`, `runBodyBench` `650-683`, `copyResults` `911-930`; steps 1–5 added their rows)
 
 **Interfaces:**
-- Consumes: Task 2 `LiquifyModel`, `liquifyGrid`, `strokeWork`, `straightStroke`, `strokesS30`, `strokesCap`; Task 1 `GUARD_STEPS`; step 1's `buildFrame(edit, faces, obstacles, protects)` (`src/edit/frame.ts`, PS §3.1) and `defaultPhoto` / `naturalPerson` / `neutralPerson`; `Engine.renderToImageData` (`types.ts:322`); main.ts's `el`, `button`, `nextPaint`, `busy`, `showError`, `errText`, `engine`, `gate`, `panel`.
+- Consumes: Task 2 `LiquifyModel`, `liquifyGrid`, `strokeWork`, `straightStroke`, `strokesS30`, `strokesCap`; Task 1 `GUARD_STEPS`; step 1's `buildFrame(edit, faces, obstacles, protects, primary, warpScales?)` (`src/edit/frame.ts:17-25` at `d09e608`, PS §3.1; `primary` is required) and `defaultPhoto` / `naturalPerson` / `neutralPerson`; `Engine.renderToImageData`; main.ts's `el`, `button`, `nextPaint`, `busy`, `showError`, `errText`, `engine`, `gate`, `panel`.
 - Produces: `interface LiquifyBenchRow { name: string; value: number; unit: 'ns/texel-stamp' | 'ms' | '%'; budget: number | null }`; `benchStamps(frame, now?)`, `benchReplay(frame, now?, withCap = true)`, `uploadMs(gl, field, now?)`, `formatLiquifyReport(rows)`; the bench page's 「推臉筆」 button.
 
 - [ ] **Step 1: Write the failing test**
@@ -5624,27 +5631,26 @@ Expected: PASS, 2 tests.
 
 In `src/bench/main.ts` (CRLF):
 
-1. Imports:
+1. Imports (`main.ts` already has `import { legacyFrame } from '../edit/frame';` and `import { defaultPhoto, neutralPerson } from '../edit/state';`: add `buildFrame` and `naturalPerson` to those two lines; `Engine` is already in its type import from `'../types'`):
 
 ```ts
 import { LiquifyModel } from '../edit/liquify';
-import { buildFrame } from '../edit/frame';
-import { defaultPhoto, naturalPerson, neutralPerson } from '../edit/state';
 import { strokesS30 } from '../edit/strokeFixtures';
 import { benchReplay, benchStamps, formatLiquifyReport, uploadMs, type LiquifyBenchRow } from './liquifyBench';
 ```
 
-2. Next to `const bodyRows …` (v0.3 `:98`): `const liquifyRows: LiquifyBenchRow[] = [];`
-3. Next to `gateBodyBtn` / `bodyBtn` (v0.3 `:166`, `:202`):
+2. Next to `const bodyRows …` (`:126` at `d09e608`): `const liquifyRows: LiquifyBenchRow[] = [];`
+3. Next to `gateBodyBtn` (`:202` at `d09e608`, before `const gate`):
 
 ```ts
 const gateLiquifyBtn = button('推臉筆', () => void liquifyBench());
 const liquifyBtn = button('推臉筆', () => void liquifyBench());
-const liquifyOut = el('pre', { className: 'note' });
+// own class, not .note: bench.spec.ts and tests/harness/t8/run-bench*.mjs need '.gate .note' and '.panel .note' to stay unique
+const liquifyOut = el('pre', { className: 'liquify-note' });
 ```
 
-append `gateLiquifyBtn` to the gate's button row (where `gateBodyBtn` sits) and `liquifyBtn` to the panel row that holds `bodyBtn` (v0.3 `:236`).
-4. Below `runBodyBench` (v0.3 `:509-541`):
+add `gateLiquifyBtn` to the `gate` element's children right after `gateBodyBtn` (`:214`; the gate lists its children in one `el('div', { className: 'gate' }, …)` call) and `liquifyBtn` to the panel's button row after `bodyBtn` (`:287`).
+4. Below `runBodyBench` (`:650-683` at `d09e608`):
 
 ```ts
 /** A 1536 × 2048 frame through the whole pipeline with the S30 strokes: the readback makes it a complete GPU frame. */
@@ -5659,8 +5665,8 @@ function liquifyFrameMs(eng: Engine, m: LiquifyModel): number {
     ctx.fillRect(0, 0, 1536, 2048);
   }
   const edit = { v: 2 as const, photo: { ...defaultPhoto(), strokes: m.records }, persons: { p0: naturalPerson() }, template: neutralPerson(), primaryInit: null };
-  // no faces, no obstacles, no protects: the strokes-only frame (step 1's buildFrame with its empty inputs)
-  const input = { ...buildFrame(edit, [], [], new Map()), source: src, width: 1536, height: 2048, liquify: m.field };
+  // no faces, no obstacles, no protects: the strokes-only frame (step 1's buildFrame with its empty inputs; p0 is the primary)
+  const input = { ...buildFrame(edit, [], [], new Map(), 'p0'), source: src, width: 1536, height: 2048, liquify: m.field };
   const times: number[] = [];
   for (let i = 0; i < 6; i++) {
     const t0 = performance.now();
@@ -5703,8 +5709,8 @@ async function liquifyBench(): Promise<void> {
 }
 ```
 
-(Import `Engine` from `'../types'` if `main.ts` does not already.) If `buildFrame`'s fourth parameter is not a `Map` in step 1's code, pass its empty value of the declared type.
-5. In `copyResults` (v0.3 `:685`), append the rows: `const text = formatReport(reportMeta(), samples, bodyRows) + formatLiquifyReport(liquifyRows);` (keep whatever step 1 appended for its Phase 0 rows).
+(`buildFrame`'s fourth parameter is a `ReadonlyMap<string, FaceProtect>`, so `new Map()` fits; its fifth, `primary`, is required.)
+5. In `copyResults` (`:911-930` at `d09e608`), whose text steps 1–5 grew to `formatReport(reportMeta(), samples, bodyRows) + multiText + exportText + (toneReport ? … : '') + (faceDetailRows.length ? … : '')`, append the rows at the end: `… + formatLiquifyReport(liquifyRows)`.
 
 - [ ] **Step 6: Run the checks**
 
@@ -5724,17 +5730,17 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ### Task 16: Release 0.4.0
 
-C §1.3 items 1 and 2, and the release gate of C §8.4: one export-harness case with every v0.4 feature on at once must give a forced `TILE = 256` export equal to the untiled export within 1/255. Then the version becomes 0.4.0 (single source `package.json`, read by `src/version.ts:6` and `vite.config.ts:58`, so `displayVersion('0.4.0')` = `v0.4` and the banner reads 「有新版本 v0.4」 with no code change, `src/ui/updateModel.ts:60-62`). The update e2e derives both of its versions from `package.json` (`tests/e2e/update.spec.ts:25-26`: A = the package version, B = its patch + 1), so nothing there hard-codes 0.3. Steps 4 and 5 of C §1.3 (`/code-review`, the clean-clone gate) run in Task 17; item 5 (push, deploy) is **not** part of this plan.
+C §1.3 items 1 and 2, and the release gate of C §8.4: one export-harness case with every v0.4 feature on at once must give a forced `TILE = 256` export equal to the untiled export within 1/255. Then the version becomes 0.4.0 (single source `package.json`, read by `src/version.ts:6` and `vite.config.ts:37-44`, so `displayVersion('0.4.0')` = `v0.4` and the banner reads 「有新版本 v0.4」 with no code change, `src/ui/updateModel.ts:60-62`). The update e2e derives both of its versions from `package.json` (`tests/e2e/update.spec.ts:25-26`: A = the package version, B = its patch + 1), so nothing there hard-codes 0.3. Steps 4 and 5 of C §1.3 (`/code-review`, the clean-clone gate) run in Task 17; item 5 (push, deploy) is **not** part of this plan.
 
 **Files:**
-- Modify: `tests/e2e/pages/export.ts`, `tests/e2e/export.spec.ts` (the release-gate case in step 3's tile harness)
-- Modify: `package.json`, `package-lock.json`
-- Modify: `src/ui/updateModel.test.ts`
-- Modify: `docs/superpowers/specs/2026-10-12-v04-roadmap.md` (append §13 Release notes)
-- Modify: `docs/superpowers/specs/2026-10-07-meiyan-pwa-design.md` (CRLF; §3 Scope `:42-48`, §7.3 BeautyPanel `:134-146`)
+- Modify: `tests/e2e/pages/export.ts`, `tests/e2e/export.spec.ts` (LF; the release-gate case in step 3's tile harness; at `d09e608` the loop's `faces` line is `:98`, `photo` `:103-108`, `base` `:112`, `bounds` `:114`, before Task 13's lines)
+- Modify: `package.json`, `package-lock.json` (LF)
+- Modify: `src/ui/updateModel.test.ts` (LF; `describe('banner text', …)` `:97-103`, `describe('已更新至 notice …', …)` `:119-` at `d09e608`)
+- Modify: `docs/superpowers/specs/2026-10-12-v04-roadmap.md` (LF; append §13 Release notes after §12, the last section)
+- Modify: `docs/superpowers/specs/2026-10-07-meiyan-pwa-design.md` (CRLF; §3 Scope `:42-48`, §7.3 BeautyPanel `:134-146`; no `v04-roadmap` pointer at `d09e608`)
 
 **Interfaces:**
-- Consumes: step 3's harness `window.runExportTiles()` and its `cases` loop (step-3 plan Task 9: the loop's locals `decode`, `bitmap`, `pts` (the fixture landmarks placed in the frame), `face`, `faces`, the shared `person`, `photo`, `base`, `bounds`), as extended by Task 13 (`strokes?: boolean`, `buildStrokeCase`); `rotateLeft`, `setStraighten`, `IDENTITY_GEOMETRY` (`src/geometry/view.ts`); `neutralPerson`, `defaultPhoto` (`src/edit/state.ts`); `adapt` (`src/tracking/adapter111.ts`); `RenderFace`, `PersonParams`, `PhotoParamId`, `Spot`, `Rect` (`src/types.ts`); step 2's `adjust.*` ids; step 4's `tone.*` ids, `PhotoParams.spots`, `RenderInput.toneSource` and `spotWindowGrowth(win: PxRect, spots, decode): PxRect` (`src/media/exportPlan.ts`, step-4 plan Task 18), feeding step 3's `TileBounds.spotWindowGrowth` hook; step 5's ids `shape.jawline`, `shape.noseWing`, `makeup.contour`, `makeup.lashes` (C §3.1). Step 4 checks its own tiles in a separate harness (`tests/e2e/pages/tone.ts`, `runToneTiles`), so this case sets the step-4 inputs itself.
+- Consumes: step 3's harness `window.runExportTiles()` and its `cases` loop (step-3 plan Task 9: the loop's locals `decode`, `bitmap`, `pts` (the fixture landmarks placed in the frame), `face`, `faces`, the shared `person`, `photo`, `base`, `bounds`), as extended by Task 13 (`strokes?: boolean`, `buildStrokeCase`); `rotateLeft`, `setStraighten`, `IDENTITY_GEOMETRY` (`src/geometry/view.ts`); `neutralPerson`, `defaultPhoto` (`src/edit/state.ts`); `adapt` (`src/tracking/adapter111.ts`); `RenderFace`, `PersonParams`, `PhotoParamId`, `Spot`, `Rect` (`src/types.ts`); step 2's `adjust.*` ids; step 4's `tone.*` ids, `PhotoParams.spots`, `RenderInput.toneSource` and `spotBounds(frame: Pick<StillFrame, 'faces' | 'photo'>, oSize): Pick<TileBounds, 'spotWindowGrowth' | 'oSpacePasses'>` (`src/media/exportPlan.ts:306-312` at `d09e608`; what `StillSession.bounds` spreads), which feeds step 3's `TileBounds.spotWindowGrowth` hook with the O-normalized `spotWindowGrowth(winO, spots, oSize)` and sets `oSpacePasses` while a step-4 pass runs; step 5's ids `shape.jawline`, `shape.noseWing`, `makeup.contour`, `makeup.lashes` (C §3.1). Step 4 checks its own tiles in a separate harness (`tests/e2e/pages/tone.ts`, `runToneTiles`), so this case sets the step-4 inputs itself.
 - Produces: the harness case `'everything'`; version 0.4.0; release notes.
 
 - [ ] **Step 1: Write the failing release-gate expectation**
@@ -5749,7 +5755,7 @@ Expected: FAIL — the list of case names lacks `'everything'`.
 - [ ] **Step 3: Add the `everything` case to the harness**
 
 In `tests/e2e/pages/export.ts`:
-1. Imports: `adapt` from `'../../../src/tracking/adapter111'` (already imported by step 3), `spotWindowGrowth` from `'../../../src/media/exportPlan'`, and `PhotoParamId`, `Spot`, `Rect` added to the type import from `'../../../src/types'`. The case type gains `twoFaces?: boolean`, `skinTools?: boolean` and `adjust?: Partial<Record<PhotoParamId, number>>`.
+1. Imports: `adapt` from `'../../../src/tracking/adapter111'` (already imported by step 3), `spotBounds` added to the existing import from `'../../../src/media/exportPlan'` (`faceBoundsFor`, `planTiles`, `TileGrid`), and `PhotoParamId`, `Spot` added to the type import from `'../../../src/types'` (`Rect` is there since Task 13). The case type gains `twoFaces?: boolean`, `skinTools?: boolean` and `adjust?: Partial<Record<PhotoParamId, number>>`.
 2. Append the case (C §8.4, last paragraph: every v0.4 feature at once):
 
 ```ts
@@ -5777,12 +5783,13 @@ const GATE_SPOTS: Spot[] = [
 ];
 ```
 
-4. In the per-case loop, where `faces` is built (step 3: `const faces: RenderFace[] = [{ face, weight: 1, person, protect: null }];`), give face A the step-4 and step-5 items in this case and add the second face with its own person, adapted from its own landmarks (so every `Face` field, step 5's `iris` and `lids` included, is consistent):
+4. In the per-case loop, where `faces` is built (at `d09e608`: `const faces: RenderFace[] = [{ face, weight: 1, person: c.faceDetail ? step5Person() : person, protect: null }];`, step 5's cases using `step5Person()`), give face A the step-4 and step-5 items in this case and add the second face with its own person, adapted from its own landmarks (so every `Face` field, step 5's `iris` and `lids` included, is consistent):
 
 ```ts
+    const personBase: PersonParams = c.faceDetail ? step5Person() : person;
     const personA: PersonParams = c.skinTools
-      ? { ...person, values: { ...person.values, 'tone.even': 0.5, 'tone.darkCircle': 1, 'shape.jawline': 0.6, 'makeup.contour': 0.6 } }
-      : person;
+      ? { ...personBase, values: { ...personBase.values, 'tone.even': 0.5, 'tone.darkCircle': 1, 'shape.jawline': 0.6, 'makeup.contour': 0.6 } }
+      : personBase;
     const faces: RenderFace[] = [{ face, weight: 1, person: personA, protect: null }];
     if (c.twoFaces) {
       // the fixture face again at 0.45 scale towards the top left, with its own 美型 and makeup
@@ -5800,21 +5807,15 @@ const GATE_SPOTS: Spot[] = [
     }
 ```
 
-(this replaces step 3's `faces` line). Where `photo` is built, spread `...c.adjust` into `photo.values` after the case's `'adjust.grain'` / `'adjust.vignette'` (the base case already sets those, the 膠片 look and the body field) and add `spots: c.skinTools ? GATE_SPOTS : []` next to Task 13's `strokes`. In `base`, add `...(c.skinTools ? { toneSource: { source: bitmap, width: c.w, height: c.h } } : {})` (every tile rebuilds the tone field from the whole working image, as step 4's runner does). In `bounds`, next to Task 13's liquify term:
+(this replaces step 3's `faces` line). Where `photo` is built, spread `...c.adjust` into `photo.values` after the case's `'adjust.grain'` / `'adjust.vignette'` (the base case already sets those, the 膠片 look and the body field) and add `spots: c.skinTools ? GATE_SPOTS : []` next to Task 13's `strokes`. In `base`, add `...(c.skinTools ? { toneSource: { source: bitmap, width: c.w, height: c.h } } : {})` (every tile rebuilds the tone field from the whole working image, as step 4's runner does). In `bounds`, next to Task 13's liquify term, add what `StillSession.bounds` adds for step 4 (`still.ts`: `...spotBounds(f, { width, height })`), from this case's own faces and photo:
 
 ```ts
-      // step 4: the window holds every spot (and donor) whose quad meets it (step 3's TileBounds hook, O-normalized)
-      ...(c.skinTools
-        ? {
-            spotWindowGrowth: (w: Rect) => {
-              const p = spotWindowGrowth({ x: w.x * c.w, y: w.y * c.h, w: w.w * c.w, h: w.h * c.h }, GATE_SPOTS, decode);
-              return { x: p.x / c.w, y: p.y / c.h, w: p.w / c.w, h: p.h / c.h };
-            },
-          }
-        : {}),
+      // step 4: the window holds every spot (and donor) whose quad meets it, and B is budgeted at window size while a
+      // 膚質 pass runs (spotBounds: TileBounds.spotWindowGrowth, O-normalized, and oSpacePasses)
+      ...(c.skinTools ? spotBounds({ faces, photo }, decode) : {}),
 ```
 
-(If step 4 hands the spots to the planner another way than through `TileBounds.spotWindowGrowth`, pass `GATE_SPOTS` the way step 4's own coverage test in `src/media/exportPlan.test.ts` does.)
+(step 4's own coverage test in `src/media/exportPlan.test.ts` builds its bounds the same way.)
 
 The comparison is the harness's own (one tile covering V vs the forced TILE = 256 plan); nothing about it changes.
 
@@ -5828,7 +5829,7 @@ Expected: PASS; the log line `everything: …, max channel diff 0/255` (at most 
 Run: `npm version 0.4.0 --no-git-tag-version`
 Expected: prints `v0.4.0`; `git diff --stat` lists only `package.json` and `package-lock.json`, and `git diff package-lock.json` changes exactly the two `"version": "0.3.0"` lines of the root package (lines 3 and 9) to `"0.4.0"`.
 
-Append to `src/ui/updateModel.test.ts`, inside `describe('banner text', …)` (v0.3 `:97-103`) and `describe('已更新至 notice (first launch of a new version)', …)` (v0.3 `:119-143`) respectively:
+Append to `src/ui/updateModel.test.ts`, inside `describe('banner text', …)` (`:97-103` at `d09e608`) and `describe('已更新至 notice (first launch of a new version)', …)` (`:119-` at `d09e608`) respectively (`bannerTitle`, `updatedNotice` and the `available(…)` helper are already there):
 
 ```ts
   it('names 0.4.0 as v0.4 (C §1.3)', () => {
@@ -5884,7 +5885,7 @@ In `docs/superpowers/specs/2026-10-07-meiyan-pwa-design.md` (CRLF), unless a v0.
 Verify that every derived image fixture v0.4 committed is in `LICENSES/NOTICE.txt` (C §1.3 item 2, §8.3). This step adds no image: `tests/fixtures/strokes_s30.json` and `strokes_cap.json` are our own data and need no line (PB §8.4), so the check looks at images only, by file name or by their directory (the parity goldens are listed as `tests/fixtures/parity-v03/`):
 
 Run: `for f in $(git diff --name-only --diff-filter=A 892ea61 -- 'tests/fixtures/*.png' 'tests/fixtures/*.jpg'); do grep -qF "$(basename "$f")" LICENSES/NOTICE.txt || grep -qF "$(dirname "$f")/" LICENSES/NOTICE.txt || echo "missing in NOTICE: $f"; done`
-Expected: no output. (A `missing` line names a fixture an earlier step forgot: add its NOTICE line in the style of `NOTICE.txt:56-57` — "modified derivative of … (Apache-2.0 §4(b) change notice): …".)
+Expected: no output. (A `missing` line names a fixture an earlier step forgot: add its NOTICE line in the style of the `fullbody_lines.jpg` entry, `NOTICE.txt:58` at `d09e608` — "modified derivative of … (Apache-2.0 §4(b) change notice): …".)
 
 - [ ] **Step 7: Run the affected suites**
 
@@ -5947,7 +5948,7 @@ Expected: PASS.
 3. Existing tests kept their assertions: the only intended assertion changes in this step are the `RESHAPE_FS` hash pin and the moved `emptyPng` helper.
 
 Run: `STEP6_BASE=$(cat "$(git rev-parse --git-dir)/STEP6_BASE") && git diff --stat "$STEP6_BASE" -- '*.test.ts' '*.test.tsx' 'tests/e2e/*.spec.ts'` (the commit recorded before Task 1, see Global Constraints) and read every changed hunk of a file that existed before this step.
-Expected: additions only, except `reshapeCpu.test.ts` (the pinned hash), `body.spec.ts` (`emptyPng` now imported from `fixtures.ts`) and the `liquifyOn: false` line added to `pipeline.test.ts`'s `base` fixture.
+Expected: additions only, except `reshapeCpu.test.ts` (the pinned hash), `body.spec.ts` (`emptyPng` now imported from `fixtures.ts`, its local copy and the `PNG` import removed), and import declarations that gained names (for example `state.test.ts`, `migrate.test.ts`, `history.test.ts`, `panelModel.test.ts`, `backMapCpu.test.ts`, `backMapFrame.test.ts`, `exportPlan.test.ts`). (The `liquifyOn: false` line in `pipeline.test.ts`'s `base` fixture and the appended `export.spec.ts` case names are additions.)
 
 4. The camera never gets the brush (`live: false`, C §2.4):
 

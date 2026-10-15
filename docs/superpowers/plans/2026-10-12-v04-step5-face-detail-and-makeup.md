@@ -7176,7 +7176,7 @@ S5 §6.2 rows 1–4: the reshape microbench with every step-5 warp at ±max, P1 
 - Consumes: `Engine` (`render`, `canvas`), `createEngine`; `RenderInput` / `RenderFace` (RM §4.1), `defaultPhoto()`, `neutralPerson()`, `emptyShades()`; Task 1 `MAKEUP_PARAM`, `paramsInGroup`, `SPLIT_IDS`; Task 5 `scaleFace`; step 1's still session (`StillSession.faces`, S1 S1) and its bench section; step 1's `chromium-group` Playwright project.
 - Produces: `warpBenchPerson(end: 0 | 1): PersonParams`, `makeupBenchPerson(): PersonParams`, `benchFaces(face: Face, n: number, person: PersonParams): RenderFace[]`, `medianMs(xs: readonly number[]): number`, `runFaceDetailRows(engine: Engine, bitmap: ImageBitmap, face: Face): Promise<string[]>`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/bench/faceDetailBench.test.ts`:
 
@@ -7241,12 +7241,12 @@ describe('step-5 bench inputs (face-detail spec §6.2)', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run src/bench/faceDetailBench.test.ts`
 Expected: FAIL — `Failed to resolve import "./faceDetailBench"`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/bench/faceDetailBench.ts`:
 
@@ -7403,12 +7403,12 @@ test('bench: live fps with three faces and every 美妝 part on (S5 §6.2 row 4)
 });
 ```
 
-- [ ] **Step 4: Run the tests and a desktop pass**
+- [x] **Step 4: Run the tests and a desktop pass**
 
 Run: `npx vitest run src/bench && npm run typecheck && npm run build`
 Expected: PASS. Then record desktop numbers once: `npm run dev`, open `/bench.html` in desktop Chrome, 靜態圖片測試 with `sample_face.png`, then 臉型細項＋美妝 (rows printed in the note); and `BENCH=1 npx playwright test --project chromium-group --grep @bench` (fps logged). Append the numbers to the hand-off note of Task 19, against the S5 §6.1 budget (desktop only; the iPhone rows wait for the user's go-ahead on a preview deploy).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 file src/bench/main.ts tests/e2e/camera-group.spec.ts

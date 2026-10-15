@@ -41,6 +41,7 @@ import type {
 import { primaryBody } from '../detect/cache';
 import { formatAdjustBench, runAdjustBench } from './adjustBench';
 import { runExportBench } from './exportBench';
+import { runFaceDetailRows } from './faceDetailBench';
 import { mountMultiFace } from './multiFace';
 import { formatToneBench, runToneBench, spotGrid, type ToneBenchCase } from './toneBench';
 import {
@@ -113,6 +114,8 @@ let tracker: Tracker | null = null;
 let model: Uint8Array | null = null;
 let loop: LiveLoop | null = null;
 let still: StillSession | null = null;
+/** the still session's photo (the session closes it on dispose): 臉型細項＋美妝 renders it at 1080 / 2048 */
+let stillBitmap: ImageBitmap | null = null;
 /** the bench's still frame: the current params on the photo's first face (v0.3's one-face render) */
 const stillFrame = (s: StillSession) => legacyFrame(params, s.faces[0]?.face ?? null, 1);
 let stats: LiveStats | null = null;
@@ -122,6 +125,8 @@ let busy = false;
 const samples: BenchSample[] = [];
 const bodyRows: BodyBenchRow[] = [];
 let exportRows: ExportBenchRow[] = [];
+/** step-5 rows (face-detail spec §6.2 rows 1–3), one text line per measurement */
+const faceDetailRows: string[] = [];
 
 // ───────────────────────── DOM ─────────────────────────
 
@@ -235,6 +240,7 @@ const landmarksBtn = button('特徵點', () => {
 const compareBtn = button('按住對比', () => {});
 const captureBtn = button('擷取測試', () => void captureTest());
 const stillBtn = button('靜態圖片測試', () => void stillTest());
+const faceDetailBtn = button('臉型細項＋美妝', () => void runFaceDetail());
 const copyBtn = button('複製結果', () => copyResults());
 const bodyBtn = button('美體偵測', () => bodyTest());
 const toneBtn = button('膚質量測', () => toneTest());
@@ -278,7 +284,7 @@ const panel = el(
   { className: 'panel' },
   el('div', { className: 'row' }, el('span', { textContent: '畫質' }), ...tierBtns),
   el('div', { className: 'row' }, el('span', { textContent: '參數' }), ...modeBtns),
-  el('div', { className: 'row' }, delegateBtn, landmarksBtn, compareBtn, captureBtn, stillBtn, bodyBtn, toneBtn, exportBtn, exportPhotoBtn, resumeBtn),
+  el('div', { className: 'row' }, delegateBtn, landmarksBtn, compareBtn, captureBtn, stillBtn, faceDetailBtn, bodyBtn, toneBtn, exportBtn, exportPhotoBtn, resumeBtn),
   el('div', { className: 'row' }, copyBtn, note),
   table,
   copyArea,
@@ -478,6 +484,7 @@ function stillTest(): void {
     // second tap = back to the camera
     still.dispose();
     still = null;
+    stillBitmap = null;
     stillBtn.textContent = '靜態圖片測試';
     startLoop();
     return;
@@ -497,6 +504,7 @@ async function runStill(file: File): Promise<void> {
     loop = null;
     const t0 = performance.now();
     still = createStillSession(engine, tracker, bitmap);
+    stillBitmap = bitmap;
     const detectMs = performance.now() - t0;
     still.render(stillFrame(still));
     const times: number[] = [];
@@ -514,6 +522,30 @@ async function runStill(file: File): Promise<void> {
     showError('still', err);
   } finally {
     busy = false;
+    syncButtons();
+  }
+}
+
+// ───────────────────────── 臉型細項＋美妝 (face-detail spec §6.2 rows 1–3) ─────────────────────────
+
+async function runFaceDetail(): Promise<void> {
+  const face = still?.faces[0]?.face;
+  if (!engine || !still || !stillBitmap || !face || busy) {
+    note.textContent = '先用「靜態圖片測試」選一張有臉的照片';
+    return;
+  }
+  busy = true;
+  try {
+    note.textContent = '臉型細項＋美妝：量測中…';
+    const rows = await runFaceDetailRows(engine, stillBitmap, face);
+    faceDetailRows.push(...rows);
+    note.textContent = rows.join('\n');
+  } catch (err) {
+    showError('faceDetail', err);
+  } finally {
+    busy = false;
+    // the bench frames left the canvas on a 6-face grid: show the still photo again
+    if (still) still.render(stillFrame(still));
     syncButtons();
   }
 }
@@ -879,7 +911,12 @@ function reportMeta(): Record<string, string> {
 function copyResults(): void {
   const multiText = multi.rows().length ? `\n\n${formatMultiRows(multi.rows())}` : '';
   const exportText = exportRows.length > 0 ? `\n\n${formatExportRows(exportRows)}` : '';
-  const text = formatReport(reportMeta(), samples, bodyRows) + multiText + exportText + (toneReport ? `\n\n膚質\n${toneReport}` : '');
+  const text =
+    formatReport(reportMeta(), samples, bodyRows) +
+    multiText +
+    exportText +
+    (toneReport ? `\n\n膚質\n${toneReport}` : '') +
+    (faceDetailRows.length ? `\n\n[step 5]\n${faceDetailRows.join('\n')}` : '');
   // the body section may be on the start screen, where the panel (and its textarea) is hidden
   if (panel.hidden) bodySection.append(copyArea);
   else if (copyArea.parentElement !== panel) panel.append(copyArea);

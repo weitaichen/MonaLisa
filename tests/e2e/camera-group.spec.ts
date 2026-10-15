@@ -95,3 +95,34 @@ test('three faces: auto beautifies the largest; tap B; 全部套用; tap C; the 
   const atB = [...d.boxes].sort((a, b) => dist(a) - dist(b))[0].id;
   expect(d.selected).toBe(atB);
 });
+
+test('bench: live fps with three faces and every 美妝 part on (S5 §6.2 row 4) @bench', async ({ page }) => {
+  test.skip(!process.env.BENCH, 'run with BENCH=1 npx playwright test --project chromium-group --grep @bench');
+  test.setTimeout(240_000);
+  await page.goto('/');
+  await page.getByRole('button', { name: /拍攝/ }).click();
+  await page.getByRole('button', { name: '點擊開啟相機' }).click();
+  await expect.poll(async () => (await debugState(page)).faces, { timeout: 90_000 }).toBe(3);
+  // as the 全部套用 case above does: the chip waits for ChipGate's debounce
+  await page.addStyleTag({ content: '.all-chip { display: inline-flex !important; }' });
+  await page.getByRole('button', { name: '全部套用' }).click();
+  await page.getByRole('tab', { name: '美妝', exact: true }).click();
+  for (const [part, first] of [
+    ['口紅', '玫瑰'],
+    ['腮紅', '蜜桃'],
+    ['眉毛', '自然黑'],
+    ['眼影', '大地'],
+    ['眼線', '黑'],
+    ['睫毛', '自然'],
+    ['臥蠶', '自然'],
+    ['修容', '自然'],
+    ['高光', '自然'],
+    ['美瞳', '冰藍'],
+  ] as const) {
+    await page.getByRole('button', { name: /^切換部位（目前：/ }).click();
+    await page.getByRole('option', { name: part, exact: true }).click();
+    await page.getByRole('option', { name: first, exact: true }).click();
+  }
+  await page.waitForTimeout(10_000);
+  console.log(`step5 live fps, 3 faces, every makeup part: ${(await debugState(page)).fps.toFixed(1)}`);
+});

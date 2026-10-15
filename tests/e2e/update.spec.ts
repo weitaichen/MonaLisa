@@ -162,6 +162,9 @@ test('new version: offered on 首頁 / 設定 only, 稍後 until next launch, �
   await expect(banner(page)).toContainText(`目前 ${displayVersion(A)}`);
   await expect(page.locator('.update-live.home')).toHaveAttribute('aria-live', 'polite');
   // ≥ 44pt targets
+  // (measured at rest: the card is still sliding in (update-in, 360 ms) when it turns visible, and a box read
+  // through that translateY can come back as 44 − 2⁻¹⁴ (float32 at y ≈ 781) for a 44 px button)
+  await banner(page).evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
   for (const name of ['更新', '稍後']) {
     const box = await banner(page).getByRole('button', { name }).boundingBox();
     expect(box && box.height >= 44 && box.width >= 44, `${name} target ${JSON.stringify(box)}`).toBe(true);

@@ -1273,6 +1273,10 @@ describe('美妝 under 全部 (RM §3.3, S §2.4 Dots)', () => {
     expect(makeupAction({ type: 'shade', part: 'lens', shade: 'blue' }, l, S14({ makeupPart: 'lens' }))?.edit).toBeNull();
     expect(makeupShadeItems(l, 'lashes').filter((i) => i.selected).map((i) => i.key)).toEqual(['on']);
     expect(sliderFor(l, S14({ makeupPart: 'lens' }))?.mixed).toBe(true);
+    // 眼線 null and 黑 are the same 黑 (step-5 review): 黑 is selected and its tap is no undo step
+    const liners = all(withMakeup({ 'makeup.liner': 0.6 }), withMakeup({ 'makeup.liner': 0.6 }, { liner: 'black' }));
+    expect(makeupShadeItems(liners, 'liner').filter((i) => i.selected).map((i) => i.key)).toEqual(['black']);
+    expect(makeupAction({ type: 'shade', part: 'liner', shade: 'black' }, liners, S14({ makeupPart: 'liner' }))?.edit).toBeNull();
     // one target off: nothing is selected, and 自然 turns that one on
     const half = all(withMakeup({ 'makeup.lashes': 0.55 }), withMakeup({}));
     expect(makeupShadeItems(half, 'lashes').filter((i) => i.selected)).toEqual([]);

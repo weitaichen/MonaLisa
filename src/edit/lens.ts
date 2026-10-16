@@ -1,6 +1,6 @@
 // One lens for every edit (RM §3.3): all panel reads and writes go through it, so the routing between the photo and
 // the person layer, and between one person and 全部, lives in one place. The editor and the camera both use it.
-import { applyPreset, cleanBand, displayValue, FILTERS, hasValue, isShadePart, MAKEUP_PARAM, MAKEUP_PICK_DEFAULT, neutralValue, paramDef, paramsInGroup } from '../engine/params';
+import { applyPreset, cleanBand, displayValue, FILTERS, hasValue, isShadePart, MAKEUP_PARAM, MAKEUP_PICK_DEFAULT, neutralValue, paramDef, paramsInGroup, SHADES } from '../engine/params';
 import type {
   EditState,
   HeightBand,
@@ -77,6 +77,11 @@ export interface Lens {
   groupNeutral(group: ParamGroup): boolean;
   groupHasValue(group: ParamGroup): boolean;
   reset(): EditState;
+}
+
+/** the shade a part draws with: 眼線 null reads as its first shade, 黑 (S5 §2.3); every other part as stored */
+export function effectiveShade(part: ShadePart, shade: string | null): string | null {
+  return part === 'liner' ? (shade ?? SHADES.liner[0].id) : shade;
 }
 
 /** before any detection the implicit person edits everything, as v0.3 did (S §3.3 item 2) */
@@ -181,9 +186,11 @@ function baseLensFor(edit: EditState, sel: Selection, persons: readonly PersonIn
       const p = person(shownOf(t));
       const on = p.values[key] > 0.01;
       const shade = p.shades[part];
+      // effective shades: 眼線 null and 黑 draw the same, so they are not 各人不同 (and 黑 is no empty undo step)
+      const eff = effectiveShade(part, shade);
       const mixed = t.some((pid) => {
         const q = person(pid);
-        return q.values[key] > 0.01 !== on || q.shades[part] !== shade;
+        return q.values[key] > 0.01 !== on || effectiveShade(part, q.shades[part]) !== eff;
       });
       return { shade, on, mixed };
     },
@@ -317,8 +324,9 @@ function sideView(edit: EditState, id: SplitParamId, side: Side, persons: readon
   const swapped: PersonId[] = [];
   let next: Record<PersonId, PersonParams> | null = null;
   for (const info of persons) {
-    const p = edit.persons[info.id];
-    if (!p || p.right === null || slotFor(!!info.screenSwap, side) === 'values') continue;
+    // a listed person without an entry yet is the template (personOf): its split side is the template's (step-5 review)
+    const p = personOf(edit, info.id);
+    if (p.right === null || slotFor(!!info.screenSwap, side) === 'values') continue;
     next ??= { ...edit.persons };
     next[info.id] = swapHalves(p, id);
     swapped.push(info.id);
@@ -360,8 +368,13 @@ function withFaceDetail(base: BaseLens, opts: LensOptions): Lens {
       const out = baseLensFor(view, sel, persons, primary, opts).set(id, v);
       if (out === view) return edit;
       const back = { ...out.persons };
-      // a person step 1's routing did not write gets its own object back; a written one swaps its halves back
-      for (const pid of swapped) back[pid] = back[pid] === view.persons[pid] ? edit.persons[pid] : swapHalves(back[pid], id as SplitParamId);
+      // a person step 1's routing did not write gets its own object back (or, a template person, no entry again); a
+      // written one swaps its halves back
+      for (const pid of swapped) {
+        if (back[pid] !== view.persons[pid]) back[pid] = swapHalves(back[pid], id as SplitParamId);
+        else if (pid in edit.persons) back[pid] = edit.persons[pid];
+        else delete back[pid];
+      }
       return { ...out, persons: back };
     },
     split() {

@@ -2,7 +2,7 @@
 import { FILTERS, hasValue, isShadePart, MAKEUP_PARAM, MAKEUP_PICK_DEFAULT, neutralValue, paramDef, paramsInGroup, PRESETS, SHADE_PARTS, SHADES, shadeColor } from '../engine/params';
 import { adjustItemActive } from '../engine/adjustMath';
 import { lookDef, LOOKS, lookThumbUrl } from '../engine/looks';
-import { NO_BODY_NOTE, NO_FACE_NOTE, type Lens } from '../edit/lens';
+import { effectiveShade, NO_BODY_NOTE, NO_FACE_NOTE, type Lens } from '../edit/lens';
 import { adjustIsNeutral, personOf } from '../edit/state';
 import { TONE_COPY } from '../edit/toneCopy';
 import type { CropLock } from '../geometry/view';
@@ -747,10 +747,8 @@ export function splitJointNotice(item: PanelItem, lens: Lens, sel: PanelSelectio
 
 // ───────────── 美妝 two-level strip (face-detail spec §2.3–2.4) ─────────────
 
-/** the shade the strip treats as current: 眼線 null reads as its first shade, 黑 (S5 §2.3) */
-export function effectiveShade(part: ShadePart, shade: string | null): string | null {
-  return part === 'liner' ? (shade ?? SHADES.liner[0].id) : shade;
-}
+/** the shade the strip treats as current (眼線 null reads as 黑, S5 §2.3): the lens's own, which its 全部 mixed check reads */
+export { effectiveShade };
 
 /** level 2's leading tile: the active part; its 「切換部位」 aria label and ‹ are drawn by BeautyPanel */
 export function makeupLeadItem(sel: PanelSelection): PanelItem {

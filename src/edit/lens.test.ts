@@ -333,3 +333,35 @@ describe('lens: sides and 左右分開 (face-detail spec §3.4)', () => {
     expect(lensFor({ ...e, persons: { f0: s } }, SEL0, onePerson(), 'f0').shade('lens')).toMatchObject({ shade: 'blue', on: true });
   });
 });
+
+describe('step-5 review: effective shades and template persons', () => {
+  it('under 全部, 眼線 null and black are the same 黑: not mixed, and the shade reads as one', () => {
+    const on = (shade: string | null) => P({ values: { ...naturalPerson().values, 'makeup.liner': 0.6 }, shades: { ...emptyShades(), liner: shade } });
+    const e = E({ f0: on(null), f1: on('black') });
+    const st = lensFor(e, ALL, twoPersons(), 'f0').shade('liner');
+    expect(st.on).toBe(true);
+    expect(st.mixed).toBe(false);
+    // another shade is still mixed; other parts compare raw ids (null 原色 is a shade of its own there)
+    expect(lensFor(E({ f0: on(null), f1: on('navy') }), ALL, twoPersons(), 'f0').shade('liner').mixed).toBe(true);
+    const lip = (shade: string | null) => P({ values: { ...naturalPerson().values, 'makeup.lip': 0.6 }, shades: { ...emptyShades(), lip: shade } });
+    expect(lensFor(E({ f0: lip(null), f1: lip(LIP_SHADES[0].id) }), ALL, twoPersons(), 'f0').shade('lip').mixed).toBe(true);
+  });
+
+  it('a listed person missing from edit.persons reads and writes its chosen side from the template', () => {
+    // the template carries a split look (a camera hand-over under 全部套用 copies look.person, right included)
+    const template = { ...splitOn(P()), right: { ...splitOn(P()).right, 'shape.jawline': 0.7 } };
+    const e: EditState = { v: 2, photo: defaultPhoto(), persons: { f0: P() }, template, primaryInit: null };
+    // f1 is listed but has no entry yet; its GPUPixel-left half shows on the screen's right
+    const sel1 = { kind: 'person', id: 'f1' } as const;
+    const lens = lensFor(e, sel1, twoPersons(false, true), 'f0');
+    expect(lens.get('shape.jawline', 'L').value).toBe(0.7); // 左 is the template's right half
+    expect(lens.get('shape.jawline', 'R').value).toBe(template.values['shape.jawline']);
+    const w = lens.set('shape.jawline', 0.2, 'L');
+    expect(w.persons.f1.right?.['shape.jawline']).toBe(0.2);
+    expect(w.persons.f1.values['shape.jawline']).toBe(template.values['shape.jawline']);
+    expect(w.template).toBe(template);
+    // a write that does not reach it (f0 selected) leaves it without an entry
+    const w0 = lensFor(e, SEL0, twoPersons(false, true), 'f0').set('shape.jawline', 0.4, 'L');
+    expect('f1' in w0.persons).toBe(false);
+  });
+});

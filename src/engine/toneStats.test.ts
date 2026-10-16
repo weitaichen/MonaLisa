@@ -115,6 +115,18 @@ describe('toolChecks: a zero target on the GPU', () => {
     expect(recoveryChecks('teeth', fix, 2 / 3).map((c) => [c.name, c.bound, c.ok])).toEqual([['teeth Cb recovery', '≥ 0.300', false]]);
     expect(recoveryChecks('teeth', fix, 1).map((c) => c.bound)).toEqual(['≥ 0.450']);
   });
+
+  it('the bounds are the ones S §8.2 states: TARGETS on the CPU, ⅔ of them on the GPU (case 2)', () => {
+    const bounds = (scale: number) =>
+      Object.fromEntries(
+        (['even', 'darkCircle', 'nasolabial', 'teeth', 'eyeBright'] as const).map((tool) => [
+          tool,
+          [...new Set(toolChecks(tool, fix, fix, orig, fx, face, scale).filter((c) => c.name.includes('recovery')).map((c) => c.bound))],
+        ]),
+      );
+    expect(bounds(1)).toEqual({ even: ['≥ 0.450'], darkCircle: ['≥ 0.450'], nasolabial: ['≥ 0.500'], teeth: ['≥ 0.450'], eyeBright: ['≥ 0.250'] });
+    expect(bounds(2 / 3)).toEqual({ even: ['≥ 0.300'], darkCircle: ['≥ 0.300'], nasolabial: ['≥ 0.333'], teeth: ['≥ 0.300'], eyeBright: ['≥ 0.167'] });
+  });
 });
 
 // 白牙's lip checks ran on the fixture only, and their 0/255 read the lip line from the same inner-lip polygon as the lip

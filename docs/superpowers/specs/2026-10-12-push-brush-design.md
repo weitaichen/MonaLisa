@@ -107,7 +107,7 @@ v0.3 has no manual liquify (`monalisa_inventory.md:216`). The displacement-textu
 | hint (推) | 單指推動，雙指縮放 (§C2.3) |
 | hint (恢復) | 單指塗抹恢復，雙指縮放 |
 | cap toast | 推臉筆筆畫已達上限 (§C2.6). Shown once per gesture that hits a cap. |
-| replay status (> 300 ms) | 正在套用推臉筆… |
+| replay status (> 300 ms) | 正在套用推臉筆… (a pill, §3.5) |
 | person strip caption in brush mode | 整張照片 (§C2.6) |
 
 ### 2.5 Gestures: drawing versus pinch-zoom (decision)
@@ -265,7 +265,7 @@ export interface LiveStroke {
   - `pending` is true while it runs;
   - brush input is refused;
   - the Editor skips `session.render` and keeps the previous frame (on a reopen there is none yet, so the canvas waits with the status);
-  - after 300 ms the status 「正在套用推臉筆…」 is shown.
+  - after 300 ms 「正在套用推臉筆…」 shows as a pill in the hint pill's place (`.liquify-busy`, a spinner and the text; the hint is hidden meanwhile), not as a status card: the previous frame stays visible (v0.4 cleanup, step-6 review). Input passes through it; the brush refuses a stroke while pending.
 - **Determinism.** Every stamp is a deterministic function of the buffer region it reads, and records replay in order. So incremental drawing, a patch revert and a full rebuild produce **bit-identical** buffers (unit test, §8.1). The stamp math uses only `+ − × ÷` and `Math.sqrt` (no `Math.exp`, `pow` or `hypot`, which are not correctly rounded and differ between V8 and JavaScriptCore), on doubles stored to Float32. Node tests and Safari therefore agree bit for bit.
 - **Finite by construction.** Sanitized inputs are finite and every operator is bounded, so the field never holds a non-finite value (the fuzz test asserts it). `liquifyTexture` therefore skips `bodyTexture`'s full-buffer `every(Number.isFinite)` scan (`pipeline.ts:268`), which would otherwise cost about 400 k calls per drawn frame.
 

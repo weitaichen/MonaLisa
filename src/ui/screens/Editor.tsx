@@ -2029,8 +2029,6 @@ export function Editor({ source }: { source: EditorSource }) {
         </button>
       </Status>
     );
-  } else if (liquifyBusy) {
-    overlay = <Status spinner title="正在套用推臉筆…" />;
   } else if (lost) {
     overlay = <EngineStatus />; // 正在恢復畫面 · 重新載入引擎
   }
@@ -2117,7 +2115,15 @@ export function Editor({ source }: { source: EditorSource }) {
           {spotMode && !hold.held && <span class="corner-label spot-hint">{TONE_COPY.spotHint}</span>}
           {/* 推臉筆 (push-brush spec §2.3): screen space, outside the zoom layer */}
           {brushDraws && <BrushOverlay handle={ring} />}
-          {brushMode && hint && <BrushHint key={hint.gen} kind={hint.kind} />}
+          {brushMode && hint && !liquifyBusy && <BrushHint key={hint.gen} kind={hint.kind} />}
+          {/* a chunked rebuild past 300 ms (push-brush spec §3.5): a pill in the hint's place, not a status card, so the
+              previous frame stays visible (on a reopen there is none yet); input passes through, the brush refuses it */}
+          {liquifyBusy && session && !fatal && !overlay && (
+            <div class="liquify-busy" role="status">
+              <span class="spinner" aria-hidden="true" />
+              正在套用推臉筆…
+            </div>
+          )}
           {session && !fatal && (
             <div class="editor-tools" inert={exportBusy}>
               <button type="button" class={`float-btn${confirmReset ? ' confirm' : ''}`} onClick={reset}>

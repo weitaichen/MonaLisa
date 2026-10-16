@@ -193,16 +193,19 @@ test('a reopen whose replay runs in slices: 儲存 during it finishes the rebuil
   // 300 ms timer fired): the case where nothing but the rebuild's end clears that status
   const tapped = page.evaluate(
     (n) =>
-      new Promise<boolean>((res) => {
+      new Promise<{ tapped: boolean; covered: boolean; pillH: number }>((res) => {
         const t0 = performance.now();
         const step = () => {
           const l = window.__meiyan?.liquify;
           const pill = document.querySelector<HTMLButtonElement>('.topbar .pill');
-          const busy = [...document.querySelectorAll('.status-title')].some((e) => e.textContent === '正在套用推臉筆…');
-          if (l?.pending && l.strokes === n && busy && pill && !pill.disabled) {
+          // 正在套用推臉筆… is a pill over the frame, never a status card over the stage (push-brush spec §3.5)
+          const busy = document.querySelector<HTMLElement>('.liquify-busy');
+          if (l?.pending && l.strokes === n && busy?.textContent?.includes('正在套用推臉筆…') && pill && !pill.disabled) {
+            const covered = !!document.querySelector('.editor-stage .status');
+            const pillH = busy.getBoundingClientRect().height;
             pill.click();
-            res(true);
-          } else if (performance.now() - t0 > 60_000) res(false);
+            res({ tapped: true, covered, pillH });
+          } else if (performance.now() - t0 > 60_000) res({ tapped: false, covered: false, pillH: 0 });
           else requestAnimationFrame(step);
         };
         step();
@@ -210,7 +213,10 @@ test('a reopen whose replay runs in slices: 儲存 during it finishes the rebuil
     cap.length,
   );
   await entry.click();
-  expect(await tapped, 'the rebuild was still pending with its status shown while 儲存 was enabled').toBe(true);
+  const seen = await tapped;
+  expect(seen.tapped, 'the rebuild was still pending with its status shown while 儲存 was enabled').toBe(true);
+  expect(seen.covered, 'no status card hides the stage during the rebuild').toBe(false);
+  expect(seen.pillH).toBeLessThan(48);
   const dialog = page.getByRole('dialog', { name: '儲存照片' });
   await expect(dialog).toBeVisible({ timeout: 30_000 });
   await dialog.getByRole('button', { name: '關閉' }).click();
@@ -223,6 +229,40 @@ test('a reopen whose replay runs in slices: 儲存 during it finishes the rebuil
   const l1 = meanLuma(reopened);
   console.log(`推臉筆 reopen + 儲存: mean luma ${l1.toFixed(1)} (first open ${l0.toFixed(1)})`);
   expect(Math.abs(l1 - l0)).toBeLessThan(12);
+
+  // ↶ after 全部清除 replays the cap's strokes in slices: the previous frame (the cleared photo) stays on screen with
+  // the pill over it, not hidden behind an opaque card (step-6 review)
+  await enterBrush(page, '美體');
+  await page.getByRole('button', { name: '全部清除' }).click();
+  await page.getByRole('button', { name: '確定清除？' }).click();
+  await expect.poll(async () => (await liquifyState(page))?.strokes).toBe(0);
+  await settled(frame);
+  // the still session's draws (__meiyan.renderCount) before the ↶: none may follow while the replay is pending, so the
+  // canvas keeps the cleared photo, and nothing but the pill lies over it
+  const during = page.evaluate(
+    () =>
+      new Promise<{ seen: boolean; covered: boolean; drawn: number }>((res) => {
+        const t0 = performance.now();
+        const n0 = window.__meiyan?.renderCount ?? 0;
+        const step = () => {
+          const busy = document.querySelector('.liquify-busy');
+          if (busy && window.__meiyan?.liquify?.pending)
+            res({ seen: true, covered: !!document.querySelector('.editor-stage .status'), drawn: (window.__meiyan?.renderCount ?? 0) - n0 });
+          else if (performance.now() - t0 > 60_000) res({ seen: false, covered: false, drawn: -1 });
+          else requestAnimationFrame(step);
+        };
+        step();
+      }),
+  );
+  await page.getByRole('button', { name: '復原' }).click();
+  const d = await during;
+  console.log(`推臉筆 replay after ↶: pill shown, ${d.drawn} frames drawn while pending, card over the stage: ${d.covered}`);
+  expect(d.seen, 'the replay ran past 300 ms with its pill').toBe(true);
+  expect(d.covered).toBe(false);
+  expect(d.drawn).toBe(0);
+  await expect.poll(async () => (await liquifyState(page))?.pending, { timeout: 60_000 }).toBe(false);
+  expect((await liquifyState(page))!.strokes).toBe(cap.length);
+  await expect(page.locator('.liquify-busy')).toHaveCount(0);
 });
 
 const GROUP = resolve(import.meta.dirname, '../fixtures/group_faces.png');

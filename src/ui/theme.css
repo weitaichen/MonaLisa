@@ -2066,6 +2066,31 @@ button:focus-visible {
     opacity: 0;
   }
 }
+/* 正在套用推臉筆… (push-brush spec §3.5): the hint pill's place and shape, so the previous frame stays visible */
+.liquify-busy {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: screen-in 200ms;
+}
+.liquify-busy .spinner {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
 /* 推臉筆 is never gated: it stays bright while the face note dims the rest of 美型 (push-brush spec §2.1) */
 .strip.face-off .item.brush-item {
   opacity: 1;

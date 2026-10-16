@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { PNG } from 'pngjs';
 import { apply, flipView, IDENTITY_GEOMETRY, oToV, rotateLeft, setStraighten, snapCrop, viewSize } from '../../src/geometry/view';
-import { closeFallback, debugState, expect, exportFile, exportResult, makeJpeg, readHistory, SAMPLE_FACE, selectPerson, test, withExifOrientation } from './fixtures';
+import { closeFallback, debugState, expect, exportFile, exportResult, historyStamps, makeJpeg, readHistory, SAMPLE_FACE, selectPerson, test, withExifOrientation } from './fixtures';
 
 async function importInto(page: Page, file: string | { name: string; mimeType: string; buffer: Buffer }) {
   await page.goto('/');
@@ -813,4 +813,30 @@ test('裁切 mode draws no engine frame while handles move, 拉直 drags and 旋
   await expect.poll(count).toBeGreaterThan(n);
   await page.waitForTimeout(800);
   expect(await count()).toBe(n + 1);
+});
+
+test('a 裁切 handle drag held still past the debounce autosaves nothing until it ends; the release saves once', async ({ page }) => {
+  await importInto(page, SAMPLE_FACE);
+  await tab(page, '裁切').click();
+  // the entry's own autosave: one record, its updatedAt unchanged across a whole interval
+  let last = '';
+  await expect
+    .poll(async () => {
+      const s = JSON.stringify(await historyStamps(page));
+      const same = s === last && s !== '{}';
+      last = s;
+      return same;
+    }, { intervals: [1200] })
+    .toBe(true);
+  const before = await historyStamps(page);
+  expect(Object.keys(before)).toHaveLength(1);
+  const corner = page.getByRole('button', { name: '右下角' });
+  const b = (await corner.boundingBox())!;
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.down();
+  for (let i = 1; i <= 8; i++) await page.mouse.move(b.x + b.width / 2 - i * 6, b.y + b.height / 2 - i * 8);
+  await page.waitForTimeout(1500); // held still, well past the 400 ms debounce
+  expect(await historyStamps(page), 'no autosave of a geometry the gesture has not committed').toEqual(before);
+  await page.mouse.up();
+  await expect.poll(async () => JSON.stringify(await historyStamps(page))).not.toBe(JSON.stringify(before));
 });

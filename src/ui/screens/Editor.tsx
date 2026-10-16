@@ -31,7 +31,7 @@ import { sanitizeParams } from '../../engine/params';
 import { eyeNoteInfo } from '../../engine/passes/eyeFrame';
 import { earOf, mouthOpen } from '../../engine/passes/toneGeometry';
 import { abortable } from '../../media/exportFull';
-import { EXPORT_COPY, NO_SOURCE, planExport, sourceSizeRecord, type ExportPlan, type SourceInfo } from '../../media/exportPlan';
+import { EXPORT_COPY, NO_SOURCE, planExport, planHead, sourceSizeRecord, type ExportPlan, type SourceInfo } from '../../media/exportPlan';
 import { takePersonsHint } from '../../store/settings';
 import { stableKey } from '../../store/undo';
 import { buildFaceProtect } from '../../tracking/faceProtect';
@@ -442,6 +442,10 @@ export function Editor({ source }: { source: EditorSource }) {
   const g = edit.photo.geometry;
   const [straighten] = useState(() => new StraightenGesture());
   const [straightening, setStraightening] = useState(false);
+  /** a 裁切 handle / move gesture changed the geometry and has not committed yet (CropOverlay onChange) */
+  const [cropDragging, setCropDragging] = useState(false);
+  /** a 裁切 gesture or a 拉直 drag runs: the encode / autosave effect waits for its commit */
+  const geoDrag = straightening || cropDragging;
   /** 240 ms after a 旋轉 / 翻轉 tap: the canvas animates (not during 拉直 drags) */
   const [turning, setTurning] = useState(false);
   /** the turn window runs from the last tap: an earlier tap's timer must not cut a later turn short */
@@ -533,17 +537,21 @@ export function Editor({ source }: { source: EditorSource }) {
     const d = detectRef.current;
     return buildFrame(e, frameFacesOf(d, s?.faces ?? []), d?.obstacles ?? [], protectsRef.current, d?.primary ?? P0, warpScales.current);
   };
+  /** the device blocks of now (S §3.7) */
+  const exportEnv = () => ({
+    prefTier: prefsRef.current.tier,
+    autoTier: deps.autoTierSession(),
+    screen: { width: window.screen.width, height: window.screen.height },
+    capped: deps.exportCapped(),
+  });
   /** the export plan (S §3.7) of `e` on session `s` from `src`, with the 輸出 prefs and the device blocks of now */
   const planFor = (s: StillSession, e: EditState, src: SourceInfo, field: BodyField | null): ExportPlan =>
-    planExport(
-      e,
-      prefsRef.current,
-      src,
-      photo,
-      { prefTier: prefsRef.current.tier, autoTier: deps.autoTierSession(), screen: { width: window.screen.width, height: window.screen.height }, capped: deps.exportCapped() },
-      s.bounds(frameOf(e, s), field, liquify.field ? (r) => liquify.maxDisp(r) : undefined),
-      deps.readExportDebug(),
-    );
+    planExport(e, prefsRef.current, src, photo, exportEnv(), s.bounds(frameOf(e, s), field, liquify.field ? (r) => liquify.maxDisp(r) : undefined), deps.readExportDebug());
+  /**
+   * planFor without its tiles (planHead): mode, format, quality and size, all the encode effect reads; no frame, no
+   * displacement bounds, no tile planning and no debug knob on an edit step
+   */
+  const planHeadFor = (e: EditState, src: SourceInfo): ExportPlan => planHead(e, prefsRef.current, src, photo, exportEnv());
   /** an edit drops a finished file (a 25 MB file is not kept past the next edit, S §2.3); functional: a drag's closure may hold a stale pill */
   const dropFinished = () => {
     fresh.current = null;
@@ -788,6 +796,7 @@ export function Editor({ source }: { source: EditorSource }) {
       wasCrop.current = cropMode;
       straighten.reset();
       setStraightening(false);
+      setCropDragging(false);
       if (cropMode) {
         const lock = lockFor(editRef.current.photo.geometry, photo);
         if (lock !== sel.crop) setSel({ ...sel, crop: lock });
@@ -1269,12 +1278,15 @@ export function Editor({ source }: { source: EditorSource }) {
   // made with (planSig: a 設定 change re-arms this, Review Focus 1). Waits while a tiled export runs (its GL buffers are
   // tile-sized: a working-size render meanwhile would grow them back) and runs once when it ends. Waits while a 推臉筆
   // stroke is live or a rebuild is pending (push-brush spec §3.5): the `drawing` flip cancels a timer armed before the
-  // stroke, so a debounced export never caches half a stroke under the pre-stroke editKey; liquifyTick re-arms it
+  // stroke, so a debounced export never caches half a stroke under the pre-stroke editKey; liquifyTick re-arms it.
+  // Waits while a 裁切 handle / move or 拉直 drag runs (geoDrag): its steps are no undo step yet and arrive at display
+  // rate; the commit at gesture end runs this once. It reads the plan's head only (planHeadFor): an edit step pays for
+  // no frame, no displacement bounds and no tile planning.
   useEffect(() => {
-    if (!session || lost || exportBusy || drawing || liquify.pending) return;
+    if (!session || lost || exportBusy || drawing || liquify.pending || geoDrag) return;
     const s = session;
     const key = editKey(edit);
-    const now = planFor(s, edit, sourceRef.current, fieldMemo.field);
+    const now = planHeadFor(edit, sourceRef.current);
     // (a tiled or PNG plan has no share file to make: only an owed thumbnail or the autosave is left)
     const shareDone = preEncodes(now) ? shareReady(fresh.current, key, fieldGen.current, planSig(now)) : !thumbOwed.current;
     if (shareDone && stampIs(saved.current, key, fieldGen.current)) return;
@@ -1287,7 +1299,8 @@ export function Editor({ source }: { source: EditorSource }) {
       const liq = liquify.snapshot();
       /** nothing newer (params, 美體 field, session) replaced what this export was made from */
       const current = () => editKey(editRef.current) === key && sessionRef.current === s && fieldGen.current === gen;
-      const plan = planFor(s, edit, sourceRef.current, field);
+      // (the head: a working-size encode reads format and quality, the share cache planSig; tiles are 儲存's)
+      const plan = planHeadFor(edit, sourceRef.current);
       const sig = planSig(plan);
       let img: ImageData | null = null;
       if (preEncodes(plan) && !shareReady(fresh.current, key, gen, sig)) {
@@ -1340,7 +1353,7 @@ export function Editor({ source }: { source: EditorSource }) {
       queueHistory(edit, gen, img, s);
     }, delay);
     return () => clearTimeout(t);
-  }, [session, edit, lost, fieldTick, protectTick, exportBusy, prefs, drawing, liquifyTick]);
+  }, [session, edit, lost, fieldTick, protectTick, exportBusy, prefs, drawing, liquifyTick, geoDrag]);
 
   const hold = useHold((on) => {
     try {
@@ -2041,7 +2054,10 @@ export function Editor({ source }: { source: EditorSource }) {
               lock={sel.crop}
               oSize={photo}
               grid={straightening}
-              onChange={(ng, commit) => update(editSetGeometry(editRef.current, ng), commit)}
+              onChange={(ng, commit) => {
+                setCropDragging(!commit);
+                update(editSetGeometry(editRef.current, ng), commit);
+              }}
             />
           )}
           {hold.held && <span class="corner-label">原圖</span>}

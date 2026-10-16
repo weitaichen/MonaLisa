@@ -320,6 +320,34 @@ export function planExport(
   bounds: TileBounds,
   knob: ExportDebugKnob = {},
 ): ExportPlan {
+  return planWith(edit, prefs, source, working, env, (grid) =>
+    knob.tile ? { tile: knob.tile, tiles: planTiles(grid, bounds, knob.tile) } : chooseTile(grid, bounds),
+  );
+}
+
+/**
+ * planExport without the tiles (tile 0 and no tiles; every other field is planExport's): the mode, format, quality and
+ * output size, which is all the encode effect needs (preEncodes, planSig) on every edit. It reads no frame and no
+ * bounds, so a drag step pays for no displacementBound and no tile planning (planTiles scans the 美體 field).
+ */
+export function planHead(
+  edit: { photo: { geometry: Geometry } },
+  prefs: Pick<Prefs, 'exportFormat' | 'exportSize'>,
+  source: SourceInfo,
+  working: Size,
+  env: ExportEnv,
+): ExportPlan {
+  return planWith(edit, prefs, source, working, env, () => ({ tile: 0, tiles: [] }));
+}
+
+function planWith(
+  edit: { photo: { geometry: Geometry } },
+  prefs: Pick<Prefs, 'exportFormat' | 'exportSize'>,
+  source: SourceInfo,
+  working: Size,
+  env: ExportEnv,
+  tiling: (grid: TileGrid) => { tile: number; tiles: TileJob[] },
+): ExportPlan {
   const g = edit.photo.geometry;
   const format = prefs.exportFormat;
   const quality = format === 'jpeg' ? (prefs.exportSize === 'full' ? FULL_JPEG_QUALITY : JPEG_QUALITY) : 1;
@@ -339,7 +367,7 @@ export function planExport(
   const V = viewSize(gs, decode);
   const fullShortEdge = Math.min(decode.width, decode.height);
   const grid: TileGrid = { V, decode, geometry: gs, oAspect: working.width / working.height, fullShortEdge };
-  const { tile, tiles } = knob.tile ? { tile: knob.tile, tiles: planTiles(grid, bounds, knob.tile) } : chooseTile(grid, bounds);
+  const { tile, tiles } = tiling(grid);
   return { mode: 'tiled', format, quality, width: V.width, height: V.height, decode, fullShortEdge, tile, tiles, fallback: null };
 }
 

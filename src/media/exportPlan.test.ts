@@ -19,6 +19,7 @@ import {
   fullExportBlock,
   isSeClassScreen,
   planExport,
+  planHead,
   planTiles,
   shouldKeepSource,
   sourceSizeRecord,
@@ -79,6 +80,26 @@ const prefs = (over: Partial<Pick<Prefs, 'exportFormat' | 'exportSize'>> = {}) =
 const src = (w: number | null, h: number | null, blob: Blob | null = new Blob(['x'])): SourceInfo => ({ blob, width: w, height: h });
 const edit = (g: Geometry = IDENTITY_GEOMETRY) => ({ photo: { geometry: g } });
 const NO_BOUNDS: TileBounds = { body: null, faces: [] };
+
+describe('planHead: the plan without its tiles (the encode effect, every edit)', () => {
+  it('is planExport field for field but tile and tiles, over prefs, blocks, sources and geometry, and needs no bounds', () => {
+    const geos: Geometry[] = [IDENTITY_GEOMETRY, applyRatio(IDENTITY_GEOMETRY, '1:1', W2048), rotateLeft(IDENTITY_GEOMETRY), setStraighten(IDENTITY_GEOMETRY, 12, W2048)];
+    const sources = [src(4032, 3024), src(8064, 6048), src(null, null, null), src(2048, 1536), src(4032, 3024, null)];
+    const envs = [env(), env({ capped: true }), env({ autoTier: 'L' }), env({ prefTier: 'L' }), env({ screen: { width: 375, height: 667 } })];
+    let n = 0;
+    for (const g of geos)
+      for (const s of sources)
+        for (const e of envs)
+          for (const pr of [prefs(), prefs({ exportSize: 'standard' }), prefs({ exportFormat: 'png' })]) {
+            const full = planExport(edit(g), pr, s, W2048, e, NO_BOUNDS);
+            const head = planHead(edit(g), pr, s, W2048, e);
+            expect({ ...head, tile: full.tile, tiles: full.tiles }).toEqual(full);
+            expect([head.tile, head.tiles]).toEqual([0, []]);
+            if (full.mode === 'tiled') n++;
+          }
+    expect(n).toBe(16); // tiled plans were compared too (4 geometries × 2 larger sources × the unblocked env × 2 full prefs)
+  });
+});
 
 describe('planExport: plan selection (S §3.7)', () => {
   it('standard pref, a block, no source, or a source no larger than the working copy → working (today\'s path)', () => {

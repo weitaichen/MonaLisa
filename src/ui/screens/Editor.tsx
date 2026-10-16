@@ -1619,6 +1619,32 @@ export function Editor({ source }: { source: EditorSource }) {
     setPill('preparing');
     setExporting({ progress: 0 });
     debug({ export: null });
+    /**
+     * This export's UI ends once: at 取消, ✕ or the background abort, at once (step-3 review: the runner frees its memory
+     * synchronously, but its pending await, a multi-second decode, an encode or a rAF that never fires while hidden,
+     * settles later), else when the runner settles. Never a later export's: exportAbort is that one's by then. The
+     * runner checks the signal after every await, so it draws no tile once the display is back.
+     */
+    let ended = false;
+    const endUi = () => {
+      if (ended) return;
+      ended = true;
+      if (exportAbort.current === ac) exportAbort.current = null;
+      setExporting(null);
+      try {
+        s.pauseDisplay(false);
+      } catch (err) {
+        reportError(err, 'pauseDisplay');
+      }
+    };
+    ac.signal.addEventListener(
+      'abort',
+      () => {
+        endUi();
+        if (!unmounted.current) setPill('save');
+      },
+      { once: true },
+    );
     // 取消, ✕ and the background abort end this wait too (abortable); the display keeps drawing meanwhile, so a LUT
     // landing shows in the preview
     abortable(s.prepareExport(frameOf(e, s)), ac.signal)
@@ -1630,20 +1656,25 @@ export function Editor({ source }: { source: EditorSource }) {
           signal: ac.signal,
           working: photo,
           knob: deps.readExportDebug(),
-          onProgress: (p) => setExporting({ progress: p }),
+          onProgress: (p) => {
+            if (!ended) setExporting({ progress: p });
+          },
           drawState: () => tileDrawState(engine, frame.photo),
         });
       })
       .then(
         (file) => {
-          if (unmounted.current) return;
+          // (cancelled after the runner had finished: the user asked for no file)
+          if (unmounted.current || ac.signal.aborted) return;
           debug({ export: { mode: 'tiled', width: plan.width, height: plan.height, tiles: plan.tiles.length, ms: Math.round(performance.now() - t0) } });
           const edited = editKey(editRef.current) !== key;
           if (!edited && fieldGen.current === gen) fresh.current = { key, field: gen, sig: planSig(plan), file };
           deliver(file, t0, !edited);
         },
         (err: unknown) => {
-          if (unmounted.current || exportOutcome(err) === 'abort') {
+          // an abort's UI ended at the abort (the pill may be a newer export's by now)
+          if (unmounted.current || ac.signal.aborted) return;
+          if (exportOutcome(err) === 'abort') {
             setPill('save');
             return;
           }
@@ -1655,15 +1686,7 @@ export function Editor({ source }: { source: EditorSource }) {
           runWorking(sessionRef.current ?? s, e, field, working, key, gen, t0, liq);
         },
       )
-      .finally(() => {
-        if (exportAbort.current === ac) exportAbort.current = null;
-        setExporting(null);
-        try {
-          s.pauseDisplay(false);
-        } catch (err) {
-          reportError(err, 'pauseDisplay');
-        }
-      });
+      .finally(endUi);
   };
 
   /** ↶ ↷ never change the selection; they flag the persons they changed and name them when none is selected (S §1.1 item 8) */

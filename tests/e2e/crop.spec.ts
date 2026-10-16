@@ -326,6 +326,30 @@ test('going to the background mid-export aborts it, frees it and says so on retu
   await expect(page.getByText('輸出已中斷，請再按一次「儲存」')).toBeVisible();
 });
 
+test('取消 ends the overlay and 準備中 at once, while the runner still waits; a new 儲存 then works', async ({ page }) => {
+  test.setTimeout(600_000);
+  await page.goto('/');
+  // the runner holds 20 s after its decode: without the immediate end the overlay would stay that long
+  await knob(page, { slowMs: 20_000, tile: 2048 });
+  await importInto(page, { name: 'big.jpg', mimeType: 'image/jpeg', buffer: await makeJpeg(page, 2400, 3200) });
+  await page.locator('.topbar .pill').click();
+  const overlay = page.locator('.status.scrim', { hasText: '正在輸出原始解析度…' });
+  await expect(overlay).toBeVisible();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('meiyan.exportGuard.v1'))).not.toBeNull();
+  await page.waitForTimeout(1500); // into the runner's held await
+  const t0 = Date.now();
+  await overlay.getByRole('button', { name: '取消' }).click();
+  await expect(overlay).toHaveCount(0, { timeout: 2_000 });
+  await expect(page.locator('.topbar .pill')).toHaveText('儲存', { timeout: 2_000 });
+  console.log(`取消 → overlay gone in ${Date.now() - t0} ms`);
+  expect(await page.evaluate(() => localStorage.getItem('meiyan.exportGuard.v1'))).toBeNull(); // memory freed at once
+  // the editor is live again: the tools are not inert, and a new export (no knob) runs to its file
+  await expect(page.locator('.editor-panel[inert]')).toHaveCount(0);
+  await knob(page, { tile: 2048 });
+  const full = await exportFile(page);
+  expect([full.width, full.height]).toEqual([2400, 3200]);
+});
+
 // The pixel helpers draw the decoded <img> itself: the CSP (connect-src 'self') blocks fetch() of its blob: URL (and of
 // data: URLs), as exportFile notes. A blob: URL is same-origin, so the canvas stays readable.
 

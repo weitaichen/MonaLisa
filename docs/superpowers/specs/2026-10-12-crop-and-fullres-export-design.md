@@ -656,7 +656,7 @@ These are added to the export bullet of C §6.2 (`src/bench/main.ts`, `/bench.ht
 | Decoded aspect differs from O by > 1 % (orientation ignored) | `ExportError('aspect')` → fallback |
 | Context lost during the tiles | The runner throws → fallback to `working`. That path waits for the restore through `exportOnLatest` (`Editor.tsx:722`). |
 | The app goes to the background mid-export | Aborted at once (§2.3): memory released, breadcrumb removed, then the history flush runs. On return the toast 「輸出已中斷，請再按一次「儲存」」. Only a kill while the page is visible leaves the breadcrumb. |
-| ✕ or 取消 during the tiles | The abort releases the memory at once (§4.4); the breadcrumb is removed; nothing is shared |
+| ✕ or 取消 during the tiles | The abort releases the memory at once (§4.4); the breadcrumb is removed; nothing is shared. The overlay, the 準備中 pill, the inert controls and the paused display end at the abort too, not when the runner's pending step settles (a multi-second decode, an encode, or a rAF that never fires while hidden); the runner checks the signal after every await, so it draws no tile once the display is back. A file that finished just before the abort is dropped (v0.4 cleanup, step-3 review) |
 | An edit attempted during the export | Not possible: the panel is `inert` (§2.3) |
 | An autosave pending when 儲存 is tapped (an edit less than 400 ms before) | Waits until the export ends, then runs once (§2.3) |
 | Export took > 4 s | Pill 「分享」 plus toast; the cached file is dropped on the next edit |

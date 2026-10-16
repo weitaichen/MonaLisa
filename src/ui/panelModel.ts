@@ -130,6 +130,12 @@ export interface BodyContext {
   suggestedBand?: { top: number; bottom: number };
   /** the person 長腿 is measured on (Editor: legsAnchor, else the primary with a body) */
   legsAnchor?: PersonId | null;
+  /**
+   * ≥ 2 persons: a body item's gate for one person by that person's own measure (Editor: editorModel personBodyGate;
+   * no measure → BODY_UNMEASURED_REASON), so a selected person the lens refuses is told its own reason; undefined →
+   * the lens's generic one
+   */
+  personGate?(person: PersonId, id: ParamId): RegionStatus;
 }
 
 export const BODY_UNSUPPORTED_NOTE = '美體目前僅支援照片編輯';
@@ -300,6 +306,10 @@ function bodyItemGate(lens: Lens, body: BodyContext | undefined, item: BodySel):
   const sel = lens.sel;
   const hasBody = sel.kind === 'person' ? (lens.persons.find((p) => p.id === sel.id)?.body ?? false) : lens.persons.some((p) => p.body);
   if (hasBody) {
+    // a selected body person: its own measure says why (none: BODY_UNMEASURED_REASON), not the context's, which may be
+    // another person's measure (step-1 review)
+    const own = sel.kind === 'person' ? body.personGate?.(sel.id, item) : undefined;
+    if (own) return own.ok ? g : own;
     const c = bodyGate(body, item);
     if (!c.ok) return c;
   }

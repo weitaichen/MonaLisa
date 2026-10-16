@@ -36,10 +36,12 @@ import {
   needsBodyMeasure,
   needsBodyScan,
   needsFaceScan,
+  personBodyGate,
   protectRequests,
   rebaseStamp,
   RedetectBudget,
   sessionPlan,
+  settleBodyAnswer,
   shouldDetectBody,
   stampIs,
   suggestedBand,
@@ -606,6 +608,55 @@ describe('persons in the editor model (S §3.3)', () => {
     expect(waist(lens({ kind: 'all' }, some), measured).disabled).toBe(false);
     expect(waist(lens({ kind: 'person', id: 'f0' }, some), measured).disabled).toBe(true);
     expect(sliderFor(lens({ kind: 'person', id: 'f0' }, some), s, measured)).toBeNull();
+    // … and says why: f0 itself has no measure (v0.3's BODY_UNMEASURED_REASON), not the generic 此照片無法使用這個效果
+    const gated = { ...measured, personGate: personBodyGate(some, torso) };
+    expect(waist(lens({ kind: 'person', id: 'f0' }, some), gated)).toMatchObject({ disabled: true, reason: BODY_UNMEASURED_REASON });
+    expect(waist(lens({ kind: 'person', id: 'b1' }, some), gated).disabled).toBe(false);
+    expect(waist(lens({ kind: 'all' }, some), gated).disabled).toBe(false);
+    // a measured person its own measure refuses reads that measure's reason
+    const legsOff = (m: BodyMeasure | null, id: ParamId): RegionStatus => (m ? (id === 'body.legSlim' ? { ok: false, reason: 'legs' } : { ok: true, reason: null }) : { ok: false, reason: 'x' });
+    const legsLens = lensFor(assignPersons(editFromLegacy(applyPreset('natural', 1)), ['f0', 'f1', 'b1'], 'f0'), { kind: 'person', id: 'b1' }, personInfos(cache), 'f0', {
+      available: (p, id) => measuredAvailable(some, p, id, legsOff),
+    });
+    const legsCtx = { ...bodyPanelContext({ phase: 'done', det: makeBodyDetection(2) }, { state: 'ready' }, m, torso), personGate: personBodyGate(some, legsOff) };
+    expect(itemsFor(legsLens, s, legsCtx).find((i) => i.key === 'body.legSlim')).toMatchObject({ disabled: true, reason: 'legs' });
+  });
+  it('personBodyGate: that person’s own measure decides; none → BODY_UNMEASURED_REASON', () => {
+    const m = {} as BodyMeasure;
+    const avail = (x: BodyMeasure | null, id: ParamId): RegionStatus => (x === m && id === 'body.waist' ? { ok: true, reason: null } : { ok: false, reason: 'no' });
+    const gate = personBodyGate(new Map([['b1', m]]), avail);
+    expect(gate('b1', 'body.waist')).toEqual({ ok: true, reason: null });
+    expect(gate('b1', 'body.hip')).toEqual({ ok: false, reason: 'no' });
+    expect(gate('f0', 'body.waist')).toEqual({ ok: false, reason: BODY_UNMEASURED_REASON });
+  });
+  it('settleBodyAnswer: a merge failure is the detection error; a notice failure after a merge is not (step-1 review)', () => {
+    const report = vi.fn((_e: unknown, where: string) => `reported ${where}`);
+    const order: string[] = [];
+    // the merge worked, the notices threw: done, the failure reported on its own
+    expect(
+      settleBodyAnswer(
+        () => order.push('merge'),
+        () => {
+          order.push('notify');
+          throw new Error('toast');
+        },
+        report,
+      ),
+    ).toEqual({ ok: true });
+    expect(order).toEqual(['merge', 'notify']);
+    expect(report).toHaveBeenLastCalledWith(expect.any(Error), 'body notices');
+    // the merge threw: an error with its message, and no notices for a merge that did not happen
+    const notify = vi.fn();
+    expect(
+      settleBodyAnswer(
+        () => {
+          throw new Error('bad cache');
+        },
+        notify,
+        report,
+      ),
+    ).toEqual({ ok: false, message: 'reported body answer' });
+    expect(notify).not.toHaveBeenCalled();
   });
   it('fieldInputOf lists only persons with a body and a non-neutral local item; 長腿 anchors on the primary with a body', () => {
     const m0 = {} as BodyMeasure;

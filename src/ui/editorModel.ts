@@ -258,6 +258,39 @@ export function bodyPanelContext(
   }
 }
 
+/**
+ * BodyContext.personGate (≥ 2 persons): a body item's gate by that person's own measure; a body person measurePersons
+ * skipped (measureBody threw) reads BODY_UNMEASURED_REASON, as v0.3 did, never the lens's generic reason (step-1 review)
+ */
+export function personBodyGate(
+  measures: ReadonlyMap<PersonId, BodyMeasure>,
+  availability: (m: BodyMeasure | null, id: ParamId) => RegionStatus,
+): (person: PersonId, id: ParamId) => RegionStatus {
+  return (person, id) => {
+    const m = measures.get(person);
+    return m ? availability(m, id) : { ok: false, reason: BODY_UNMEASURED_REASON };
+  };
+}
+
+/**
+ * A 美體 detection's answer in two steps (step-1 review): `merge` (bodyAnswer, the rebase onto every stored state) is
+ * the outcome, so only its failure is 美體偵測失敗 (重試 detects again); `notify` (the group-photo notices) runs after a
+ * merge that worked, and a failure there is reported on its own: the bodies are merged already.
+ */
+export function settleBodyAnswer(merge: () => void, notify: () => void, report: (e: unknown, where: string) => string): { ok: true } | { ok: false; message: string } {
+  try {
+    merge();
+  } catch (e) {
+    return { ok: false, message: report(e, 'body answer') };
+  }
+  try {
+    notify();
+  } catch (e) {
+    report(e, 'body notices');
+  }
+  return { ok: true };
+}
+
 /** long edge of a draft 美體 field (a drag step's preview): about a quarter of the full field's build cost */
 export const BODY_DRAFT_LONG_EDGE = 128;
 

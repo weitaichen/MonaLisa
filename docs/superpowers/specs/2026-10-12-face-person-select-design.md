@@ -222,6 +222,7 @@ Hit test (`hitPerson(uv, ctx)`, pure, `src/detect/persons.ts`):
   - The first 全部 write in an editor session shows 「已套用到全部人物」.
   - The first touch of each photo-level item in a session with ≥ 2 persons shows 「{label}套用於整張照片」.
 - **Availability under 全部:** a body item is enabled when it is available for at least one person (`paramAvailability` per person's measure, `measure.ts`). The write goes only to those persons.
+- **A selected body person the item refuses** reads its own measure's reason (`BodyContext.personGate`, `editorModel.personBodyGate`); a body person with no measure (`measureBody` threw) reads 「無法量測人物輪廓，美體調整暫不可用」 (`BODY_UNMEASURED_REASON`, as v0.3), never the lens's generic 「此照片無法使用這個效果」 (step-1 review). A notice that fails after a 美體 answer was merged is reported on its own and is not 美體偵測失敗 (`settleBodyAnswer`).
 
 ### 2.5 Camera
 

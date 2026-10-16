@@ -90,10 +90,12 @@ import {
   needsBodyScan,
   needsFaceScan,
   PERSON_TABS,
+  personBodyGate,
   protectRequests,
   rebaseStamp,
   RedetectBudget,
   sessionPlan,
+  settleBodyAnswer,
   shouldDetectBody,
   stampIs,
   thumbRect,
@@ -1032,19 +1034,27 @@ export function Editor({ source }: { source: EditorSource }) {
           if (dets === undefined || unmounted.current) return;
           const cache = detectRef.current;
           if (!cache) return;
-          try {
-            // pairing (P4) against the cache's own faces (no session needed: an engine recovery has none), the body-only
-            // persons appended from the template, a vanished body's person handing over (p0 in a photo without faces)
-            const a = bodyAnswer(cache, dets ? bodiesUToO(dets, q).bodies : [], photo);
-            rebaseOnDetect(a.rebase, { ...a.detect, bodyScans: addBodyScan(cache.bodyScans, q) });
-            setBodyDet({ phase: 'done', det: null });
-            // body-only persons made this a group photo: the strip mounts now, with the notices of a group answer
-            const n = a.detect.persons.length;
-            if (cache.persons.length < 2 && n >= 2) showNotices(answerNotices(a.detect, n, takePersonsHint()));
-          } catch (e) {
-            // never a spinner forever (or an unhandled rejection): 重試 runs the detection again
-            if (!unmounted.current) setBodyDet({ phase: 'error', message: reportError(e, 'body answer') });
-          }
+          let merged: DetectionCache | null = null;
+          const r = settleBodyAnswer(
+            () => {
+              // pairing (P4) against the cache's own faces (no session needed: an engine recovery has none), the
+              // body-only persons appended from the template, a vanished body's person handing over (p0 in a photo
+              // without faces)
+              const a = bodyAnswer(cache, dets ? bodiesUToO(dets, q).bodies : [], photo);
+              rebaseOnDetect(a.rebase, { ...a.detect, bodyScans: addBodyScan(cache.bodyScans, q) });
+              merged = a.detect;
+              setBodyDet({ phase: 'done', det: null });
+            },
+            () => {
+              // body-only persons made this a group photo: the strip mounts now, with the notices of a group answer
+              const n = merged?.persons.length ?? 0;
+              if (merged && cache.persons.length < 2 && n >= 2) showNotices(answerNotices(merged, n, takePersonsHint()));
+            },
+            reportError,
+          );
+          // never a spinner forever (or an unhandled rejection): 重試 runs the detection again. Only a failed merge is
+          // 美體偵測失敗; a notice that threw after it is reported alone (the bodies are merged)
+          if (!r.ok && !unmounted.current) setBodyDet({ phase: 'error', message: r.message });
         },
         (e: unknown) => {
           // a download / startup failure was reported by ensureBodyTracker and has a friendly hint; a failing
@@ -1756,6 +1766,8 @@ export function Editor({ source }: { source: EditorSource }) {
       retryBody,
     ),
     legsAnchor: detect ? legsAnchorOf(edit, detect, measures) : null,
+    // a selected body person the lens refuses is told its own measure's reason (none: BODY_UNMEASURED_REASON)
+    personGate: personBodyGate(measures, paramAvailability),
   };
   const lens = lensOf(edit);
   // ── 祛痘 (skin-cleanup spec §2.3): the size, the two-tap clear and its scope, the tap rings ──

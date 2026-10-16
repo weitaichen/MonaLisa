@@ -5,7 +5,7 @@ import { makeBodyDetection } from '../app/testFakes';
 import { prepareFaces } from '../detect/faces';
 import { withBodies } from '../detect/cache';
 import { cacheBody, makeCache } from '../detect/testCaches';
-import { IDENTITY_GEOMETRY } from '../geometry/view';
+import { cropValid, IDENTITY_GEOMETRY, maxFit } from '../geometry/view';
 import { normalizeEntry } from '../store/history';
 import { stableKey } from '../store/undo';
 import type { BeautyParams, EditState, Face, HistoryEntry, Landmarks478, ParamId, Pose33, Stroke } from '../types';
@@ -123,6 +123,40 @@ describe('openState (S §5.3)', () => {
     expect(openState(entry, { width: 1536, height: 2048 }).edit.photo.geometry.flipH).toBe(true);
     const broken = { ...entry, edit: { ...edit, photo: { ...edit.photo, geometry: { ...edit.photo.geometry, crop: { x: 2, y: 2, w: 1, h: 1 } } } } };
     expect(openState(broken, { width: 1536, height: 2048 }).edit.photo.geometry).toEqual(IDENTITY_GEOMETRY);
+  });
+  it('a crop valid for the stored size also fits the bitmap decoded now (2048 vs 1440 tier: the aspect rounds apart)', () => {
+    // 1537 × 2048 stored; a tier-L reopen decodes 1081 × 1440 (aspect +2.7e-4); the reverse is a tier-H reopen of a
+    // tier-L entry. Max-fit crops at θ ≠ 0 touch the rotated edge, so the rounding alone pushes them past it
+    const cases: [{ width: number; height: number }, { width: number; height: number }][] = [
+      [{ width: 1537, height: 2048 }, { width: 1081, height: 1440 }],
+      [{ width: 1081, height: 1440 }, { width: 1537, height: 2048 }],
+      [{ width: 2048, height: 1365 }, { width: 1440, height: 960 }],
+    ];
+    for (const [stored, decoded] of cases) {
+      for (const g of [
+        { flipH: false, quarter: 0 as const, straighten: 10, crop: maxFit(10, stored.width, stored.height, stored.width / stored.height) },
+        { flipH: true, quarter: 1 as const, straighten: -7.5, crop: maxFit(-7.5, stored.height, stored.width, 1) },
+      ]) {
+        const label = `${stored.width}×${stored.height} → ${decoded.width}×${decoded.height}, θ ${g.straighten}`;
+        expect(cropValid(g, stored), label).toBe(true);
+        const edit = { v: 2 as const, photo: { ...defaultPhoto(), geometry: g }, persons: { p0: naturalPerson() }, template: neutralPerson(), primaryInit: null };
+        const entry = {
+          id: 'g2', createdAt: 1, updatedAt: 1,
+          original: new Blob(['o'], { type: 'image/jpeg' }), thumb: new Blob(['t'], { type: 'image/jpeg' }),
+          ...stored, schema: 2 as const, edit, params: defaultParams(),
+        };
+        const out = openState(entry, decoded).edit.photo.geometry;
+        // valid for the decode the editor draws, with every handle live (cropFits at 1e-9), and still the user's crop
+        expect(cropValid(out, decoded), label).toBe(true);
+        expect([out.flipH, out.quarter, out.straighten], label).toEqual([g.flipH, g.quarter, g.straighten]);
+        for (const k of ['x', 'y', 'w', 'h'] as const) expect(Math.abs(out.crop[k] - g.crop[k]), `${label} ${k}`).toBeLessThan(1e-3);
+      }
+    }
+    // the same decode size changes nothing
+    const g = { flipH: false, quarter: 0 as const, straighten: 10, crop: maxFit(10, 1537, 2048, 1537 / 2048) };
+    const same = { id: 'g3', createdAt: 1, updatedAt: 1, original: new Blob(['o']), thumb: new Blob(['t']), width: 1537, height: 2048, schema: 2 as const, params: defaultParams(),
+      edit: { v: 2 as const, photo: { ...defaultPhoto(), geometry: g }, persons: { p0: naturalPerson() }, template: neutralPerson(), primaryInit: null } };
+    expect(openState(same, { width: 1537, height: 2048 }).edit.photo.geometry).toEqual(g);
   });
 });
 

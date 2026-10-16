@@ -5,6 +5,7 @@
 import { addFaceScan, aspectFits, boxScore, buildCache, cachedFits, noFaceCache, poseBox, rematchByIoU, withBodies, withFaces } from '../detect/cache';
 import { adaptCached, EMPTY_PREPARED, type PreparedFaces } from '../detect/faces';
 import { seedPrimary } from '../detect/persons';
+import { cropConstrain, cropValid, isIdentity } from '../geometry/view';
 import type { BodyDetections, CachedBody, CameraLook, DetectionCache, EditState, FaceSeed, HistoryEntry, LiquifyFrame, PersonId, PersonParams, Rect } from '../types';
 import { editFromLegacy, mergeLegacy } from './legacy';
 import { sanitizeStrokes } from './liquify';
@@ -50,7 +51,23 @@ function boxesOf(cache: DetectionCache): Record<PersonId, Rect> {
   return out;
 }
 
+/**
+ * The geometry as the editor draws it: validated against the stored size first (sanitizeGeometry, D13), then fitted to
+ * the bitmap decoded now (step-3 review). The 2048 and 1440 tiers round the aspect apart (about 3e-4), which pushes a
+ * max-fit crop at θ ≠ 0 past the rotated edge for the decode: cropModel's handles return their start while !cropFits, so
+ * every one would be dead. cropConstrain moves or shrinks it by that rounding only; an equal size changes nothing.
+ */
+function fitToDecode(o: OpenedState, size: { width: number; height: number }): OpenedState {
+  const g = o.edit.photo.geometry;
+  if (!(size.width > 0 && size.height > 0) || isIdentity(g) || cropValid(g, size)) return o;
+  return { ...o, edit: { ...o.edit, photo: { ...o.edit.photo, geometry: cropConstrain(g, size) } } };
+}
+
 export function openState(entry: HistoryEntry, size: { width: number; height: number }): OpenedState {
+  return fitToDecode(openStored(entry, size), size);
+}
+
+function openStored(entry: HistoryEntry, size: { width: number; height: number }): OpenedState {
   const frame: LiquifyFrame = { width: entry.width, height: entry.height };
   const v2Edit = entry.schema === 2 ? entry.edit : undefined;
   const d = entry.detect;
@@ -66,6 +83,7 @@ export function openState(entry: HistoryEntry, size: { width: number; height: nu
   }
   // the geometry and the strokes are validated against the stored size of `original` (step-3 spec §5, D13; push-brush
   // spec §3.3: never the decode size) on every v2 path, the ones that hand the stored edit back as it is included
+  // (openState then fits the geometry to the decode: fitToDecode)
   let edit: EditState = {
     ...v2Edit,
     photo: { ...v2Edit.photo, geometry: sanitizeGeometry(v2Edit.photo.geometry, frame), strokes: sanitizeStrokes(v2Edit.photo.strokes, frame) },

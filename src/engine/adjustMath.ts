@@ -3,7 +3,7 @@
 // Pure and `import type` only, so scripts/gen-luts.mjs can import this file under Node's type stripping.
 // Original work: IEC 61966-2-1 sRGB transfer, Rec. 709 luma, the logistic sigmoid, Fritsch–Carlson (1980) monotone
 // cubic tangents; the grain hash uses the lowbias32 constants of Chris Wellons' hash-prospector (public domain).
-import type { AdjustId, LookDef, Rect } from '../types';
+import type { AdjustId, LookDef, ParamDef, Rect } from '../types';
 
 /** strip order (step-2 spec §2.1) */
 export const ADJUST_IDS = [
@@ -246,6 +246,14 @@ export function curveAt(k: CurveKnots, Y: number): number {
 export type AdjustValues = Readonly<Partial<Record<AdjustId, number>>>;
 
 /**
+ * A display-unit offset (a look's, LookDef.offsets) in shader space: −50…+50 → −1…1 for a bidirectional item, 0–100 →
+ * 0…1 for a one-way one (step-2 spec §4.3). effectiveAdjust adds the looks' offsets through it.
+ */
+export function offsetToShader(def: Pick<ParamDef, 'bidirectional'>, d: number): number {
+  return def.bidirectional ? d / 50 : d / 100;
+}
+
+/**
  * Shader-space values with the look's offsets added: s ∈ [−1, 1] for bidirectional items, v ∈ [0, 1] for one-way
  * items. `amount` is the look's 程度; `look` null (or not drawn) adds nothing.
  */
@@ -255,8 +263,9 @@ export function effectiveAdjust(values: AdjustValues, look: LookDef | null, amou
   for (const id of ADJUST_IDS) {
     const raw = values[id];
     const u = typeof raw === 'number' && Number.isFinite(raw) ? clamp01(raw) : neutralAdjust(id);
-    const o = look?.offsets[id] ?? 0;
-    out[id] = ADJUST_ONE_WAY.has(id) ? clamp01(u + (a * o) / 100) : clampS((u - 0.5) * 2 + (a * o) / 50);
+    const oneWay = ADJUST_ONE_WAY.has(id);
+    const o = offsetToShader({ bidirectional: !oneWay }, a * (look?.offsets[id] ?? 0));
+    out[id] = oneWay ? clamp01(u + o) : clampS((u - 0.5) * 2 + o);
   }
   return out;
 }

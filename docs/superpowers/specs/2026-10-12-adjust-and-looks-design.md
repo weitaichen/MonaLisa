@@ -262,8 +262,8 @@ interface Engine {
 | `src/types.ts:276-292` (`RenderInput`, C §4.1) | `pictureFrame?: Rect` (source-uv rectangle that the vignette and the grain lattice treat as the picture V; default `[0,0,1,1]`), `grainSeed?: number` (default 0) |
 | `src/types.ts:303-328` | `Engine.loadLut`, `lutState` |
 | `src/engine/params.ts:4-37` | 12 `ParamDef`s; `export { LOOKS, lookDef } from './looks'` |
-| `src/engine/looks.ts` | **New**: `LOOKS` table (§3.2), `lookDef(id)`, `offsetToShader(def, d)` |
-| `src/engine/adjustMath.ts` | **New**, pure, `import type` only: `ADJUST_K` constants, `effectiveAdjust`, `curveKnots`, `adjustUniforms`, `adjustRgb` (per-pixel reference), `grainAt`, `lowbias32` |
+| `src/engine/looks.ts` | **New**: `LOOKS` table (§3.2), `lookDef(id)` (`offsetToShader` moved to `adjustMath.ts` in the v0.4 cleanup, so `effectiveAdjust` uses the tested mapping) |
+| `src/engine/adjustMath.ts` | **New**, pure, `import type` only: `ADJUST_K` constants, `offsetToShader(def, d)`, `effectiveAdjust` (adds each look offset through `offsetToShader`), `curveKnots`, `adjustUniforms`, `adjustRgb` (per-pixel reference), `grainAt`, `lowbias32` |
 | `src/engine/shaders/adjust.ts` | **New**: `ADJUST_GLSL` (uniform declarations + `adjustStage()`), original work with no GPUPixel header |
 | `src/engine/shaders/composite.ts:9-16, 47-59, 61-83, 196-201` | The shader becomes `compositeFs({adjust: boolean})`; `COMPOSITE_FS = compositeFs({adjust: false})` is the step-1 text, unchanged. With `adjust: true` it adds the unit `look: 8`, `uLookLut`, `uLookAmt`, the 質感 LUT block, the `${ADJUST_GLSL}` splice and the `adjustStage` call. Header "Modified" list gains "calls the 調節 stages of adjust.ts after the filter LUT". |
 | `src/engine/compositeCpu.ts` | **New**: CPU reference for P5's new stages on an RGBA8 image: a GPUImage lookup port (with the GPUImage attribution, as `composite.ts:17-19`) + `adjustMath.adjustRgb` |
@@ -586,7 +586,7 @@ No pass, FBO, readback or resample is added. The stages run inside the composite
     - `lowbias32` matches known vectors, including negative lattice indices.
   - **Effective values:** user + a·offset with clamping; `lookReady = false` ignores the look entirely; amount 0 gives neutral output; `adjust.on` is false exactly when every effective value is neutral and no look is drawn.
   - **Import hygiene:** the module has no runtime `import` (regex over the source), so `gen-luts.mjs` can load it.
-- **`src/engine/looks.test.ts`:** 5 unique ids and labels; offsets use only `AdjustId`s and stay within display range; `defaultAmount` is 0.8; `offsetToShader` round-trips.
+- **`src/engine/looks.test.ts`:** 5 unique ids and labels; offsets use only `AdjustId`s and stay within display range; `defaultAmount` is 0.8. `adjustMath.test.ts` checks that `offsetToShader` round-trips and that `effectiveAdjust` adds exactly `offsetToShader(amount · offset)` for every look and item (v0.4 cleanup).
 - **`src/engine/params.test.ts`:**
   - 12 adjust defs: group `adjust`, scope `photo`, `live: true`, neutral default;
   - no `PRESETS` entry changes an adjust value or the look (C §3.4);

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { fromDisplay, paramDef, signed } from './params';
-import { isLookId, LOOK_IDS, lookDef, LOOKS, lookThumbUrl, offsetToShader, photoLuts } from './looks';
+import { isLookId, LOOK_IDS, lookDef, LOOKS, lookThumbUrl, photoLuts } from './looks';
+import { paramDef } from './params';
 
 describe('質感 looks (step-2 spec §3.2)', () => {
   it('5 looks with unique ids and labels in strip order, 程度 0.8 when picked', () => {
@@ -31,16 +31,6 @@ describe('質感 looks (step-2 spec §3.2)', () => {
       'adjust.fade': 30, 'adjust.grain': 35, 'adjust.vignette': 20, 'adjust.contrast': -10, 'adjust.saturation': -10, 'adjust.temperature': 8,
     });
     expect(lookDef('flash')!.offsets['adjust.vignette']).toBe(35);
-  });
-
-  it('offsetToShader matches the slider mapping: display d → shader value of fromDisplay(d)', () => {
-    for (const id of ['adjust.exposure', 'adjust.fade'] as const) {
-      const def = paramDef(id);
-      for (let d = def.bidirectional ? -50 : 0; d <= (def.bidirectional ? 50 : 100); d++) {
-        const v = fromDisplay(def, d);
-        expect(offsetToShader(def, d)).toBeCloseTo(def.bidirectional ? signed(v) : v, 12);
-      }
-    }
   });
 
   it('lookDef / isLookId reject unknown ids', () => {

@@ -17,11 +17,13 @@ import {
   lin,
   luma,
   neutralAdjust as neutralOf,
+  offsetToShader,
   seedMix,
   type AdjustFrame,
   type AdjustValues,
 } from './adjustMath';
-import { lookDef } from './looks';
+import { lookDef, LOOKS } from './looks';
+import { fromDisplay, paramDef, signed } from './params';
 
 const F = frameFor({ width: 1080, height: 1080 });
 const MID: [number, number] = [0.5, 0.5];
@@ -206,6 +208,29 @@ describe('effective values and the look (step-2 spec §4.3)', () => {
     expect(e['adjust.grain']).toBeCloseTo(0.8 * 0.35, 12);
     expect(effectiveAdjust({}, film, 0)['adjust.grain']).toBe(0);
     expect(effectiveAdjust({ 'adjust.exposure': Number.NaN }, null, 1)['adjust.exposure']).toBe(0);
+  });
+
+  it('offsetToShader matches the slider mapping: display d → shader value of fromDisplay(d)', () => {
+    for (const id of ['adjust.exposure', 'adjust.fade'] as const) {
+      const def = paramDef(id);
+      for (let d = def.bidirectional ? -50 : 0; d <= (def.bidirectional ? 50 : 100); d++) {
+        const v = fromDisplay(def, d);
+        expect(offsetToShader(def, d)).toBeCloseTo(def.bidirectional ? signed(v) : v, 12);
+      }
+    }
+  });
+
+  it('effectiveAdjust adds offsetToShader of amount × offset for every look and item (one mapping; ADJUST_ONE_WAY is the one-way ParamDefs)', () => {
+    for (const id of ADJUST_IDS) expect(ADJUST_ONE_WAY.has(id), id).toBe(!paramDef(id).bidirectional);
+    for (const look of LOOKS)
+      for (const amount of [0.3, 0.8, 1]) {
+        const e = effectiveAdjust({}, look, amount);
+        for (const id of ADJUST_IDS) {
+          const o = offsetToShader(paramDef(id), amount * (look.offsets[id] ?? 0));
+          const want = ADJUST_ONE_WAY.has(id) ? Math.min(1, Math.max(0, o)) : Math.min(1, Math.max(-1, o));
+          expect(e[id], `${look.id} ${amount} ${id}`).toBeCloseTo(want, 12);
+        }
+      }
   });
 
   it('lookReady = false ignores the look entirely (no LUT, no offsets)', () => {

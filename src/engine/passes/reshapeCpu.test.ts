@@ -6,17 +6,17 @@ import { prepareFaces } from '../../detect/faces';
 import { applyPreset, neutralValue, PARAM_DEFS, paramsInGroup, setParam, SPLIT_IDS } from '../params';
 import { adapt } from '../../tracking/adapter111';
 import { apply, glMat3, IDENTITY_GEOMETRY, rotateLeft, vToO } from '../../geometry/view';
-import { faceDetailMoves, faceWidthIso, IDENTITY_VIEW, RESHAPE_FS, reshapeFs, reshapeGeometry, reshapeUniforms } from './reshape';
+import { detailMask, faceDetailMoves, faceDetailOn, faceWidthIso, IDENTITY_VIEW, RESHAPE_FS, reshapeFs, reshapeGeometry, reshapeUniforms } from './reshape';
 import { reshapeMapCpu, reshapeMapMulti, shiftEllipseUv, squeezeAxisUv, withView } from './reshapeCpu';
 import { reshapeMapCpuV03 } from './reshapeCpuV03';
-import { attenuate, boxCentre, capsFor, influenceBox, ovalBox, WHOLE, type TableFace } from './faceCap';
+import { attenuate, boxCentre, capsFor, FT, influenceBox, ovalBox, packFaceTable, WHOLE, type TableFace } from './faceCap';
 import type { ReshapeUniforms as RU } from './reshape';
 import { MIN_DET } from '../../body/field';
 import { syntheticPortrait } from '../../body/synthetic';
 import { buildFaceProtect } from '../../tracking/faceProtect';
 import { shaderHash } from '../shaderHash';
 
-const PINNED = '3ace9b9e';
+const PINNED = '12c178ac';
 
 const lm = JSON.parse(readFileSync(new URL('../../../tests/fixtures/landmarks_sample_face.json', import.meta.url), 'utf8')) as {
   width: number;
@@ -654,6 +654,78 @@ describe('step-5 warps through the CPU port (face-detail spec §4.2, §8.1)', ()
         // for 山根 with S5 §4.4's disc(c, max(r−, r+, ry)), which misses the band's corners: Task 6 uses the circumscribed disc)
         expect(worst, `${id} = ${v}`).toBeLessThan(1e-6);
       }
+  });
+});
+
+describe('the step-5 read gate (RESHAPE_FS uDetail, detailMask)', () => {
+  const table = (ts: readonly TableFace[]) => {
+    const out = new Float32Array(FT.ROW * MAX_RENDER_FACES * 4);
+    packFaceTable(ts, aspect, out);
+    return out;
+  };
+  const tf = (u: RU): TableFace => ({ face, u, layer: -1, window: WHOLE, centre: boxCentre(ovalBox(face)), cap: -1 });
+  const STEP5: ParamId[] = ['shape.jawline', 'shape.temple', 'shape.hairline', 'shape.noseWing', 'shape.noseBridge', 'shape.mouthHeight'];
+
+  it('the shader reads texels 70, 71, 75 and 76 only behind the bit, and the axes only in the 髮際線 / 山根 branches', () => {
+    expect(RESHAPE_FS).toContain('uniform int uDetail;');
+    const chain = RESHAPE_FS.slice(RESHAPE_FS.indexOf('vec2 faceChain('), RESHAPE_FS.indexOf('void main()'));
+    const gate = chain.indexOf('if (((uDetail >> f) & 1) != 0) {');
+    expect(gate).toBeGreaterThan(0);
+    const block = chain.slice(gate, chain.indexOf('}', gate));
+    for (const t of [`F(f, ${FT.RIGHT})`, `F(f, ${FT.RIGHT} + 1)`, 'F(f, 75)', 'F(f, 76)']) {
+      expect(block).toContain(t);
+      expect(chain.split(t).length - 1, t).toBe(1);
+    }
+    expect(chain.split('F(f, 88)').length - 1).toBe(2);
+    expect(chain).not.toMatch(/\n {2}vec4 axes = F\(f, 88\);/); // not at the top of the chain
+  });
+
+  it('自然, 原圖 and every v0.3 item leave the bit clear; each step-5 item, at either end, sets it', () => {
+    const natural = reshapeUniforms(applyPreset('natural', 1).values, 1);
+    expect(detailMask(table([tf(natural), tf(U5()), tf(U5({ 'shape.faceSlim': 1, 'shape.eyeEnlarge': 1, 'shape.chin': 0 }))]), 3)).toBe(0);
+    for (const id of STEP5)
+      for (const v of id === 'shape.jawline' ? [1] : [0, 1]) {
+        const u = U5({ [id]: v });
+        expect(detailMask(table([tf(natural), tf(u)]), 2), `${id} = ${v}`).toBe(0b10);
+        expect(faceDetailOn(u, reshapeGeometry(face, aspect, u)), `${id} = ${v}`).toBe(true);
+      }
+  });
+
+  it('左右分開 with a right side that differs sets the bit; an equal right side does not', () => {
+    for (const id of SPLIT_IDS) {
+      const left = { [id]: id === 'shape.jawline' || id === 'shape.temple' ? 0.6 : 0.8 };
+      const same = U5(left, Object.fromEntries(SPLIT_IDS.map((k) => [k, { ...NEUTRAL, ...left }[k]])));
+      const other = U5(left, Object.fromEntries(SPLIT_IDS.map((k) => [k, k === id ? 0.3 : { ...NEUTRAL, ...left }[k]])));
+      expect(detailMask(table([tf(same)]), 1), `${id} equal`).toBe(id === 'shape.jawline' || id === 'shape.temple' ? 1 : 0);
+      expect(detailMask(table([tf(other)]), 1), `${id} split`).toBe(1);
+    }
+  });
+
+  it('detailMask on the packed row and faceDetailOn on the uniforms agree (random persons, split or not, 1–6 faces)', () => {
+    let s = 99;
+    const rnd = () => ((s = (s * 1103515245 + 12345) >>> 0) / 2 ** 32);
+    const shape = paramsInGroup('shape').map((d) => d.id);
+    for (let k = 0; k < 200; k++) {
+      const n = 1 + Math.floor(rnd() * MAX_RENDER_FACES);
+      const us: RU[] = [];
+      for (let f = 0; f < n; f++) {
+        const over: Partial<Record<ParamId, number>> = {};
+        for (const id of shape) if (rnd() < 0.25) over[id] = rnd() < 0.3 ? NEUTRAL[id] : rnd();
+        const right = rnd() < 0.3 ? Object.fromEntries(SPLIT_IDS.map((id) => [id, rnd() < 0.5 ? { ...NEUTRAL, ...over }[id] : rnd()])) : null;
+        us.push(U5(over, right));
+      }
+      const want = us.reduce((m, u, f) => m | (faceDetailOn(u, reshapeGeometry(face, aspect, u)) ? 1 << f : 0), 0);
+      expect(detailMask(table(us.map(tf)), n)).toBe(want);
+    }
+  });
+
+  it('a NaN or a negative zero in the block: NaN reads the block, −0 counts as 0 (both chains then agree)', () => {
+    const t = table([tf(U5())]);
+    t[75 * 4 + 2] = -0;
+    t[FT.RIGHT * 4] = -0;
+    expect(detailMask(t, 1)).toBe(0);
+    t[76 * 4 + 1] = NaN;
+    expect(detailMask(t, 1)).toBe(1);
   });
 });
 

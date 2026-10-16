@@ -506,6 +506,48 @@ export function packFaceDetail(row: Float32Array, u: ReshapeUniforms, g: Reshape
 }
 
 /**
+ * RESHAPE_FS's uDetail: bit f set when face f's packed row has step-5 work, i.e. a 左右分開 side that differs from the
+ * left value (texel 70 ≠ (S1.xyz, S2.w)) or any non-zero strength in texels 71.xy, 75 and 76.xy. The shader reads
+ * texels 70–71 and 75–95 of a face only when its bit is set. A clear bit means the right side equals the left one
+ * (compared as stored: ±0 equal, NaN never) and every step-5 strength is 0, so the shader's substitutes (s1.xyz, s2.w)
+ * and 0 are the stored values and the gated chain is the full one exactly; the 自然 live path then reads only the
+ * texels v0.3's chain read (face-detail spec §4.5).
+ */
+export function detailMask(table: Float32Array, count: number): number {
+  let mask = 0;
+  for (let f = 0; f < Math.min(count, MAX_RENDER_FACES); f++) {
+    const o = f * FT.ROW * 4;
+    const t = (texel: number, c: number) => table[o + texel * 4 + c];
+    const r = FT.RIGHT;
+    const split = t(r, 0) !== t(FT.S1, 0) || t(r, 1) !== t(FT.S1, 1) || t(r, 2) !== t(FT.S1, 2) || t(r, 3) !== t(FT.S2, 3);
+    const items = t(71, 0) !== 0 || t(71, 1) !== 0 || [0, 1, 2, 3].some((c) => t(75, c) !== 0) || t(76, 0) !== 0 || t(76, 1) !== 0;
+    if (split || items) mask |= 1 << f;
+  }
+  return mask;
+}
+
+/**
+ * detailMask's test on one face's uniforms and geometry (the CPU port's gate, reshapeCpu.ts): a split side, or a
+ * 下頜線 / 太陽穴 / 髮際線 / 鼻翼 / 山根 / 嘴高 strength.
+ */
+export function faceDetailOn(u: ReshapeUniforms, g: Pick<ReshapeGeometry, 'hairlineS' | 'noseWingS' | 'rootK' | 'mouthHS'>): boolean {
+  return (
+    u.faceSlimR !== u.faceSlim ||
+    u.faceVR !== u.faceV ||
+    u.faceNarrowR !== u.faceNarrow ||
+    u.eyeEnlargeR !== u.eyeEnlarge ||
+    u.jawline !== 0 ||
+    u.jawlineR !== 0 ||
+    u.temple !== 0 ||
+    u.templeR !== 0 ||
+    g.hairlineS !== 0 ||
+    g.noseWingS !== 0 ||
+    g.rootK !== 0 ||
+    g.mouthHS !== 0
+  );
+}
+
+/**
  * The largest move of every active step-5 warp, for step 3's displacementBound (S3 §4.4): UV vectors (count
  * hypot(dx·W, dy·H) px) and iso lengths (count iso·W px). Two 鼻翼 discs may overlap, so the wing counts twice.
  */
@@ -554,6 +596,7 @@ uniform sampler2D uLiqDisp; // RG16F 推臉筆 backward displacement in O UV uni
 uniform float uLiqOn;
 uniform mediump sampler2DArray uProtArr; // R16F signed distance (iso units) per face layer, row 0 = window top
 uniform int uCount;
+uniform int uDetail;    // bit f: face f has step-5 work (detailMask); clear = its texels 70–71 and 75–95 are not read
 uniform float uAspect;  // W/H
 uniform mat3 uGeo;   // V → O, normalized (step 3); the exact identity mat3 when the geometry is identity
 uniform vec4 uTile;  // buffer uv → V: V = uTile.xy + vUv · uTile.zw; (0, 0, 1, 1) outside a tile
@@ -675,11 +718,18 @@ vec2 faceChain(int f, vec2 tc) {
   vec4 s2 = F(f, ${FT.S2});        // forehead, nose, mouth, eye (GPUPixel-left)
   vec4 r = F(f, ${FT.RADII});      // eyeR.x, eyeR.y, mouthR, protect layer (−1 = none)
   vec4 ce = F(f, ${FT.CHIN_EYE});  // chinTarget, eyeDisp
-  vec4 sR = F(f, ${FT.RIGHT});     // step 5: slimR, vR, narrowR, eyeR (GPUPixel-right; == s1/s2 while 左右分開 is off)
-  vec4 sR2 = F(f, ${FT.RIGHT} + 1); // jawR, templeR
-  vec4 s5 = F(f, 75);              // jawL, templeL, hairline, noseWing
-  vec4 s6 = F(f, 76);              // 山根 k, mouthHeight
-  vec4 axes = F(f, 88);            // r̂ (iso), m̂ (iso)
+  // step 5: the right side and the new items are read only for a face whose uDetail bit is set; a clear bit means
+  // texel 70 == (s1.xyz, s2.w) and texels 71, 75, 76 are 0 (detailMask), so these values are the stored ones exactly
+  vec4 sR = vec4(s1.xyz, s2.w);    // slimR, vR, narrowR, eyeR (GPUPixel-right; == s1/s2 while 左右分開 is off)
+  vec4 sR2 = vec4(0.0);            // jawR, templeR
+  vec4 s5 = vec4(0.0);             // jawL, templeL, hairline, noseWing
+  vec4 s6 = vec4(0.0);             // 山根 k, mouthHeight
+  if (((uDetail >> f) & 1) != 0) {
+    sR = F(f, ${FT.RIGHT});
+    sR2 = F(f, ${FT.RIGHT} + 1);
+    s5 = F(f, 75);
+    s6 = F(f, 76);
+  }
   if (s1.x != 0.0 || sR.x != 0.0) {
     for (int i = 0; i < 9; i++) tc = curveWarp(tc, P(f, SLIM[i].x), P(f, SLIM[i].y), sided(s1.x, sR.x, SLIM_SIDE[i]));
   }
@@ -697,7 +747,10 @@ vec2 faceChain(int f, vec2 tc) {
   }
   if (s1.w != 0.0) tc = curveWarp(tc, P(f, 16), ce.xy, s1.w);
   if (s2.x != 0.0) tc = curveWarp(tc, EXT(f, 0), EXT(f, 3), s2.x);
-  if (s5.z != 0.0) tc = shiftEllipse(tc, EXT(f, 0), axes.xy, axes.zw, F(f, 89).xyz, F(f, 90).xy); // 髮際線
+  if (s5.z != 0.0) { // 髮際線; axes = r̂ (iso), m̂ (iso)
+    vec4 axes = F(f, 88);
+    tc = shiftEllipse(tc, EXT(f, 0), axes.xy, axes.zw, F(f, 89).xyz, F(f, 90).xy);
+  }
   if (r.w >= 0.0) tc = protectContour(f, tc0, tc, r.w);
   if (s2.y != 0.0) {
     for (int i = 0; i < 4; i++) tc = curveWarp(tc, P(f, NOSE[i].x), P(f, NOSE[i].y), s2.y);
@@ -708,6 +761,7 @@ vec2 faceChain(int f, vec2 tc) {
     tc = shiftAround(tc, P(f, 81), nw.x, -nw.yz);
   }
   if (s6.x != 0.0) { // 山根
+    vec4 axes = F(f, 88);
     vec4 rt = F(f, 94);
     tc = squeezeAxis(tc, rt.xy, axes.xy, axes.zw, vec3(rt.z, rt.w, F(f, 95).x), s6.x);
   }
@@ -804,13 +858,21 @@ export interface ReshapePass {
    * its face drawn unlimited); `aspect` defaults to dst's (pass the image's for the ¼-res mask); `body` = RG16F
    * backward displacement texture (UV units), applied before the face chains; null = none. `view` = geometry / tile /
    * window (step 3, ReshapeView); omitted = identity. `liquify` = RG16F 推臉筆 field (O UV units), the outermost map;
-   * null = none (push-brush spec §4.4).
+   * null = none (push-brush spec §4.4). `allDetail` (tests only) sets every uDetail bit: the ungated chain, which reads
+   * every face's step-5 block, for the pin that the gate (detailMask) changes no output bit.
    */
   drawFaces(
     src: Texture,
     dst: Framebuffer,
     faces: readonly TableFace[],
-    opts?: { aspect?: number; body?: Texture | null; protects?: readonly FaceProtect[]; view?: ReshapeView; liquify?: Texture | null },
+    opts?: {
+      aspect?: number;
+      body?: Texture | null;
+      protects?: readonly FaceProtect[];
+      view?: ReshapeView;
+      liquify?: Texture | null;
+      allDetail?: boolean;
+    },
   ): void;
   /**
    * One face with v0.3's signature (harnesses, pins, the pipeline until RenderInput v0.4): yaw attenuation applied
@@ -939,6 +1001,7 @@ export function createReshapePass(gl: GL, opts: { carrier?: 'texture' | 'ubo' } 
     if (tableTex) bindTexture(gl, FACE_TABLE_UNIT, tableTex);
     else gl.bindBufferBase(gl.UNIFORM_BUFFER, FACE_UBO_BINDING, ubo);
     gl.uniform1i(prog.u('uCount'), faces.length);
+    gl.uniform1i(prog.u('uDetail'), o.allDetail ? (1 << MAX_RENDER_FACES) - 1 : detailMask(table, faces.length));
     gl.uniform1f(prog.u('uAspect'), aspect);
     drawFullscreen(gl);
     bindTexture(gl, BODY_UNIT, null);

@@ -32,6 +32,20 @@ test('reshape CPU port == RESHAPE_FS with N faces and caps, both face-table carr
   }
 });
 
+test('the step-5 read gate (uDetail) changes no output bit: gated == every face block read, both carriers', async ({ page }) => {
+  await page.goto(`${DEV_URL}/tests/e2e/pages/reshape.html`);
+  await page.waitForFunction(() => typeof window.runReshapeDetailGate === 'function');
+  for (const carrier of ['texture', 'ubo'] as const) {
+    const cases = await page.evaluate((c) => window.runReshapeDetailGate!(c), carrier);
+    expect(cases).toHaveLength(6);
+    for (const c of cases) {
+      console.log(`${c.name}: ${c.moved} px moved > 1 px, ${c.diff} output floats differ`);
+      expect(c.moved, c.name).toBeGreaterThan(300);
+      expect(c.diff, c.name).toBe(0);
+    }
+  }
+});
+
 test('reshape CPU port == RESHAPE_FS under geometry and windows (uGeo, uTile, uWin)', async ({ page }) => {
   await page.goto(`${DEV_URL}/tests/e2e/pages/reshape.html`);
   await page.waitForFunction(() => typeof window.runReshapePinView === 'function');

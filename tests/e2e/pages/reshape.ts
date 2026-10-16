@@ -37,6 +37,8 @@ declare global {
     runReshapePinFaceDetail?: (carrier: 'texture' | 'ubo') => PinCase[];
     /** step 6 (push-brush spec §8.2): the 推臉筆 field as the outermost map */
     runReshapePinLiquify?: () => PinCase[];
+    /** the step-5 read gate (uDetail) vs every bit set: output floats that differ (must be 0), pixels moved > 1 px */
+    runReshapeDetailGate?: (carrier: 'texture' | 'ubo') => { name: string; diff: number; moved: number }[];
   }
 }
 
@@ -330,6 +332,66 @@ window.runReshapePinFaceDetail = (carrier) => {
     { name: `every 美型 item at max (${carrier})`, faces: one(U(all15)) },
   ];
   return pinCases(gl, cases, aspect, carrier);
+};
+
+/**
+ * The step-5 read gate (RESHAPE_FS uDetail, reshape.ts detailMask) changes no output bit: every case is drawn with the
+ * mask the pass computes and with every bit set (allDetail: each face's step-5 block read, the ungated chain), and the
+ * two RGBA32F readbacks are compared float for float. `moved` (vs the identity) shows each case warps something.
+ */
+window.runReshapeDetailGate = (carrier) => {
+  const gl = context();
+  const r = rig(gl);
+  const pass = createReshapePass(gl, { carrier });
+  const { width: W, height: H } = landmarks;
+  const aspect = W / H;
+  const base = adapt({ points: new Float32Array(landmarks.points) }, W, H);
+  const shrink = (f: Face, k: number, dx: number): Face => {
+    const b = ovalBox(f);
+    const c = [b.x + b.w / 2, b.y + b.h / 2];
+    const m = (a: Float32Array) => a.map((v, i) => (i % 2 === 0 ? c[0] + (v - c[0]) * k + dx : c[1] + (v - c[1]) * k));
+    return { pts111: m(f.pts111), ext: m(f.ext), oval: m(f.oval), yaw: f.yaw, iris: m(f.iris), lids: m(f.lids) };
+  };
+  const neutral = Object.fromEntries(PARAM_DEFS.map((d) => [d.id, neutralValue(d)])) as Record<ParamId, number>;
+  const U = (over: Partial<Record<ParamId, number>>, right: PersonParams['right'] = null) => reshapeUniforms({ ...neutral, ...over }, 1, right);
+  const tf = (f: Face, u: ReshapeUniforms): TableFace => ({ face: f, u: attenuate(u, f.yaw), layer: -1, window: WHOLE, centre: boxCentre(ovalBox(f)), cap: -1 });
+  const natural = reshapeUniforms(applyPreset('natural', 1).values, 1);
+  const v03 = U({ 'shape.faceSlim': 1, 'shape.faceV': 1, 'shape.faceNarrow': 1, 'shape.chin': 0, 'shape.forehead': 1, 'shape.noseSlim': 1, 'shape.mouthSize': 1, 'shape.eyeDistance': 0, 'shape.eyeEnlarge': 1 });
+  const split = { 'shape.eyeEnlarge': 1, 'shape.faceSlim': 1, 'shape.faceV': 1, 'shape.faceNarrow': 1 };
+  const A = shrink(base, 0.45, -0.24);
+  const B = shrink(base, 0.45, 0.24);
+  const cases: { name: string; faces: TableFace[] }[] = [
+    { name: '自然', faces: [tf(base, natural)] },
+    { name: 'every v0.3 item at an end', faces: [tf(base, v03)] },
+    { name: '自然 ×3', faces: [tf(base, natural), tf(A, natural), tf(B, natural)] },
+    { name: '自然 + one face with 下頜線 and 山根', faces: [tf(base, natural), tf(A, U({ 'shape.jawline': 1, 'shape.noseBridge': 1 })), tf(B, natural)] },
+    { name: '左右分開 L = max, R = 0', faces: [tf(base, U(split, Object.fromEntries(Object.keys(split).map((id) => [id, 0]))))] },
+    { name: '髮際線 −max', faces: [tf(base, U({ 'shape.hairline': 0 }))] },
+  ];
+  const n = r.dst.width * r.dst.height * 4;
+  const read = () => {
+    const px = new Float32Array(n);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, r.dst.fbo);
+    gl.readPixels(0, 0, r.dst.width, r.dst.height, gl.RGBA, gl.FLOAT, px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return px;
+  };
+  pass.drawFaces(r.src, r.dst, [], { aspect });
+  const identity = read();
+  const out = cases.map((c) => {
+    pass.drawFaces(r.src, r.dst, c.faces, { aspect });
+    const gated = read();
+    pass.drawFaces(r.src, r.dst, c.faces, { aspect, allDetail: true });
+    const full = read();
+    let diff = 0;
+    let moved = 0;
+    for (let i = 0; i < n; i++) if (!Object.is(gated[i], full[i])) diff++;
+    for (let i = 0; i < n; i += 4) if (Math.hypot((gated[i] - identity[i]) * r.dst.width, (gated[i + 1] - identity[i + 1]) * r.dst.height) > 1) moved++;
+    return { name: `${c.name} (${carrier})`, diff, moved };
+  });
+  pass.dispose();
+  r.dispose();
+  return out;
 };
 
 /** A field from a fixed record list on the photo's own frame: a 大 push across the left cheek contour, a 大 restore over half of it. */

@@ -13,6 +13,7 @@ import type { BodyField, Face, FaceProtect, LiquifyField, Rect } from '../../typ
 import { fieldAt } from '../../body/cpuWarp';
 import { attenuate, boxCentre, faceDrawn, influenceBox, ovalBox, WHOLE, type TableFace } from './faceCap';
 import {
+  faceDetailOn,
   faceWidthIso,
   JAW,
   JAW_SIDE,
@@ -158,36 +159,49 @@ function chainOf(face: Face, u: ReshapeUniforms, aspect: number, prot: FaceProte
     const s = budgetScale(L, t, PROTECT_RAMP * reach, PROTECT_SLOPE, kappa);
     return s >= 1 ? tc : [tc0[0] + gx[0] * s, tc0[1] + gx[1] * s];
   };
+  // RESHAPE_FS's uDetail bit (detailMask): without step-5 work the right side takes the left strengths and the step-5
+  // strengths are 0, the values the shader substitutes for the texels it then skips (the same values: the map is unchanged)
+  const detail = faceDetailOn(u, g);
+  const slimR = detail ? u.faceSlimR : u.faceSlim;
+  const vR = detail ? u.faceVR : u.faceV;
+  const narrowR = detail ? u.faceNarrowR : u.faceNarrow;
+  const eyeR = detail ? u.eyeEnlargeR : u.eyeEnlarge;
+  const jaw = detail ? u.jawline : 0;
+  const jawR = detail ? u.jawlineR : 0;
+  const temple = detail ? u.temple : 0;
+  const templeR = detail ? u.templeR : 0;
+  const hairline = detail ? g.hairlineS : 0;
+  const noseWing = detail ? g.noseWingS : 0;
+  const rootK = detail ? g.rootK : 0;
+  const mouthH = detail ? g.mouthHS : 0;
+  // r̂ / m̂ (texel 88): the shader reads them only inside the 髮際線 and 山根 branches
+  const rh: V2 = [g.axes[0], g.axes[1]];
+  const mh: V2 = [g.axes[2], g.axes[3]];
   return (tcIn) => {
     let tc = tcIn;
     const tc0 = tc;
     const at = (a: Float32Array, k: number): V2 => [a[k * 2], a[k * 2 + 1]];
-    const rh: V2 = [g.axes[0], g.axes[1]];
-    const mh: V2 = [g.axes[2], g.axes[3]];
     // contour: each split anchor takes its side's strength (S5 §4.3)
-    if (u.faceSlim !== 0 || u.faceSlimR !== 0)
-      SLIM.forEach(([o, t], i) => (tc = curveWarp(tc, pt(o), pt(t), sided(u.faceSlim, u.faceSlimR, SLIM_SIDE[i]))));
-    if (u.faceV !== 0 || u.faceVR !== 0)
-      V_JAW.forEach((i, k) => (tc = curveWarp(tc, pt(i), at(g.vTargets, k), sided(u.faceV, u.faceVR, VJAW_SIDE[k]))));
-    if (u.faceNarrow !== 0 || u.faceNarrowR !== 0)
-      NARROW.forEach((i, k) => (tc = curveWarp(tc, pt(i), at(g.narrowTargets, k), sided(u.faceNarrow, u.faceNarrowR, NARROW_SIDE[k]))));
-    if (u.jawline !== 0 || u.jawlineR !== 0)
-      JAW.forEach((i, k) => (tc = curveWarp(tc, pt(i), at(g.jawTargets, k), sided(u.jawline, u.jawlineR, JAW_SIDE[k]))));
-    if (u.temple !== 0 || u.templeR !== 0)
-      TEMPLE.forEach((_, k) => (tc = curveWarp(tc, at(g.templeAnchors, k), at(g.templeTargets, k), sided(u.temple, u.templeR, TEMPLE_SIDE[k]) * TEMPLE_W[k])));
+    if (u.faceSlim !== 0 || slimR !== 0) SLIM.forEach(([o, t], i) => (tc = curveWarp(tc, pt(o), pt(t), sided(u.faceSlim, slimR, SLIM_SIDE[i]))));
+    if (u.faceV !== 0 || vR !== 0) V_JAW.forEach((i, k) => (tc = curveWarp(tc, pt(i), at(g.vTargets, k), sided(u.faceV, vR, VJAW_SIDE[k]))));
+    if (u.faceNarrow !== 0 || narrowR !== 0)
+      NARROW.forEach((i, k) => (tc = curveWarp(tc, pt(i), at(g.narrowTargets, k), sided(u.faceNarrow, narrowR, NARROW_SIDE[k]))));
+    if (jaw !== 0 || jawR !== 0) JAW.forEach((i, k) => (tc = curveWarp(tc, pt(i), at(g.jawTargets, k), sided(jaw, jawR, JAW_SIDE[k]))));
+    if (temple !== 0 || templeR !== 0)
+      TEMPLE.forEach((_, k) => (tc = curveWarp(tc, at(g.templeAnchors, k), at(g.templeTargets, k), sided(temple, templeR, TEMPLE_SIDE[k]) * TEMPLE_W[k])));
     if (u.chin !== 0) tc = curveWarp(tc, pt(16), g.chinTarget, u.chin);
     if (u.forehead !== 0) tc = curveWarp(tc, ext(0), ext(3), u.forehead);
-    if (g.hairlineS !== 0) tc = shiftEllipseUv(tc, ext(0), rh, mh, g.hairlineRadii, g.hairlineDisp, aspect);
+    if (hairline !== 0) tc = shiftEllipseUv(tc, ext(0), rh, mh, g.hairlineRadii, g.hairlineDisp, aspect);
     if (prot) tc = protectContour(tc0, tc);
     // nose
     if (u.noseSlim !== 0) for (const [o, t] of NOSE) tc = curveWarp(tc, pt(o), pt(t), u.noseSlim);
-    if (g.noseWingS !== 0) {
+    if (noseWing !== 0) {
       tc = shiftAround(tc, pt(80), g.noseWingR, g.noseWingDisp);
       tc = shiftAround(tc, pt(81), g.noseWingR, [-g.noseWingDisp[0], -g.noseWingDisp[1]]);
     }
-    if (g.rootK !== 0) tc = squeezeAxisUv(tc, [g.root[0], g.root[1]], rh, mh, [g.root[2], g.root[3], g.rootRy], g.rootK, aspect);
+    if (rootK !== 0) tc = squeezeAxisUv(tc, [g.root[0], g.root[1]], rh, mh, [g.root[2], g.root[3], g.rootRy], rootK, aspect);
     // mouth: 嘴高, then 嘴型 (backward order: forward, 嘴型 scales about the true p106, then 嘴高 moves it)
-    if (g.mouthHS !== 0) tc = shiftEllipseUv(tc, pt(106), [-g.mouthHAxis[1], g.mouthHAxis[0]], g.mouthHAxis, g.mouthHRadii, g.mouthHDisp, aspect);
+    if (mouthH !== 0) tc = shiftEllipseUv(tc, pt(106), [-g.mouthHAxis[1], g.mouthHAxis[0]], g.mouthHAxis, g.mouthHRadii, g.mouthHDisp, aspect);
     if (u.mouthSize !== 0) tc = scaleAround(tc, pt(106), g.mouthR, u.mouthSize);
     // eyes: 眼距, then 大眼 per side
     if (g.eyeDisp[0] !== 0 || g.eyeDisp[1] !== 0) {
@@ -195,7 +209,7 @@ function chainOf(face: Face, u: ReshapeUniforms, aspect: number, prot: FaceProte
       tc = shiftAround(tc, pt(77), g.eyeR[1], [-g.eyeDisp[0], -g.eyeDisp[1]]);
     }
     if (u.eyeEnlarge !== 0) tc = enlargeEye(tc, pt(74), g.eyeR[0], u.eyeEnlarge);
-    if (u.eyeEnlargeR !== 0) tc = enlargeEye(tc, pt(77), g.eyeR[1], u.eyeEnlargeR);
+    if (eyeR !== 0) tc = enlargeEye(tc, pt(77), g.eyeR[1], eyeR);
     return tc;
   };
 }

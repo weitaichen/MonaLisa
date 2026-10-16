@@ -36,6 +36,7 @@ import {
   needsBodyMeasure,
   needsBodyScan,
   needsFaceScan,
+  outputWaits,
   personBodyGate,
   protectRequests,
   rebaseStamp,
@@ -628,6 +629,17 @@ describe('persons in the editor model (S §3.3)', () => {
     expect(gate('b1', 'body.waist')).toEqual({ ok: true, reason: null });
     expect(gate('b1', 'body.hip')).toEqual({ ok: false, reason: 'no' });
     expect(gate('f0', 'body.waist')).toEqual({ ok: false, reason: BODY_UNMEASURED_REASON });
+  });
+  it('outputWaits: the encode / autosave waits for each hold on its own; the timer reads the live stroke (step-6 review)', () => {
+    const clear = { noSession: false, lost: false, exportBusy: false, stroke: false, rebuild: false, geoDrag: false };
+    expect(outputWaits(clear)).toBe(false);
+    for (const k of Object.keys(clear) as (keyof typeof clear)[]) expect(outputWaits({ ...clear, [k]: true }), k).toBe(true);
+    // the ~1 ms window: the timer fires after a finger went down (live stroke set, stamps applied in that frame) but
+    // before the `drawing` flip's cleanup cancelled it; the effect saw drawing = false when it armed the timer
+    const armedWith = { ...clear, stroke: false };
+    const firesWith = { ...clear, stroke: true };
+    expect(outputWaits(armedWith)).toBe(false);
+    expect(outputWaits(firesWith)).toBe(true);
   });
   it('settleBodyAnswer: a merge failure is the detection error; a notice failure after a merge is not (step-1 review)', () => {
     const report = vi.fn((_e: unknown, where: string) => `reported ${where}`);

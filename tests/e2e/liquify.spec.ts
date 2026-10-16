@@ -540,3 +540,78 @@ test('↶ and 全部清除 wait while a finger draws; finger-up makes exactly on
   await undo.click();
   await expect.poll(() => strokes(page)).toBe(0);
 });
+
+// ── v0.4 cleanup (step-6 review) ──
+
+test('the debounced export fired after a stroke’s first stamps but before the drawing flip snapshots nothing of it', async ({ page }) => {
+  await openPhoto(page, { name: 'line.png', mimeType: 'image/png', buffer: linePng() });
+  const a = await savedPixels(page);
+  await expect.poll(() => thumbLineShift(page, 450), { timeout: 10_000 }).toBeLessThanOrEqual(1);
+  await page.getByRole('tab', { name: '美體' }).click();
+  // the editor's 400 ms debounced encode / autosave is held back, so the test fires it at the moment of the race;
+  // synthetic pointers (setPointerCapture is a no-op for them) give the exact order within one frame
+  await page.evaluate(() => {
+    type Held = { fn: () => void; cancelled: boolean };
+    const w = window as unknown as { __held: Held[] };
+    const st = window.setTimeout.bind(window);
+    const ct = window.clearTimeout.bind(window);
+    const held = new Map<number, Held>();
+    let fake = 1e9;
+    w.__held = [];
+    window.setTimeout = ((fn: TimerHandler, ms?: number, ...args: unknown[]) => {
+      if (ms === 400 && typeof fn === 'function' && fn.constructor.name === 'AsyncFunction') {
+        const rec: Held = { fn: fn as () => void, cancelled: false };
+        held.set(++fake, rec);
+        w.__held.push(rec);
+        return fake;
+      }
+      return st(fn, ms, ...args);
+    }) as typeof window.setTimeout;
+    window.clearTimeout = ((id?: number) => {
+      const r = id === undefined ? undefined : held.get(id);
+      if (r) r.cancelled = true;
+      else ct(id);
+    }) as typeof window.clearTimeout;
+    Element.prototype.setPointerCapture = () => undefined;
+  });
+  await option(page, '背景保護').click(); // an edit: arms the (held) debounced export
+  await option(page, '推臉筆').click();
+  await expect(page.getByRole('radiogroup', { name: '筆刷模式' })).toBeVisible();
+  const { at } = await photoToClient(page, LINE);
+  const s = at(LINE.x, 450);
+  const r = await page.evaluate(
+    ({ x, y }) =>
+      new Promise<{ armed: boolean }>((resolve) => {
+        const w = window as unknown as { __held: { fn: () => void; cancelled: boolean }[] };
+        const timer = w.__held.filter((h) => !h.cancelled).at(-1);
+        const target = document.querySelector('.editor-stage canvas') ?? document.querySelector('.editor-stage')!;
+        const ev = (type: string, id: number, px: number) =>
+          target.dispatchEvent(
+            new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: id, pointerType: 'touch', isPrimary: id === 1, clientX: px, clientY: y, button: 0, buttons: 1 }),
+          );
+        ev('pointerdown', 1, x);
+        for (let i = 1; i <= 8; i++) ev('pointermove', 1, x + 3 * i);
+        // after the queue's frame (its stamps are applied), before Preact's effect flush (the drawing flip's cleanup)
+        requestAnimationFrame(() => {
+          const armed = !!timer && !timer.cancelled;
+          if (armed) timer!.fn();
+          // a second finger within PINCH_GRACE_MS cancels the stroke: no undo step, the pre-stroke params stay
+          ev('pointerdown', 2, x + 80);
+          ev('pointerup', 2, x + 80);
+          ev('pointerup', 1, x + 24);
+          resolve({ armed });
+        });
+      }),
+    s,
+  );
+  expect(r.armed, 'the export armed before the stroke was still pending when the stamps landed').toBe(true);
+  await page.waitForTimeout(1500); // a mid-stroke encode and its history write would land by now
+  expect(await strokes(page)).toBe(0);
+  const b = await savedPixels(page);
+  const row = Math.round((450 / LINE.height) * a.height);
+  const band: [number, number] = [row - 4, row + 4];
+  const shift = Math.abs(darkestColumn(b, band, [0, b.width - 1]) - darkestColumn(a, band, [0, a.width - 1]));
+  console.log(`a debounced export at the race: the shared file's line moved ${shift} px at the stroke row`);
+  expect(shift).toBeLessThanOrEqual(1);
+  expect(await thumbLineShift(page, 450)).toBeLessThanOrEqual(1);
+});

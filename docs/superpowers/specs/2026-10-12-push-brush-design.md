@@ -508,7 +508,7 @@ Without a frame (the camera look) every stroke is dropped. Otherwise, in order, 
 | 推／恢復 or size changed mid-stroke | Applies to the next stroke |
 | ↶ ↷ during a live stroke | Disabled until finger up |
 | 儲存 during a live stroke | Commit first, then export with `model.snapshot()` |
-| The debounced autosave fires during a live stroke or a chunked rebuild | Skipped; `liquifyTick` re-arms it when the stroke ends or the rebuild finishes (§3.5) |
+| The debounced autosave fires during a live stroke or a chunked rebuild | Skipped; `liquifyTick` re-arms it when the stroke ends or the rebuild finishes (§3.5). The timer checks again when it fires, reading the live stroke from its ref (`editorModel.outputWaits`): Preact runs the cleanup that cancels a timer armed before the stroke only after the next frame, whose queue drain already applied the first stamps (v0.4 cleanup, step-6 review) |
 | An export waits for a filter LUT while the user keeps drawing | The export uses the snapshot taken at the tap (the `snapshotField` rule, `Editor.tsx:533-541`) |
 | WebGL context loss mid-stroke | The field lives on the CPU. After restore, the pipeline re-uploads it (the new texture has no upload key) and the stroke continues. |
 | Engine swap or re-detect replaces the session | The replacement is created with `liquify: model.field` (§3.7), so its first frame has the strokes |

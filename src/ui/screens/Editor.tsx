@@ -89,6 +89,7 @@ import {
   measurePersons,
   needsBodyScan,
   needsFaceScan,
+  outputWaits,
   PERSON_TABS,
   personBodyGate,
   protectRequests,
@@ -1293,7 +1294,7 @@ export function Editor({ source }: { source: EditorSource }) {
   // rate; the commit at gesture end runs this once. It reads the plan's head only (planHeadFor): an edit step pays for
   // no frame, no displacement bounds and no tile planning.
   useEffect(() => {
-    if (!session || lost || exportBusy || drawing || liquify.pending || geoDrag) return;
+    if (!session || outputWaits({ noSession: false, lost, exportBusy, stroke: drawing, rebuild: liquify.pending, geoDrag })) return;
     const s = session;
     const key = editKey(edit);
     const now = planHeadFor(edit, sourceRef.current);
@@ -1303,6 +1304,10 @@ export function Editor({ source }: { source: EditorSource }) {
     const delay = Math.max(ENCODE_DEBOUNCE_MS, protectSrc.outputHoldMs());
     const t = window.setTimeout(async () => {
       if (unmounted.current || sessionRef.current !== s || editKey(editRef.current) !== key) return;
+      // synchronously, from the refs: a stroke that started after this timer was armed may have applied stamps before
+      // the `drawing` flip's cleanup cancels it (Preact runs it after the next frame); liquifyTick re-arms the export
+      const wait = { noSession: false, lost: !!sessionEngine.current?.lost, exportBusy: exportAbort.current !== null, stroke: live.current !== null, rebuild: liquify.pending, geoDrag: false };
+      if (outputWaits(wait)) return;
       // (a drag held still past the debounce: export the full field, not its draft)
       const gen = settleField();
       const field = snapshotField();

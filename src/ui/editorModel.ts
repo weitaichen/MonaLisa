@@ -291,6 +291,33 @@ export function settleBodyAnswer(merge: () => void, notify: () => void, report: 
   return { ok: true };
 }
 
+/** What the debounced encode / autosave waits for (the Editor's encode effect, and its timer when it fires). */
+export interface OutputWait {
+  /** no session bound to the current engine */
+  noSession: boolean;
+  /** the WebGL context is lost: nothing to read back (the effect re-arms on restore) */
+  lost: boolean;
+  /** a tiled export runs: its GL buffers are tile-sized */
+  exportBusy: boolean;
+  /** a 推臉筆 stroke is live: the effect reads the `drawing` state, the timer the live stroke's ref */
+  stroke: boolean;
+  /** a chunked 推臉筆 rebuild is pending */
+  rebuild: boolean;
+  /** a 裁切 handle / move or 拉直 drag runs */
+  geoDrag: boolean;
+}
+
+/**
+ * The debounced encode / autosave waits (push-brush spec §3.5, step-3 §6.3); liquifyTick, fieldTick and the gesture's
+ * commit re-arm it. The timer asks again when it fires, with the live stroke read from its ref (step-6 review): Preact
+ * runs the cleanup that cancels a timer armed before the stroke only after the next frame, and the queue drain in that
+ * frame already applied the stroke's first stamps, so the timer alone would snapshot half a stroke under the pre-stroke
+ * editKey.
+ */
+export function outputWaits(w: OutputWait): boolean {
+  return w.noSession || w.lost || w.exportBusy || w.stroke || w.rebuild || w.geoDrag;
+}
+
 /** long edge of a draft 美體 field (a drag step's preview): about a quarter of the full field's build cost */
 export const BODY_DRAFT_LONG_EDGE = 128;
 

@@ -131,8 +131,7 @@ interface FaceCtx {
   face: Face;
   aspect: number;
   fw: number;
-  /** iso unit axes: m̂ toward the chin, r̂ from the GPUPixel-left eye toward the right eye */
-  mh: V2;
+  /** iso unit axis r̂, from the GPUPixel-left eye toward the right eye (m̂, toward the chin, only orients it) */
   rh: V2;
   frames: readonly [EyeFrame, EyeFrame];
   /** α factor per GPUPixel side for 修容 and the 高光 cheekbone: the yaw far side × yawAttenuation (S5 §4.9) */
@@ -167,7 +166,6 @@ function faceCtx(rf: RenderFace, aspect: number): FaceCtx {
     face: rf.face,
     aspect,
     fw: faceWidthIso(rf.face, aspect),
-    mh,
     rh,
     frames: eyeFrames(rf.face, aspect),
     sideAtt,

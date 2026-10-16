@@ -78,14 +78,16 @@ describe('一鍵 › 美顏／質感 (step-2 spec §2.2)', () => {
   it('part buttons 美顏 · 質感, 美顏 first; only 質感 shows a dot, while a look is set', () => {
     expect(PRESET_PARTS.map((p) => p.label)).toEqual(['美顏', '質感']);
     expect(INITIAL_SELECTION.presetPart).toBe('beauty');
-    const parts = partButtons(sel({ tab: 'preset' }), { makeupOn: () => false, look: { id: 'ccd', amount: 0.8 } })!;
+    const parts = partButtons(sel({ tab: 'preset' }), { look: { id: 'ccd', amount: 0.8 } })!;
     expect(parts.map((p) => [p.label, p.active, p.hasValue])).toEqual([
       ['美顏', true, false],
       ['質感', false, true],
     ]);
     expect(selectPart(sel({ tab: 'preset' }), 'look').presetPart).toBe('look');
-    expect(partButtons(sel({ tab: 'makeup' }), { makeupOn: (p) => p === 'blush', look: null })).toBeNull();
-    expect(partButtons(sel({ tab: 'adjust' }), { makeupOn: () => false, look: null })).toBeNull();
+    expect(partButtons(sel({ tab: 'makeup' }), { look: null })).toBeNull();
+    expect(partButtons(sel({ tab: 'adjust' }), { look: null })).toBeNull();
+    // 美妝 has no part buttons (its parts are strip items, makeupAction 'part'): a stray selectPart changes nothing
+    expect(selectPart(sel({ tab: 'makeup' }), 'lip')).toEqual(sel({ tab: 'makeup' }));
   });
 
   it('質感 strip: 無 · 膠片 · CCD · 直閃 · 藍調 · 電影感, exactly one selected, thumbnails over the look icon', () => {

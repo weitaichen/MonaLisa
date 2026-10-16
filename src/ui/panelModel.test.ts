@@ -954,7 +954,7 @@ describe('step-5 icons (face-detail spec §3.1)', () => {
   it('every new item and strip control has an icon', () => {
     for (const k of [
       'jawline', 'temple', 'hairline', 'noseWing', 'noseBridge', 'mouthHeight', 'brow', 'eyeshadow', 'liner', 'lashes',
-      'aegyo', 'contour', 'highlight', 'lens', 'split', 'parts', 'makeupOff',
+      'aegyo', 'contour', 'highlight', 'lens', 'split', 'makeupOff',
     ])
       expect(hasIcon(k), k).toBe(true);
   });

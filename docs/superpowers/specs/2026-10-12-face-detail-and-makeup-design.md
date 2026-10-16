@@ -198,7 +198,7 @@ New `ParamId`s, in the `PARAM_DEFS` positions that produce the RM §2.1 strip or
 - `MakeupPart` moves from `panelModel.ts:23` to `src/types.ts` (next to `ShadePart`), because `params.ts` is engine code and must not import from `src/ui`. `panelModel.ts` re-exports it.
 - `MAKEUP_PICK_DEFAULT` (`params.ts:80`) becomes `Record<MakeupPart, number>`: lip 0.5, blush 0.4 (unchanged), brow 0.45, eyeshadow 0.45, liner 0.6, lashes 0.55, aegyo 0.5, contour 0.4, highlight 0.4, lens 0.6.
 - **Schema tests** (`params.test.ts:44-104`) are ported in the same commit: the count, the bidirectional list (+ temple, hairline, noseWing, noseBridge, mouthHeight), the defaults table (+14 rows) and `paramsInGroup('makeup')` / `('shape')` order. Each assertion stays; only the expected tables grow. This is the mechanical port that RM §1.1 allows.
-- The new icons are original 24 × 24 line icons in `src/ui/icons.tsx` (keys above, plus `split`, `parts` and `makeupOff`), drawn in the existing style (1.75 px stroke, `icons.tsx:1`).
+- The new icons are original 24 × 24 line icons in `src/ui/icons.tsx` (keys above, plus `split` and `makeupOff`), drawn in the existing style (1.75 px stroke, `icons.tsx:1`). A `parts` icon was drawn for the 美妝 lead tile, but the tile shows the selected part's own icon (`makeupLeadItem`), so it was removed unused (v0.4 cleanup).
 
 ### 3.2 Shades (`params.ts:63-77`, extended)
 

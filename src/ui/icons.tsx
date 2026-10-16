@@ -264,14 +264,6 @@ const P: Record<string, JSX.Element> = {
       <path d="M10 4C7.2 4.6 5.6 7 5.6 10.4c0 4.4 2 8.2 4.4 9.4M14 4c2.8.6 4.4 3 4.4 6.4 0 4.4-2 8.2-4.4 9.4" />
     </>
   ),
-  parts: (
-    <>
-      <rect x="4.4" y="4.4" width="6.2" height="6.2" rx="1.6" />
-      <rect x="13.4" y="4.4" width="6.2" height="6.2" rx="1.6" />
-      <rect x="4.4" y="13.4" width="6.2" height="6.2" rx="1.6" />
-      <rect x="13.4" y="13.4" width="6.2" height="6.2" rx="1.6" />
-    </>
-  ),
   makeupOff: (
     <>
       <path d="M9 20.4h6v-7.8H9Z" />

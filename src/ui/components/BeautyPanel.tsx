@@ -18,7 +18,6 @@ import {
   leadChip,
   makeupLeadItem,
   partButtons,
-  partHasValue,
   personNote,
   photoTabLabel,
   selectPart,
@@ -104,7 +103,7 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
   const tabs = crop ? EDITOR_TABS : TABS;
   const items = sel.tab === 'crop' && crop ? cropItems(crop.geometry, crop.lock, crop.oSize) : itemsFor(lens, sel, body, skin);
   const look = lens.look();
-  const parts = partButtons(sel, { makeupOn: (p) => partHasValue(lens, p), look });
+  const parts = partButtons(sel, { look });
   const lead = leadChip(sel, look);
   // photo-level face note (no face, 基本模式, tracker health) first; then the selected person's (S §2.4, U5);
   // 調節 and 一鍵 › 質感 act on the whole photo: no per-person strip note (step-2 spec §2.2)

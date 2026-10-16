@@ -997,16 +997,15 @@ export interface PartButton {
  * The part row that leads the strip: 一鍵's 美顏／質感 (step-2 spec §2.2); null on other tabs. 美妝 has none: its
  * leading part tile and level-1 part list replace it (face-detail spec §2.3).
  */
-export function partButtons(sel: PanelSelection, state: { makeupOn(part: MakeupPart): boolean; look: PhotoParams['look'] }): PartButton[] | null {
+export function partButtons(sel: PanelSelection, state: { look: PhotoParams['look'] }): PartButton[] | null {
   if (sel.tab === 'preset')
     return PRESET_PARTS.map((p) => ({ id: p.id, label: p.label, icon: p.icon, active: sel.presetPart === p.id, hasValue: p.id === 'look' && state.look !== null }));
   return null;
 }
 
+/** a tap on one of partButtons' buttons: only 一鍵 has them (美妝 picks its part through makeupAction's 'part') */
 export function selectPart(sel: PanelSelection, id: string): PanelSelection {
-  if (sel.tab === 'makeup') return { ...sel, makeupPart: id as MakeupPart };
-  if (sel.tab === 'preset') return { ...sel, presetPart: id as PresetPart };
-  return sel;
+  return sel.tab === 'preset' ? { ...sel, presetPart: id as PresetPart } : sel;
 }
 
 /** 調節's lead chip 「質感：{label}」 while a look is set; tapping it opens 一鍵 › 質感 (step-2 spec §2.1) */

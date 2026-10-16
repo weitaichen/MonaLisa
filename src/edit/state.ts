@@ -204,6 +204,15 @@ export function clearStrokes(edit: EditState): EditState {
   return edit.photo.strokes.length ? { ...edit, photo: { ...edit.photo, strokes: [] } } : edit;
 }
 
+/**
+ * An edit computed from the state before a live stroke was committed (a second finger on a strip item while the first
+ * one draws, push-brush spec §2.5) keeps the stroke: when `e` still holds exactly the list the commit replaced (`from`,
+ * by identity), it gets the committed list `to`. 全部清除 and 重置 make a new list, so they still clear.
+ */
+export function rebaseStrokes(e: EditState, from: readonly Stroke[], to: readonly Stroke[]): EditState {
+  return from !== to && e.photo.strokes === from ? { ...e, photo: { ...e.photo, strokes: to } } : e;
+}
+
 /** the person part of `ref` (face items within 1e-6, every shade, 左右分開 off) is what `p` holds (RM §3.4 matching, S5 §3.5) */
 export function matchesPersonPreset(p: PersonParams, ref: PresetRef): boolean {
   const q = personFromPreset(ref.id, ref.amount);

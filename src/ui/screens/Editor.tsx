@@ -35,20 +35,24 @@ import { EXPORT_COPY, NO_SOURCE, planExport, sourceSizeRecord, type ExportPlan, 
 import { takePersonsHint } from '../../store/settings';
 import { stableKey } from '../../store/undo';
 import { buildFaceProtect } from '../../tracking/faceProtect';
-import type { BodyDetection, BodyField, DetectionCache, EditState, Engine, Face, FaceProtect, LookId, PersonId, PersonMask, Rect, Selection, SpotSize } from '../../types';
+import type { BodyDetection, BodyField, BrushKind, BrushSize, DetectionCache, EditState, Engine, Face, FaceProtect, LiquifyField, LookId, PersonId, PersonMask, Rect, Selection, SpotSize, Stroke } from '../../types';
 import { buildFrame } from '../../edit/frame';
 import { lensFor, type PersonInfo } from '../../edit/lens';
 import { legacyProjection } from '../../edit/legacy';
+import { LiquifyModel, makeStrokeId, type LiveStroke } from '../../edit/liquify';
 import { bodyAnswer, firstAnswer } from '../../edit/migrate';
 import { patchPlan, readPatch } from '../../edit/patch';
 import { screenLeftIsGpLeft } from '../../edit/sides';
 import { addSpot, clearScope, clearSpots, ownerAt, ownerCtxOf, planSpot, regionAt, spotRadius, spotsInScope, type PlanResult } from '../../edit/spots';
-import { editKey, editSetGeometry, P0 } from '../../edit/state';
+import { clearStrokes, editKey, editSetGeometry, P0, rebaseStrokes, withStrokes } from '../../edit/state';
 import { TONE_COPY } from '../../edit/toneCopy';
 import { createWarpGuard } from '../../edit/warpGuard';
 import { bodiesUToO, faceOToU, fieldUToO, maskOToU, maskUToO, poseOToU, upCanvas, upImage, upTracker } from '../../geometry/upFrame';
 import { apply, chipTransform, cropModeLayout, cssTurn, eYAt, isIdentity, lockFor, oToV, ovalViewBox, snapCrop, upQuarter, viewSize, vToO, type Quarter } from '../../geometry/view';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
+import { BrushBar } from '../components/BrushBar';
+import { BRUSH_HINT_MS, BrushHint } from '../components/BrushHint';
+import { BrushOverlay, ringLook, type RingHandle } from '../components/BrushOverlay';
 import { FaceBoxes, type FaceBoxItem } from '../components/FaceBoxes';
 import { BandPlane, HeightBandOverlay } from '../components/HeightBandOverlay';
 import { CanvasHost } from '../components/CanvasHost';
@@ -61,6 +65,8 @@ import { SpotControls } from '../components/SpotControls';
 import { SpotOverlay, type SpotRing } from '../components/SpotOverlay';
 import { Status } from '../components/Status';
 import { debug, reportError } from '../debug';
+import { brushAt, clientToO } from '../brushMapping';
+import { BrushQueue } from '../brushQueue';
 import { cropActivate, StraightenGesture, straightenView, type CropAction } from '../cropPanel';
 import { deps, type UndoLike } from '../deps';
 import {
@@ -112,6 +118,8 @@ import {
   photoTabLabel,
   photoTouchToast,
   rememberable,
+  rememberSel,
+  showsBrush,
   showsHeightBand,
   showsSpotMode,
   skinToolGate,
@@ -127,7 +135,7 @@ import { ensureBodyTracker, ensureEngine, ensureFaceSegmenter, svc } from '../se
 import { app, go, setPendingHistory, showSaveFallback, toast, type EditorSource } from '../state';
 import { useStore } from '../store';
 import { requestLut, useAdjustFailureNotice, useElementSize, useHold, useLutLoader } from './hooks';
-import { useZoomPan } from './zoomPan';
+import { useZoomPan, type BrushHooks } from './zoomPan';
 
 const ENCODE_DEBOUNCE_MS = 400;
 const THUMB_EDGE = 360;
@@ -143,6 +151,9 @@ const TOOLS_BAND = 50;
 let lastSel: PanelSelection = INITIAL_SELECTION;
 /** 祛痘 大小, remembered for the app session only (skin-cleanup spec §2.3) */
 let lastSpotSize: SpotSize = 'M';
+/** 推／恢復 and the size: remembered for the app session, never persisted, never undo steps (push-brush spec §2.2) */
+let lastBrushKind: BrushKind = 'push';
+let lastBrushSize: BrushSize = 'm';
 
 export function Editor({ source }: { source: EditorSource }) {
   const engine = useStore(svc, (s) => s.engine);
@@ -154,6 +165,83 @@ export function Editor({ source }: { source: EditorSource }) {
   const [edit, setEditState] = useState<EditState>(source.edit);
   const editRef = useRef(edit);
   editRef.current = edit;
+
+  // ── 推臉筆 (push-brush spec §3.5) ──
+  /** bumped when a live stroke ends (commit or cancel) and when a chunked rebuild settles: re-arms sync, render and export */
+  const [liquifyTick, setLiquifyTick] = useState(0);
+  const [liquify] = useState(() => new LiquifyModel(source.frame, { onSettled: () => setLiquifyTick((n) => n + 1) }));
+  /** a stroke is live (finger down): ↶ ↷ and 全部清除 wait, the encode / autosave waits */
+  const [drawing, setDrawing] = useState(false);
+  /** 「正在套用推臉筆…」 after 300 ms of a chunked rebuild */
+  const [liquifyBusy, setLiquifyBusy] = useState(false);
+  const [brushKind, setBrushKindState] = useState<BrushKind>(lastBrushKind);
+  const [brushSize, setBrushSizeState] = useState<BrushSize>(lastBrushSize);
+  const [hint, setHint] = useState<{ kind: BrushKind; gen: number } | null>(null);
+  const ring = useRef<RingHandle | null>(null);
+  const frameEl = useRef<HTMLDivElement>(null); // the .frame element (frameOf builds the StillFrame)
+  /** the live stroke; `kind` is the one it started with (a 推／恢復 switch mid-stroke applies to the next stroke) */
+  const live = useRef<{ stroke: LiveStroke; kind: BrushKind; queue: BrushQueue; ringPx: number; last: { x: number; y: number }; capToast: boolean } | null>(null);
+  /** the stroke list the last commit replaced and the one it made: an edit computed before it keeps the stroke (update) */
+  const committed = useRef<{ from: readonly Stroke[]; to: readonly Stroke[] } | null>(null);
+
+  const publishLiquify = () =>
+    debug({
+      liquify: {
+        strokes: editRef.current.photo.strokes.length,
+        version: liquify.field?.version ?? 0,
+        work: liquify.work,
+        maxDisp: liquify.maxAbs,
+        pending: liquify.pending,
+      },
+    });
+
+  /** finger up, a late second finger, pointercancel, or anything that ends the editing context: one undo step */
+  const commitLive = () => {
+    const cur = live.current;
+    if (!cur) return;
+    live.current = null;
+    cur.queue.finish(); // stamps still queued are applied first: what was drawn is what is committed
+    const taken = new Set(editRef.current.photo.strokes.map((s) => s.id));
+    const recs = cur.stroke.commit(() => {
+      const id = makeStrokeId(taken);
+      taken.add(id);
+      return id;
+    });
+    ring.current?.hide();
+    setDrawing(false);
+    if (recs.length) {
+      const prev = editRef.current;
+      const next = withStrokes(prev, recs);
+      committed.current = { from: prev.photo.strokes, to: next.photo.strokes };
+      editRef.current = next; // a flush right after (unmount, hidden) must see it before the next render
+      update(next, true);
+    }
+    sessionRef.current?.setLiquify(liquify.field);
+    setLiquifyTick((n) => n + 1); // a no-op gesture made no edit: the export it held back still has to run
+    publishLiquify();
+  };
+
+  /** a second finger within PINCH_GRACE_MS: the preview reverts, no undo step */
+  const cancelLive = () => {
+    const cur = live.current;
+    if (!cur) return;
+    live.current = null;
+    cur.queue.clear();
+    cur.stroke.cancel();
+    ring.current?.hide();
+    setDrawing(false);
+    sessionRef.current?.setLiquify(liquify.field);
+    setLiquifyTick((n) => n + 1);
+    publishLiquify();
+  };
+
+  // The latest commitLive / cancelLive for callers created once: the brush hooks (memoized on brushOn) and
+  // flushHistory, which the visibilitychange and unmount effects (deps []) captured on the first render; a stale
+  // commitLive there would call that render's `update`.
+  const commitRef = useRef(commitLive);
+  commitRef.current = commitLive;
+  const cancelRef = useRef(cancelLive);
+  cancelRef.current = cancelLive;
   /** the photo's detection cache (persons, faces, bodies); null until the first definite face answer */
   const [detect, setDetectState] = useState<DetectionCache | null>(source.detect);
   const detectRef = useRef(detect);
@@ -453,8 +541,10 @@ export function Editor({ source }: { source: EditorSource }) {
   }, [source]);
 
   const setSel = (s: PanelSelection) => {
-    // a first touch on the next photo can never add a spot (S §2.3)
-    lastSel = rememberable(s);
+    commitLive(); // a tab or strip-item tap ends the editing context (push-brush spec §2.5)
+    // never 'spot' (step 4: a first touch on the next photo can never add a spot, S §2.3) and never 'brush': the next
+    // photo opens in neither mode; the brush falls back to the item before it
+    lastSel = rememberSel(rememberable(s), lastSel);
     setSelState(s);
     // another item's slider: a drag of the old one can no longer commit (its row was replaced)
     setDragging(false);
@@ -465,6 +555,12 @@ export function Editor({ source }: { source: EditorSource }) {
    * write through the selection (重置 resets everyone whatever is selected: no 全部 toast)
    */
   const update = (e: EditState, commit: boolean, user = true) => {
+    // a live stroke is committed first (a no-op unless one is live; commitLive clears it before it calls update): 重置,
+    // 全部清除, presets and every other edit made with a second finger while the first one draws
+    commitLive();
+    // an edit computed before that commit (a strip item read the state without the live stroke) keeps the stroke
+    const c = committed.current;
+    if (c && editRef.current.photo.strokes === c.to) e = rebaseStrokes(e, c.from, c.to);
     dropFinished();
     fieldDraft.noteUpdate(commit);
     // a drag step draws the plain table; the commit checks it (S §4.4)
@@ -604,6 +700,8 @@ export function Editor({ source }: { source: EditorSource }) {
               faces: useCache ? cache?.faces : undefined,
               obstacles: useCache ? cache?.obstacles : undefined,
               body: fieldMemo.field,
+              // a replacement session (engine swap, re-detect) draws the strokes on its first frame
+              liquify: liquify.field,
             }),
         );
         // a tracker that could not answer is not "no face": no answer until the re-detect gives a real one
@@ -769,6 +867,10 @@ export function Editor({ source }: { source: EditorSource }) {
    * stay alive until that settles.
    */
   const flushHistory = () => {
+    // through the ref: the visibilitychange and unmount effects hold the first render's flushHistory
+    commitRef.current(); // a live stroke is committed before the editing context ends (hidden, unmount)
+    liquify.settle(); // a pending rebuild finishes now: the thumbnail must show the committed strokes
+    sessionRef.current?.setLiquify(liquify.field);
     const s = sessionRef.current;
     if (!s || fatalRef.current) return;
     const e = editRef.current;
@@ -790,9 +892,10 @@ export function Editor({ source }: { source: EditorSource }) {
     }
     const ready = s.exportReady(frameOf(e, s));
     const field = snapshotField();
+    const liq = liquify.snapshot();
     let stamp: OutputStamp;
     try {
-      stamp = queueHistory(e, gen, s.exportImageData(frameOf(e, s), field), s);
+      stamp = queueHistory(e, gen, s.exportImageData(frameOf(e, s), field, liq), s);
     } catch (err) {
       reportError(err, 'history flush');
       return;
@@ -805,7 +908,7 @@ export function Editor({ source }: { source: EditorSource }) {
       .then(() => Promise.race([s.prepareExport(frameOf(e, s)), new Promise((r) => window.setTimeout(r, FLUSH_LUT_WAIT_MS))]))
       .then(async () => {
         if (saved.current !== stamp || !s.exportReady(frameOf(e, s))) return;
-        await writeHistory(e, s.exportImageData(frameOf(e, s), field), s, limitRecord());
+        await writeHistory(e, s.exportImageData(frameOf(e, s), field, liq), s, limitRecord());
       })
       .catch((err: unknown) => reportError(err, 'history flush'));
     setPendingHistory(historyChain.current);
@@ -838,11 +941,14 @@ export function Editor({ source }: { source: EditorSource }) {
       // a finished file can be 25 MB: not kept past the editor (S §2.3)
       fresh.current = null;
       delivered.current = null;
-      flushHistory(); // before dispose: the readback needs the live session
+      flushHistory(); // before dispose: the readback needs the live session (it commits a live stroke first)
+      live.current?.queue.clear();
+      live.current = null;
       const s = sessionRef.current;
       sessionRef.current = null;
       const release = () => {
         s?.dispose();
+        liquify.dispose(); // the 推臉筆 buffers go with the session (push-brush spec §6.1)
         try {
           source.bitmap.close();
         } catch {
@@ -1072,14 +1178,29 @@ export function Editor({ source }: { source: EditorSource }) {
     });
   };
 
+  // the field follows the committed strokes (undo, redo, 全部清除, 重置, reopen). Declared before the render effect, so a
+  // frame never draws new strokes with an old field (push-brush spec §3.5)
   useEffect(() => {
-    if (!session) return;
+    const r = liquify.sync(edit.photo.strokes);
+    if (!r.pending) sessionRef.current?.setLiquify(liquify.field);
+    publishLiquify();
+    if (!r.pending) {
+      setLiquifyBusy(false);
+      return;
+    }
+    const t = window.setTimeout(() => setLiquifyBusy(liquify.pending), 300);
+    return () => clearTimeout(t);
+  }, [edit.photo.strokes, liquifyTick]);
+
+  useEffect(() => {
+    // a chunked rebuild is pending: the canvas keeps its previous frame (on a reopen there is none yet: the status shows)
+    if (!session || liquify.pending) return;
     try {
       session.render(frameOf(edit, session));
     } catch (e) {
       setFatal(reportError(e, 'session.render'));
     }
-  }, [session, edit, protects, detect]);
+  }, [session, edit, protects, detect, liquifyTick]);
   // (a layout effect: a tap's selection is readable by the time the event's task ends)
   useLayoutEffect(() => {
     if (!session) return;
@@ -1088,14 +1209,14 @@ export function Editor({ source }: { source: EditorSource }) {
   }, [session, detect, infos, selId, edit.photo.geometry]);
 
   /**
-   * Export + encode with the user's state captured when it was asked for (`e`, the 美體 `field`); waits for the filter
-   * LUT so the file matches the settled preview, and draws with the 瘦臉 limits at export time (see save). The working
-   * size, encoded in the plan's format and quality.
+   * Export + encode with the user's state captured when it was asked for (`e`, the 美體 `field`, the 推臉筆 `liq`); waits
+   * for the filter LUT so the file matches the settled preview, and draws with the 瘦臉 limits at export time (see save).
+   * The working size, encoded in the plan's format and quality.
    */
-  const encode = async (s: StillSession, e: EditState, field: BodyField | null, plan: ExportPlan) => {
+  const encode = async (s: StillSession, e: EditState, field: BodyField | null, plan: ExportPlan, liq: LiquifyField | null) => {
     await s.prepareExport(frameOf(e, s));
     if (unmounted.current) throw new Error('editor closed');
-    const img = s.exportImageData(frameOf(e, s), field);
+    const img = s.exportImageData(frameOf(e, s), field, liq);
     return { img, file: await deps.encodeOutput(img, plan.format, plan.quality) };
   };
 
@@ -1105,9 +1226,11 @@ export function Editor({ source }: { source: EditorSource }) {
   // no limit), so the limit landing does not redo a full-resolution export + history write right after this one.
   // Only a working-size JPEG plan keeps a pre-encoded share file (S §2.3); a share file is for the output settings it was
   // made with (planSig: a 設定 change re-arms this, Review Focus 1). Waits while a tiled export runs (its GL buffers are
-  // tile-sized: a working-size render meanwhile would grow them back) and runs once when it ends
+  // tile-sized: a working-size render meanwhile would grow them back) and runs once when it ends. Waits while a 推臉筆
+  // stroke is live or a rebuild is pending (push-brush spec §3.5): the `drawing` flip cancels a timer armed before the
+  // stroke, so a debounced export never caches half a stroke under the pre-stroke editKey; liquifyTick re-arms it
   useEffect(() => {
-    if (!session || lost || exportBusy) return;
+    if (!session || lost || exportBusy || drawing || liquify.pending) return;
     const s = session;
     const key = editKey(edit);
     const now = planFor(s, edit, sourceRef.current, fieldMemo.field);
@@ -1120,6 +1243,7 @@ export function Editor({ source }: { source: EditorSource }) {
       // (a drag held still past the debounce: export the full field, not its draft)
       const gen = settleField();
       const field = snapshotField();
+      const liq = liquify.snapshot();
       /** nothing newer (params, 美體 field, session) replaced what this export was made from */
       const current = () => editKey(editRef.current) === key && sessionRef.current === s && fieldGen.current === gen;
       const plan = planFor(s, edit, sourceRef.current, field);
@@ -1127,7 +1251,7 @@ export function Editor({ source }: { source: EditorSource }) {
       let img: ImageData | null = null;
       if (preEncodes(plan) && !shareReady(fresh.current, key, gen, sig)) {
         try {
-          const r = await encode(s, edit, field, plan);
+          const r = await encode(s, edit, field, plan, liq);
           img = r.img;
           // (a session replaced meanwhile, e.g. by a re-detect that found the face, made this file stale)
           if (current()) fresh.current = { key, field: gen, sig, file: r.file };
@@ -1142,7 +1266,7 @@ export function Editor({ source }: { source: EditorSource }) {
         try {
           await s.prepareExport(frameOf(edit, s));
           if (unmounted.current || sessionRef.current !== s) return;
-          img = s.exportImageData(frameOf(edit, s), field);
+          img = s.exportImageData(frameOf(edit, s), field, liq);
         } catch (e) {
           reportError(e, 'history export');
           return;
@@ -1164,7 +1288,7 @@ export function Editor({ source }: { source: EditorSource }) {
         try {
           await s.prepareExport(frameOf(edit, s));
           if (unmounted.current || stampIs(saved.current, key, gen) || sessionRef.current !== s) return;
-          img = s.exportImageData(frameOf(edit, s), field);
+          img = s.exportImageData(frameOf(edit, s), field, liq);
         } catch (e) {
           reportError(e, 'history export');
           return;
@@ -1175,7 +1299,7 @@ export function Editor({ source }: { source: EditorSource }) {
       queueHistory(edit, gen, img, s);
     }, delay);
     return () => clearTimeout(t);
-  }, [session, edit, lost, fieldTick, protectTick, exportBusy, prefs]);
+  }, [session, edit, lost, fieldTick, protectTick, exportBusy, prefs, drawing, liquifyTick]);
 
   const hold = useHold((on) => {
     try {
@@ -1184,6 +1308,123 @@ export function Editor({ source }: { source: EditorSource }) {
       reportError(e, 'setCompare');
     }
   });
+
+  // ── 推臉筆 brush mode (push-brush spec §2.5): one finger draws, two fingers pinch; never while 按住對比 is held ──
+  const brushOn = !!session && !fatal && !lost && !hold.held && showsBrush(sel);
+
+  const frameXY = (p: { x: number; y: number }) => {
+    const r = frameEl.current?.getBoundingClientRect();
+    return r ? { x: p.x - r.left, y: p.y - r.top } : p;
+  };
+  const layerRect = () => layerRef.current?.getBoundingClientRect() ?? null;
+  const kindRef = useRef(brushKind);
+  kindRef.current = brushKind;
+  const sizeRef = useRef(brushSize);
+  sizeRef.current = brushSize;
+
+  // memoized on brushOn only (a new hooks object restarts zoomPan's reducer): the latest commitLive / cancelLive are
+  // called through commitRef / cancelRef, everything else is read through refs
+  const brushHooks = useMemo<BrushHooks | null>(() => {
+    if (!brushOn) return null;
+    return {
+      start(p) {
+        if (live.current) return;
+        const r = layerRect();
+        if (!r) return;
+        const g = editRef.current.photo.geometry;
+        const b = brushAt(p, sizeRef.current, r, g, source.frame);
+        const kind = kindRef.current; // fixed for the stroke: a switch mid-stroke applies to the next one
+        const stroke = liquify.begin(kind, b.radius, b.o);
+        if (!stroke) {
+          // a cap is already reached (a pending rebuild refuses input silently: its status shows)
+          if (!liquify.pending) toast('推臉筆筆畫已達上限', 2600);
+          return;
+        }
+        const queue = new BrushQueue({
+          add: (o) => stroke.add(o),
+          changed: () => {
+            sessionRef.current?.setLiquify(liquify.field); // the session coalesces renders to one per frame
+            const cur = live.current;
+            if (!cur || cur.stroke !== stroke) return; // drained by a commit: the ring is already hidden
+            const f = frameXY(cur.last);
+            ring.current?.show(f.x, f.y, cur.ringPx, ringLook(kind, stroke.state));
+            if (stroke.state === 'capped' && !cur.capToast) {
+              cur.capToast = true; // once per gesture (push-brush spec §2.4)
+              toast('推臉筆筆畫已達上限', 2600);
+            }
+          },
+          now: () => performance.now(),
+          raf: (cb) => requestAnimationFrame(cb),
+          cancelRaf: (id) => cancelAnimationFrame(id),
+        });
+        live.current = { stroke, kind, queue, ringPx: b.ringPx, last: p, capToast: false };
+        setDrawing(true);
+        const f = frameXY(p);
+        ring.current?.show(f.x, f.y, b.ringPx, ringLook(kind, stroke.state));
+      },
+      move(ps) {
+        const cur = live.current;
+        const r = layerRect();
+        if (!cur || !r || !ps.length) return;
+        const g = editRef.current.photo.geometry;
+        for (const p of ps) cur.queue.push(clientToO(p, r, g, source.frame));
+        cur.last = ps[ps.length - 1];
+        const f = frameXY(cur.last);
+        ring.current?.show(f.x, f.y, cur.ringPx, ringLook(cur.kind, cur.stroke.state));
+      },
+      commit: () => commitRef.current(),
+      cancel: () => cancelRef.current(),
+      stamped() {
+        const cur = live.current;
+        if (!cur) return false;
+        cur.queue.finish();
+        return cur.stroke.stamped;
+      },
+      pinch(on) {
+        if (on) ring.current?.hide();
+      },
+    };
+  }, [brushOn]);
+
+  // leaving brush mode (tab, item, 按住對比, crop, a lost context) commits a live stroke first
+  useEffect(() => {
+    if (!brushOn) commitLive();
+  }, [brushOn]);
+
+  // the hint pill: on entering the mode and on each 推／恢復 switch, for BRUSH_HINT_MS
+  useEffect(() => {
+    if (!brushOn) {
+      setHint(null);
+      return;
+    }
+    setHint((h) => ({ kind: brushKind, gen: (h?.gen ?? 0) + 1 }));
+    const t = window.setTimeout(() => setHint(null), BRUSH_HINT_MS);
+    return () => clearTimeout(t);
+  }, [brushOn, brushKind]);
+
+  const setBrushKind = (k: BrushKind) => {
+    lastBrushKind = k;
+    setBrushKindState(k); // applies to the next stroke (a live one keeps its kind)
+  };
+  /** the preview ring's hide timer: a later size tap restarts the 700 ms */
+  const previewTimer = useRef(0);
+  useEffect(() => () => clearTimeout(previewTimer.current), []);
+  const setBrushSize = (s: BrushSize) => {
+    lastBrushSize = s;
+    setBrushSizeState(s);
+    // a preview ring at the centre of the frame for 700 ms (push-brush spec §2.2), at the size the brush will have there
+    const fr = frameEl.current?.getBoundingClientRect();
+    const lr = layerRect();
+    if (!fr || !lr || live.current) return;
+    const c = { x: fr.left + fr.width / 2, y: fr.top + fr.height / 2 };
+    const b = brushAt(c, s, lr, editRef.current.photo.geometry, source.frame);
+    ring.current?.show(fr.width / 2, fr.height / 2, b.ringPx, ringLook(kindRef.current, 'ok'));
+    clearTimeout(previewTimer.current);
+    previewTimer.current = window.setTimeout(() => {
+      if (!live.current) ring.current?.hide();
+    }, 700);
+  };
+  const clearAllStrokes = () => update(clearStrokes(editRef.current), true); // update commits a live stroke first
 
   const share = (file: File) => {
     let p: Promise<string>;
@@ -1211,6 +1452,10 @@ export function Editor({ source }: { source: EditorSource }) {
    */
   const save = () => {
     if (!session || lost) return;
+    // a live stroke is committed first and a pending rebuild finished: the file shows the committed strokes (§2.5)
+    commitLive();
+    liquify.settle();
+    sessionRef.current?.setLiquify(liquify.field);
     const action = tapAction(pill, delivered.current !== null);
     if (action === 'ignore') return;
     if (action === 'sharePending') {
@@ -1230,6 +1475,8 @@ export function Editor({ source }: { source: EditorSource }) {
     const key = editKey(e);
     const gen = settleField();
     const field = snapshotField();
+    // the user's strokes at the tap (the snapshotField rule)
+    const liq = liquify.snapshot();
     const plan = planFor(s, e, sourceRef.current, field);
     const sig = planSig(plan);
     if (shareReady(fresh.current, key, gen, sig)) {
@@ -1242,8 +1489,8 @@ export function Editor({ source }: { source: EditorSource }) {
       toast(EXPORT_COPY.noSource);
     }
     const t0 = performance.now();
-    if (plan.mode === 'tiled' && sourceRef.current.blob && sessionEngine.current) runTiled(s, e, field, plan, key, gen, t0);
-    else runWorking(s, e, field, plan, key, gen, t0);
+    if (plan.mode === 'tiled' && sourceRef.current.blob && sessionEngine.current) runTiled(s, e, field, plan, key, gen, t0, liq);
+    else runWorking(s, e, field, plan, key, gen, t0, liq);
   };
 
   /** finished: share inside the 4 s window, else the pill asks for a second tap (S §2.3) */
@@ -1259,7 +1506,7 @@ export function Editor({ source }: { source: EditorSource }) {
   };
 
   /** today's path: the working size, encoded in the plan's format */
-  const runWorking = (s: StillSession, e: EditState, field: BodyField | null, plan: ExportPlan, key: string, gen: number, t0: number) => {
+  const runWorking = (s: StillSession, e: EditState, field: BodyField | null, plan: ExportPlan, key: string, gen: number, t0: number, liq: LiquifyField | null) => {
     setPill('preparing');
     // a re-detect or an engine recovery may replace (and dispose) the session while this waits for the filter
     // LUT: export from the replacement instead of failing
@@ -1267,7 +1514,7 @@ export function Editor({ source }: { source: EditorSource }) {
       const cur = sessionRef.current;
       return !unmounted.current && cur && cur !== failed && !sessionEngine.current?.lost ? cur : null;
     };
-    exportOnLatest(s, (x) => encode(x, e, field, plan), replacement).then(
+    exportOnLatest(s, (x) => encode(x, e, field, plan, liq), replacement).then(
       ({ s: done, result: r }) => {
         debug({ export: { mode: 'working', width: r.img.width, height: r.img.height, tiles: 0, ms: Math.round(performance.now() - t0) } });
         // cached only while it still matches what is on screen (not after a 美體 edit during 準備中)
@@ -1287,7 +1534,7 @@ export function Editor({ source }: { source: EditorSource }) {
    * encode(), it first waits for the 濾鏡 / 質感 LUTs and the static textures, so the file matches the settled preview:
    * the engine draws a tile without a LUT that is still loading, and one landing between tiles would leave seams
    */
-  const runTiled = (s: StillSession, e: EditState, field: BodyField | null, plan: ExportPlan, key: string, gen: number, t0: number) => {
+  const runTiled = (s: StillSession, e: EditState, field: BodyField | null, plan: ExportPlan, key: string, gen: number, t0: number, liq: LiquifyField | null) => {
     const engine = sessionEngine.current!;
     const blob = sourceRef.current.blob!;
     const ac = new AbortController();
@@ -1327,7 +1574,7 @@ export function Editor({ source }: { source: EditorSource }) {
           console.warn('[meiyan] tiled export failed; standard fallback', err);
           toast(EXPORT_COPY.fallback, 4000);
           const working = planFor(s, e, NO_SOURCE, field);
-          runWorking(sessionRef.current ?? s, e, field, working, key, gen, t0);
+          runWorking(sessionRef.current ?? s, e, field, working, key, gen, t0, liq);
         },
       )
       .finally(() => {
@@ -1353,7 +1600,8 @@ export function Editor({ source }: { source: EditorSource }) {
     if (t) toast(t, 2600);
   };
   const doUndo = () => {
-    if (!undo?.canUndo) return;
+    // never while a stroke is live (push-brush spec §2.5): finger up makes its undo step first
+    if (drawing || !undo?.canUndo) return;
     haptic();
     const before = editRef.current;
     const e = undo.undo();
@@ -1371,7 +1619,7 @@ export function Editor({ source }: { source: EditorSource }) {
     bump((n) => n + 1);
   };
   const doRedo = () => {
-    if (!undo?.canRedo) return;
+    if (drawing || !undo?.canRedo) return;
     haptic();
     const before = editRef.current;
     const e = undo.redo();
@@ -1563,10 +1811,13 @@ export function Editor({ source }: { source: EditorSource }) {
       }
     : undefined;
   // off in 裁切 mode, and its view is reset to identity when the tab opens (S §2.1)
+  // brush mode: one finger draws, and no person is selected by a tap (push-brush spec §2.5). brushOn and spotMode are
+  // never both true (美型／美體 versus 美膚); zoomPan reads `brush` before `spotTap` and `onTap`
   useZoomPan(stageRef, layerRef, !!session && !cropMode, {
-    onTap: spotMode ? undefined : onPersonTap,
+    onTap: spotMode || brushOn ? undefined : onPersonTap,
     spotTap: spotMode ? tapSpot : undefined,
     resetWhen: cropMode,
+    brush: brushHooks,
   });
   /** chip thumbnails, drawn once per person from the working bitmap */
   const [thumbs, setThumbs] = useState<Readonly<Record<PersonId, string | null>>>({});
@@ -1585,7 +1836,8 @@ export function Editor({ source }: { source: EditorSource }) {
     }
     setThumbs(next);
   }, [detect]);
-  const scope = multi && photoScoped(sel, lens);
+  // strokes are photo-level (push-brush spec §1.2): the strip dims with 「整張照片」 in brush mode
+  const scope = multi && (photoScoped(sel, lens) || brushOn);
   const stripPersons: StripPerson[] = infos.map((p, i) => ({
     id: p.id,
     n: i + 1,
@@ -1609,8 +1861,8 @@ export function Editor({ source }: { source: EditorSource }) {
           return [{ person: p.id, n: i + 1, box, selected: selected.kind === 'all' || selected.id === p.id, changed: changedIds.includes(p.id), dashed: !f, narrow: box.w * layerW < 24 }];
         })
       : [];
-  // 祛痘 hides the boxes (C §2.2): the chips stay and pick the 清除 scope
-  const showBoxes = !!session && !fatal && !dragging && !hold.held && !showsHeightBand(sel, bodyCtx) && !spotMode;
+  // 祛痘 and 推臉筆 hide the boxes (C §2.2): the chips stay (in 祛痘 they pick the 清除 scope)
+  const showBoxes = !!session && !fatal && !dragging && !hold.held && !showsHeightBand(sel, bodyCtx) && !spotMode && !brushOn;
   // face effects cannot apply: 基本模式, or no face in this photo (null while analysing, so no flash)
   // (a tracker that could not answer gets a neutral note until the re-detect gives a real answer)
   let faceNote: string | null = null;
@@ -1653,6 +1905,8 @@ export function Editor({ source }: { source: EditorSource }) {
         </button>
       </Status>
     );
+  } else if (liquifyBusy) {
+    overlay = <Status spinner title="正在套用推臉筆…" />;
   } else if (lost) {
     overlay = <EngineStatus />; // 正在恢復畫面 · 重新載入引擎
   }
@@ -1662,8 +1916,8 @@ export function Editor({ source }: { source: EditorSource }) {
       <div class="topbar">
         <IconButton icon="close" label="關閉" onClick={close} />
         <div class="title-center" inert={exportBusy}>
-          <IconButton icon="undo" label="復原" onClick={doUndo} disabled={!undo?.canUndo} />
-          <IconButton icon="redo" label="重做" onClick={doRedo} disabled={!undo?.canRedo} />
+          <IconButton icon="undo" label="復原" onClick={doUndo} disabled={!undo?.canUndo || drawing} />
+          <IconButton icon="redo" label="重做" onClick={doRedo} disabled={!undo?.canRedo || drawing} />
         </div>
         <button type="button" class="pill" onClick={save} disabled={!session || pill === 'preparing' || lost} aria-busy={pill === 'preparing'}>
           <span>{pillLabel(pill)}</span>
@@ -1671,7 +1925,7 @@ export function Editor({ source }: { source: EditorSource }) {
       </div>
 
       <div class="stage editor-stage" ref={stageRef}>
-        <div class={`frame${cropMode ? ' crop-mode' : ''}`} style={cropMode ? undefined : { '--r': String(ratio) }}>
+        <div class={`frame${cropMode ? ' crop-mode' : ''}`} ref={frameEl} style={cropMode ? undefined : { '--r': String(ratio) }}>
           <div class="zoom-layer" ref={layerRef}>
             <CanvasHost
               fit="contain"
@@ -1734,6 +1988,9 @@ export function Editor({ source }: { source: EditorSource }) {
           )}
           {hold.held && <span class="corner-label">原圖</span>}
           {spotMode && !hold.held && <span class="corner-label spot-hint">{TONE_COPY.spotHint}</span>}
+          {/* 推臉筆 (push-brush spec §2.3): screen space, outside the zoom layer */}
+          {brushOn && <BrushOverlay handle={ring} />}
+          {brushOn && hint && <BrushHint key={hint.gen} kind={hint.kind} />}
           {session && !fatal && (
             <div class="editor-tools" inert={exportBusy}>
               <button type="button" class={`float-btn${confirmReset ? ' confirm' : ''}`} onClick={reset}>
@@ -1758,7 +2015,18 @@ export function Editor({ source }: { source: EditorSource }) {
         {session && multi && (
           <PersonStrip persons={stripPersons} selection={selected} photoScope={scope} onSelect={choose} thumbTransform={isIdentity(g) ? undefined : chipTransform(g)} />
         )}
-        {spotMode ? (
+        {/* the brush bar takes the slider row's place, also when faceOff (the brush is never gated, push-brush spec §2.1) */}
+        {brushOn ? (
+          <BrushBar
+            kind={brushKind}
+            size={brushSize}
+            strokes={edit.photo.strokes.length}
+            busy={drawing || liquifyBusy}
+            onKind={setBrushKind}
+            onSize={setBrushSize}
+            onClear={clearAllStrokes}
+          />
+        ) : spotMode ? (
           <SpotControls
             size={spotSize}
             onSize={setSpotSize}

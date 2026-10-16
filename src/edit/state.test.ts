@@ -21,6 +21,7 @@ import {
   neutralPerson,
   PERSON_IDS,
   PHOTO_IDS,
+  rebaseStrokes,
   renamePersons,
   resetAll,
   sanitizeEditState,
@@ -458,6 +459,27 @@ describe('strokes in EditState (push-brush spec §3.4, §5)', () => {
     const e1 = clearStrokes(withStrokes(e0, [rec('a')]));
     expect(e1.photo.strokes).toEqual([]);
     expect(editKey(e1)).toBe(editKey(e0));
+  });
+
+  it('rebaseStrokes: an edit made from the state before a stroke committed keeps the stroke; a clear or 重置 still clears', () => {
+    const e0 = base();
+    const committed = withStrokes(e0, [rec('a')]);
+    const from = e0.photo.strokes;
+    const to = committed.photo.strokes;
+    // a second finger on a strip item while the first one draws: the item's edit was computed without the live stroke
+    const stale = { ...e0, photo: { ...e0.photo, bodyProtect: !e0.photo.bodyProtect } };
+    const kept = rebaseStrokes(stale, from, to);
+    expect(kept.photo.strokes).toBe(to);
+    expect(kept.photo.bodyProtect).toBe(stale.photo.bodyProtect);
+    // an edit made from the committed state, 全部清除 and 重置 (both make a new array) are left as they are
+    const fresh = { ...committed, photo: { ...committed.photo, bodyProtect: false } };
+    expect(rebaseStrokes(fresh, from, to)).toBe(fresh);
+    const cleared = clearStrokes(committed);
+    expect(rebaseStrokes(cleared, from, to)).toBe(cleared);
+    const reset = resetAll(committed);
+    expect(rebaseStrokes(reset, from, to)).toBe(reset);
+    // no commit happened (from === to): nothing to carry
+    expect(rebaseStrokes(stale, from, from)).toBe(stale);
   });
 
   it('editKey compares strokes by id: equal for the same ids with other points, different for other ids', () => {

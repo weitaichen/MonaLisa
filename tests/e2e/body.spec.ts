@@ -7,8 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Locator, Page } from '@playwright/test';
-import { PNG } from 'pngjs';
-import { debugState, dragSlider, expect, grab, GROUP_PEOPLE, importFixture, mad, regionDiff, SAMPLE_FACE, settled, shot, test, type Pixels, type Rect } from './fixtures';
+import { debugState, dragSlider, emptyPng, expect, grab, GROUP_PEOPLE, importFixture, mad, regionDiff, SAMPLE_FACE, settled, shot, test, type Pixels, type Rect } from './fixtures';
 
 const FULLBODY = resolve(import.meta.dirname, '../fixtures/fullbody.jpg');
 // (its fullbody_lines.json, the drawn lines' geometry, is metadata kept for the stage-2 per-line bend check: unused yet)
@@ -39,22 +38,6 @@ function maxDiff(a: Pixels, b: Pixels, r: Rect): number {
     }
   }
   return m;
-}
-
-/** A person-free photo: a soft gradient with a straight dark line (a floor edge for 增高 to move). */
-function emptyPng(width = 600, height = 900): Buffer {
-  const png = new PNG({ width, height });
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = (y * width + x) * 4;
-      const v = y > 640 && y < 660 ? 40 : 120 + Math.round((80 * (x + y)) / (width + height));
-      png.data[i] = v;
-      png.data[i + 1] = v;
-      png.data[i + 2] = v + 4;
-      png.data[i + 3] = 255;
-    }
-  }
-  return PNG.sync.write(png);
 }
 
 async function importPhoto(page: Page, file: string | { name: string; mimeType: string; buffer: Buffer }): Promise<void> {

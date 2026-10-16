@@ -4255,12 +4255,13 @@ PB §3.5 "Editor wiring", §2.5 (commit before anything that ends the editing co
 - Modify: `src/ui/screens/Editor.tsx` (LF; anchors at `d09e608`: `143` lastSel, `154-156` `edit` / `editRef`, `402-405` `frameOf`, `407-416` `planFor`, `444-453` undo, `455-461` setSel, `467-487` update, `554-642` session (its `deps.createStillSession(…)` options `602-607`), `771-812` flushHistory, `814-831` visibilitychange, `833-860` unmount, `970-975` snapshotField, `1075-1082` render effect, `1095-1100` encode, `1109-1178` encode / autosave effect, `1180-1186` hold, `1212-1247` save, `1262-1283` runWorking, `1290-1342` runTiled, `1355-1388` undo / redo, `1389-1402` 重置, `1485-1541` tapSpot, `1555-1564` onPersonTap, `1566-1570` zoomPan, `1588` scope, `1613` showBoxes, `1616-1624` faceNote / faceOff, `1633-1658` overlay chain, `1660-1797` JSX)
 - Modify: `tests/e2e/fixtures.ts` (LF), `tests/e2e/body.spec.ts` (LF; `emptyPng` moves out, `:44-58` at `d09e608`, and with it the file's only use of `PNG`, `:10`)
 - Create: `tests/e2e/liquify.spec.ts`
+- Modify (found while implementing): `src/edit/state.ts`, `src/edit/state.test.ts` (LF): `rebaseStrokes(e, from, to)`. `update`'s `commitLive()` commits the live stroke before the edit it was called with, but a strip item's edit (`BeautyPanel` computes it from the rendered `edit`, which never holds the live stroke; e.g. 背景保護 or a preset tapped with a second finger) would then replace the committed state and drop the stroke from it. `commitLive` records the list it replaced and the one it made (`committed`), and `update` hands an edit that still holds exactly the replaced list (by identity) the committed one; 全部清除 and 重置 make a new list, so they still clear. Pinned by a unit test and by a second e2e test in `liquify.spec.ts` (「a strip item tapped while a finger draws…」, seen failing with the rebase disabled). Also: `enterBrush` first waits for the hint pill to appear (it mounts in an effect after the bar, so the count-0 check could pass before it existed and the 「before」 grab then held the pill); `setBrushSize`'s 700 ms preview timer is kept in a ref and restarted by a later size tap; `move` ignores an empty point list.
 
 **Interfaces:**
 - Consumes: Task 2 `LiquifyModel`, `LiveStroke`, `makeStrokeId`; Task 3 `withStrokes`, `clearStrokes`, `editKey`, `EditorSource.frame`; Task 6 `StillSession.setLiquify / liquify`, `StillSessionOptions.liquify`, `exportImageData(frame, body?, liquify?)`; Task 8 `BrushHooks`, `useZoomPan(…, { onTap, brush })`; Task 9 `BrushQueue`, `brushAt`, `clientToO`; Task 10 `BrushBar`, `BrushOverlay`, `RingHandle`, `ringLook`, `BrushHint`, `BRUSH_HINT_MS`; Task 11 `showsBrush`, `rememberSel`. From step 1 (PS §3.3, §3.4 U1–U5): the `edit` state and `editRef` (`:154-156` at `d09e608`), `update(e, commit, user = true)`, `UndoStack<EditState>` with `{ clone: false, key: editKey }`, `setSel`, the `Selection` state, `buildFrame` → `session.render(frame)`, `OutputStamp.key = editKey(edit)`, the `FaceBoxes` / `PersonStrip` components with their photo-level flag (A11), the person-tap handler (`onPersonTap`, as step 4 names it). From step 4 (step-4 plan Task 17): `spotMode`, `tapSpot`, `setSel` storing `lastSel = rememberable(s)`, the `{spotMode ? <SpotControls …/> : <SliderRow …/>}` ternary in `.editor-panel`, and its `useZoomPan(…, { onTap: spotMode ? undefined : onPersonTap, spotTap: spotMode ? tapSpot : undefined })`. From step 3 (step-3 plan Tasks 14 and 17), as landed: `cropMode = sel.tab === 'crop'`; `useZoomPan(stageRef, layerRef, !!session && !cropMode, { onTap, spotTap, resetWhen: cropMode })`; no StillFrame ref: `frameOf(e: EditState, s = sessionRef.current)` builds the frame session `s` renders and exports for `e` (`buildFrame(…)`), and every export takes the `EditState`: `planFor(s, e, src, field)` → `planExport(…, s.bounds(frameOf(e, s), field), …)`; `encode(s, e, field, plan)` (renders `s.exportImageData(frameOf(e, s), field)`); `runWorking(s, e, field, plan, key, gen, t0)` and `runTiled(s, e, field, plan, key, gen, t0)` (which takes `const frame = frameOf(e, s)` and calls `deps.runTiledExport(engine, blob, plan, s.tileInput(frame, field), …)`, and on a failure falls back to `runWorking(sessionRef.current ?? s, e, field, working, key, gen, t0)`); `snapshotField()` and `settleField()`; the debounced encode effect that computes `plan` with `planFor`, guarded by `exportBusy` (a tiled export runs). (This task's DOM ref for the `.frame` element is called `frameEl`.)
 - Produces: `window.__meiyan.liquify` = `{ strokes, version, work, maxDisp, pending }` (written on mount, sync, commit, cancel and rebuild end); e2e helpers `emptyPng`, `LINE`, `linePng`, `liquifyState`, `brushDrag`, `touch`, `savedPixels` in `tests/e2e/fixtures.ts`.
 
-- [ ] **Step 1: Add the e2e helpers**
+- [x] **Step 1: Add the e2e helpers**
 
 In `tests/e2e/fixtures.ts` (LF; it already imports `PNG` and `Page`), append:
 
@@ -4351,7 +4352,7 @@ export async function savedPixels(page: Page): Promise<Pixels> {
 
 In `tests/e2e/body.spec.ts`, delete the local `emptyPng` (its doc comment and function, `:44-58` at `d09e608`), add `emptyPng` to the import from `'./fixtures'`, and delete `import { PNG } from 'pngjs';` (`:10`): `emptyPng` was its only user, and `noUnusedLocals` would fail `typecheck` on it.
 
-- [ ] **Step 2: Write the failing e2e test**
+- [x] **Step 2: Write the failing e2e test**
 
 Create `tests/e2e/liquify.spec.ts`:
 
@@ -4444,12 +4445,12 @@ test('美體 › 推臉筆: one finger moves the line under the brush, nothing f
 });
 ```
 
-- [ ] **Step 3: Run it to verify it fails**
+- [x] **Step 3: Run it to verify it fails**
 
 Run: `npm run build && npx playwright test tests/e2e/liquify.spec.ts`
 Expected: FAIL — `option(page, '推臉筆')` resolves (Task 11), but `radiogroup 筆刷模式` never appears (the editor still shows the slider row) and `liquifyState` is `null`.
 
-- [ ] **Step 4: The model per photo and its state**
+- [x] **Step 4: The model per photo and its state**
 
 In `src/ui/screens/Editor.tsx`:
 
@@ -4527,7 +4528,7 @@ let lastBrushSize: BrushSize = 'm';
     });
 ```
 
-- [ ] **Step 5: Commit and cancel a live stroke**
+- [x] **Step 5: Commit and cancel a live stroke**
 
 Below `publishLiquify`:
 
@@ -4581,7 +4582,7 @@ Below `publishLiquify`:
 
 At the very top of `update(e, commit, user = true)` (`:467-487` at `d09e608`, before its `dropFinished()`), add `commitLive();` (a no-op unless a stroke is live; `commitLive` clears `live.current` before it calls `update`, so there is no recursion). This covers 重置, 全部清除, presets and every other edit made with a second finger while the first one draws.
 
-- [ ] **Step 6: The brush hooks and brush mode**
+- [x] **Step 6: The brush hooks and brush mode**
 
 Place this block after `const hold = useHold(…)` (`:1180-1186` at `d09e608`), because `brushOn` reads `hold.held`, and before the `useZoomPan(…)` call (`:1566-1570`), which takes `brushHooks`; right after `hold` is a good place, since `showBoxes` (`:1613`) and `scope` (`:1588`) read `brushOn` too (Step 10). The hooks object is memoized on `brushOn` only, so it calls the latest `commitLive` / `cancelLive` through Step 5's `commitRef` / `cancelRef`:
 
@@ -4712,7 +4713,7 @@ Pass the hooks to zoomPan (`:1566-1570` at `d09e608`, which passes `onTap: spotM
 
 (`brushOn` and `spotMode` are never both true: they need the 美型／美體 and the 美膚 tab respectively. zoomPan reads `brush` before `spotTap` and `onTap`, Task 8.)
 
-- [ ] **Step 7: Sync before render; hold the render while a rebuild is pending**
+- [x] **Step 7: Sync before render; hold the render while a rebuild is pending**
 
 Directly **above** the render effect (`:1075-1082` at `d09e608`: `if (!session) return; … session.render(frameOf(edit, session)) …`, deps `[session, edit, protects, detect]`), add:
 
@@ -4751,7 +4752,7 @@ In the overlay chain (`:1633-1658` at `d09e608`), after the `exporting` branch a
     overlay = <Status spinner title="正在套用推臉筆…" />;
 ```
 
-- [ ] **Step 8: Exports always match the committed strokes**
+- [x] **Step 8: Exports always match the committed strokes**
 
 1. **flushHistory** (`:771-812` at `d09e608`): insert at its very top, before `const s = sessionRef.current;` and its guard `if (!s || fatalRef.current) return;`:
 
@@ -4781,12 +4782,12 @@ add `drawing` and `liquifyTick` to its dependency list (`[session, edit, lost, f
 
 next to `const field = snapshotField();` add `const liq = liquify.snapshot();` (the user's strokes at the tap, the `snapshotField` rule, `Editor.tsx:965-975` at `d09e608`), and give `runWorking` and `runTiled` a last parameter `liq: LiquifyField | null`: `runWorking` passes it to `encode(x, e, field, plan, liq)` (its `exportOnLatest(s, (x) => encode(x, e, field, plan), …)`); `runTiled` passes it to its working-size fallback, `runWorking(sessionRef.current ?? s, e, field, working, key, gen, t0, liq)`, and its tiles are wired in Task 13. `save` calls both with `liq`.
 
-- [ ] **Step 9: Undo, redo and unmount**
+- [x] **Step 9: Undo, redo and unmount**
 
 1. ↶ ↷ are disabled while a stroke is live (PB §2.5): the two `IconButton`s (`:1665-1666` at `d09e608`) get `disabled={!undo?.canUndo || drawing}` / `disabled={!undo?.canRedo || drawing}`, and `doUndo` / `doRedo` (`:1355-1388`) start with `if (drawing) return;`.
 2. In the unmount cleanup (`:833-860` at `d09e608`), after `flushHistory()` (which commits and snapshots), dispose the model inside `release` so its buffers go with the session: `const release = () => { s?.dispose(); liquify.dispose(); … }`. Also clear a live queue first: `live.current?.queue.clear(); live.current = null;` right after `flushHistory()`.
 
-- [ ] **Step 10: Render the brush UI**
+- [x] **Step 10: Render the brush UI**
 
 In the JSX (`:1660-1797` at `d09e608`):
 1. Add `ref={frameEl}` to the `.frame` div (`:1674`, the one whose class also takes ` crop-mode` in 裁切).
@@ -4836,7 +4837,7 @@ Only the outer `brushOn ?` level is new. The `SpotControls` and `SliderRow` elem
 
 6. Nothing to pass for the item's dot: `BeautyPanel` already gets step 1's `lens`, and the item reads `lens.edit.photo.strokes` (Task 11).
 
-- [ ] **Step 11: Run the test**
+- [x] **Step 11: Run the test**
 
 Run: `npm run typecheck && npm run build && npx playwright test tests/e2e/liquify.spec.ts`
 Expected: PASS; the log line reports a ratio near 0.7×.
@@ -4844,7 +4845,7 @@ Expected: PASS; the log line reports a ratio near 0.7×.
 Run: `npx playwright test tests/e2e/editor.spec.ts tests/e2e/body.spec.ts tests/e2e/parity.spec.ts`
 Expected: PASS (no stroke anywhere: unchanged behaviour).
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add src/ui/screens/Editor.tsx tests/e2e/fixtures.ts tests/e2e/body.spec.ts tests/e2e/liquify.spec.ts

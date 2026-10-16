@@ -398,3 +398,86 @@ export async function readHistory(page: Page): Promise<{ sourceSize: number; sou
       }),
   );
 }
+
+/** A person-free photo: a soft gradient with a straight dark row band at y 640–660 (moved from body.spec.ts). */
+export function emptyPng(width = 600, height = 900): Buffer {
+  const png = new PNG({ width, height });
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const v = y > 640 && y < 660 ? 40 : 120 + Math.round((80 * (x + y)) / (width + height));
+      png.data[i] = v;
+      png.data[i + 1] = v;
+      png.data[i + 2] = v + 4;
+      png.data[i + 3] = 255;
+    }
+  }
+  return PNG.sync.write(png);
+}
+
+/** A person-free photo with one dark vertical line at x = 298…302: the 推臉筆 tests measure where it moves. */
+export const LINE = { width: 600, height: 900, x: 300 } as const;
+export function linePng(): Buffer {
+  const { width, height } = LINE;
+  const png = new PNG({ width, height });
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const v = Math.abs(x - LINE.x) <= 2 ? 40 : 130 + Math.round((60 * (x + y)) / (width + height));
+      png.data[i] = v;
+      png.data[i + 1] = v;
+      png.data[i + 2] = v + 4;
+      png.data[i + 3] = 255;
+    }
+  }
+  return PNG.sync.write(png);
+}
+
+/** The editor's 推臉筆 debug state (window.__meiyan.liquify); null before the editor published one. */
+export async function liquifyState(page: Page): Promise<NonNullable<DebugState['liquify']> | null> {
+  return page.evaluate(() => window.__meiyan?.liquify ?? null);
+}
+
+/** A one-finger (mouse: the primary button draws) brush drag between two client points. */
+export async function brushDrag(page: Page, from: { x: number; y: number }, to: { x: number; y: number }, steps = 12): Promise<void> {
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  for (let i = 1; i <= steps; i++) await page.mouse.move(from.x + ((to.x - from.x) * i) / steps, from.y + ((to.y - from.y) * i) / steps);
+  await page.mouse.up();
+}
+
+export interface TouchFrame {
+  type: 'touchStart' | 'touchMove' | 'touchEnd';
+  /** every finger still down after this event (touchEnd lists the ones that remain) */
+  points: { x: number; y: number; id: number }[];
+  /** wait after dispatching, ms */
+  waitMs?: number;
+}
+
+/** Multi-touch through CDP (Chromium turns it into pointer events with pointerType 'touch'). */
+export async function touch(page: Page, frames: TouchFrame[]): Promise<void> {
+  const cdp = await page.context().newCDPSession(page);
+  for (const f of frames) {
+    await cdp.send('Input.dispatchTouchEvent', { type: f.type, touchPoints: f.points });
+    if (f.waitMs) await page.waitForTimeout(f.waitMs);
+  }
+  await cdp.detach();
+}
+
+/** The file 儲存 shares, decoded: Chromium has no share sheet, so it is the long-press fallback image (editor.spec.ts:98-107). */
+export async function savedPixels(page: Page): Promise<Pixels> {
+  await page.getByRole('button', { name: '儲存' }).click();
+  const dialog = page.getByRole('dialog', { name: '儲存照片' });
+  await expect(dialog).toBeVisible({ timeout: 30_000 });
+  const img = dialog.getByRole('img', { name: '編輯結果' });
+  await expect.poll(() => img.evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
+  const url = await img.evaluate((i: HTMLImageElement) => {
+    const c = document.createElement('canvas');
+    c.width = i.naturalWidth;
+    c.height = i.naturalHeight;
+    c.getContext('2d')!.drawImage(i, 0, 0);
+    return c.toDataURL('image/png');
+  });
+  await dialog.getByRole('button', { name: '關閉' }).click();
+  return decodeDataUrl(url);
+}

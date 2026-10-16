@@ -6,14 +6,18 @@
 // no camera, so it can run from the start screen too.
 // 輸出測試 (step-3 spec §6.4): decode, tiled render, encode, canvas-area and P2-with-geometry rows on synthetic frames
 // (or a picked photo's decode, 輸出測試（選照片）), added to 複製結果. It needs the engine, so it sits in the live panel.
+// 推臉筆 (push-brush spec §6.2): stamp, replay and field-upload rows (no camera, so on the start screen too) and, once
+// 開始 made the engine, a 2048 frame with strokes; added to 複製結果 with each row's budget (ok / OVER).
 import { debugState, reportError } from '../app/debug';
 import { type LiveLoop, type LiveStats, autoTierSession, resetAutoTierSession, startLiveLoop } from '../app/live';
 import { type StillSession, createStillSession } from '../app/still';
-import { legacyFrame } from '../edit/frame';
+import { buildFrame, legacyFrame } from '../edit/frame';
 import { splitLegacy } from '../edit/legacy';
+import { LiquifyModel } from '../edit/liquify';
 import { patchPlan, readPatch } from '../edit/patch';
 import { planSpot, spotRadius } from '../edit/spots';
-import { defaultPhoto, neutralPerson } from '../edit/state';
+import { defaultPhoto, naturalPerson, neutralPerson } from '../edit/state';
+import { strokesS30 } from '../edit/strokeFixtures';
 import { ENGINE_PATHS, loadEngineAssets, loadPoseModel } from '../engine/assets';
 import { createEngine, isWebGL2Supported } from '../engine/index';
 import { applyPreset, resetGroup } from '../engine/params';
@@ -42,6 +46,7 @@ import { primaryBody } from '../detect/cache';
 import { formatAdjustBench, runAdjustBench } from './adjustBench';
 import { runExportBench } from './exportBench';
 import { runFaceDetailRows } from './faceDetailBench';
+import { benchReplay, benchStamps, formatLiquifyReport, uploadMs, type LiquifyBenchRow } from './liquifyBench';
 import { mountMultiFace } from './multiFace';
 import { formatToneBench, runToneBench, spotGrid, type ToneBenchCase } from './toneBench';
 import {
@@ -127,6 +132,8 @@ const bodyRows: BodyBenchRow[] = [];
 let exportRows: ExportBenchRow[] = [];
 /** step-5 rows (face-detail spec §6.2 rows 1–3), one text line per measurement */
 const faceDetailRows: string[] = [];
+/** step-6 rows (push-brush spec §6.2): 推臉筆 stamp, replay, upload and frame */
+const liquifyRows: LiquifyBenchRow[] = [];
 
 // ───────────────────────── DOM ─────────────────────────
 
@@ -164,6 +171,7 @@ button.primary { background: #B8F02A; color: #000; border-color: #B8F02A; font-w
 .multi-note { color: #B8F02A; font: 12px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
 .adjust-note { color: #B8F02A; font: 12px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; text-align: left; }
 .tone-note { color: #B8F02A; font: 12px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; text-align: left; }
+.liquify-note { margin: 0; color: #B8F02A; font: 12px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; text-align: left; }
 table { border-collapse: collapse; width: 100%; font: 11px/1.3 ui-monospace, Menlo, monospace; margin-top: 6px; }
 td, th { padding: 1px 4px; text-align: right; color: #ddd; } th { color: #8E8E93; font-weight: 400; }
 textarea { width: 100%; height: 30vh; background: #1C1C1E; color: #fff; border: 1px solid #4A4A4C; border-radius: 8px;
@@ -203,6 +211,10 @@ const gateBodyBtn = button('美體偵測', () => bodyTest());
 const gateAdjustBtn = button('調節效能', () => void runAdjust());
 // own class, not .note: tests/harness/t8/run-bench.mjs and bench.spec.ts need '.gate .note' to be gateProgress alone
 const adjustOut = el('div', { className: 'adjust-note', id: 'adjust-bench' });
+const gateLiquifyBtn = button('推臉筆', () => void liquifyBench());
+const liquifyBtn = button('推臉筆', () => void liquifyBench());
+// own class, not .note: bench.spec.ts and tests/harness/t8/run-bench*.mjs need '.gate .note' and '.panel .note' to stay unique
+const liquifyOut = el('pre', { className: 'liquify-note' });
 const gate = el(
   'div',
   { className: 'gate' },
@@ -212,6 +224,7 @@ const gate = el(
   gateProgress,
   el('p', { textContent: '美體偵測：選一張全身照，量測姿態模型的載入、偵測時間與遮罩（不需相機）。' }),
   gateBodyBtn,
+  gateLiquifyBtn,
   el('p', { textContent: '調節效能：在 1080×1920 量測調節與質感的 GPU 時間、調節程式的編譯時間，並檢查顆粒雜湊與 CPU 版本一致（不需相機）。' }),
   gateAdjustBtn,
   adjustOut,
@@ -284,7 +297,7 @@ const panel = el(
   { className: 'panel' },
   el('div', { className: 'row' }, el('span', { textContent: '畫質' }), ...tierBtns),
   el('div', { className: 'row' }, el('span', { textContent: '參數' }), ...modeBtns),
-  el('div', { className: 'row' }, delegateBtn, landmarksBtn, compareBtn, captureBtn, stillBtn, faceDetailBtn, bodyBtn, toneBtn, exportBtn, exportPhotoBtn, resumeBtn),
+  el('div', { className: 'row' }, delegateBtn, landmarksBtn, compareBtn, captureBtn, stillBtn, faceDetailBtn, bodyBtn, liquifyBtn, toneBtn, exportBtn, exportPhotoBtn, resumeBtn),
   el('div', { className: 'row' }, copyBtn, note),
   table,
   copyArea,
@@ -682,6 +695,63 @@ async function runBodyBench(file: File): Promise<void> {
   }
 }
 
+/** A 1536 × 2048 frame through the whole pipeline with the S30 strokes: the readback makes it a complete GPU frame. */
+function liquifyFrameMs(eng: Engine, m: LiquifyModel): number {
+  const src = el('canvas', { width: 1536, height: 2048 });
+  const ctx = src.getContext('2d');
+  if (ctx) {
+    const grad = ctx.createLinearGradient(0, 0, 1536, 2048);
+    grad.addColorStop(0, '#806050');
+    grad.addColorStop(1, '#d0b0a0');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 1536, 2048);
+  }
+  const edit = { v: 2 as const, photo: { ...defaultPhoto(), strokes: m.records }, persons: { p0: naturalPerson() }, template: neutralPerson(), primaryInit: null };
+  // no faces, no obstacles, no protects: the strokes-only frame (step 1's buildFrame with its empty inputs; p0 is the primary)
+  const input = { ...buildFrame(edit, [], [], new Map(), 'p0'), source: src, width: 1536, height: 2048, liquify: m.field };
+  const times: number[] = [];
+  for (let i = 0; i < 6; i++) {
+    const t0 = performance.now();
+    eng.renderToImageData(input, { mirror: false });
+    if (i > 0) times.push(performance.now() - t0); // the first one compiles and uploads
+  }
+  times.sort((a, b) => a - b);
+  return times[2];
+}
+
+async function liquifyBench(): Promise<void> {
+  if (busy) return;
+  busy = true;
+  gateLiquifyBtn.disabled = liquifyBtn.disabled = true;
+  (gate.hidden ? panel : gate).append(liquifyOut);
+  try {
+    liquifyRows.length = 0;
+    const frame = { width: 1536, height: 2048 };
+    liquifyOut.textContent = '推臉筆：量測筆刷…';
+    await nextPaint();
+    liquifyRows.push(...benchStamps(frame));
+    liquifyOut.textContent = '推臉筆：量測重播…';
+    await nextPaint();
+    liquifyRows.push(...benchReplay(frame));
+    const m = new LiquifyModel(frame, { syncWork: Infinity });
+    m.sync(strokesS30(frame));
+    const gl = el('canvas').getContext('webgl2');
+    if (gl && m.field) liquifyRows.push({ name: 'liquify.upload', value: uploadMs(gl, m.field), unit: 'ms', budget: 2 });
+    // free the throwaway context now: past the browser's context limit the oldest one (the engine's) would be lost
+    gl?.getExtension('WEBGL_lose_context')?.loseContext();
+    // the frame row needs the engine: run 開始 first
+    if (engine) liquifyRows.push({ name: 'liquify.frame', value: liquifyFrameMs(engine, m), unit: 'ms', budget: 33 });
+    m.dispose();
+    liquifyOut.textContent = formatLiquifyReport(liquifyRows).trim();
+  } catch (err) {
+    showError('liquify', err);
+    liquifyOut.textContent = `失敗：${errText(err)}`;
+  } finally {
+    busy = false;
+    gateLiquifyBtn.disabled = liquifyBtn.disabled = false;
+  }
+}
+
 /** Compact on-screen table; the full TSV (load, mask coverage, heap, errors) goes to 複製結果. */
 function renderBodyTable(): void {
   bodyTable.replaceChildren(
@@ -916,7 +986,8 @@ function copyResults(): void {
     multiText +
     exportText +
     (toneReport ? `\n\n膚質\n${toneReport}` : '') +
-    (faceDetailRows.length ? `\n\n[step 5]\n${faceDetailRows.join('\n')}` : '');
+    (faceDetailRows.length ? `\n\n[step 5]\n${faceDetailRows.join('\n')}` : '') +
+    formatLiquifyReport(liquifyRows);
   // the body section may be on the start screen, where the panel (and its textarea) is hidden
   if (panel.hidden) bodySection.append(copyArea);
   else if (copyArea.parentElement !== panel) panel.append(copyArea);

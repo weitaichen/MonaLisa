@@ -5463,7 +5463,7 @@ PB §6.2: `liquify.stamp` (ns per texel-stamp for push, bisecting push and resto
 - Consumes: Task 2 `LiquifyModel`, `liquifyGrid`, `strokeWork`, `straightStroke`, `strokesS30`, `strokesCap`; Task 1 `GUARD_STEPS`; step 1's `buildFrame(edit, faces, obstacles, protects, primary, warpScales?)` (`src/edit/frame.ts:17-25` at `d09e608`, PS §3.1; `primary` is required) and `defaultPhoto` / `naturalPerson` / `neutralPerson`; `Engine.renderToImageData`; main.ts's `el`, `button`, `nextPaint`, `busy`, `showError`, `errText`, `engine`, `gate`, `panel`.
 - Produces: `interface LiquifyBenchRow { name: string; value: number; unit: 'ns/texel-stamp' | 'ms' | '%'; budget: number | null }`; `benchStamps(frame, now?)`, `benchReplay(frame, now?, withCap = true)`, `uploadMs(gl, field, now?)`, `formatLiquifyReport(rows)`; the bench page's 「推臉筆」 button.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/bench/liquifyBench.test.ts`:
 
@@ -5513,12 +5513,12 @@ describe('liquify bench rows (push-brush spec §6.2)', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run src/bench/liquifyBench.test.ts`
 Expected: FAIL — `Failed to load url ./liquifyBench`.
 
-- [ ] **Step 3: Write the rows**
+- [x] **Step 3: Write the rows**
 
 Create `src/bench/liquifyBench.ts`:
 
@@ -5629,12 +5629,12 @@ export function formatLiquifyReport(rows: readonly LiquifyBenchRow[]): string {
 }
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `npx vitest run src/bench/liquifyBench.test.ts`
 Expected: PASS, 2 tests.
 
-- [ ] **Step 5: Add the 推臉筆 button to the bench page**
+- [x] **Step 5: Add the 推臉筆 button to the bench page**
 
 In `src/bench/main.ts` (CRLF):
 
@@ -5719,12 +5719,12 @@ async function liquifyBench(): Promise<void> {
 (`buildFrame`'s fourth parameter is a `ReadonlyMap<string, FaceProtect>`, so `new Map()` fits; its fifth, `primary`, is required.)
 5. In `copyResults` (`:911-930` at `d09e608`), whose text steps 1–5 grew to `formatReport(reportMeta(), samples, bodyRows) + multiText + exportText + (toneReport ? … : '') + (faceDetailRows.length ? … : '')`, append the rows at the end: `… + formatLiquifyReport(liquifyRows)`.
 
-- [ ] **Step 6: Run the checks**
+- [x] **Step 6: Run the checks**
 
 Run: `npm run typecheck && npx vitest run src/bench && npm run build && npx playwright test tests/e2e/bench.spec.ts`
 Expected: no errors; PASS (the bench page still starts; the new button is not exercised by the e2e).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/bench/liquifyBench.ts src/bench/liquifyBench.test.ts src/bench/main.ts

@@ -5923,7 +5923,7 @@ The gate of C §1.2 for step 6, which is also the gate of the release: everythin
 - Consumes: everything above; step 1's `tests/e2e/parity.spec.ts` and goldens `tests/fixtures/parity-v03/*.png` (C §8.3).
 - Produces: a green, committed `feat/meiyan-pwa` at version 0.4.0.
 
-- [ ] **Step 1: Static checks and unit tests**
+- [x] **Step 1: Static checks and unit tests**
 
 Run: `npm run typecheck`
 Expected: exit 0, no output.
@@ -5937,12 +5937,12 @@ Expected: exit 0; `dist/version.json` contains `{"version":"0.4.0"}`:
 Run: `cat dist/version.json`
 Expected: `{"version":"0.4.0"}`
 
-- [ ] **Step 2: The whole e2e suite**
+- [x] **Step 2: The whole e2e suite**
 
 Run: `npm run test:e2e` (in the background: the suite takes longer than one 10-minute tool call)
 Expected: every project and spec passes, among them `liquify.spec.ts` (13), `reshape.spec.ts` (with the liquify pin), `export.spec.ts` (strokes case and release gate), `parity.spec.ts`, `camera.spec.ts`, `camera-group.spec.ts`, `update.spec.ts`.
 
-- [ ] **Step 3: v0.3 equivalence (C §1.1, §8.4)**
+- [x] **Step 3: v0.3 equivalence (C §1.1, §8.4)**
 
 1. Parity goldens with no strokes:
 
@@ -5964,7 +5964,7 @@ Expected: additions only, except `reshapeCpu.test.ts` (the pinned hash), `body.s
 Run: `grep -n "推臉筆\|BrushBar\|liquify" src/ui/screens/Camera.tsx src/app/live.ts src/app/liveCore.ts`
 Expected: no output.
 
-- [ ] **Step 4: Clean-clone gate (C §1.3 item 4; local only)**
+- [x] **Step 4: Clean-clone gate (C §1.3 item 4; local only)**
 
 Stop every dev / preview server of the working copy first (Playwright would otherwise reuse them and test the wrong build); `CI=1` makes Playwright start its own servers and fail loudly if a port is taken.
 
@@ -5977,9 +5977,11 @@ cd "$GATE" && npm ci && npm run build && npm test && CI=1 npm run test:e2e
 
 Expected: `npm ci` installs from the lockfile without changing it, then build, unit tests and the whole e2e suite pass in the fresh clone (run the command in the background and wait for it; it takes well over 10 minutes). The clone lives on the **long** path (`C:/Users/jeff_chen/...`), never under `JEFF_C~1` (project memory: the short 8.3 path breaks the build). Remove it afterwards with `rm -rf /c/Users/jeff_chen/AppData/Local/Temp/meiyan-gate-step6` (a new shell call does not know `$GATE`).
 
-- [ ] **Step 5: Review and hand-off (no push)**
+- [x] **Step 5: Review and hand-off (no push)**
 
 Review the whole v0.4 diff (`git diff 892ea61..HEAD`, C §1.3 item 3) with the `advance-codex-review` skill, which is what the user asked for once every feature is written (C §12 「決定」: 「全部功能寫完後，跑advance codex review」); it runs the review rounds and fixes, and so covers C §1.3's `/code-review`. Fix real findings in the owning task's files, each fix committed locally with the attribution line; if any fix landed, re-run Steps 1–4 (the clean clone included) on the final commit. Then stop: report the gate results and the commit range to the user, and ask before any `git push`, merge to `main` or deploy (C §1.3 item 5; after a deploy the user's checklist polls the Vercel status and `https://mona-lisa-jeff-s-projects7.vercel.app/version.json` for `0.4.0`).
 
 Run: `git status --short && git log --oneline -20`
 Expected: a clean tree; the step-6 commits and `release: Mona Misa 美顏 0.4.0` on top of steps 1–5; nothing pushed (`git status` shows the branch ahead of its upstream, if it has one).
+
+**Landed (gate results and deviations):** (1) **Review** (Step 5, start `fe71a66`): round 1, Codex (`gpt-6-astra`, `--base 892ea61`) gave one [P2]: a working-size 儲存 still in 準備中 (its panel stays usable) kept its file for 「分享」 after an edit, so the second tap shared the pre-edit photo; fixed in `f5e5a37` (`deliverAction` in `src/ui/exportFlow.ts`, pinned by `crop.spec.ts` 「an edit while a working-size 儲存 waits (準備中) drops its file」). Round 2: Claude's own review found that `f5e5a37` keyed the drop on the whole share-cache test, so the 瘦臉 limit landing (or a LUT retry, 美體 measures) during the wait, which is no edit, also dropped the file; fixed in `2ec5f9f` (delivery compares the edit key only; the share cache keeps its stricter test), pinned by `faceProtect.spec.ts` 「the limit landing while a slow 儲存 waits is no edit」. Codex could not run in round 2 (`helper_unknown_error: setup refresh had errors`, its output says the verdict is a placeholder), so per the skill the loop stopped there: whether to run more rounds is the user's call. Left as P3: a detection rebase (U2, "not an edit") landing during 準備中 also changes `editKey`, so it now drops the file too (one more 儲存 tap, never a photo that differs from the screen). The skill's "no commits" rule yields to this plan's per-fix local commits (`git diff fe71a66..HEAD` shows the review's whole output). The fixes are step-3 export-flow code; the commits carry this task's number, as the workflow names tasks of this plan. (2) **Gate on `2ec5f9f`** (Steps 1–4 re-run after the fixes): `npm run typecheck` exit 0; `npm test` 113 files, 1973 passed; `npm run build` exit 0, `dist/version.json` `{"version":"0.4.0"}`; full e2e 121 passed, 1 failed, 2 skipped (`@sheet`, `@bench`): the failure was `shape-makeup.spec.ts:406` 「美妝 and 左右分開 in the camera」, a jitter-relative bound on live camera frames (eye-band change 1.86 as in every run, jitter 1.34 against 0.00 elsewhere); it passed twice on its own and in the clean clone. `parity.spec.ts` max 0/255 on all five goldens; `reshapeCpu.test.ts` 45/45; `reshape.spec.ts` 4/4; the camera grep printed nothing; the test diff since `STEP6_BASE` (`108f9ca`) changes only the expected lines (hash pin, `emptyPng` and its `PNG` import, Task 11's `BRUSH_KEY` strip assertions and `editor.spec.ts`'s no-face loop, Task 16's `lifted` list gaining `'everything'`, import lines gaining names), the fixes only an import line. Clean clone (`C:/Users/jeff_chen/AppData/Local/Temp/meiyan-gate-step6`): `npm ci` left the lockfile unchanged, build 0.4.0, typecheck 0, unit 1972 passed and 1 skipped (`tests/harness/t5/assets.test.mjs`'s y4m check, which waits for the gitignored `face.y4m` that the e2e global setup generates), e2e 122 passed, 2 skipped; the clone was removed. (Before the fixes, `fe71a66` gave the same results: unit 1972, e2e 120 passed / 2 skipped in the working copy and in a clean clone.) (3) **Port 4173** was held by a `vite preview` of the working copy started before this task, and stopping it was not permitted here. The working-copy runs reused it (it serves `dist/` from disk; `vite.config.ts` and `vercel.json` are unchanged since `STEP6_BASE`). In the clone, `CI=1` would have failed on the taken port, so the clone ran `CI=1 npx playwright test -c playwright.gate.config.ts`, an untracked wrapper (in the clone only, never committed) that spreads the clone's own `playwright.config.ts` and moves only the app preview to 4174, after `npm run build` as its own step (what `npm run test:e2e`'s `pretest:e2e` runs). (4) Nothing was pushed, merged or deployed: C §1.3 item 5 waits for the user.

@@ -272,6 +272,11 @@ export interface Pipeline {
   readonly adjustFailed: boolean;
   /** every FBO to 1 × 1 (after a tiled export, S §4.4); the next frame re-allocates at its own size */
   releaseBuffers(): void;
+  /**
+   * delete the 美體 and 推臉筆 field textures and drop the upload keys, which hold the fields themselves (a 1.5 MB
+   * 推臉筆 buffer); the next frame with a field uploads it again
+   */
+  releaseFields(): void;
   /** step 4 (tiles): the cached tone field is the one for `key` */
   toneFieldReady(key: string): boolean;
   /**
@@ -721,6 +726,13 @@ export function createPipeline(gl: GL): Pipeline {
         const f = fbs[k];
         if (f) resizeFramebuffer(gl, f, 1, 1);
       }
+    },
+
+    releaseFields() {
+      deleteTexture(gl, bodyTex);
+      deleteTexture(gl, liqTex);
+      bodyTex = liqTex = null;
+      bodyKey = liqKey = null;
     },
 
     toneFieldReady(key) {

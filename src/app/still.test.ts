@@ -209,6 +209,18 @@ describe('createStillSession', () => {
     expect(bmp.close).toHaveBeenCalledTimes(1);
   });
 
+  it('dispose releases the engine’s 美體 / 推臉筆 field textures once (nothing else draws with this photo’s fields)', () => {
+    const engine = fakeEngine();
+    const s = createStillSession(engine, fakeTracker(), bitmap());
+    s.setLiquify({ width: 2, height: 2, data: new Float32Array(8), version: 1 });
+    s.render(fr(s, natural));
+    expect(engine.releaseFields).not.toHaveBeenCalled();
+    s.dispose();
+    expect(engine.releaseFields).toHaveBeenCalledTimes(1);
+    s.dispose();
+    expect(engine.releaseFields).toHaveBeenCalledTimes(1);
+  });
+
   it('ownsBitmap:false leaves the bitmap open on dispose (the caller rebinds it to a new engine)', () => {
     const bmp = bitmap();
     const s = createStillSession(fakeEngine(), fakeTracker(), bmp, { ownsBitmap: false });

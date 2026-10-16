@@ -649,6 +649,11 @@ export interface Engine {
   renderTile(input: RenderInput, read: PxRect): ImageData;
   /** shrink every pipeline buffer and the source texture to 1 × 1 (after a tiled export, before encoding) */
   releaseBuffers(): void;
+  /**
+   * delete the 美體 / 推臉筆 field textures and drop the pipeline's references to those fields (a still session's
+   * dispose: the photo's fields go with it; the next frame with a field uploads it again)
+   */
+  releaseFields(): void;
   /** true after webglcontextlost until recreated */
   readonly lost: boolean;
   dispose(): void;

@@ -179,3 +179,14 @@ test('two faces: per-face skin strengths and makeup; the neutral face is untouch
   expect(r.lipOverlapSolo).toBeGreaterThan(3);
   expect(Math.abs(r.lipOverlap - r.lipOverlapSolo)).toBeLessThan(0.5);
 });
+
+test('releaseFields: the 美體 and 推臉筆 textures go with the still session; the next frame uploads them again', async ({ page }) => {
+  await page.goto(`${DEV_URL}/tests/e2e/pages/engine.html`);
+  await page.waitForFunction(() => typeof window.runEngineReleaseFields === 'function');
+  const r = await page.evaluate(() => window.runEngineReleaseFields!());
+  console.log(`RG16F uploads ${r.uploadsBefore} for two frames, ${r.freed} textures freed, ${r.uploadsAfter} uploads after`);
+  expect(r.uploadsBefore, 'one upload per field, the second frame reuses them').toBe(2);
+  expect(r.freed).toBe(2);
+  expect(r.uploadsAfter).toBe(2);
+  expect(r.err).toBe(0);
+});

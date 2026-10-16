@@ -142,6 +142,7 @@ export interface FakeEngine extends Engine {
   renderOriginal: ReturnType<typeof vi.fn<Engine['renderOriginal']>>;
   renderTile: ReturnType<typeof vi.fn<Engine['renderTile']>>;
   releaseBuffers: ReturnType<typeof vi.fn<Engine['releaseBuffers']>>;
+  releaseFields: ReturnType<typeof vi.fn<Engine['releaseFields']>>;
   /** last RenderInput passed to render() */
   lastInput(): RenderInput | undefined;
 }
@@ -205,6 +206,7 @@ export function fakeEngine(clock?: { work(ms: number): void }, tier: Tier = 'M')
         ({ width: read.w, height: read.h, data: new Uint8ClampedArray(read.w * read.h * 4) }) as unknown as ImageData,
     ),
     releaseBuffers: vi.fn(),
+    releaseFields: vi.fn(),
     dispose: vi.fn(),
     lastInput(): RenderInput | undefined {
       const calls = e.render.mock.calls;

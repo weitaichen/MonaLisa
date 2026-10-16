@@ -416,6 +416,15 @@ export function createStillSession(
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
       engine.canvas.removeEventListener('webglcontextrestored', onRestored);
+      // the pipeline's 美體 / 推臉筆 textures and its references to this photo's fields (the 推臉筆 buffer is 1.5 MB):
+      // nothing draws with them after the session; a session that follows on this engine uploads its own again
+      try {
+        engine.releaseFields();
+      } catch (e) {
+        reportError('releaseFields', e);
+      }
+      liquify = null;
+      body = null;
       if (!ownsBitmap) return;
       try {
         bitmap.close();

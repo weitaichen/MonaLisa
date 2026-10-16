@@ -164,6 +164,7 @@ class FakeEngine implements Engine {
     return ctx.getImageData(0, 0, read.w, read.h);
   }
   releaseBuffers() {}
+  releaseFields() {}
   dispose() {}
 }
 

@@ -546,6 +546,12 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       if (srcTex) shrinkTexture(gl, srcTex);
     },
 
+    releaseFields() {
+      // (on a lost context the pipeline already dropped them)
+      if (lost || disposed || !pipeline) return;
+      pipeline.releaseFields();
+    },
+
     dispose() {
       if (disposed) return;
       disposed = true;

@@ -5,7 +5,7 @@ import landmarks from '../../fixtures/landmarks_sample_face.json';
 import { prepareFaces } from '../../../src/detect/faces';
 import { legacyFrame } from '../../../src/edit/frame';
 import { splitLegacy } from '../../../src/edit/legacy';
-import { neutralPerson } from '../../../src/edit/state';
+import { defaultPhoto, neutralPerson } from '../../../src/edit/state';
 import { createEngine } from '../../../src/engine/index';
 import { applyPreset, setFilter, setParam, setShade } from '../../../src/engine/params';
 import { adapt } from '../../../src/tracking/adapter111';
@@ -27,6 +27,7 @@ export interface EngineCheck {
 declare global {
   interface Window {
     runEngineCheck?: () => Promise<EngineCheck>;
+    runEngineReleaseFields?: () => Promise<{ uploadsBefore: number; freed: number; uploadsAfter: number; err: number }>;
     runEngineMulti?: () => Promise<{
       maskA: number;
       maskB: number;
@@ -48,6 +49,45 @@ function toPng(img: ImageData): string {
   ctx.putImageData(img, 0, 0);
   return c.toDataURL('image/png');
 }
+
+/**
+ * engine.releaseFields (the still session's dispose): the 美體 and 推臉筆 field textures (RG16F) are deleted with the
+ * pipeline's references to the fields, and the next frame with a field uploads it again. Counts RG16F texImage2D
+ * uploads and deleteTexture calls on the engine's context.
+ */
+window.runEngineReleaseFields = async () => {
+  const canvas = document.createElement('canvas');
+  const engine = createEngine(canvas, { mirror: false });
+  await engine.ready;
+  const gl = canvas.getContext('webgl2')!;
+  let uploads = 0;
+  let deleted = 0;
+  const texImage2D = gl.texImage2D.bind(gl) as (...a: unknown[]) => void;
+  (gl as unknown as { texImage2D: (...a: unknown[]) => void }).texImage2D = (...a: unknown[]) => {
+    if (a[2] === gl.RG16F) uploads++;
+    texImage2D(...a);
+  };
+  const deleteTexture = gl.deleteTexture.bind(gl);
+  gl.deleteTexture = (t) => {
+    deleted++;
+    deleteTexture(t);
+  };
+  const source = await createImageBitmap(new ImageData(64, 48));
+  const field = (version: number) => ({ width: 32, height: 24, data: new Float32Array(32 * 24 * 2).fill(0.002), version });
+  const input: RenderInput = { source, width: 64, height: 48, faces: [], globalSkin: null, photo: defaultPhoto(), body: field(1), liquify: field(1) };
+  engine.render(input, { still: true });
+  engine.render(input, { still: true });
+  const uploadsBefore = uploads;
+  const d0 = deleted;
+  engine.releaseFields();
+  const freed = deleted - d0;
+  engine.render(input, { still: true });
+  const uploadsAfter = uploads - uploadsBefore;
+  const err = gl.getError();
+  engine.dispose();
+  source.close();
+  return { uploadsBefore, freed, uploadsAfter, err };
+};
 
 window.runEngineCheck = async () => {
   const blob = await (await fetch('/tests/fixtures/sample_face.png')).blob();

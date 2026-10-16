@@ -42,6 +42,7 @@ vi.mock('./pipeline', () => ({
     procMakeupFailed: vi.fn(() => false),
     drawSource: vi.fn(),
     releaseBuffers: vi.fn(),
+    releaseFields: vi.fn(),
     dispose: vi.fn(),
   })),
 }));
@@ -400,6 +401,7 @@ describe('createEngine: geometry, windows and tiles (step 3)', () => {
   const pipe = () => vi.mocked(createPipeline).mock.results.at(-1)!.value as {
     run: ReturnType<typeof vi.fn>;
     releaseBuffers: ReturnType<typeof vi.fn>;
+    releaseFields: ReturnType<typeof vi.fn>;
     drawSource: ReturnType<typeof vi.fn>;
   };
   const job = (): FrameJob => pipe().run.mock.calls.at(-1)![0] as FrameJob;
@@ -480,6 +482,17 @@ describe('createEngine: geometry, windows and tiles (step 3)', () => {
     await engine.ready;
     engine.releaseBuffers();
     expect(pipe().releaseBuffers).toHaveBeenCalledTimes(1);
+  });
+
+  it('releaseFields drops the pipeline’s field textures; a no-op once disposed', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    engine.releaseFields();
+    expect(pipe().releaseFields).toHaveBeenCalledTimes(1);
+    engine.dispose();
+    engine.releaseFields();
+    expect(pipe().releaseFields).toHaveBeenCalledTimes(1);
   });
 
   it('renderOriginal draws through the geometry (按住對比 keeps the crop)', async () => {

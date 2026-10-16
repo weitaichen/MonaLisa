@@ -248,6 +248,8 @@ test('a larger picked photo is kept in 最近編輯 with its size; a reopen stil
   const rows = await readHistory(page);
   expect(rows).toHaveLength(1);
   expect(rows[0].sourceSize).toBe(jpeg.length);
+  // in its own record, so the entry's autosave and thumbnail patches never write the file again
+  expect(rows[0].sourceInline).toBe(false);
   expect([rows[0].sourceWidth, rows[0].sourceHeight]).toEqual([3000, 4000]);
 });
 

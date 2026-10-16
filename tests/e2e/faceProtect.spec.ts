@@ -332,7 +332,8 @@ async function entries(page: Page): Promise<EntryInfo[]> {
         all.onsuccess = () => {
           db.close();
           resolve(
-            (all.result as { faceProtect?: boolean; faceMask?: { width: number; height: number } }[]).map((e) => ({
+            // entries only (a kept source file is a record of its own, without updatedAt)
+            (all.result as { updatedAt?: number; faceProtect?: boolean; faceMask?: { width: number; height: number } }[]).filter((e) => typeof e.updatedAt === 'number').map((e) => ({
               faceProtect: e.faceProtect === true,
               ...(e.faceMask ? { mask: [e.faceMask.width, e.faceMask.height] as [number, number] } : {}),
             })),

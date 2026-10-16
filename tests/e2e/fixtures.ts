@@ -238,13 +238,14 @@ export async function historyStamps(page: Page): Promise<Record<string, number>>
       q.onsuccess = () => res(q.result);
       q.onerror = () => rej(q.error);
     });
-    const all = await new Promise<{ id: string; updatedAt: number }[]>((res, rej) => {
+    const all = await new Promise<{ id: string; updatedAt?: number }[]>((res, rej) => {
       const q = db.transaction('edits').objectStore('edits').getAll();
-      q.onsuccess = () => res(q.result as { id: string; updatedAt: number }[]);
+      q.onsuccess = () => res(q.result as { id: string; updatedAt?: number }[]);
       q.onerror = () => rej(q.error);
     });
     db.close();
-    return Object.fromEntries(all.map((e) => [e.id, e.updatedAt]));
+    // entries only: a kept source file is a record of its own without updatedAt (store/history.ts SOURCE_PREFIX)
+    return Object.fromEntries(all.filter((e) => typeof e.updatedAt === 'number').map((e) => [e.id, e.updatedAt!]));
   });
 }
 
@@ -375,8 +376,11 @@ export async function closeFallback(page: Page): Promise<void> {
   await page.getByRole('dialog', { name: '儲存照片' }).getByRole('button', { name: '關閉' }).click();
 }
 
-/** the raw 最近編輯 records (IndexedDB meiyan / edits): what the source fields hold */
-export async function readHistory(page: Page): Promise<{ sourceSize: number; sourceWidth?: number; sourceHeight?: number }[]> {
+/**
+ * the raw 最近編輯 entries (IndexedDB meiyan / edits): what the source fields hold. The file is in its own record,
+ * `source:<id>` without updatedAt (store/history.ts SOURCE_PREFIX); `sourceInline` = a copy in the entry record itself.
+ */
+export async function readHistory(page: Page): Promise<{ sourceSize: number; sourceInline: boolean; sourceWidth?: number; sourceHeight?: number }[]> {
   return page.evaluate(
     () =>
       new Promise((resolve, reject) => {
@@ -385,12 +389,18 @@ export async function readHistory(page: Page): Promise<{ sourceSize: number; sou
         open.onsuccess = () => {
           const req = open.result.transaction('edits', 'readonly').objectStore('edits').getAll();
           req.onsuccess = () => {
+            type Row = { id: string; updatedAt?: number; source?: Blob; sourceWidth?: number; sourceHeight?: number };
+            const rows = req.result as Row[];
+            const files = new Map(rows.filter((r) => typeof r.updatedAt !== 'number').map((r) => [r.id, r.source]));
             resolve(
-              (req.result as { source?: Blob; sourceWidth?: number; sourceHeight?: number }[]).map((r) => ({
-                sourceSize: r.source?.size ?? 0,
-                sourceWidth: r.sourceWidth,
-                sourceHeight: r.sourceHeight,
-              })),
+              rows
+                .filter((r) => typeof r.updatedAt === 'number')
+                .map((r) => ({
+                  sourceSize: (r.source ?? files.get(`source:${r.id}`))?.size ?? 0,
+                  sourceInline: r.source !== undefined,
+                  sourceWidth: r.sourceWidth,
+                  sourceHeight: r.sourceHeight,
+                })),
             );
             open.result.close();
           };

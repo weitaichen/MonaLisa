@@ -24,7 +24,9 @@ import {
   normalizeBody,
   normalizeEntry,
   OPEN_TIMEOUT_MS,
+  sourceKey,
   STORE_NAME,
+  UPDATED_INDEX,
   updateEntry,
   type NewHistoryEntry,
 } from './history';
@@ -834,9 +836,9 @@ describe('source file (HistoryEntry.source, step 3)', () => {
       return put.call(this, value, key);
     });
     const id = await addEntry({ ...entry('q'), source, sourceWidth: 4032, sourceHeight: 3024 });
-    expect(calls).toHaveLength(2);
-    expect(calls.map((c) => c.id)).toEqual([id, id]);
-    expect(calls[1].source).toBeUndefined();
+    // the entry, its source record (refused), then the entry once more without a source record
+    expect(calls.map((c) => c.id)).toEqual([id, sourceKey(id), id]);
+    expect(calls.filter((c) => c.source)).toHaveLength(1);
     const got = await getEntry(id);
     expect(got).toBeDefined();
     expect(got?.source).toBeUndefined();
@@ -863,6 +865,118 @@ describe('source file (HistoryEntry.source, step 3)', () => {
     for (const other of [new DOMException('lost', 'UnknownError'), new Error('QuotaExceededError'), null, undefined, 'QuotaExceededError', 22]) {
       expect(isQuotaError(other)).toBe(false);
     }
+  });
+});
+
+describe('the source file in a record of its own (no schema bump; v0.3 never sees it)', () => {
+  const source = new Blob([new Uint8Array(64)], { type: 'image/jpeg' });
+
+  /** every value put in the store while `run` runs (its key, and whether it carries a Blob under `source`) */
+  async function puts(run: () => Promise<unknown>): Promise<{ id: unknown; blob: boolean }[]> {
+    const put = FDBObjectStore.prototype.put;
+    const seen: { id: unknown; blob: boolean }[] = [];
+    const spy = vi.spyOn(FDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      const v = value as { id?: unknown; source?: unknown };
+      seen.push({ id: v.id, blob: v.source instanceof Blob });
+      return put.call(this, value, key);
+    });
+    await run();
+    spy.mockRestore();
+    return seen;
+  }
+  async function rawGet(key: string): Promise<Record<string, unknown> | undefined> {
+    const db = await rawDb();
+    const r = await req(db.transaction(STORE_NAME).objectStore(STORE_NAME).get(key));
+    db.close();
+    return r as Record<string, unknown> | undefined;
+  }
+  async function rawKeys(): Promise<string[]> {
+    const db = await rawDb();
+    const r = await req(db.transaction(STORE_NAME).objectStore(STORE_NAME).getAllKeys());
+    db.close();
+    return r as string[];
+  }
+
+  it('a params, thumb, edit or cache patch never puts the source blob again', async () => {
+    const id = await addEntry({ ...entry('p'), source, sourceWidth: 4032, sourceHeight: 3024 });
+    const seen = await puts(async () => {
+      await updateEntry(id, { params: setParam(defaultParams(), 'skin.smooth', 0.3) });
+      await updateEntry(id, { thumb: jpeg('t2') }, { touch: false });
+      await updateEntry(id, { schema: 2, edit: editFromLegacy(defaultParams()), paramsKey: 'k' });
+      await updateEntry(id, { body: null });
+    });
+    expect(seen.map((s) => s.id)).toEqual([id, id, id, id]);
+    expect(seen.some((s) => s.blob)).toBe(false);
+    expect((await getEntry(id))?.source?.size).toBe(64);
+  });
+
+  it('the entry record holds no source; the source record has no updatedAt, so no index sees it', async () => {
+    const id = await addEntry({ ...entry('r'), source, sourceWidth: 4032, sourceHeight: 3024 });
+    expect((await rawGet(id))?.source).toBeUndefined();
+    const s = await rawGet(sourceKey(id));
+    expect(s?.source).toBeInstanceOf(Blob);
+    expect(s?.updatedAt).toBeUndefined();
+    const db = await rawDb();
+    expect(await req(db.transaction(STORE_NAME).objectStore(STORE_NAME).index(UPDATED_INDEX).count())).toBe(1);
+    db.close();
+    expect(await listEntries()).toHaveLength(1);
+  });
+
+  it('a v0.4-dev record with the source inline: read as before, moved to its own record by the next patch, once', async () => {
+    await rawPut([validRecord('dev', 5, { source, sourceWidth: 4032, sourceHeight: 3024 })]);
+    expect((await getEntry('dev'))?.source?.size).toBe(64);
+    const first = await puts(() => updateEntry('dev', { thumb: jpeg('t') }));
+    expect(first).toEqual([
+      { id: sourceKey('dev'), blob: true },
+      { id: 'dev', blob: false },
+    ]);
+    expect((await rawGet('dev'))?.source).toBeUndefined();
+    const later = await puts(() => updateEntry('dev', { params: defaultParams() }));
+    expect(later).toEqual([{ id: 'dev', blob: false }]);
+    const got = await getEntry('dev');
+    expect(got?.source?.size).toBe(64);
+    expect(got?.sourceWidth).toBe(4032);
+  });
+
+  it('a v0.3 entry (no source anywhere) patches and reads as before', async () => {
+    await rawPut([validRecord('v03', 5)]);
+    const seen = await puts(() => updateEntry('v03', { params: defaultParams() }));
+    expect(seen).toEqual([{ id: 'v03', blob: false }]);
+    expect((await getEntry('v03'))?.source).toBeUndefined();
+    expect(await rawKeys()).toEqual(['v03']);
+  });
+
+  it('a quota error while moving an inline source keeps the patch: it is written once more with the source inline', async () => {
+    await rawPut([validRecord('dev', 5, { source })]);
+    const put = FDBObjectStore.prototype.put;
+    vi.spyOn(FDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      if ((value as { id?: unknown }).id === sourceKey('dev')) throw new DOMException('quota', 'QuotaExceededError');
+      return put.call(this, value, key);
+    });
+    await updateEntry('dev', { thumb: jpeg('patched') });
+    vi.restoreAllMocks();
+    const got = await getEntry('dev');
+    expect(await got?.thumb.text()).toBe('patched');
+    expect(got?.source?.size).toBe(64);
+  });
+
+  it('deleteEntry and the eviction take the source record with the entry', async () => {
+    const a = await addEntry({ ...entry('a'), source });
+    const b = await addEntry({ ...entry('b'), source });
+    await deleteEntry(b);
+    expect(await rawKeys()).toEqual([a, sourceKey(a)].sort());
+    await addMany(HISTORY_LIMIT, 'n');
+    const keys = await rawKeys();
+    expect(keys).not.toContain(a);
+    expect(keys.filter((k) => k.startsWith('source:'))).toEqual([]);
+    expect(keys).toHaveLength(HISTORY_LIMIT);
+  });
+
+  it('a source record left without its entry (deleted or evicted by 0.3 after a rollback) is swept by the next add', async () => {
+    await rawPut([{ id: sourceKey('gone'), source }, validRecord('kept', 5), { id: sourceKey('kept'), source }]);
+    const id = await addEntry(entry('next'));
+    expect(await rawKeys()).toEqual(['kept', id, sourceKey('kept')].sort());
+    expect((await getEntry('kept'))?.source?.size).toBe(64);
   });
 });
 

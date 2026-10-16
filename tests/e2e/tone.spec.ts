@@ -350,7 +350,8 @@ test('祛痘 refuses an eye, and stops at 100 spots', async ({ page }) => {
           const store = db.transaction('edits', 'readwrite').objectStore('edits');
           const all = store.getAll();
           all.onsuccess = () => {
-            const e = all.result[0] as { edit: { photo: { spots: unknown[] } } };
+            // the entry (a kept source file is a record of its own, without updatedAt)
+            const e = (all.result as { updatedAt?: number; edit: { photo: { spots: unknown[] } } }[]).find((r) => typeof r.updatedAt === 'number')!;
             for (let i = e.edit.photo.spots.length; i < 100; i++) e.edit.photo.spots.push({ x: 0.03 + (i % 10) * 0.012, y: 0.03 + Math.floor(i / 10) * 0.012, r: 0.005, dx: 0, dy: 0, owner: null });
             store.put(e).onsuccess = () => {
               db.close();

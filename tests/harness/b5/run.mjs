@@ -100,7 +100,7 @@ const dumpHistory = () =>
           const g = r.result.transaction('edits').objectStore('edits').getAll();
           g.onsuccess = () =>
             res(
-              g.result.map((e) => ({
+              g.result.filter((e) => typeof e.updatedAt === 'number').map((e) => ({
                 band: e.params.heightBand,
                 waist: e.params.values['body.waist'],
                 legs: e.params.values['body.legs'],

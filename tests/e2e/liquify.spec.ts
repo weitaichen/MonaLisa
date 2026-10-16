@@ -66,13 +66,14 @@ async function historyThumb(page: Page): Promise<Pixels | null> {
       q.onsuccess = () => res(q.result);
       q.onerror = () => rej(q.error);
     });
-    const all = await new Promise<{ thumb?: Blob }[]>((res, rej) => {
+    const all = await new Promise<{ thumb?: Blob; updatedAt?: number }[]>((res, rej) => {
       const q = db.transaction('edits').objectStore('edits').getAll();
-      q.onsuccess = () => res(q.result as { thumb?: Blob }[]);
+      q.onsuccess = () => res(q.result as { thumb?: Blob; updatedAt?: number }[]);
       q.onerror = () => rej(q.error);
     });
     db.close();
-    const thumb = all[0]?.thumb;
+    // the entry (a kept source file is a record of its own, without updatedAt)
+    const thumb = all.find((r) => typeof r.updatedAt === 'number')?.thumb;
     if (!thumb) return null;
     const bmp = await createImageBitmap(thumb);
     const c = document.createElement('canvas');
@@ -179,7 +180,7 @@ test('a reopen whose replay runs in slices: 儲存 during it finishes the rebuil
       const store = tx.objectStore('edits');
       const all = store.getAll();
       all.onsuccess = () => {
-        const rec = (all.result as { edit: { photo: { strokes: unknown[] } } }[])[0];
+        const rec = (all.result as { updatedAt?: number; edit: { photo: { strokes: unknown[] } } }[]).find((r) => typeof r.updatedAt === 'number')!;
         rec.edit.photo.strokes = strokes;
         store.put(rec);
       };

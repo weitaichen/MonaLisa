@@ -20,6 +20,16 @@ export const DB_VERSION = 1;
 export const STORE_NAME = 'edits';
 export const UPDATED_INDEX = 'updatedAt';
 export const OPEN_TIMEOUT_MS = 3000;
+/**
+ * The picked file (HistoryEntry.source) lives in a record of its own in the same store, keyed SOURCE_PREFIX + entry id:
+ * `{ id, source }`. It has no updatedAt, so the updatedAt index (listEntries, the eviction count, and 0.3's code after a
+ * rollback) never sees it, and no schema bump is needed (RM §5.2: DB_VERSION 1, store `edits`). An entry's patches
+ * (autosave, thumbnails, caches) then never put the up to 30 MB Blob again: Chromium writes a new blob file for every
+ * put of a value holding a Blob. A v0.4-dev record that still holds its source inline is read as is and moved out by
+ * its next patch.
+ */
+export const SOURCE_PREFIX = 'source:';
+export const sourceKey = (id: string): string => SOURCE_PREFIX + id;
 
 let dbPromise: Promise<IDBDatabase | null> | null = null;
 let conn: IDBDatabase | null = null;
@@ -50,12 +60,13 @@ export async function addEntry(e: NewHistoryEntry): Promise<string> {
     if (e.edit) entry.edit = e.edit;
     if (e.paramsKey !== undefined) entry.paramsKey = e.paramsKey;
     if (e.detect) entry.detect = e.detect;
-    if (withSource && e.source) entry.source = e.source;
     if (e.sourceWidth !== undefined && e.sourceHeight !== undefined) {
       entry.sourceWidth = e.sourceWidth;
       entry.sourceHeight = e.sourceHeight;
     }
     store.put(entry);
+    if (withSource && e.source) store.put({ id: sourceKey(id), source: e.source });
+    sweepSources(store);
     // Requests in one transaction run in order, so the count already includes the new entry.
     const index = store.index(UPDATED_INDEX);
     const count = index.count();
@@ -69,6 +80,7 @@ export async function addEntry(e: NewHistoryEntry): Promise<string> {
         // never evict what we just added, even if the clock went backwards
         if (c.primaryKey !== id) {
           c.delete();
+          store.delete(sourceKey(String(c.primaryKey)));
           excess--;
         }
         if (excess > 0) c.continue();
@@ -97,14 +109,31 @@ export function isQuotaError(err: unknown): boolean {
  * Patches an entry. Without `touch` an edit (params, edit or thumb) bumps updatedAt, moving the entry to the front; a
  * cache-only patch (body, detect, faceProtect / faceMask alone) keeps it. `touch: false` never bumps (A17): a
  * detection-driven rebase writes edit + params + thumb, and merely viewing an entry must not reorder 最近編輯.
- * Missing id → no-op. faceProtect false removes the flag.
+ * Missing id → no-op. faceProtect false removes the flag. The source record (SOURCE_PREFIX) is never touched; an inline
+ * source (a v0.4-dev record) is moved to it by this patch, once. A quota failure of that move writes the patch once
+ * more with the source left inline, so a patch is never lost to the file.
  */
-export function updateEntry(
+export async function updateEntry(
   id: string,
-  patch: Partial<Pick<HistoryEntry, 'params' | 'thumb' | 'body' | 'faceProtect' | 'faceMask' | 'schema' | 'edit' | 'paramsKey' | 'detect'>>,
+  patch: EntryPatch,
   opts: { touch?: boolean } = {},
 ): Promise<void> {
-  return withStore('readwrite', undefined, (store) => {
+  let quota = false;
+  await withStore('readwrite', undefined, patchTx(id, patch, opts, true), (err) => {
+    if (isQuotaError(err)) {
+      quota = true;
+      return 'stop';
+    }
+    return 'retry';
+  });
+  if (quota) await withStore('readwrite', undefined, patchTx(id, patch, opts, false));
+}
+
+type EntryPatch = Partial<Pick<HistoryEntry, 'params' | 'thumb' | 'body' | 'faceProtect' | 'faceMask' | 'schema' | 'edit' | 'paramsKey' | 'detect'>>;
+
+/** updateEntry's transaction; `moveSource`: an inline source goes to its own record */
+function patchTx(id: string, patch: EntryPatch, opts: { touch?: boolean }, moveSource: boolean): (store: IDBObjectStore) => () => undefined {
+  return (store) => {
     const req = store.get(id);
     req.onsuccess = () => {
       const cur: unknown = req.result;
@@ -122,10 +151,21 @@ export function updateEntry(
       if (patch.edit !== undefined) next.edit = patch.edit;
       if (patch.paramsKey !== undefined) next.paramsKey = patch.paramsKey;
       if (patch.detect !== undefined) next.detect = patch.detect;
+      if (moveSource && isBlob(next.source)) {
+        // a put refused at once (DataCloneError, QuotaExceededError) leaves the source inline, as before
+        let moved = false;
+        try {
+          store.put({ id: sourceKey(id), source: next.source });
+          moved = true;
+        } catch {
+          moved = false;
+        }
+        if (moved) delete next.source;
+      }
       store.put(next);
     };
     return () => undefined;
-  });
+  };
 }
 
 /** Newest (updatedAt) first, at most HISTORY_LIMIT; corrupt records are skipped. */
@@ -144,18 +184,39 @@ export function listEntries(): Promise<HistoryEntry[]> {
   });
 }
 
+/** The entry with its source file (from its own record, or inline in a v0.4-dev record). listEntries carries no source. */
 export function getEntry(id: string): Promise<HistoryEntry | undefined> {
   return withStore('readonly', undefined, (store) => {
     const req = store.get(id);
-    return () => normalizeEntry(req.result) ?? undefined;
+    const src = store.get(sourceKey(id));
+    return () => {
+      const entry = normalizeEntry(req.result);
+      if (!entry) return undefined;
+      const s: unknown = (src.result as { source?: unknown } | undefined)?.source;
+      if (!entry.source && isBlob(s) && s.size > 0) entry.source = s;
+      return entry;
+    };
   });
 }
 
 export function deleteEntry(id: string): Promise<void> {
   return withStore('readwrite', undefined, (store) => {
     store.delete(id);
+    store.delete(sourceKey(id));
     return () => undefined;
   });
+}
+
+/**
+ * Delete the source records whose entry is gone (0.3, after a rollback, deletes and evicts entries without knowing
+ * about them). Every add runs it in its transaction after its puts; an entry the add evicts takes its source along.
+ */
+function sweepSources(store: IDBObjectStore): void {
+  const keys = store.getAllKeys();
+  keys.onsuccess = () => {
+    const all = new Set(keys.result.map(String));
+    for (const k of all) if (k.startsWith(SOURCE_PREFIX) && !all.has(k.slice(SOURCE_PREFIX.length))) store.delete(k);
+  };
 }
 
 /** Drop the cached connection (next op reopens). Used by tests; harmless to call any time. */

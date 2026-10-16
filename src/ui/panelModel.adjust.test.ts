@@ -1,6 +1,7 @@
 // 調節 tab and 一鍵 › 質感 (step-2 spec §2.1–2.2, §3.4, §8.1 panelModel list).
 import { describe, expect, it } from 'vitest';
 import { lensFor } from '../edit/lens';
+import { adjustItemActive, adjustValuesNeutral } from '../engine/adjustMath';
 import { defaultPhoto, naturalPerson, neutralPerson } from '../edit/state';
 import { paramsInGroup } from '../engine/params';
 import type { AdjustId, EditState, PhotoParams } from '../types';
@@ -190,6 +191,38 @@ describe('step-1 panel functions dispatch to 調節 and 質感', () => {
     const grain = items.find((i) => i.key === 'adjust.grain')!;
     const r2 = activate(grain, lensOf(dirty), s, actCtx(false));
     expect(r2.sel.adjust).toBe('adjust.grain');
+  });
+
+  it('display ±1 (v = 0.01 / 0.51 / 0.49) is drawn, dotted and reset by ⊘: the three rules agree (step-2 review)', () => {
+    const s = sel({ tab: 'adjust' });
+    for (const [id, v] of [
+      ['adjust.grain', 0.01],
+      ['adjust.vignette', 0.01],
+      ['adjust.fade', 0.01],
+      ['adjust.exposure', 0.51],
+      ['adjust.exposure', 0.49],
+      ['adjust.temperature', 0.49],
+    ] as [AdjustId, number][]) {
+      const e = editOf({ values: { ...defaultPhoto().values, [id]: v } });
+      const label = `${id} = ${v}`;
+      // the engine draws it (its own neutral rule) …
+      expect(adjustValuesNeutral(e.photo.values), label).toBe(false);
+      expect(adjustItemActive(id, v), label).toBe(true);
+      // … so the item and the tab show a dot …
+      const items = itemsFor(lensOf(e), s);
+      expect(items.filter((i) => i.hasValue).map((i) => i.key), label).toEqual([id]);
+      expect(tabHasValue(lensOf(e), 'adjust'), label).toBe(true);
+      // … and ⊘ is the undo step that clears it
+      const r = activate(items[0], lensOf(e), s, actCtx(false));
+      expect(r.changed, label).toBe(true);
+      expect(adjustValuesNeutral(r.edit.photo.values), label).toBe(true);
+    }
+    // a stored value the engine treats as neutral (far below one display step) has no dot and ⊘ is no undo step
+    const tiny = editOf({ values: { ...defaultPhoto().values, 'adjust.grain': 0.00005, 'adjust.exposure': 0.50002 } });
+    expect(adjustValuesNeutral(tiny.photo.values)).toBe(true);
+    expect(itemsFor(lensOf(tiny), s).some((i) => i.hasValue)).toBe(false);
+    expect(tabHasValue(lensOf(tiny), 'adjust')).toBe(false);
+    expect(activate(itemsFor(lensOf(tiny), s)[0], lensOf(tiny), s, actCtx(false)).changed).toBe(false);
   });
 
   it('≥ 2 persons: 調節 and 一鍵 › 質感 dim the chips, show no person note, and say 「調節／質感套用於整張照片」 once each', () => {

@@ -142,18 +142,22 @@ export function isNeutralAdjust(id: AdjustId, v: number): boolean {
 }
 
 /**
+ * One stored 調節 value (0..1; missing or non-finite → neutral) is drawn without a look: effectiveAdjust's expressions
+ * with no look (its + 0 offset changes no value), then isNeutralAdjust. The single rule the engine, the item and tab
+ * dots and the ⊘ no-op check share (step-2 spec §2.1), so display 1 (v = 0.01) draws, shows its dot and ⊘ clears it.
+ */
+export function adjustItemActive(id: AdjustId, raw: number | undefined): boolean {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return false;
+  const u = clamp01(raw);
+  return !isNeutralAdjust(id, ADJUST_ONE_WAY.has(id) ? u : clampS((u - 0.5) * 2));
+}
+
+/**
  * Every stored value is neutral in shader space: effectiveAdjust(values, null, 0) gives isNeutralAdjust for all 12
  * items, without building the record (the engine's per-frame check before any 調節 work, step-2 spec §4.3).
  */
 export function adjustValuesNeutral(values: AdjustValues): boolean {
-  for (const id of ADJUST_IDS) {
-    const raw = values[id];
-    if (typeof raw !== 'number' || !Number.isFinite(raw)) continue;
-    const u = clamp01(raw);
-    // effectiveAdjust's expressions with no look (its + 0 offset changes no value)
-    if (!isNeutralAdjust(id, ADJUST_ONE_WAY.has(id) ? u : clampS((u - 0.5) * 2))) return false;
-  }
-  return true;
+  return !ADJUST_IDS.some((id) => adjustItemActive(id, values[id]));
 }
 
 // ───────────── tone curve: 亮度, 對比, 高光, 陰影 (step-2 spec §4.2) ─────────────

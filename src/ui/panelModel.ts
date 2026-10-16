@@ -1,5 +1,6 @@
 // BeautyPanel logic (spec §7.3), kept pure so it can be unit-tested without a DOM.
 import { FILTERS, hasValue, isShadePart, MAKEUP_PARAM, MAKEUP_PICK_DEFAULT, neutralValue, paramDef, paramsInGroup, PRESETS, SHADE_PARTS, SHADES, shadeColor } from '../engine/params';
+import { adjustItemActive } from '../engine/adjustMath';
 import { lookDef, LOOKS, lookThumbUrl } from '../engine/looks';
 import { NO_BODY_NOTE, NO_FACE_NOTE, type Lens } from '../edit/lens';
 import { adjustIsNeutral, personOf } from '../edit/state';
@@ -897,7 +898,8 @@ export function adjustItems(value: (id: AdjustId) => number, sel: PanelSelection
         label: d.label,
         visual: { kind: 'icon', icon: d.icon },
         selected: sel.adjust === d.id,
-        hasValue: hasValue(d, value(d.id as AdjustId)),
+        // the engine's own rule (adjustItemActive), not hasValue's > 0.01: display 1 draws, so it has its dot
+        hasValue: adjustItemActive(d.id as AdjustId, value(d.id as AdjustId)),
         action: { type: 'param', id: d.id },
         ...(ADJUST_DIVIDERS.has(d.id) ? { divider: 'before' as const } : {}),
         ...ENABLED,
@@ -970,9 +972,9 @@ export function lookActivation(target: LookId | null, look: PhotoParams['look'],
   return { kind: 'set', id: target, amount: look ? look.amount : (lookDef(target)?.defaultAmount ?? 0.8) };
 }
 
-/** 調節 tab dot: any of the 12 user values is not neutral */
+/** 調節 tab dot: any of the 12 user values is drawn (adjustItemActive, the rule of the item dots and ⊘) */
 export function adjustTabHasValue(value: (id: AdjustId) => number): boolean {
-  return paramsInGroup('adjust').some((d) => hasValue(d, value(d.id as AdjustId)));
+  return paramsInGroup('adjust').some((d) => adjustItemActive(d.id as AdjustId, value(d.id as AdjustId)));
 }
 
 export interface PartButton {

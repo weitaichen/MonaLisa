@@ -1,6 +1,7 @@
 // The v0.4 edit of one photo (RM §3.2–3.4): an immutable EditState with a photo layer and a person layer. Every change
 // returns a new object and shares what it did not change, so UndoStack keeps states by reference ({clone: false}).
 import { isLookId } from '../engine/looks';
+import { adjustValuesNeutral } from '../engine/adjustMath';
 import { applyPreset, FILTERS, neutralValue, PARAM_DEFS, paramsInGroup, PRESETS, sanitizeBand, SHADE_PARTS, SHADES as SHADE_DEFS } from '../engine/params';
 import { clampStraighten, cropConstrain, cropValid, flipView, IDENTITY_GEOMETRY, isIdentity, rotateLeft } from '../geometry/view';
 import { stableKey } from '../store/undo';
@@ -160,9 +161,12 @@ export function setLook(edit: EditState, id: LookId | null, amount: number): Edi
   return { ...edit, photo: { ...edit.photo, look: next } };
 }
 
-/** true when no 調節 item carries a value (the item / tab dots and the ⊘ no-op check, step-2 spec §2.1) */
+/**
+ * true when no 調節 item is drawn (the ⊘ no-op check, step-2 spec §2.1): the engine's own rule (adjustValuesNeutral),
+ * which the item and tab dots read too (adjustItemActive), so ⊘ makes an undo step exactly when a dot shows
+ */
 export function adjustIsNeutral(photo: Pick<PhotoParams, 'values'>): boolean {
-  return paramsInGroup('adjust').every((d) => photo.values[d.id as AdjustId] === neutralValue(d));
+  return adjustValuesNeutral(photo.values);
 }
 
 /** ⊘ 原圖 in 調節: the 12 user values to neutral, the 質感 untouched. Already neutral → the same object. */

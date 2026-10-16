@@ -69,9 +69,9 @@ Position: after 美妝 (C §2.1). In step 2 the editor has 7 tabs (一鍵 · 美
 | Element | Behaviour |
 |---|---|
 | Default selection | 亮度 (`PanelSelection.adjust`, remembered in the module-level `lastSel` like the other tabs) |
-| Item dot | 4 px accent dot when the user's value is not neutral (`hasValue`, `params.ts:254-256`) |
-| Tab dot | 調節 shows the tab dot when any of the 12 user values is not neutral |
-| ⊘ 原圖 | Resets the 12 user values to neutral in one undo step. It does not touch the 質感. It is a no-op (no haptic, no undo step) when everything is already neutral, like 美體 (`panelModel.ts:426-427`). |
+| Item dot | 4 px accent dot when the user's value is drawn: `adjustItemActive` (`adjustMath.ts`), the engine's own neutral rule (\|s\| > 1e-4, v > 1e-4, §4.3) applied to the user's value without the look. Not `hasValue`'s > 0.01, which hid display ±1 (v = 0.01), a visible 顆粒 or 暗角 (step-2 review) |
+| Tab dot | 調節 shows the tab dot when any of the 12 user values is drawn (the same rule) |
+| ⊘ 原圖 | Resets the 12 user values to neutral in one undo step. It does not touch the 質感. It is a no-op (no haptic, no undo step) when everything is already neutral, like 美體 (`panelModel.ts:426-427`). Neutral is the dots' rule (`adjustIsNeutral` = `adjustValuesNeutral`), so ⊘ makes an undo step exactly when a dot shows. |
 | Slider | One slider for the selected item. Bidirectional items show −50…+50 with a centre tick and snap to 0 within ±3; one-way items show 0–100. Double-tap resets to neutral (`Slider.tsx`, unchanged). There is no recommended-default dot, because neutral is the default. |
 | Slider tint | 色溫's track shows a blue → amber gradient and 色調's a green → magenta gradient (new `SliderBinding.track?: 'temperature' \| 'tint'` → CSS class `track-temperature` / `track-tint`). Every other item uses the plain track. |
 | 質感 chip | When `photo.look ≠ null`, a compact pill leads the strip: 「質感：膠片」. Tapping it switches to 一鍵 › 質感. It tells the user that the look also moves some 調節 items, while the sliders keep showing the user's own numbers. |
@@ -393,7 +393,7 @@ uAdjustOn  = any effective value non-neutral (|s| > 1e-4, v > 1e-4)
 adjust.on  = uAdjustOn || a > 0               // picks the 調節 program (§4.1)
 ```
 
-- Sliders and `hasValue` read the user's value `u_i` only.
+- Sliders and the dots (`adjustItemActive`) read the user's value `u_i` only.
 - `adjustUniforms` is memoized on `(user values, look id, amount, lookReady, uVMap, grain scale)`. During a drag it rebuilds 9 knots, which takes microseconds.
 - With a look on, a one-way item (褪色, 顆粒, 暗角) can only be raised above the look's own amount, never lowered below it; only 程度 lowers it, together with the rest of the look. This follows from C §3.4 (sliders show the user's value, the look adds on top); §11 Q6 asks the user about it.
 

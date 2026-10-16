@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { splitLegacy } from '../edit/legacy';
 import { defaultPhoto, naturalPerson } from '../edit/state';
 import { applyPreset } from '../engine/params';
+import { adapt } from '../tracking/adapter111';
 import type { CameraLook, DebugState, Face, Prefs, Rect } from '../types';
 import { AUTO_TIER, FACE_EASE_MS } from './liveCore';
 import { type LiveDeps, type LiveStats, autoTierSession, resetAutoTierSession, startLiveLoop } from './live';
@@ -13,6 +14,7 @@ import {
   fakeTracker,
   installWorkClock,
   makeFace,
+  makeLandmarks,
   prefs as makePrefs,
   stubRaf,
   weightOf,
@@ -540,6 +542,37 @@ describe('live loop on face tracks (S §3.3 Live camera, §3.4 T4)', () => {
     vi.advanceTimersByTime(600);
     expect(stats.at(-1)!.faces).toBe(2);
     loop.stop();
+  });
+  it('LiveStats.gpLeftOnLeft follows the tracked face: upright true, turned upside down false, emitted at once (S5 §3.4)', () => {
+    // the mocked adapt: points[1] = 1 marks a face turned upside down (its GPUPixel-left eye p74 right of p77)
+    const orig = vi.mocked(adapt).getMockImplementation()!;
+    vi.mocked(adapt).mockImplementation((lm) => {
+      const f = makeFace(++faceSeq, 0.25);
+      const turned = lm.points[1] === 1;
+      f.pts111.set(turned ? [0.3, 0.6] : [0.2, 0.4], 74 * 2);
+      f.pts111.set(turned ? [0.2, 0.6] : [0.3, 0.4], 77 * 2);
+      return f;
+    });
+    try {
+      const { stats, loop, tracker } = setup();
+      let turned = false;
+      tracker!.detectVideo.mockImplementation(() => {
+        const l = makeLandmarks();
+        if (turned) l.points[1] = 1;
+        return [l];
+      });
+      vi.advanceTimersByTime(600);
+      expect(stats.at(-1)!.gpLeftOnLeft).toBe(true);
+      turned = true;
+      const n = stats.length;
+      vi.advanceTimersByTime(600);
+      // emitted as soon as it changed (no 250 ms throttle), then held
+      expect(stats.slice(n).some((s) => s.gpLeftOnLeft === false)).toBe(true);
+      expect(stats.at(-1)!.gpLeftOnLeft).toBe(false);
+      loop.stop();
+    } finally {
+      vi.mocked(adapt).mockImplementation(orig);
+    }
   });
 });
 

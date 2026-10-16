@@ -1,5 +1,6 @@
 // OWNER: app-glue agent. Live camera loop: rVFC → detect → adapt → render, face easing, auto-tier, debug state.
 import { LIVE_DETECT_FACES, MAX_RENDER_FACES } from '../config/limits';
+import { gpLeftOnLeft } from '../edit/sides';
 import { photoLuts } from '../engine/looks';
 import type { CameraController, CameraLook, Engine, EngineOptions, FaceSeed, Landmarks478, Prefs, Rect, StillFrame, Tier, Tracker } from '../types';
 import { debugState, reportError } from './debug';
@@ -15,6 +16,12 @@ export interface LiveStats {
   face: boolean;
   /** shown tracks, held ones included */
   faces: number;
+  /**
+   * the beautified track's GPUPixel-left eye shows left of its right eye on the unmirrored frame (gpLeftOnLeft, with
+   * hysteresis); the last answer while no face shows, null before the first one on this stream. The camera's 左／右
+   * chips map through it and the preview mirror (cameraScreenSwap, S5 §3.4)
+   */
+  gpLeftOnLeft: boolean | null;
 }
 
 export interface LiveLoop {
@@ -124,6 +131,8 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
   let tierPrefAuto: boolean | null = null;
   let lastEmitTs = -Infinity;
   let lastEmitted: LiveStats | null = null;
+  /** LiveStats.gpLeftOnLeft of this stream (reset with the face state) */
+  let sides: boolean | null = null;
 
   const dbg = debugState();
   if (dbg && tracker) dbg.delegate = tracker.delegate;
@@ -225,6 +234,7 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
     paused = false;
     geometry = geo;
     tracks.reset();
+    sides = null;
     detectedLastFrame = false;
     lastTs = null;
     lastPresented = null;
@@ -285,13 +295,18 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
   }
 
   function publish(now: number, force: boolean): void {
+    const views = tracks.views();
+    // the 左／右 reference: the beautified track while it is found (a held one keeps the last answer)
+    const ref = views.find((v) => v.beautified);
+    if (ref?.present) sides = gpLeftOnLeft(ref.face, sides);
     const s: LiveStats = {
       fps: paused ? 0 : fpsEma.value ? 1000 / fpsEma.value : 0,
       detectMs: detectEma.value ?? 0,
       renderMs: renderEma.value ?? 0,
       tier: engine.tier,
-      face: tracks.views().some((v) => v.present),
-      faces: tracks.views().length,
+      face: views.some((v) => v.present),
+      faces: views.length,
+      gpLeftOnLeft: sides,
     };
     if (dbg) {
       dbg.fps = s.fps;
@@ -311,7 +326,8 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
       if (tracker) dbg.delegate = tracker.delegate;
     }
     if (!deps.onStats) return;
-    const changed = !lastEmitted || lastEmitted.face !== s.face || lastEmitted.faces !== s.faces || lastEmitted.tier !== s.tier;
+    const changed =
+      !lastEmitted || lastEmitted.face !== s.face || lastEmitted.faces !== s.faces || lastEmitted.tier !== s.tier || lastEmitted.gpLeftOnLeft !== s.gpLeftOnLeft;
     if (!force && !changed && now - lastEmitTs < STATS_EVERY_MS) return;
     lastEmitTs = now;
     lastEmitted = s;

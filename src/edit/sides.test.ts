@@ -4,7 +4,7 @@ import { apply, oToV } from '../geometry/view';
 import { blankEyes } from '../tracking/adapter111';
 import type { CameraLook, Face, Geometry, PersonParams } from '../types';
 import { defaultPhoto, naturalPerson } from './state';
-import { cameraScreenSwap, handOverLook, isSplitId, mirrorSides, readSide, sanitizeRight, screenLeftIsGpLeft, slotFor, splitOff, splitOn, writeSide } from './sides';
+import { cameraScreenSwap, gpLeftOnLeft, handOverLook, isSplitId, mirrorSides, readSide, sanitizeRight, screenLeftIsGpLeft, slotFor, splitOff, splitOn, writeSide } from './sides';
 
 const eyes = (l: [number, number], r: [number, number]): Face => {
   const pts111 = new Float32Array(222);
@@ -115,5 +115,32 @@ describe('camera → 編輯 hand-over (face-detail spec §3.4)', () => {
   it('the camera preview mirrors the front camera only', () => {
     expect(cameraScreenSwap('user')).toBe(true);
     expect(cameraScreenSwap('environment')).toBe(false);
+  });
+  it('the camera labels go through the preview mapping of the tracked face (S5 §3.4): a face upside down swaps them', () => {
+    // screenLeftIsGpLeft with toScreen = x → 1 − x (front) or the identity (back), on the unmirrored frame's answer
+    const upright = eyes([0.4, 0.4], [0.6, 0.4]);
+    const flipped = eyes([0.6, 0.6], [0.4, 0.6]);
+    for (const [face, unmirrored] of [
+      [upright, true],
+      [flipped, false],
+    ] as const) {
+      expect(gpLeftOnLeft(face, null)).toBe(unmirrored);
+      expect(cameraScreenSwap('user', gpLeftOnLeft(face, null))).toBe(!screenLeftIsGpLeft(face, (p) => [1 - p[0], p[1]]));
+      expect(cameraScreenSwap('environment', gpLeftOnLeft(face, null))).toBe(!screenLeftIsGpLeft(face, (p) => p));
+    }
+    expect(cameraScreenSwap('user', false)).toBe(false);
+    expect(cameraScreenSwap('environment', false)).toBe(true);
+  });
+  it('a face held sideways keeps its labels until the eyes cross by a fifth of their distance (no flicker)', () => {
+    // rolled just past 90°: p77 a little left of p74
+    const past = eyes([0.5, 0.4], [0.48, 0.6]);
+    expect(gpLeftOnLeft(past, null)).toBe(false); // no previous answer: the sign decides
+    expect(gpLeftOnLeft(past, true)).toBe(true); // within the band: kept
+    expect(gpLeftOnLeft(eyes([0.5, 0.4], [0.42, 0.6]), true)).toBe(false); // clearly crossed
+    expect(gpLeftOnLeft(eyes([0.5, 0.4], [0.52, 0.6]), false)).toBe(false);
+    expect(gpLeftOnLeft(eyes([0.5, 0.4], [0.58, 0.6]), false)).toBe(true);
+    // a degenerate face (both eyes on one point) keeps the last answer, else reads as upright
+    expect(gpLeftOnLeft(eyes([0.5, 0.5], [0.5, 0.5]), null)).toBe(true);
+    expect(gpLeftOnLeft(eyes([0.5, 0.5], [0.5, 0.5]), false)).toBe(false);
   });
 });

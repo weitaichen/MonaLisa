@@ -88,10 +88,32 @@ export function handOverLook(look: CameraLook, mirrored: boolean): CameraLook {
   return person === look.person ? look : { ...look, person };
 }
 
+/** how far (× the eye distance) the eyes must cross before the camera's 左／右 swap: a face held sideways never flickers */
+const SIDE_HYSTERESIS = 0.2;
+
 /**
- * The camera detects on the unmirrored frame and shows the front camera mirrored (live.ts:160), so an upright face's
- * GPUPixel-left half shows on the right exactly when facing === 'user' (S5 §3.4: toScreen is x → 1 − x there).
+ * The camera's tracked face on the unmirrored frame: its GPUPixel-left eye (p74) shows left of its right eye (p77),
+ * screenLeftIsGpLeft with the identity. `prev` (the last answer) holds until the eyes cross by more than SIDE_HYSTERESIS ×
+ * their distance, so a face rolled near ±90° keeps its labels; without one the sign decides (a tie reads as upright).
+ * A degenerate face (both eyes on one point) keeps `prev`, else reads as upright.
  */
-export function cameraScreenSwap(facing: Facing): boolean {
-  return facing === 'user';
+export function gpLeftOnLeft(face: Face, prev: boolean | null): boolean {
+  const P = face.pts111;
+  const dx = P[77 * 2] - P[74 * 2];
+  const dy = P[77 * 2 + 1] - P[74 * 2 + 1];
+  const d = Math.hypot(dx, dy);
+  if (!(d > 0)) return prev ?? true;
+  const m = prev === null ? 0 : SIDE_HYSTERESIS * d;
+  return (prev ?? true) ? dx >= -m : dx > m;
+}
+
+/**
+ * The camera's 左／右 mapping (S5 §3.4): !screenLeftIsGpLeft through the preview, whose toScreen is x → 1 − x for the
+ * mirrored front camera (live.ts:160) and the identity for the back one. `unmirrored`: gpLeftOnLeft of the tracked face
+ * (LiveStats.gpLeftOnLeft); null (no face yet) assumes an upright face, whose GPUPixel-left half (the subject's right) is
+ * on the frame's left, so the front camera swaps and the back one does not.
+ */
+export function cameraScreenSwap(facing: Facing, unmirrored: boolean | null = null): boolean {
+  const left = unmirrored ?? true;
+  return !(facing === 'user' ? !left : left);
 }

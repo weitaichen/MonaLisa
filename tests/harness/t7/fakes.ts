@@ -244,7 +244,7 @@ function fakeLiveLoop(d: LiveDeps): LiveLoop {
     if (compare) e.renderOriginal(input);
     else e.render({ ...input, ...fakeFrame(d.getLook()) });
     if (++n % 15 === 0) {
-      const s = { fps: 30, detectMs: 6.2, renderMs: 3.1, tier: e.tier, face: flag('face') !== '0', faces: flag('face') !== '0' ? 1 : 0 };
+      const s = { fps: 30, detectMs: 6.2, renderMs: 3.1, tier: e.tier, face: flag('face') !== '0', faces: flag('face') !== '0' ? 1 : 0, gpLeftOnLeft: null };
       window.__meiyan && Object.assign(window.__meiyan, s);
       d.onStats?.(s);
     }

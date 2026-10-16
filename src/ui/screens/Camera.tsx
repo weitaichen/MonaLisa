@@ -67,12 +67,15 @@ export function Camera() {
   const [ring, setRing] = useState<{ id: TrackId; at: number } | null>(null);
   /** shown tracks, from LiveStats: redraws the marker when the count changes */
   const [shownFaces, setShownFaces] = useState(0);
+  /** LiveStats.gpLeftOnLeft: the tracked face's halves on the unmirrored frame (the 左／右 chips, S5 §3.4) */
+  const [gpLeft, setGpLeft] = useState<boolean | null>(null);
 
   const lookRef = useRef(look);
   lookRef.current = look;
   /** the camera is one person, 'live' (RM §3.7): the panel uses the editor's lens and code */
-  // 左／右 follow the preview mirror (S5 §3.4): a front ↔ back flip re-maps the side chips on the next render (S5 §7)
-  const livePersons: PersonInfo[] = [{ ...LIVE_PERSONS[0], screenSwap: cameraScreenSwap(snap?.facing ?? 'user') }];
+  // 左／右 follow the tracked face through the preview mirror (S5 §3.4): a front ↔ back flip, or the face turned upside
+  // down, re-maps the side chips on the next render (S5 §7)
+  const livePersons: PersonInfo[] = [{ ...LIVE_PERSONS[0], screenSwap: cameraScreenSwap(snap?.facing ?? 'user', gpLeft) }];
   const lensOf = (l: typeof look) => lensFor(cameraEdit(l), { kind: 'person', id: LIVE }, livePersons, LIVE);
   const setEdit = (e: EditState) => setLook(lookOf(e));
   const prefsRef = useRef(prefs);
@@ -124,6 +127,7 @@ export function Camera() {
     let faceTimer = 0;
     const onStats = (s: LiveStats) => {
       setShownFaces(s.faces);
+      setGpLeft(s.gpLeftOnLeft);
       setChip(chipGate.current.update(s.faces, app.get().cameraAll, performance.now()));
       if (s.face === lastFace) return;
       lastFace = s.face;

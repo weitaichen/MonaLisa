@@ -4874,7 +4874,7 @@ Three consumers of P2's backward map must apply the liquify field first, exactly
 - Consumes: Task 2 `LiquifyModel` (`backward`, `maxDisp` in long-edge units, `snapshot`), `straightStroke`, `liquifyGrid`; Task 4 `liquifyAt`, `reshapeMapCpu(face, u, aspect, body?, protect?, liquify?)`, `reshapeMapMulti(faces, aspect, { body, protects, liquify })`; Task 6 `tileInput(frame, body?, liquify?)`, `bounds(frame, body?, liquifyMaxDisp?)`; Task 12's `liq` snapshot in `save` / `runTiled`. Step 3 (plan Task 9): `backMapCpu(v: Vec2, frame: BackMapFrame): [number, number]` with `BackMapFrame { geometry; oSize; oMap: UvMap }`, `backMapperCpu(frame)`, `planTiles(grid: TileGrid, bounds: TileBounds, T)`, `TileBounds { body; faces; liquifyMaxDisp? }`, `displacementBound`, `reshapeGeometry`, the imports of its coverage test in `exportPlan.test.ts`; the harness `window.runExportTiles(): Promise<TileCheck[]>` whose `cases` entries are `{ name; w; h; geometry(size) }` and whose per-case loop builds `photo`, `base: Omit<RenderInput, 'source' | 'width' | 'height'>` and `bounds = { body, faces }`; `tests/e2e/export.spec.ts`, which asserts the list of case names. Step 1: `hitPerson(uv, ctx: HitCtx)` (it adds the body field at `uv` first) and the editor's person-tap handler (`onPersonTap`). Step 4 (plan Task 17): `interface BackMapInput { faces: readonly RenderFace[]; obstacles?; body?: BodyField | null; geometry: Geometry }`, `backMapFrameOf(input, oSize): BackMapFrame` (`src/engine/backMapFrame.ts`) and its test file's `FACE`, `O_SIZE`; the editor's `tapSpot`, which calls `backMapCpu(v, backMapFrameOf({ faces, obstacles, body: s.body, geometry }, photo))` (SK §3.4).
 - Produces: `BackMapInput.liquify?: LiquifyField | null`; `buildStrokeCase(frame: LiquifyFrame): { strokes: Stroke[]; field: LiquifyField; model: LiquifyModel }`; the harness case `'strokes + 90° turn'`.
 
-- [ ] **Step 1: Write the unit tests**
+- [x] **Step 1: Write the unit tests**
 
 Append to `src/engine/backMapCpu.test.ts` (it already defines `oSize`, `face`, `values` and imports `IDENTITY_GEOMETRY`, `reshapeUniforms`, `reshapeMapCpu`, `backMapCpu`; `liquifyAt` joins its existing `import { reshapeMapCpu, withView } from './passes/reshapeCpu';`):
 
@@ -4993,12 +4993,12 @@ In `src/media/exportPlan.test.ts`, inside `describe('planTiles (S §4.4)', …)`
   });
 ```
 
-- [ ] **Step 2: Run them**
+- [x] **Step 2: Run them**
 
 Run: `npx vitest run src/engine/backMapCpu.test.ts src/engine/backMapFrame.test.ts src/media/exportPlan.test.ts`
 Expected: `backMapFrame.test.ts` FAILS (TS: `liquify` does not exist in type `BackMapInput`; at run time the strokes are ignored); the others PASS (Tasks 2 and 4 provide the CPU composition and the long-edge `maxDisp`; step 3 provides the hook). These tests pin the composition and that the hook is what keeps every sample inside its window; if the coverage test reports samples outside a window, `maxDisp`'s unit no longer matches the planner's `× max(decode.width, decode.height)` — fix `maxDisp`, not the test.
 
-- [ ] **Step 2b: Extend the tap back-map**
+- [x] **Step 2b: Extend the tap back-map**
 
 In `src/engine/backMapFrame.ts` (step 4): `BackMapInput` gains
 
@@ -5012,7 +5012,7 @@ In `src/engine/backMapFrame.ts` (step 4): `BackMapInput` gains
 Run: `npx vitest run src/engine/backMapFrame.test.ts`
 Expected: PASS.
 
-- [ ] **Step 3: Wire the editor**
+- [x] **Step 3: Wire the editor**
 
 In `src/ui/screens/Editor.tsx`:
 1. **Person taps** (`onPersonTap`, `:1555-1564` at `d09e608`, PS §2.3): it maps the tap V → O inline and hit-tests at once, `const hit = hitPerson(apply(vToO(g, photo), uv), hitCtxOf(d, sel.tab === 'body', fieldMemo.field, rect));`. Between the two, map the point through the strokes, so the hit test sees P2's map without the face chains:
@@ -5032,7 +5032,7 @@ In `src/ui/screens/Editor.tsx`:
 
 and in `runTiled` (with Task 12's `liq` parameter) the runner gets `s.tileInput(frame, field, liq)`.
 
-- [ ] **Step 4: The tiled = untiled e2e case**
+- [x] **Step 4: The tiled = untiled e2e case**
 
 Create `tests/e2e/pages/strokeCases.ts`:
 
@@ -5085,12 +5085,12 @@ then put `strokes: sc ? sc.strokes : []` into `photo`, `liquify: sc ? sc.field :
 
 In `tests/e2e/export.spec.ts`, append `'strokes + 90° turn'` at the end of the `expect(res.map((r) => r.name)).toEqual([...])` list (after any names steps 4 and 5 appended). The loop's existing assertions (`glError` 0, more than one tile, max channel difference ≤ 1) then cover the new case.
 
-- [ ] **Step 5: Run the e2e case**
+- [x] **Step 5: Run the e2e case**
 
 Run: `npx playwright test tests/e2e/export.spec.ts`
 Expected: PASS; the log has a line `strokes + 90° turn: 600×800, N tiles, max channel diff 0/255` (at most 1/255).
 
-- [ ] **Step 6: Typecheck and commit**
+- [x] **Step 6: Typecheck and commit**
 
 Run: `npm run typecheck`
 Expected: no errors.

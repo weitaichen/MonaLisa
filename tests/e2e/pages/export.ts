@@ -5,10 +5,11 @@ import landmarks from '../../fixtures/landmarks_sample_face.json';
 import { defaultPhoto, emptyShades, neutralPerson } from '../../../src/edit/state';
 import { createEngine } from '../../../src/engine/index';
 import { MAKEUP_PARAM } from '../../../src/engine/params';
-import { IDENTITY_GEOMETRY, setStraighten, snapCrop, viewSize } from '../../../src/geometry/view';
+import { IDENTITY_GEOMETRY, rotateLeft, setStraighten, snapCrop, viewSize } from '../../../src/geometry/view';
 import { faceBoundsFor, planTiles, type TileGrid } from '../../../src/media/exportPlan';
 import { adapt } from '../../../src/tracking/adapter111';
-import type { BodyField, Geometry, PersonParams, PhotoParams, RenderFace, RenderInput } from '../../../src/types';
+import type { BodyField, Geometry, PersonParams, PhotoParams, Rect, RenderFace, RenderInput } from '../../../src/types';
+import { buildStrokeCase } from './strokeCases';
 
 export interface TileCheck {
   name: string;
@@ -74,7 +75,7 @@ window.runExportTiles = async () => {
     values: { ...neutralPerson().values, 'shape.eyeEnlarge': 1, 'shape.faceSlim': 1, 'skin.smooth': 0.8, 'makeup.lip': 0.8 },
   };
   const out: TileCheck[] = [];
-  const cases: { name: string; w: number; h: number; geometry: (size: { width: number; height: number }) => Geometry; faceDetail?: boolean }[] = [
+  const cases: { name: string; w: number; h: number; geometry: (size: { width: number; height: number }) => Geometry; faceDetail?: boolean; strokes?: boolean }[] = [
     { name: 'identity', w: 800, h: 600, geometry: () => IDENTITY_GEOMETRY },
     { name: 'quarter 1 + flip', w: 800, h: 600, geometry: () => ({ ...IDENTITY_GEOMETRY, flipH: true, quarter: 1 }) },
     { name: 'θ 12° + crop', w: 800, h: 600, geometry: (size) => setStraighten(IDENTITY_GEOMETRY, 12, size) },
@@ -83,9 +84,12 @@ window.runExportTiles = async () => {
     { name: 'step 5 identity', w: 800, h: 600, geometry: () => IDENTITY_GEOMETRY, faceDetail: true },
     { name: 'step 5 quarter 1 + flip', w: 800, h: 600, geometry: () => ({ ...IDENTITY_GEOMETRY, flipH: true, quarter: 1 }), faceDetail: true },
     { name: 'step 5 θ 12° + crop', w: 800, h: 600, geometry: (size) => setStraighten(IDENTITY_GEOMETRY, 12, size), faceDetail: true },
+    // step 6 (push-brush spec §8.3 test 9): 推臉筆 strokes (two pushes and a restore) with a 90° turn
+    { name: 'strokes + 90° turn', w: 800, h: 600, geometry: () => rotateLeft(IDENTITY_GEOMETRY), strokes: true },
   ];
   for (const c of cases) {
     const decode = { width: c.w, height: c.h };
+    const sc = c.strokes ? buildStrokeCase(decode) : null;
     const { bitmap, place } = await makeFrame(c.w, c.h, sample);
     // the fixture's landmarks, moved into the frame (z in width units)
     const pts = new Float32Array(landmarks.points.length);
@@ -105,13 +109,18 @@ window.runExportTiles = async () => {
       values: { ...defaultPhoto().values, 'skin.sharpen': 0, 'skin.whiten': 0, 'adjust.grain': 0.5, 'adjust.vignette': 0.5 },
       look: { id: 'film', amount: 0.8 },
       geometry: g,
+      strokes: sc ? sc.strokes : [],
     };
     const V = viewSize(g, decode);
     const fullShortEdge = Math.min(c.w, c.h);
     const oAspect = c.w / c.h;
-    const base: Omit<RenderInput, 'source' | 'width' | 'height'> = { faces, obstacles: [], globalSkin: null, photo, body: bodyField(), geometry: g, oAspect };
+    const base: Omit<RenderInput, 'source' | 'width' | 'height'> = { faces, obstacles: [], globalSkin: null, photo, body: bodyField(), geometry: g, oAspect, liquify: sc ? sc.field : null };
     const grid: TileGrid = { V, decode, geometry: g, oAspect, fullShortEdge };
-    const bounds = { body: base.body ?? null, faces: faceBoundsFor(faces, oAspect) };
+    const bounds = {
+      body: base.body ?? null,
+      faces: faceBoundsFor(faces, oAspect),
+      ...(sc ? { liquifyMaxDisp: (r: Rect) => sc.model.maxDisp(r) } : {}),
+    };
     const render = async (T: number): Promise<{ data: Uint8ClampedArray; tiles: number }> => {
       const tiles = planTiles(grid, bounds, T);
       const data = new Uint8ClampedArray(V.width * V.height * 4);

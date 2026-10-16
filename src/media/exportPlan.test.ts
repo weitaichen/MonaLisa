@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { makeFace } from '../app/testFakes';
 import { fieldAt } from '../body/cpuWarp';
+import { LiquifyModel, liquifyGrid } from '../edit/liquify';
 import { defaultPhoto, neutralPerson } from '../edit/state';
+import { straightStroke } from '../edit/strokeFixtures';
 import { backMapperCpu } from '../engine/backMapCpu';
 import { PARAM_DEFS } from '../engine/params';
 import { displacementBound, reshapeGeometry, reshapeUniforms } from '../engine/passes/reshape';
@@ -233,6 +235,59 @@ describe('planTiles (S §4.4)', () => {
         }
     expect(checked).toBeGreaterThan(5000);
     expect(outside.slice(0, 5)).toEqual([]);
+  });
+
+  it('coverage with 推臉筆 strokes, a body field, a face and a 90° 旋轉 (liquifyMaxDisp feeds the window)', () => {
+    const lm = JSON.parse(readFileSync(new URL('../../tests/fixtures/landmarks_sample_face.json', import.meta.url), 'utf8')) as {
+      width: number;
+      height: number;
+      points: number[];
+    };
+    const decode = { width: 400, height: 600 };
+    const aspect = decode.width / decode.height;
+    const face = adapt({ points: new Float32Array(lm.points) }, lm.width, lm.height);
+    const values = Object.fromEntries(PARAM_DEFS.map((d) => [d.id, d.bidirectional ? 0.5 : 0])) as Record<ParamId, number>;
+    for (const id of ['shape.faceSlim', 'shape.eyeEnlarge'] as ParamId[]) values[id] = 1;
+    const u = reshapeUniforms(values, 1);
+    const bd = new Float32Array(16 * 24 * 2).map((_, i) => (i % 2 === 0 ? 0.015 * Math.sin(i * 0.37) : 0.01 * Math.cos(i * 0.21)));
+    const body: BodyField = { width: 16, height: 24, data: bd, version: 1 };
+    // strokes on this frame: two 大 pushes of 2 radii, through the app's own model
+    const g6 = liquifyGrid(decode);
+    const R = (44 / 28) * (28.7 / g6.F);
+    const model = new LiquifyModel(decode, { now: () => 0, syncWork: Infinity });
+    model.sync([
+      ...straightStroke(decode, 'push', R, { x: 0.45, y: 0.5 }, { x: 0.45 + (2 * R) / g6.ax, y: 0.5 }, 'c1'),
+      ...straightStroke(decode, 'push', R, { x: 0.6, y: 0.35 }, { x: 0.6, y: 0.35 + (2 * R) / g6.ay }, 'c2'),
+    ]);
+    const oMap = reshapeMapCpu(face, u, aspect, body, null, model.snapshot());
+    const bounds: TileBounds = {
+      body,
+      faces: [{ box: reshapeGeometry(face, aspect, u).box, bound: displacementBound(face, aspect, u) }],
+      liquifyMaxDisp: (r) => model.maxDisp(r),
+    };
+    const g = rotateLeft(IDENTITY_GEOMETRY);
+    const V = viewSize(g, decode);
+    const grid = { V, decode, geometry: g, oAspect: aspect, fullShortEdge: 400 };
+    const tiles = planTiles(grid, bounds, 64);
+    const back = backMapperCpu({ geometry: g, oSize: decode, oMap });
+    let checked = 0;
+    const outside: number[][] = [];
+    for (const t of tiles)
+      for (let y = t.buf.y; y < t.buf.y + t.buf.h; y += 3)
+        for (let x = t.buf.x; x < t.buf.x + t.buf.w; x += 3) {
+          const o = back([(x + 0.5) / V.width, (y + 0.5) / V.height]);
+          const px = o[0] * decode.width;
+          const py = o[1] * decode.height;
+          const inX = (t.win.x === 0 || px >= t.win.x) && (t.win.x + t.win.w === decode.width || px <= t.win.x + t.win.w);
+          const inY = (t.win.y === 0 || py >= t.win.y) && (t.win.y + t.win.h === decode.height || py <= t.win.y + t.win.h);
+          if (!inX || !inY) outside.push([x, y, px, py]);
+          checked++;
+        }
+    expect(checked).toBeGreaterThan(5000);
+    expect(outside.slice(0, 5)).toEqual([]);
+    // the hook is what grew the windows: without it some window is smaller
+    const blind = planTiles(grid, { ...bounds, liquifyMaxDisp: undefined }, 64);
+    expect(blind.some((t, i) => t.win.w < tiles[i].win.w || t.win.h < tiles[i].win.h)).toBe(true);
   });
 });
 

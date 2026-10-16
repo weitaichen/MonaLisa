@@ -512,7 +512,7 @@ export function Editor({ source }: { source: EditorSource }) {
       src,
       photo,
       { prefTier: prefsRef.current.tier, autoTier: deps.autoTierSession(), screen: { width: window.screen.width, height: window.screen.height }, capped: deps.exportCapped() },
-      s.bounds(frameOf(e, s), field),
+      s.bounds(frameOf(e, s), field, liquify.field ? (r) => liquify.maxDisp(r) : undefined),
       deps.readExportDebug(),
     );
   /** an edit drops a finished file (a 25 MB file is not kept past the next edit, S §2.3); functional: a drag's closure may hold a stale pill */
@@ -1560,7 +1560,7 @@ export function Editor({ source }: { source: EditorSource }) {
         // the frame of now, as encode() takes it: a 瘦臉 limit that landed during the wait is in it
         const frame = frameOf(e, s);
         s.pauseDisplay(true);
-        return deps.runTiledExport(engine, blob, plan, s.tileInput(frame, field), {
+        return deps.runTiledExport(engine, blob, plan, s.tileInput(frame, field, liq), {
           signal: ac.signal,
           working: photo,
           knob: deps.readExportDebug(),
@@ -1757,7 +1757,8 @@ export function Editor({ source }: { source: EditorSource }) {
     try {
       // the frame the session shows for `cur`: every face with its person's params, limit and λ_f (frameOf)
       const f = frameOf(cur, s);
-      o = backMapCpu(v, backMapFrameOf({ faces: f.faces, obstacles: f.obstacles, body: s.body, geometry: shown }, photo));
+      // the 推臉筆 field first, so a spot tapped after strokes lands on what the finger touched (push-brush spec §4.5)
+      o = backMapCpu(v, backMapFrameOf({ faces: f.faces, obstacles: f.obstacles, body: s.body, geometry: shown, liquify: liquify.field }, photo));
     } catch (e) {
       reportError(e, 'backMapCpu');
       return;
@@ -1817,7 +1818,9 @@ export function Editor({ source }: { source: EditorSource }) {
         const d = detectRef.current;
         if (!d || dragging) return;
         // the layer shows V: the hit test runs in O (S §2.2)
-        const hit = hitPerson(apply(vToO(g, photo), uv), hitCtxOf(d, sel.tab === 'body', fieldMemo.field, rect));
+        const o = apply(vToO(g, photo), uv);
+        const lq = liquify.backward({ x: o[0], y: o[1] }); // 推臉筆 first (push-brush spec §4.5); hitPerson then adds the body field
+        const hit = hitPerson([lq.x, lq.y], hitCtxOf(d, sel.tab === 'body', fieldMemo.field, rect));
         if (hit) choose({ kind: 'person', id: hit });
       }
     : undefined;

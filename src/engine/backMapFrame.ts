@@ -1,8 +1,9 @@
 // The CPU back-map of the frame the editor shows (skin-cleanup spec §3.4 cpuSample): Geo⁻¹ (backMapCpu), then the
-// O-space part of P2 — the 美體 field and every listed face's warp chain with its cap and limit — built from the
-// frame exactly as the engine's job() and tableFaces() build the face table. Taps only: never in a render path.
+// O-space part of P2 — the 推臉筆 field (step 6, outermost), the 美體 field and every listed face's warp chain with
+// its cap and limit — built from the frame exactly as the engine's job() and tableFaces() build the face table. Taps
+// only: never in a render path.
 import { MAX_RENDER_FACES } from '../config/limits';
-import type { BodyField, Geometry, RenderFace, Size } from '../types';
+import type { BodyField, Geometry, LiquifyField, RenderFace, Size } from '../types';
 import type { BackMapFrame } from './backMapCpu';
 import { boxCentre, ovalBox } from './passes/faceCap';
 import { makeupUniformsFor } from './passes/makeup';
@@ -15,6 +16,8 @@ export interface BackMapInput {
   obstacles?: readonly (readonly [number, number])[];
   body?: BodyField | null;
   geometry: Geometry;
+  /** 推臉筆 field, the outermost O-space map of P2 (push-brush spec §4.1); absent / null = no strokes */
+  liquify?: LiquifyField | null;
 }
 
 /** λ_f of the editor's fold safety net (RenderFace.warpScale), applied as index.ts's scaleUniforms does */
@@ -42,5 +45,5 @@ export function backMapFrameOf(input: BackMapInput, oSize: Size): BackMapFrame {
     };
   });
   const t = tableFaces({ faces, obstacles: input.obstacles ?? [] }, aspect);
-  return { geometry: input.geometry, oSize, oMap: reshapeMapMulti(t.faces, aspect, { body: input.body ?? null, protects: t.protects }) };
+  return { geometry: input.geometry, oSize, oMap: reshapeMapMulti(t.faces, aspect, { body: input.body ?? null, protects: t.protects, liquify: input.liquify ?? null }) };
 }

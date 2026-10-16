@@ -6,7 +6,7 @@ import type { ParamId } from '../types';
 import { backMapCpu, backMapperCpu } from './backMapCpu';
 import { PARAM_DEFS } from './params';
 import { reshapeUniforms } from './passes/reshape';
-import { reshapeMapCpu, withView } from './passes/reshapeCpu';
+import { liquifyAt, reshapeMapCpu, withView } from './passes/reshapeCpu';
 
 const lm = JSON.parse(readFileSync(new URL('../../tests/fixtures/landmarks_sample_face.json', import.meta.url), 'utf8')) as {
   width: number;
@@ -39,5 +39,32 @@ describe('backMapCpu (the CPU copy of P2, S §4.6)', () => {
       expect(a[1]).toBeCloseTo(b[1], 6);
       expect(many(v)).toEqual(a);
     }
+  });
+});
+
+describe('backMapCpu with a 推臉筆 field (push-brush spec §4.4, §4.5)', () => {
+  const liquify = { width: 4, height: 4, data: new Float32Array(32).map((_, i) => (i % 2 === 0 ? 0.02 : -0.01)), version: 1 };
+
+  it('an oMap built with the liquify field applies it first (f16 texels, like the GPU)', () => {
+    const aspect = oSize.width / oSize.height;
+    const oMap = reshapeMapCpu(null, null, aspect, null, null, liquify);
+    const v: [number, number] = [0.4, 0.6];
+    const got = backMapCpu(v, { geometry: IDENTITY_GEOMETRY, oSize, oMap });
+    const d = liquifyAt(liquify, v[0], v[1]);
+    expect(got[0]).toBeCloseTo(v[0] + d[0], 12);
+    expect(got[1]).toBeCloseTo(v[1] + d[1], 12);
+  });
+
+  it('then the face chain runs at the liquified point', () => {
+    const u = reshapeUniforms(values, 1);
+    const aspect = oSize.width / oSize.height;
+    const both = reshapeMapCpu(face, u, aspect, null, null, liquify);
+    const faceOnly = reshapeMapCpu(face, u, aspect);
+    const v: [number, number] = [0.45, 0.5];
+    const d = liquifyAt(liquify, v[0], v[1]);
+    const a = backMapCpu(v, { geometry: IDENTITY_GEOMETRY, oSize, oMap: both });
+    const b = faceOnly(v[0] + d[0], v[1] + d[1]);
+    expect(a[0]).toBeCloseTo(b[0], 12);
+    expect(a[1]).toBeCloseTo(b[1], 12);
   });
 });

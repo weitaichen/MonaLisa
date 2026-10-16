@@ -16,6 +16,7 @@ test('a TILE = 256 export equals the untiled render (warps, 磨皮, lip, body fi
     'step 5 identity',
     'step 5 quarter 1 + flip',
     'step 5 θ 12° + crop',
+    'strokes + 90° turn',
   ]);
   for (const r of res) {
     console.log(`${r.name}: ${r.w}×${r.h}, ${r.tiles} tiles, max channel diff ${r.maxDiff}/255, glError ${r.glError}`);

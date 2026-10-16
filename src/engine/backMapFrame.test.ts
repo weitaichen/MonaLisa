@@ -6,7 +6,7 @@ import { adapt } from '../tracking/adapter111';
 import { backMapCpu } from './backMapCpu';
 import { backMapFrameOf } from './backMapFrame';
 import { reshapeUniforms } from './passes/reshape';
-import { reshapeMapCpu } from './passes/reshapeCpu';
+import { liquifyAt, reshapeMapCpu } from './passes/reshapeCpu';
 
 const lm = JSON.parse(readFileSync(new URL('../../tests/fixtures/landmarks_sample_face.json', import.meta.url), 'utf8')) as {
   width: number;
@@ -50,5 +50,26 @@ describe('backMapFrameOf: the editor tap back-map (skin-cleanup spec §3.4)', ()
         expect(a[0]).toBeCloseTo(x, 9);
         expect(a[1]).toBeCloseTo(y, 9);
       }
+  });
+});
+
+describe('backMapFrameOf with the 推臉筆 field (push-brush spec §4.5: a 祛痘 tap lands on what the finger touched)', () => {
+  const liquify = { width: 4, height: 4, data: new Float32Array(32).map((_, i) => (i % 2 === 0 ? 0.02 : -0.01)), version: 1 };
+
+  it('applies the strokes first, then the face chain at the liquified point', () => {
+    const person = neutralPerson();
+    const values = { ...person.values, 'shape.faceSlim': 0.6 };
+    const faces = [{ face: FACE, weight: 1, person: { ...person, values }, protect: null }];
+    const withStrokes = backMapFrameOf({ faces, geometry: IDENTITY_GEOMETRY, liquify }, O_SIZE);
+    const without = backMapFrameOf({ faces, geometry: IDENTITY_GEOMETRY }, O_SIZE);
+    for (const v of [[0.4, 0.6], [0.45, 0.5], [0.7, 0.3]] as [number, number][]) {
+      const d = liquifyAt(liquify, v[0], v[1]);
+      const a = backMapCpu(v, withStrokes);
+      const b = backMapCpu([v[0] + d[0], v[1] + d[1]], without);
+      expect(a[0]).toBeCloseTo(b[0], 12);
+      expect(a[1]).toBeCloseTo(b[1], 12);
+    }
+    // no field (or null) is today's back-map exactly
+    expect(backMapCpu([0.4, 0.6], backMapFrameOf({ faces, geometry: IDENTITY_GEOMETRY, liquify: null }, O_SIZE))).toEqual(backMapCpu([0.4, 0.6], without));
   });
 });

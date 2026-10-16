@@ -212,6 +212,22 @@ function beyond(poly: readonly V2[], d: number): (x: number, y: number) => boole
     return poly.every((a, i) => segDist(p, a, poly[(i + 1) % poly.length]) > d);
   };
 }
+/**
+ * The pixels whose centre lies outside `poly` at a true distance in [d0, d1] px from its nearest edge: a ring hugging the
+ * polygon from outside. For the inner lip this is the lip itself, right where its colour passes 白牙's tooth gate (S §4.4)
+ * and R.B's ramp, read bilinearly from the ¼ target, still reaches: so the ring moves only if the lip guard fails.
+ */
+export function ringOutside(poly: readonly V2[], d0: number, d1: number): (x: number, y: number) => boolean {
+  const xs = poly.map((p) => p[0]);
+  const ys = poly.map((p) => p[1]);
+  const [x0, x1, y0, y1] = [Math.min(...xs) - d1, Math.max(...xs) + d1, Math.min(...ys) - d1, Math.max(...ys) + d1];
+  return (x, y) => {
+    const p: V2 = [x + 0.5, y + 0.5];
+    if (p[0] < x0 || p[0] > x1 || p[1] < y0 || p[1] > y1 || inPoly(p, poly)) return false;
+    const d = Math.min(...poly.map((a, i) => segDist(p, a, poly[(i + 1) % poly.length])));
+    return d >= d0 && d <= d1;
+  };
+}
 /** the polygon pushed out radially from its centroid by d px; it never reaches past beyond()'s region, so its check is stricter */
 function grow(poly: readonly V2[], d: number): V2[] {
   const cx = poly.reduce((s, p) => s + p[0], 0) / poly.length;
@@ -224,8 +240,8 @@ function grow(poly: readonly V2[], d: number): V2[] {
 const pts = (face: Face, idx: readonly number[], W: number, H: number): V2[] => idx.map((i) => [face.pts111[i * 2] * W, face.pts111[i * 2 + 1] * H]);
 const ovalPx = (face: Face, W: number, H: number): V2[] => Array.from({ length: face.oval.length / 2 }, (_, i): V2 => [face.oval[i * 2] * W, face.oval[i * 2 + 1] * H]);
 
-/** the largest channel difference (0..255) over pixels the predicate excludes */
-function maxDiff(a: Rgba8, b: Rgba8, count: (x: number, y: number) => boolean): number {
+/** the largest channel difference (0..255) over the pixels the predicate selects */
+export function maxDiff(a: Rgba8, b: Rgba8, count: (x: number, y: number) => boolean): number {
   let m = 0;
   for (let y = 0; y < a.height; y++)
     for (let x = 0; x < a.width; x++) {
@@ -239,6 +255,8 @@ function maxDiff(a: Rgba8, b: Rgba8, count: (x: number, y: number) => boolean): 
 const EYE_L = [52, 53, 72, 54, 55, 56, 73, 57];
 const EYE_R = [58, 59, 75, 60, 61, 62, 76, 63];
 const INNER_LIP = [96, 97, 98, 99, 100, 101, 102, 103];
+/** the inner-lip polygon 96–103 in px of a W × H image */
+export const innerLipPx = (face: Face, W: number, H: number): V2[] => pts(face, INNER_LIP, W, H);
 const OUTER_LIP = [84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95];
 
 /**
@@ -315,6 +333,8 @@ export function toolChecks(tool: ToolName, out: Rgba8, fix: Rgba8, orig: Rgba8, 
       const inner = pts(face, INNER_LIP, W, H);
       const outer = pts(face, OUTER_LIP, W, H);
       atMost('lips max diff', maxDiff(out, fix, (x, y) => inPoly([x + 0.5, y + 0.5], outer) && !inPoly([x + 0.5, y + 0.5], inner)), 2);
+      // the lip right outside the inner-lip line, where its colour passes the tooth gate: only the lip guard keeps it still
+      atMost('lip ring 1–4 px outside the inner lip, max diff', maxDiff(out, fix, ringOutside(inner, 1, 4)), 2);
       // by true distance: R.B's 0.04·mouthW ramp, read bilinearly from the ¼ target, reaches past grow(inner) above and below the lip
       atMost('max diff outside mouth + 0.06 mouthW', maxDiff(out, fix, beyond(inner, 0.06 * fr.mouthW * W)), 1);
       break;

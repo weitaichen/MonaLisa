@@ -9,7 +9,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { adapt } from '../tracking/adapter111';
 import type { Face } from '../types';
 import { faceFrame } from './passes/toneGeometry';
-import { TARGETS, toolChecks, type Rgba8, type ToneFixture } from './toneStats.node';
+import { inPoly, innerLipPx, maxDiff, renderToneCpu, ringOutside, TARGETS, TOOL_VALUES, toolChecks, ycc, type Rgba8, type ToneFixture } from './toneStats.node';
 
 const root = resolve(import.meta.dirname, '../..');
 let fix: Rgba8;
@@ -115,4 +115,49 @@ describe('toolChecks: a zero target on the GPU', () => {
     expect(recoveryChecks('teeth', fix, 2 / 3).map((c) => [c.name, c.bound, c.ok])).toEqual([['teeth Cb recovery', '≥ 0.300', false]]);
     expect(recoveryChecks('teeth', fix, 1).map((c) => c.bound)).toEqual(['≥ 0.450']);
   });
+});
+
+// 白牙's lip checks ran on the fixture only, and their 0/255 read the lip line from the same inner-lip polygon as the lip
+// guard. The ring 1–4 px outside that line is the lip where its colour passes the tooth gate and R.B's ramp still reaches
+// (S §4.4), and it is checked on the real photo too: with lipGuard forced to 1 it reads 24/255 on sample_face.png and on
+// the fixture (the outer-lip check 28/255). Like the guard, it trusts the inner-lip landmarks (S §9).
+describe('白牙: the lip ring 1–4 px outside the inner lip', () => {
+  const ringName = 'lip ring 1–4 px outside the inner lip, max diff';
+  it('counts a change 2–3 px outside the inner lip and none 7 px out (the check reads its ring)', () => {
+    const W = fix.width;
+    const H = fix.height;
+    const fr = faceFrame(face, W / H);
+    // the inner lip's upper (97–99) and lower (101–103) points, moved k px up or down along the face's y axis
+    const offLip = (k: number): [number, number][] =>
+      [97, 98, 99, 101, 102, 103].map((i) => {
+        const s = i < 100 ? -k : k;
+        return [Math.floor(face.pts111[i * 2] * W + fr.yhat[0] * s), Math.floor(face.pts111[i * 2 + 1] * H + fr.yhat[1] * s)];
+      });
+    const bumped = (pixels: [number, number][]): Rgba8 => {
+      const data = Uint8ClampedArray.from(fix.data);
+      for (const [x, y] of pixels) {
+        const i = (y * W + x) * 4;
+        data[i] = data[i] > 127 ? data[i] - 20 : data[i] + 20;
+      }
+      return { width: W, height: H, data };
+    };
+    const ring = (out: Rgba8) => toolChecks('teeth', out, fix, orig, fx, face, 1).find((c) => c.name === ringName)!;
+    expect([ring(bumped(offLip(2.5))).value, ring(bumped(offLip(2.5))).ok]).toEqual([20, false]);
+    expect(ring(bumped(offLip(7))).value).toBe(0);
+  });
+
+  it('on sample_face.png at 100 the ring moves ≤ 2/255 while the teeth inside the inner lip whiten', () => {
+    const W = orig.width;
+    const H = orig.height;
+    const out = renderToneCpu(orig, face, TOOL_VALUES.teeth);
+    const inner = innerLipPx(face, W, H);
+    const ring = maxDiff(out, orig, ringOutside(inner, 1, 4));
+    // the effect is real: inside the inner lip many pixels gain luma (shadowed teeth, S §4.4)
+    let lifted = 0;
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) if (inPoly([x + 0.5, y + 0.5], inner) && ycc(out, x, y)[0] - ycc(orig, x, y)[0] >= 4 / 255) lifted++;
+    console.log(`sample_face.png 白牙 100: lip ring max ${ring}/255, ${lifted} pixels inside the inner lip gain ≥ 4/255 luma`);
+    expect(ring).toBeLessThanOrEqual(2);
+    expect(lifted).toBeGreaterThan(200);
+  }, 60_000);
 });

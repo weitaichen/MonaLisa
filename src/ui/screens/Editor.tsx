@@ -235,6 +235,19 @@ export function Editor({ source }: { source: EditorSource }) {
     publishLiquify();
   };
 
+  /**
+   * Finish a pending rebuild now (儲存, the history flush: they need the committed strokes). LiquifyModel.settle() does
+   * not call onSettled, so the tick is bumped here: it re-runs the sync effect (status off, __meiyan.liquify), the
+   * render effect (it skipped the frame while pending; on a reopen there is none yet) and the encode effect. Uses
+   * stable values only: the first render's flushHistory calls it.
+   */
+  const settleLiquify = () => {
+    if (!liquify.pending) return;
+    liquify.settle();
+    sessionRef.current?.setLiquify(liquify.field);
+    setLiquifyTick((n) => n + 1);
+  };
+
   // The latest commitLive / cancelLive for callers created once: the brush hooks (memoized on brushOn) and
   // flushHistory, which the visibilitychange and unmount effects (deps []) captured on the first render; a stale
   // commitLive there would call that render's `update`.
@@ -869,8 +882,7 @@ export function Editor({ source }: { source: EditorSource }) {
   const flushHistory = () => {
     // through the ref: the visibilitychange and unmount effects hold the first render's flushHistory
     commitRef.current(); // a live stroke is committed before the editing context ends (hidden, unmount)
-    liquify.settle(); // a pending rebuild finishes now: the thumbnail must show the committed strokes
-    sessionRef.current?.setLiquify(liquify.field);
+    settleLiquify(); // a pending rebuild finishes now: the thumbnail must show the committed strokes
     const s = sessionRef.current;
     if (!s || fatalRef.current) return;
     const e = editRef.current;
@@ -1454,8 +1466,7 @@ export function Editor({ source }: { source: EditorSource }) {
     if (!session || lost) return;
     // a live stroke is committed first and a pending rebuild finished: the file shows the committed strokes (§2.5)
     commitLive();
-    liquify.settle();
-    sessionRef.current?.setLiquify(liquify.field);
+    settleLiquify();
     const action = tapAction(pill, delivered.current !== null);
     if (action === 'ignore') return;
     if (action === 'sharePending') {

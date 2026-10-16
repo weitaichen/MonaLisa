@@ -697,6 +697,39 @@ test.describe('a 質感 LUT still downloading when 儲存 is tapped', () => {
     for (const d of look) expect(d, 'every tile carries the look').toBeGreaterThan(2);
     for (const d of resident) expect(d, 'as exported with the LUT resident').toBeLessThan(0.1);
   });
+
+  test('an edit while a working-size 儲存 waits (準備中) drops its file: the pill returns to 儲存, never 分享', async ({ page }) => {
+    test.setTimeout(300_000);
+    const FILM = /\/luts\/looks\/look_film\.png$/;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    await page.route(FILM, async (r) => {
+      await gate;
+      await r.continue();
+    });
+    await importInto(page, SAMPLE_FACE); // 1000 × 1500: the plan is the working size, and 準備中 leaves the panel usable
+    await tab(page, '一鍵').click();
+    await page.getByRole('button', { name: '質感', exact: true }).click();
+    const asked = page.waitForRequest(FILM);
+    await option(page, '膠片').click();
+    await asked;
+    await watchToasts(page);
+    const pill = page.locator('.topbar .pill');
+    await pill.click();
+    await expect(pill).toHaveText('準備中'); // the export waits for the held LUT
+    // an edit while it waits: the file it will make is for the state before it (S §2.3: dropped on the next edit)
+    await tab(page, '美膚').click();
+    await option(page, '美白').click();
+    await rowSlider(page).focus();
+    await page.keyboard.press('ArrowRight');
+    // past the 4 s share window, then the LUT lands and the export finishes
+    await page.waitForTimeout(4500);
+    release();
+    await expect.poll(async () => (await debugState(page)).export?.mode, { timeout: 120_000 }).toBe('working');
+    await expect(pill).toHaveText('儲存');
+    expect(await toastsSeen(page)).not.toContain('已準備好，點一下分享');
+    expect((await debugState(page)).lastError).toBeNull();
+  });
 });
 
 test('a crash breadcrumb: toast at launch, 標準 exports, 設定 shows why; 原始解析度 again lifts the cap', async ({ page }) => {

@@ -101,7 +101,7 @@ import {
   type BodyDet,
   type OutputStamp,
 } from '../editorModel';
-import { exportOutcome, noSourceNote, pillLabel, planSig, preEncodes, shareNow, shareReady, tapAction, tileDrawState, type Pill, type ShareCache } from '../exportFlow';
+import { deliverAction, exportOutcome, noSourceNote, pillLabel, planSig, preEncodes, shareReady, tapAction, tileDrawState, type Pill, type ShareCache } from '../exportFlow';
 import { FaceProtectSource, isContourEdit, maskCoversFace, paramsPatch, type FaceProtectRecord } from '../faceProtectModel';
 import { Icon } from '../icons';
 import {
@@ -1504,16 +1504,20 @@ export function Editor({ source }: { source: EditorSource }) {
     else runWorking(s, e, field, plan, key, gen, t0, liq);
   };
 
-  /** finished: share inside the 4 s window, else the pill asks for a second tap (S §2.3) */
-  const deliver = (file: File, t0: number) => {
-    if (shareNow(t0, performance.now())) {
+  /**
+   * finished: share inside the 4 s window, else the pill asks for a second tap (S §2.3), but only for a file that still
+   * matches the edit (`current`, the share-cache test): an edit during 準備中 superseded it, so it is dropped
+   */
+  const deliver = (file: File, t0: number, current: boolean) => {
+    const action = deliverAction(t0, performance.now(), current);
+    if (action === 'share') {
       setPill('save');
       share(file);
-    } else {
+    } else if (action === 'pending') {
       delivered.current = file;
       setPill('share');
       toast(EXPORT_COPY.shareReady, 4000);
-    }
+    } else setPill('save');
   };
 
   /** today's path: the working size, encoded in the plan's format */
@@ -1528,9 +1532,10 @@ export function Editor({ source }: { source: EditorSource }) {
     exportOnLatest(s, (x) => encode(x, e, field, plan, liq), replacement).then(
       ({ s: done, result: r }) => {
         debug({ export: { mode: 'working', width: r.img.width, height: r.img.height, tiles: 0, ms: Math.round(performance.now() - t0) } });
-        // cached only while it still matches what is on screen (not after a 美體 edit during 準備中)
-        if (sessionRef.current === done && editKey(editRef.current) === key && fieldGen.current === gen) fresh.current = { key, field: gen, sig: planSig(plan), file: r.file };
-        deliver(r.file, t0);
+        // cached (and kept for 分享) only while it still matches what is on screen (not after an edit during 準備中)
+        const current = sessionRef.current === done && editKey(editRef.current) === key && fieldGen.current === gen;
+        if (current) fresh.current = { key, field: gen, sig: planSig(plan), file: r.file };
+        deliver(r.file, t0, current);
       },
       (err: unknown) => {
         if (unmounted.current) return;
@@ -1572,8 +1577,9 @@ export function Editor({ source }: { source: EditorSource }) {
         (file) => {
           if (unmounted.current) return;
           debug({ export: { mode: 'tiled', width: plan.width, height: plan.height, tiles: plan.tiles.length, ms: Math.round(performance.now() - t0) } });
-          if (editKey(editRef.current) === key && fieldGen.current === gen) fresh.current = { key, field: gen, sig: planSig(plan), file };
-          deliver(file, t0);
+          const current = editKey(editRef.current) === key && fieldGen.current === gen;
+          if (current) fresh.current = { key, field: gen, sig: planSig(plan), file };
+          deliver(file, t0, current);
         },
         (err: unknown) => {
           if (unmounted.current || exportOutcome(err) === 'abort') {

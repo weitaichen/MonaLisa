@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ExportPlan } from '../media/exportPlan';
 import type { LutKind, LutState } from '../types';
-import { exportOutcome, noSourceNote, pillLabel, planSig, preEncodes, shareNow, shareReady, tapAction, tileDrawState } from './exportFlow';
+import { deliverAction, exportOutcome, noSourceNote, pillLabel, planSig, preEncodes, shareNow, shareReady, tapAction, tileDrawState } from './exportFlow';
 
 const plan = (over: Partial<ExportPlan> = {}): ExportPlan => ({
   mode: 'working',
@@ -38,6 +38,14 @@ describe('export flow rules (S §2.3)', () => {
   it('shares at once within 4 s of the tap, else asks for a second tap', () => {
     expect(shareNow(1000, 5000)).toBe(true);
     expect(shareNow(1000, 5001)).toBe(false);
+  });
+
+  it('a finished file: shared within 4 s of the tap; later it waits for 分享 only while it still matches the edit', () => {
+    expect(deliverAction(1000, 5000, true)).toBe('share');
+    expect(deliverAction(1000, 5000, false)).toBe('share'); // inside the tap's activation: the state at the tap
+    expect(deliverAction(1000, 5001, true)).toBe('pending');
+    // an edit during 準備中 superseded it: dropped like a finished file on the next edit (S §2.3), the pill back to 儲存
+    expect(deliverAction(1000, 5001, false)).toBe('drop');
   });
 
   it('the 分享 tap shares the finished file whatever made it (a fallback included), never a new export (Review Focus 5)', () => {

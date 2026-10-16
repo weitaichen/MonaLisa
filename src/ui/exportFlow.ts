@@ -39,6 +39,16 @@ export function shareNow(startedAt: number, now: number): boolean {
 }
 
 /**
+ * What a finished export does (S §2.3): inside the tap's 4 s it is shared at once (the state at the tap). Later the pill
+ * turns 「分享」 only while the file still matches the edit (`current`); one an edit superseded while it ran (準備中
+ * leaves a working-size export's panel usable) is dropped like a finished file on the next edit, and the pill is 儲存.
+ */
+export function deliverAction(startedAt: number, now: number, current: boolean): 'share' | 'pending' | 'drop' {
+  if (shareNow(startedAt, now)) return 'share';
+  return current ? 'pending' : 'drop';
+}
+
+/**
  * What a pill tap does (S §2.3): 「分享」 shares the file the slow export just delivered, synchronously inside the tap,
  * whatever plan made it (a fallback's working-size file too, and also when a settling 美體 field kept it out of the share
  * cache), so the second tap can never start another export that ends in 「分享」 again.

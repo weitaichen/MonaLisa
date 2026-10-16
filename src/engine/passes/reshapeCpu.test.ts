@@ -672,12 +672,12 @@ describe('the step-5 read gate (RESHAPE_FS uDetail, detailMask)', () => {
     const gate = chain.indexOf('if (((uDetail >> f) & 1) != 0) {');
     expect(gate).toBeGreaterThan(0);
     const block = chain.slice(gate, chain.indexOf('}', gate));
-    for (const t of [`F(f, ${FT.RIGHT})`, `F(f, ${FT.RIGHT} + 1)`, 'F(f, 75)', 'F(f, 76)']) {
+    for (const t of [`F(f, ${FT.RIGHT})`, `F(f, ${FT.RIGHT} + 1)`, `F(f, ${FT.S5})`, `F(f, ${FT.S6})`]) {
       expect(block).toContain(t);
       expect(chain.split(t).length - 1, t).toBe(1);
     }
-    expect(chain.split('F(f, 88)').length - 1).toBe(2);
-    expect(chain).not.toMatch(/\n {2}vec4 axes = F\(f, 88\);/); // not at the top of the chain
+    expect(chain.split(`F(f, ${FT.AXES})`).length - 1).toBe(2);
+    expect(chain).not.toContain(`\n  vec4 axes = F(f, ${FT.AXES});`); // not at the top of the chain
   });
 
   it('自然, 原圖 and every v0.3 item leave the bit clear; each step-5 item, at either end, sets it', () => {

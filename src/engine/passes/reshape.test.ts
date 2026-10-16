@@ -5,6 +5,7 @@ import { applyPreset, defaultParams, neutralValue, PARAM_DEFS, paramDef, SPLIT_I
 import { adapt, blankEyes } from '../../tracking/adapter111';
 import { uMaxBox } from './faceCap';
 import { FACE_TEMPLATE } from './faceMesh';
+import { FT } from './faceTable';
 import { reshapeMapCpu } from './reshapeCpu';
 import {
   displacementBound,
@@ -395,29 +396,31 @@ describe('step-5 geometry (face-detail spec §4.1, §4.2, §4.4)', () => {
     for (const v of all) expect(Number.isFinite(v)).toBe(true);
   });
 
-  it('packFaceDetail fills texels 70–71 and 75–95 and leaves 0–69 and 72–74 alone', () => {
+  it('packFaceDetail fills texels 70–71 and 75–95 (the named step-5 entries) and leaves 0–69 and 72–74 alone', () => {
     const u = U5({ ...NEW_AT_MAX, 'shape.faceSlim': 0.5 }, { 'shape.faceSlim': 0.8, 'shape.jawline': 0.4 });
     const g = reshapeGeometry(fixture, FA, u);
-    const row = new Float32Array(96 * 4).fill(7);
+    const row = new Float32Array(FT.ROW * 4).fill(7);
     packFaceDetail(row, u, g);
     const t = (i: number) => Array.from(row.subarray(i * 4, i * 4 + 4));
-    for (let i = 0; i < 70; i++) expect(t(i)).toEqual([7, 7, 7, 7]);
-    for (const i of [72, 73, 74]) expect(t(i)).toEqual([7, 7, 7, 7]);
+    for (let i = 0; i < FT.RIGHT; i++) expect(t(i)).toEqual([7, 7, 7, 7]);
+    for (const i of [FT.BOX, FT.CAP, FT.WIN]) expect(t(i)).toEqual([7, 7, 7, 7]);
+    // the names sit where the step-5 layout put them
+    expect([FT.RIGHT, FT.RIGHT2, FT.S5, FT.S6, FT.JT, FT.TA, FT.TT, FT.AXES, FT.ROOT_RY]).toEqual([70, 71, 75, 76, 77, 82, 85, 88, 95]);
     const f32 = (xs: number[]) => xs.map((x) => Math.fround(x));
-    expect(t(70)).toEqual(f32([u.faceSlimR, u.faceVR, u.faceNarrowR, u.eyeEnlargeR]));
-    expect(t(71)).toEqual(f32([u.jawlineR, u.templeR, 0, 0]));
-    expect(t(75)).toEqual(f32([u.jawline, u.temple, g.hairlineS, g.noseWingS]));
-    expect(t(76)).toEqual(f32([g.rootK, g.mouthHS, 0, 0]));
-    expect(Array.from(row.subarray(77 * 4, 82 * 4))).toEqual(Array.from(g.jawTargets));
-    expect(Array.from(row.subarray(82 * 4, 85 * 4))).toEqual(Array.from(g.templeAnchors));
-    expect(Array.from(row.subarray(85 * 4, 88 * 4))).toEqual(Array.from(g.templeTargets));
-    expect(t(88)).toEqual(f32(g.axes));
-    expect(t(89)).toEqual(f32([...g.hairlineRadii, 0]));
-    expect(t(90)).toEqual(f32([...g.hairlineDisp, ...g.mouthHDisp]));
-    expect(t(91)).toEqual(f32([...g.mouthHRadii, 0]));
-    expect(t(92)).toEqual(f32([...g.mouthHAxis, 0, 0]));
-    expect(t(93)).toEqual(f32([g.noseWingR, ...g.noseWingDisp, 0]));
-    expect(t(94)).toEqual(f32(g.root));
-    expect(t(95)).toEqual(f32([g.rootRy, 0, 0, 0]));
+    expect(t(FT.RIGHT)).toEqual(f32([u.faceSlimR, u.faceVR, u.faceNarrowR, u.eyeEnlargeR]));
+    expect(t(FT.RIGHT2)).toEqual(f32([u.jawlineR, u.templeR, 0, 0]));
+    expect(t(FT.S5)).toEqual(f32([u.jawline, u.temple, g.hairlineS, g.noseWingS]));
+    expect(t(FT.S6)).toEqual(f32([g.rootK, g.mouthHS, 0, 0]));
+    expect(Array.from(row.subarray(FT.JT * 4, FT.TA * 4))).toEqual(Array.from(g.jawTargets));
+    expect(Array.from(row.subarray(FT.TA * 4, FT.TT * 4))).toEqual(Array.from(g.templeAnchors));
+    expect(Array.from(row.subarray(FT.TT * 4, FT.AXES * 4))).toEqual(Array.from(g.templeTargets));
+    expect(t(FT.AXES)).toEqual(f32(g.axes));
+    expect(t(FT.HAIR_R)).toEqual(f32([...g.hairlineRadii, 0]));
+    expect(t(FT.HAIR_MOUTH_DISP)).toEqual(f32([...g.hairlineDisp, ...g.mouthHDisp]));
+    expect(t(FT.MOUTH_R)).toEqual(f32([...g.mouthHRadii, 0]));
+    expect(t(FT.MOUTH_AXIS)).toEqual(f32([...g.mouthHAxis, 0, 0]));
+    expect(t(FT.WING)).toEqual(f32([g.noseWingR, ...g.noseWingDisp, 0]));
+    expect(t(FT.ROOT)).toEqual(f32(g.root));
+    expect(t(FT.ROOT_RY)).toEqual(f32([g.rootRy, 0, 0, 0]));
   });
 });

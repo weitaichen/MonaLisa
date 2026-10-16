@@ -484,25 +484,25 @@ export function faceWidthIso(face: Face, aspect: number): number {
 
 /**
  * The step-5 block of one face row of the face table (face-detail spec §4.4; S1 §4.4 keeps 72–74). `row` is the face's
- * 96-texel slice; texels 70–71 and 75–95, all other texels untouched.
+ * 96-texel slice; it fills FT.RIGHT, FT.RIGHT2 and FT.S5 … FT.ROOT_RY (texels 70–71 and 75–95), all other texels untouched.
  */
 export function packFaceDetail(row: Float32Array, u: ReshapeUniforms, g: ReshapeGeometry): void {
   const set = (t: number, a: number, b: number, c: number, d: number) => row.set([a, b, c, d], t * 4);
-  set(70, u.faceSlimR, u.faceVR, u.faceNarrowR, u.eyeEnlargeR);
-  set(71, u.jawlineR, u.templeR, 0, 0);
-  set(75, u.jawline, u.temple, g.hairlineS, g.noseWingS);
-  set(76, g.rootK, g.mouthHS, 0, 0);
-  row.set(g.jawTargets, 77 * 4);
-  row.set(g.templeAnchors, 82 * 4);
-  row.set(g.templeTargets, 85 * 4);
-  set(88, g.axes[0], g.axes[1], g.axes[2], g.axes[3]);
-  set(89, g.hairlineRadii[0], g.hairlineRadii[1], g.hairlineRadii[2], 0);
-  set(90, g.hairlineDisp[0], g.hairlineDisp[1], g.mouthHDisp[0], g.mouthHDisp[1]);
-  set(91, g.mouthHRadii[0], g.mouthHRadii[1], g.mouthHRadii[2], 0);
-  set(92, g.mouthHAxis[0], g.mouthHAxis[1], 0, 0);
-  set(93, g.noseWingR, g.noseWingDisp[0], g.noseWingDisp[1], 0);
-  set(94, g.root[0], g.root[1], g.root[2], g.root[3]);
-  set(95, g.rootRy, 0, 0, 0);
+  set(FT.RIGHT, u.faceSlimR, u.faceVR, u.faceNarrowR, u.eyeEnlargeR);
+  set(FT.RIGHT2, u.jawlineR, u.templeR, 0, 0);
+  set(FT.S5, u.jawline, u.temple, g.hairlineS, g.noseWingS);
+  set(FT.S6, g.rootK, g.mouthHS, 0, 0);
+  row.set(g.jawTargets, FT.JT * 4);
+  row.set(g.templeAnchors, FT.TA * 4);
+  row.set(g.templeTargets, FT.TT * 4);
+  set(FT.AXES, g.axes[0], g.axes[1], g.axes[2], g.axes[3]);
+  set(FT.HAIR_R, g.hairlineRadii[0], g.hairlineRadii[1], g.hairlineRadii[2], 0);
+  set(FT.HAIR_MOUTH_DISP, g.hairlineDisp[0], g.hairlineDisp[1], g.mouthHDisp[0], g.mouthHDisp[1]);
+  set(FT.MOUTH_R, g.mouthHRadii[0], g.mouthHRadii[1], g.mouthHRadii[2], 0);
+  set(FT.MOUTH_AXIS, g.mouthHAxis[0], g.mouthHAxis[1], 0, 0);
+  set(FT.WING, g.noseWingR, g.noseWingDisp[0], g.noseWingDisp[1], 0);
+  set(FT.ROOT, g.root[0], g.root[1], g.root[2], g.root[3]);
+  set(FT.ROOT_RY, g.rootRy, 0, 0, 0);
 }
 
 /**
@@ -520,7 +520,7 @@ export function detailMask(table: Float32Array, count: number): number {
     const t = (texel: number, c: number) => table[o + texel * 4 + c];
     const r = FT.RIGHT;
     const split = t(r, 0) !== t(FT.S1, 0) || t(r, 1) !== t(FT.S1, 1) || t(r, 2) !== t(FT.S1, 2) || t(r, 3) !== t(FT.S2, 3);
-    const items = t(71, 0) !== 0 || t(71, 1) !== 0 || [0, 1, 2, 3].some((c) => t(75, c) !== 0) || t(76, 0) !== 0 || t(76, 1) !== 0;
+    const items = t(FT.RIGHT2, 0) !== 0 || t(FT.RIGHT2, 1) !== 0 || [0, 1, 2, 3].some((c) => t(FT.S5, c) !== 0) || t(FT.S6, 0) !== 0 || t(FT.S6, 1) !== 0;
     if (split || items) mask |= 1 << f;
   }
   return mask;
@@ -683,9 +683,9 @@ ${glslFloats('JAW_SIDE', JAW_SIDE)}
 ${glslFloats('TEMPLE_SIDE', TEMPLE_SIDE)}
 ${glslFloats('TEMPLE_W', TEMPLE_W)}
 float sided(float dl, float dr, float side) { return dl + (dr - dl) * side; } // == dl exactly when dr == dl
-vec2 JT(int f, int k) { return pairOf(F(f, 77 + (k >> 1)), k); } // 下頜線 targets (step 5, texels 77–81)
-vec2 TA(int f, int k) { return pairOf(F(f, 82 + (k >> 1)), k); } // 太陽穴 anchors (82–84)
-vec2 TT(int f, int k) { return pairOf(F(f, 85 + (k >> 1)), k); } // 太陽穴 targets (85–87)
+vec2 JT(int f, int k) { return pairOf(F(f, ${FT.JT} + (k >> 1)), k); } // 下頜線 targets (step 5, texels 77–81)
+vec2 TA(int f, int k) { return pairOf(F(f, ${FT.TA} + (k >> 1)), k); } // 太陽穴 anchors (82–84)
+vec2 TT(int f, int k) { return pairOf(F(f, ${FT.TT} + (k >> 1)), k); } // 太陽穴 targets (85–87)
 
 // Elliptical local translate with a flat top (face-detail spec §4.2): content near c moves by disp. ax / ay = unit iso
 // axes; r = (rx, ry toward −ay, ry toward +ay) iso. Profile (1 − w⁴)²: k ≥ 0.88 for w ≤ 0.5, C¹, max |dk/dw| 2.42.
@@ -727,8 +727,8 @@ vec2 faceChain(int f, vec2 tc) {
   if (((uDetail >> f) & 1) != 0) {
     sR = F(f, ${FT.RIGHT});
     sR2 = F(f, ${FT.RIGHT} + 1);
-    s5 = F(f, 75);
-    s6 = F(f, 76);
+    s5 = F(f, ${FT.S5});
+    s6 = F(f, ${FT.S6});
   }
   if (s1.x != 0.0 || sR.x != 0.0) {
     for (int i = 0; i < 9; i++) tc = curveWarp(tc, P(f, SLIM[i].x), P(f, SLIM[i].y), sided(s1.x, sR.x, SLIM_SIDE[i]));
@@ -748,26 +748,26 @@ vec2 faceChain(int f, vec2 tc) {
   if (s1.w != 0.0) tc = curveWarp(tc, P(f, 16), ce.xy, s1.w);
   if (s2.x != 0.0) tc = curveWarp(tc, EXT(f, 0), EXT(f, 3), s2.x);
   if (s5.z != 0.0) { // 髮際線; axes = r̂ (iso), m̂ (iso)
-    vec4 axes = F(f, 88);
-    tc = shiftEllipse(tc, EXT(f, 0), axes.xy, axes.zw, F(f, 89).xyz, F(f, 90).xy);
+    vec4 axes = F(f, ${FT.AXES});
+    tc = shiftEllipse(tc, EXT(f, 0), axes.xy, axes.zw, F(f, ${FT.HAIR_R}).xyz, F(f, ${FT.HAIR_MOUTH_DISP}).xy);
   }
   if (r.w >= 0.0) tc = protectContour(f, tc0, tc, r.w);
   if (s2.y != 0.0) {
     for (int i = 0; i < 4; i++) tc = curveWarp(tc, P(f, NOSE[i].x), P(f, NOSE[i].y), s2.y);
   }
   if (s5.w != 0.0) { // 鼻翼
-    vec4 nw = F(f, 93);
+    vec4 nw = F(f, ${FT.WING});
     tc = shiftAround(tc, P(f, 80), nw.x, nw.yz);
     tc = shiftAround(tc, P(f, 81), nw.x, -nw.yz);
   }
   if (s6.x != 0.0) { // 山根
-    vec4 axes = F(f, 88);
-    vec4 rt = F(f, 94);
-    tc = squeezeAxis(tc, rt.xy, axes.xy, axes.zw, vec3(rt.z, rt.w, F(f, 95).x), s6.x);
+    vec4 axes = F(f, ${FT.AXES});
+    vec4 rt = F(f, ${FT.ROOT});
+    tc = squeezeAxis(tc, rt.xy, axes.xy, axes.zw, vec3(rt.z, rt.w, F(f, ${FT.ROOT_RY}).x), s6.x);
   }
   if (s6.y != 0.0) { // 嘴高, then 嘴型 (backward order: forward, 嘴型 scales about the true p106, then 嘴高 moves it)
-    vec2 ay = F(f, 92).xy;
-    tc = shiftEllipse(tc, P(f, 106), vec2(-ay.y, ay.x), ay, F(f, 91).xyz, F(f, 90).zw);
+    vec2 ay = F(f, ${FT.MOUTH_AXIS}).xy;
+    tc = shiftEllipse(tc, P(f, 106), vec2(-ay.y, ay.x), ay, F(f, ${FT.MOUTH_R}).xyz, F(f, ${FT.HAIR_MOUTH_DISP}).zw);
   }
   if (s2.z != 0.0) tc = scaleAround(tc, P(f, 106), r.z, s2.z);
   if (ce.zw != vec2(0.0)) {

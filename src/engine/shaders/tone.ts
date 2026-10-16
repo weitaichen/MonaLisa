@@ -7,9 +7,11 @@ import { TONE_ZERO } from '../passes/toneGeometry';
  * Every tunable constant of the tone field and the retouch. The gains are calibrated on sample_face_tone.png by
  * toneCalibration.test.ts (plan Task 9): from the spec's starting values, 勻膚 even.chroma ×1.2, 膚色 warm and cool ×1.2,
  * 亮眼 eye.detint ×2 and eye.clarity ×1.1; the two gains above 1 act through an effective factor capped at 1, so they
- * steepen the region ramp but never push past neutral (step 4 follow-up). 白牙's tooth gate and lip guard are plan
- * Task 11's decision (b). 法令紋 reads a fold-relative reference, and its lift is ×1.5 (step 4 follow-up). Every other
- * entry is the spec's (S §4.3–4.4).
+ * steepen the region ramp but never push past neutral (step 4 follow-up). 勻膚 and 黑眼圈 read the same mid band; where
+ * their regions overlap the factors combine as if one ran after the other, 1 − (1 − e)(1 − d), never above 1 (v0.4 cleanup).
+ * 白牙's tooth gate and lip guard are plan Task 11's decision (b). 法令紋 reads a fold-relative reference, and its lift
+ * is ×1.5 (step 4 follow-up); over 勻膚 / 黑眼圈 it does not add to them (the larger lift wins, TONE_FIELD_FS). Every
+ * other entry is the spec's (S §4.3–4.4).
  */
 export const TONE = {
   /** conf = smoothstep(conf0, conf1, L.a): how much skin the low-pass reference saw */
@@ -18,7 +20,7 @@ export const TONE = {
   evenGuard: [0.06, 0.14],
   /** 黑眼圈 / 法令紋 leave darkness beyond these alone (lashes, frames) */
   darkGuard: [0.2, 0.3],
-  /** chroma: the effective factor min(1, chroma · weight) never inverts bC (a gain above 1 only steepens the ramp) */
+  /** chroma: the effective factor min(1, chroma · wE) never inverts bC (a gain above 1 only steepens the ramp) */
   even: { chroma: 1.08, lift: 0.45 },
   darkCircle: { lift: 0.85, chroma: 0.7 },
   /**
@@ -179,8 +181,11 @@ void main() {
 
 /**
  * Δ8 = ZERO + 2·clamp(Δ): 勻膚 and 黑眼圈 on the mid band, 法令紋 on the valley depth across its band, then 膚色 (S §4.3).
- * 法令紋 reads base0 (uBase, working px) and the band chords (uFold: S.xy, E.xy in working px, uFolds of them); with
- * none listed it does nothing (foldBand in toneCpu.ts).
+ * Δ is a luma lift dY plus a zero-luma chroma correction dC. 勻膚 + 黑眼圈 (one mid band): each factor is 1 − (1 − e)(1 − d),
+ * as if one ran after the other, so the overlap never passes L (v0.4 cleanup; they used to add, to 1.3 lift and 1.7
+ * chroma). 法令紋 over them (its own reference): dY is the larger lift, and the chroma sum is cut to the longer one's
+ * length, so it never adds past the stronger tool. 法令紋 reads base0 (uBase, working px) and the band
+ * chords (uFold: S.xy, E.xy in working px, uFolds of them); with none listed it does nothing (foldBand in toneCpu.ts).
  */
 export const TONE_FIELD_FS = /* glsl */ `#version 300 es
 precision highp float;
@@ -221,8 +226,9 @@ void main() {
   vec4 q = texture(uQ, uv);
   vec4 r = texture(uR, uv);
   float wE = q.r * conf * gE;
-  vec3 d = -min(1.0, ${g(T.even.chroma)} * wE) * bC + ${g(T.even.lift)} * wE * lift
-         + r.r * conf * gD * (${g(T.darkCircle.lift)} * lift - ${g(T.darkCircle.chroma)} * bC);
+  float wD = r.r * conf * gD;
+  float dY = (1.0 - (1.0 - ${g(T.even.lift)} * wE) * (1.0 - ${g(T.darkCircle.lift)} * wD)) * lift;
+  vec3 dC = -(1.0 - (1.0 - min(1.0, ${g(T.even.chroma)} * wE)) * (1.0 - ${g(T.darkCircle.chroma)} * wD)) * bC;
   if (r.g > 0.0 && uFolds > 0) {
     vec2 c = (vec2(p) + 0.5) * 8.0;
     float best = 1e30;
@@ -241,8 +247,13 @@ void main() {
     vec3 bn = box8(c) - 0.5 * (box8(c + uFoldK * n) + box8(c - uFoldK * n));
     float bnY = dot(bn, L709);
     float gN = 1.0 - smoothstep(${g(T.darkGuard[0])}, ${g(T.darkGuard[1])}, -bnY);
-    d += r.g * conf * gN * (${g(T.nasolabial.lift)} * -min(bnY, 0.0) - ${g(T.nasolabial.chroma)} * (bn - vec3(bnY)));
+    float wN = r.g * conf * gN;
+    dY = max(dY, ${g(T.nasolabial.lift)} * wN * -min(bnY, 0.0));
+    vec3 nC = -${g(T.nasolabial.chroma)} * wN * (bn - vec3(bnY));
+    vec3 sC = dC + nC;
+    dC = sC * min(1.0, max(length(dC), length(nC)) / max(length(sC), 1e-6));
   }
+  vec3 d = dC + vec3(dY);
   float s = clamp(2.0 * (q.b - ZERO), -1.0, 1.0);
   if (abs(s) > 0.5 / 255.0) {
     vec3 c0 = m + d;

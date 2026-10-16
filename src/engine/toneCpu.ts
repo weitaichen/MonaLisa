@@ -222,17 +222,26 @@ export function deltaTexel(m: ArrayLike<number>, L: ArrayLike<number>, q: ArrayL
   const gD = 1 - smoothstep(TONE.darkGuard[0], TONE.darkGuard[1], -bY);
   const kE = q[0] * conf * gE;
   const kD = r[0] * conf * gD;
-  // 勻膚's chroma factor is capped at 1: at full weight it cancels bC, never inverts it
-  const cE = Math.min(1, TONE.even.chroma * kE);
-  for (let c = 0; c < 3; c++) {
-    out[c] = -cE * bC[c] + TONE.even.lift * kE * lift + kD * (TONE.darkCircle.lift * lift - TONE.darkCircle.chroma * bC[c]);
-  }
-  // 法令紋: only what is darker than across its band is lifted, and darkness beyond darkGuard is left alone
+  // 勻膚 and 黑眼圈 read the same mid band. Where the regions overlap (勻膚's covers the crescents) their factors combine as
+  // if one ran after the other, 1 − (1 − e)(1 − d): the sum is never above 1, so the texel never passes L, and each slider
+  // still acts; each tool alone keeps its own factor
+  const fL = 1 - (1 - TONE.even.lift * kE) * (1 - TONE.darkCircle.lift * kD);
+  const fC = 1 - (1 - Math.min(1, TONE.even.chroma * kE)) * (1 - TONE.darkCircle.chroma * kD);
+  let dY = fL * lift;
+  const dC = [-fC * bC[0], -fC * bC[1], -fC * bC[2]];
+  // 法令紋: only what is darker than across its band is lifted, and darkness beyond darkGuard is left alone. It reads its
+  // own reference, so over 勻膚 / 黑眼圈 the two corrections do not add: the lift is the larger one, and the chroma sum is
+  // cut to the length of the longer one (it only shortens when they point the same way)
   if (r[1] > 0 && fold) {
     const fY = LUMA709[0] * fold[0] + LUMA709[1] * fold[1] + LUMA709[2] * fold[2];
     const kN = r[1] * conf * (1 - smoothstep(TONE.darkGuard[0], TONE.darkGuard[1], -fY));
-    for (let c = 0; c < 3; c++) out[c] += kN * (TONE.nasolabial.lift * -Math.min(fY, 0) - TONE.nasolabial.chroma * (fold[c] - fY));
+    dY = Math.max(dY, TONE.nasolabial.lift * kN * -Math.min(fY, 0));
+    const nC = [0, 1, 2].map((c) => -TONE.nasolabial.chroma * kN * (fold[c] - fY));
+    const s = [dC[0] + nC[0], dC[1] + nC[1], dC[2] + nC[2]];
+    const cut = Math.min(1, Math.max(Math.hypot(dC[0], dC[1], dC[2]), Math.hypot(nC[0], nC[1], nC[2])) / Math.max(Math.hypot(s[0], s[1], s[2]), 1e-6));
+    for (let c = 0; c < 3; c++) dC[c] = s[c] * cut;
   }
+  for (let c = 0; c < 3; c++) out[c] = dC[c] + dY;
   const s = Math.min(1, Math.max(-1, 2 * (q[2] - TONE_ZERO)));
   if (Math.abs(s) > 0.5 / 255) {
     const c0 = [m[0] + out[0], m[1] + out[1], m[2] + out[2]];

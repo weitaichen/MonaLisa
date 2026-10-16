@@ -85,6 +85,58 @@ describe('toneCpu (skin-cleanup spec §4.3–4.4)', () => {
     for (let k = 0; k < 3; k++) expect(h[k]).toBeCloseTo(-Math.min(1, 0.5 * TONE.even.chroma) * c[k], 12);
   });
 
+  describe('overlapping tools never add past one tool (S §4.3, §9)', () => {
+    // a darker-than-reference texel with a chroma cast: bY −0.03 (gE = gD = 1), conf 1
+    const L = [0.7, 0.55, 0.45, 1];
+    const cast = [0.012, -0.012 * (LUMA709[0] / LUMA709[1]), 0];
+    const m = [L[0] - 0.03 + cast[0], L[1] - 0.03 + cast[1], L[2] - 0.03 + cast[2], 1];
+    const lumaOf = (d: ArrayLike<number>) => lum(d);
+    const chromaOf = (d: ArrayLike<number>) => [0, 1, 2].map((k) => d[k] - lumaOf(d));
+    const len = (v: readonly number[]) => Math.hypot(...v);
+
+    it('勻膚 + 黑眼圈 combine as if one ran after the other, so their overlap never passes L (it used to add to 1.3 lift, 1.7 chroma)', () => {
+      const { bY, bC } = bandOf(m, L);
+      expect(bY).toBeCloseTo(-0.03, 12);
+      // each alone keeps its own factor: 勻膚 0.45 lift, min(1, 1.08) chroma; 黑眼圈 0.85 lift, 0.70 chroma
+      const e = deltaTexel(m, L, [1, 1, TONE_ZERO, 0], [0, 0, 0, 0], [0, 0, 0]);
+      const k = deltaTexel(m, L, [0, 1, TONE_ZERO, 0], [1, 0, 0, 0], [0, 0, 0]);
+      expect(lumaOf(e)).toBeCloseTo(TONE.even.lift * 0.03, 12);
+      expect(lumaOf(k)).toBeCloseTo(TONE.darkCircle.lift * 0.03, 12);
+      for (let c = 0; c < 3; c++) expect(chromaOf(k)[c]).toBeCloseTo(-TONE.darkCircle.chroma * bC[c], 12);
+      // both at once equal 勻膚, then 黑眼圈 on its result against the same L (the guards are 1 at both steps here)
+      const both = deltaTexel(m, L, [1, 1, TONE_ZERO, 0], [1, 0, 0, 0], [0, 0, 0]);
+      const m1 = [m[0] + e[0], m[1] + e[1], m[2] + e[2], 1];
+      const then = deltaTexel(m1, L, [0, 1, TONE_ZERO, 0], [1, 0, 0, 0], [0, 0, 0]);
+      for (let c = 0; c < 3; c++) expect(both[c]).toBeCloseTo(e[c] + then[c], 12);
+      // so the lift factor is 1 − 0.55 · 0.15 and the chroma factor 1: the texel ends between m and L, never past L
+      expect(lumaOf(both)).toBeCloseTo((1 - (1 - TONE.even.lift) * (1 - TONE.darkCircle.lift)) * 0.03, 12);
+      for (let c = 0; c < 3; c++) expect(chromaOf(both)[c]).toBeCloseTo(-bC[c], 12);
+      expect(lumaOf(both)).toBeLessThanOrEqual(-bY);
+      // and each slider still acts where the other is on (no dead slider): 黑眼圈 0.5 over 勻膚 1 lifts more than 勻膚 alone
+      const half = deltaTexel(m, L, [1, 1, TONE_ZERO, 0], [0.5, 0, 0, 0], [0, 0, 0]);
+      expect(lumaOf(half)).toBeGreaterThan(lumaOf(e) + 1 / 255);
+    });
+
+    it('法令紋 over 勻膚 / 黑眼圈: the lift is the larger of the two, the chroma correction no longer than the longer one', () => {
+      // a fold depth across the band (bNY −0.02) with its own chroma, at full 法令紋 weight
+      const fold = [-0.02 - 0.006, -0.02 + 0.006 * (LUMA709[0] / LUMA709[1]), -0.02];
+      const foldY = lumaOf(fold);
+      const n = deltaTexel(m, L, [0, 1, TONE_ZERO, 0], [0, 1, 0, 0], [0, 0, 0], fold);
+      // alone: its calibrated gain, unchanged (1.20 of the valley depth)
+      expect(lumaOf(n)).toBeCloseTo(TONE.nasolabial.lift * -foldY, 12);
+      const e = deltaTexel(m, L, [1, 1, TONE_ZERO, 0], [0, 0, 0, 0], [0, 0, 0]);
+      const en = deltaTexel(m, L, [1, 1, TONE_ZERO, 0], [0, 1, 0, 0], [0, 0, 0], fold);
+      expect(lumaOf(en)).toBeCloseTo(Math.max(lumaOf(e), lumaOf(n)), 12);
+      expect(len(chromaOf(en))).toBeLessThanOrEqual(Math.max(len(chromaOf(e)), len(chromaOf(n))) + 1e-12);
+      // with every mid-band tool and 法令紋 at full weight the lift is still the larger of the mid band's (勻膚 then 黑眼圈) and 法令紋's
+      const mid = deltaTexel(m, L, [1, 1, TONE_ZERO, 0], [1, 0, 0, 0], [0, 0, 0]);
+      const all = deltaTexel(m, L, [1, 1, TONE_ZERO, 0], [1, 1, 0, 0], [0, 0, 0], fold);
+      expect(lumaOf(mid)).toBeGreaterThan(lumaOf(n));
+      expect(lumaOf(all)).toBeCloseTo(lumaOf(mid), 12);
+      expect(len(chromaOf(all))).toBeLessThanOrEqual(Math.max(len(chromaOf(mid)), len(chromaOf(n))) + 1e-12);
+    });
+  });
+
   it('a mole (mid-band luma −0.2) is left alone by 勻膚', () => {
     const w = 256;
     const sMid = sigmaMid(w);
@@ -307,6 +359,6 @@ describe('toneCpu (skin-cleanup spec §4.3–4.4)', () => {
 
 describe('tone shaders pin', () => {
   it('is pinned to the shader text and the TONE table: a change must be mirrored in toneCpu.ts (then update this hash)', () => {
-    expect(shaderHash([TONE_DOWN8_FS, TONE_BLUR_FS, TONE_LBOX_FS, TONE_FIELD_FS, RETOUCH_FS].join('\n'))).toBe('2f3ec5e2');
+    expect(shaderHash([TONE_DOWN8_FS, TONE_BLUR_FS, TONE_LBOX_FS, TONE_FIELD_FS, RETOUCH_FS].join('\n'))).toBe('7b5800af');
   });
 });

@@ -8,7 +8,8 @@ import { PNG } from 'pngjs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { adapt } from '../tracking/adapter111';
 import type { Face } from '../types';
-import { renderToneCpu, TOOL_VALUES, toolChecks, type Rgba8, type ToneFixture, type ToolName } from './toneStats.node';
+import { NEUTRAL_TONE } from './passes/toneGeometry';
+import { renderToneCpu, TOOL_VALUES, toolChecks, type Check, type Rgba8, type ToneFixture, type ToolName } from './toneStats.node';
 
 const root = resolve(import.meta.dirname, '../..');
 let fix: Rgba8;
@@ -39,4 +40,26 @@ describe('TONE calibration on sample_face_tone.png', () => {
       expect(checks.filter((c) => !c.ok).map((c) => `${c.name} = ${c.value.toFixed(4)} (${c.bound})`)).toEqual([]);
     }, 60_000);
   }
+});
+
+// 勻膚's region covers the crescents and the bands, so the tools overlap there (S §4.3). They used to add (lift 0.45 + 0.85
+// under the eyes): 勻膚 + 黑眼圈 then cut the left lash line to 0.792 of its contrast, below the 0.8 keep. Now 勻膚 and
+// 黑眼圈 combine as if one ran after the other and 法令紋 takes the larger lift, so every tool's own checks still hold
+// together and each still adds to the other (no dead slider).
+describe('overlapping tools at 100 on sample_face_tone.png', () => {
+  const failed = (checks: Check[]) => checks.filter((c) => !c.ok).map((c) => `${c.name} = ${c.value.toFixed(4)} (${c.bound})`);
+  const recoveries = (checks: Check[]) => checks.filter((c) => c.name.includes('recovery')).map((c) => c.value);
+
+  it('勻膚 + 黑眼圈 + 法令紋 keep every bound of each tool, and each tool recovers at least what it does alone', () => {
+    const all = renderToneCpu(fix, face, { ...NEUTRAL_TONE, even: 1, darkCircle: 1, nasolabial: 1 });
+    const report: string[] = [];
+    for (const tool of ['even', 'darkCircle', 'nasolabial'] as const) {
+      const together = toolChecks(tool, all, fix, orig, fx, face, 1);
+      const alone = toolChecks(tool, renderToneCpu(fix, face, TOOL_VALUES[tool]), fix, orig, fx, face, 1);
+      report.push(`${tool}: ${together.map((c) => `${c.name} = ${c.value.toFixed(4)}`).join('; ')}`);
+      expect(failed(together), tool).toEqual([]);
+      recoveries(together).forEach((v, i) => expect(v, `${tool} recovery ${i}`).toBeGreaterThanOrEqual(recoveries(alone)[i] - 1e-9));
+    }
+    console.log(report.join('\n'));
+  }, 120_000);
 });

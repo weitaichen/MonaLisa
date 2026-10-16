@@ -94,6 +94,8 @@ export function useHold(onChange: (on: boolean) => void) {
   }, []);
   return {
     held,
+    /** the hold now, synchronously (a pointer down in the same frame as the press, before the re-render) */
+    isHeld: () => heldRef.current,
     /** force off (e.g. the preview went away or a photo is being taken) */
     release: () => set(false),
     props: {

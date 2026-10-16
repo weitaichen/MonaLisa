@@ -280,7 +280,7 @@ export function Editor({ source }: { source: EditorSource }) {
     setLiquifyTick((n) => n + 1);
   };
 
-  // The latest commitLive / cancelLive for callers created once: the brush hooks (memoized on brushOn) and
+  // The latest commitLive / cancelLive for callers created once: the brush hooks (memoized on brushMode) and
   // flushHistory, which the visibilitychange and unmount effects (deps []) captured on the first render; a stale
   // commitLive there would call that render's `update`.
   const commitRef = useRef(commitLive);
@@ -1379,7 +1379,17 @@ export function Editor({ source }: { source: EditorSource }) {
   });
 
   // ── 推臉筆 brush mode (push-brush spec §2.5): one finger draws, two fingers pinch; never while 按住對比 is held ──
-  const brushOn = !!session && !fatal && !lost && !hold.held && showsBrush(sel);
+  /**
+   * the mode: the brush bar, the dimmed strip, the hint and the gesture hooks (zoomPan's reducer). 按住對比 keeps it
+   * (§2.3: the hold only hides the ring and starts no stroke), and so does a lost context (§7)
+   */
+  const brushMode = !!session && !fatal && showsBrush(sel);
+  /** a stroke can start and the ring shows: not while 按住對比 is held, not with the context lost */
+  const brushDraws = brushMode && !lost && !hold.held;
+  const drawsRef = useRef(brushDraws);
+  drawsRef.current = brushDraws;
+  /** read at the pointer down: the hold and the context as they are now (a press in the frame before the re-render) */
+  const canDraw = () => drawsRef.current && !hold.isHeld() && !svc.get().lost;
 
   const frameXY = (p: { x: number; y: number }) => {
     const r = frameEl.current?.getBoundingClientRect();
@@ -1391,15 +1401,17 @@ export function Editor({ source }: { source: EditorSource }) {
   const sizeRef = useRef(brushSize);
   sizeRef.current = brushSize;
 
-  // memoized on brushOn only (a new hooks object restarts zoomPan's reducer): the latest commitLive / cancelLive are
-  // called through commitRef / cancelRef, everything else is read through refs
+  // memoized on brushMode only (a new hooks object restarts zoomPan's reducer, so 按住對比 must not make one): the latest
+  // commitLive / cancelLive are called through commitRef / cancelRef, everything else is read through refs
   const brushHooks = useMemo<BrushHooks | null>(() => {
-    if (!brushOn) return null;
+    if (!brushMode) return null;
     return {
       start(p) {
         // a stroke whose backlog still drains after its finger up commits now; any other live stroke keeps the input
         if (live.current?.ending) commitRef.current();
         if (live.current) return;
+        // 按住對比 held or the context lost: the finger neither draws nor pans (two fingers still pinch)
+        if (!canDraw()) return;
         const r = layerRect();
         if (!r) return;
         const g = editRef.current.photo.geometry;
@@ -1461,23 +1473,24 @@ export function Editor({ source }: { source: EditorSource }) {
         if (on) ring.current?.hide();
       },
     };
-  }, [brushOn]);
+  }, [brushMode]);
 
-  // leaving brush mode (tab, item, 按住對比, crop, a lost context) commits a live stroke first
+  // leaving brush mode (tab, item, crop), pressing 按住對比 or losing the context commits a live stroke first: what was
+  // drawn is one undo step, and the next stroke starts after the release or the restore (push-brush spec §7)
   useEffect(() => {
-    if (!brushOn) commitLive();
-  }, [brushOn]);
+    if (!brushDraws) commitLive();
+  }, [brushDraws]);
 
-  // the hint pill: on entering the mode and on each 推／恢復 switch, for BRUSH_HINT_MS
+  // the hint pill: on entering the mode and on each 推／恢復 switch, for BRUSH_HINT_MS (a 按住對比 hold is no re-entry)
   useEffect(() => {
-    if (!brushOn) {
+    if (!brushMode) {
       setHint(null);
       return;
     }
     setHint((h) => ({ kind: brushKind, gen: (h?.gen ?? 0) + 1 }));
     const t = window.setTimeout(() => setHint(null), BRUSH_HINT_MS);
     return () => clearTimeout(t);
-  }, [brushOn, brushKind]);
+  }, [brushMode, brushKind]);
 
   const setBrushKind = (k: BrushKind) => {
     lastBrushKind = k;
@@ -1922,10 +1935,10 @@ export function Editor({ source }: { source: EditorSource }) {
       }
     : undefined;
   // off in 裁切 mode, and its view is reset to identity when the tab opens (S §2.1)
-  // brush mode: one finger draws, and no person is selected by a tap (push-brush spec §2.5). brushOn and spotMode are
-  // never both true (美型／美體 versus 美膚); zoomPan reads `brush` before `spotTap` and `onTap`
+  // brush mode: one finger draws, and no person is selected by a tap (push-brush spec §2.5), also while 按住對比 is held.
+  // brushMode and spotMode are never both true (美型／美體 versus 美膚); zoomPan reads `brush` before `spotTap` and `onTap`
   useZoomPan(stageRef, layerRef, !!session && !cropMode, {
-    onTap: spotMode || brushOn ? undefined : onPersonTap,
+    onTap: spotMode || brushMode ? undefined : onPersonTap,
     spotTap: spotMode ? tapSpot : undefined,
     resetWhen: cropMode,
     brush: brushHooks,
@@ -1948,7 +1961,7 @@ export function Editor({ source }: { source: EditorSource }) {
     setThumbs(next);
   }, [detect]);
   // strokes are photo-level (push-brush spec §1.2): the strip dims with 「整張照片」 in brush mode
-  const scope = multi && (photoScoped(sel, lens) || brushOn);
+  const scope = multi && (photoScoped(sel, lens) || brushMode);
   const stripPersons: StripPerson[] = infos.map((p, i) => ({
     id: p.id,
     n: i + 1,
@@ -1973,7 +1986,7 @@ export function Editor({ source }: { source: EditorSource }) {
         })
       : [];
   // 祛痘 and 推臉筆 hide the boxes (C §2.2): the chips stay (in 祛痘 they pick the 清除 scope)
-  const showBoxes = !!session && !fatal && !dragging && !hold.held && !showsHeightBand(sel, bodyCtx) && !spotMode && !brushOn;
+  const showBoxes = !!session && !fatal && !dragging && !hold.held && !showsHeightBand(sel, bodyCtx) && !spotMode && !brushMode;
   // face effects cannot apply: 基本模式, or no face in this photo (null while analysing, so no flash)
   // (a tracker that could not answer gets a neutral note until the re-detect gives a real answer)
   let faceNote: string | null = null;
@@ -2103,8 +2116,8 @@ export function Editor({ source }: { source: EditorSource }) {
           {hold.held && <span class="corner-label">原圖</span>}
           {spotMode && !hold.held && <span class="corner-label spot-hint">{TONE_COPY.spotHint}</span>}
           {/* 推臉筆 (push-brush spec §2.3): screen space, outside the zoom layer */}
-          {brushOn && <BrushOverlay handle={ring} />}
-          {brushOn && hint && <BrushHint key={hint.gen} kind={hint.kind} />}
+          {brushDraws && <BrushOverlay handle={ring} />}
+          {brushMode && hint && <BrushHint key={hint.gen} kind={hint.kind} />}
           {session && !fatal && (
             <div class="editor-tools" inert={exportBusy}>
               <button type="button" class={`float-btn${confirmReset ? ' confirm' : ''}`} onClick={reset}>
@@ -2130,7 +2143,7 @@ export function Editor({ source }: { source: EditorSource }) {
           <PersonStrip persons={stripPersons} selection={selected} photoScope={scope} onSelect={choose} thumbTransform={isIdentity(g) ? undefined : chipTransform(g)} />
         )}
         {/* the brush bar takes the slider row's place, also when faceOff (the brush is never gated, push-brush spec §2.1) */}
-        {brushOn ? (
+        {brushMode ? (
           <BrushBar
             kind={brushKind}
             size={brushSize}

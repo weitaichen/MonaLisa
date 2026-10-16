@@ -474,6 +474,15 @@ test('group photo: brush mode dims the person strip with 整張照片, and a tap
   await page.waitForTimeout(300);
   expect((await debugState(page)).selected).toBe(selected);
   expect(await strokes(page)).toBe(0);
+  // 按住對比 keeps the mode (§2.3): the strip stays dimmed with 整張照片 and the bar stays while it is held
+  const hb = (await page.getByRole('button', { name: '按住對比' }).boundingBox())!;
+  await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+  await page.mouse.down();
+  await expect(page.locator('.float-btn.held')).toHaveCount(1);
+  await expect(page.getByText('整張照片', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('radiogroup', { name: '筆刷模式' })).toBeVisible();
+  await page.mouse.up();
+  await expect(page.locator('.float-btn.held')).toHaveCount(0);
 });
 
 /** what iOS does when the user swipes home or a call comes in: the page turns hidden (Editor's flushHistory listener) */
@@ -542,6 +551,50 @@ test('↶ and 全部清除 wait while a finger draws; finger-up makes exactly on
 });
 
 // ── v0.4 cleanup (step-6 review) ──
+
+test('按住對比 in brush mode keeps the mode: the bar stays, a second finger draws nothing, the hint does not come back', async ({ page }) => {
+  await openPhoto(page, { name: 'line.png', mimeType: 'image/png', buffer: linePng() });
+  await enterBrush(page, '美體');
+  const hb = (await page.getByRole('button', { name: '按住對比' }).boundingBox())!;
+  const holdPt = { x: hb.x + hb.width / 2, y: hb.y + hb.height / 2, id: 1 };
+  const { at } = await photoToClient(page, LINE);
+  const c = at(LINE.x, 450);
+  // what the page shows on every frame while the hold is down (one touch sequence: no assertion can run inside it)
+  await page.evaluate(() => {
+    const w = window as unknown as { __hold: { frames: number; bar: number; ring: number; hint: number } };
+    w.__hold = { frames: 0, bar: 0, ring: 0, hint: 0 };
+    const tick = () => {
+      if (document.querySelector('.float-btn.held')) {
+        w.__hold.frames++;
+        if (document.querySelector('.brush-bar [role="radiogroup"][aria-label="筆刷模式"]')) w.__hold.bar++;
+        if (document.querySelector('.brush-ring:not(.hidden)')) w.__hold.ring++;
+      }
+      if (document.querySelector('.brush-hint')) w.__hold.hint++;
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  await touch(page, [
+    { type: 'touchStart', points: [holdPt], waitMs: 200 },
+    // a second finger on the photo while the hold is down
+    { type: 'touchStart', points: [holdPt, { x: c.x, y: c.y, id: 2 }], waitMs: 16 },
+    ...[1, 2, 3, 4, 5, 6].map((i) => ({ type: 'touchMove' as const, points: [holdPt, { x: c.x + 4 * i, y: c.y, id: 2 }], waitMs: 16 })),
+    { type: 'touchEnd', points: [holdPt], waitMs: 200 },
+    { type: 'touchEnd', points: [], waitMs: 600 },
+  ]);
+  const seen = await page.evaluate(() => (window as unknown as { __hold: { frames: number; bar: number; ring: number; hint: number } }).__hold);
+  console.log(`按住對比 in brush mode: ${seen.frames} held frames, the bar in ${seen.bar}, the ring in ${seen.ring}; hint frames ${seen.hint}`);
+  expect(seen.frames).toBeGreaterThan(5);
+  expect(seen.bar).toBe(seen.frames); // the brush bar never left
+  expect(seen.ring).toBe(0);
+  expect(seen.hint).toBe(0); // the release is no re-entry: no hint pill
+  await expect(page.locator('.float-btn.held')).toHaveCount(0);
+  expect(await strokes(page)).toBe(0);
+  await expect(page.getByRole('button', { name: '復原' })).toBeDisabled();
+  // the mode draws at once after the release
+  await brushDrag(page, c, { x: c.x + 24, y: c.y });
+  await expect.poll(() => strokes(page)).toBe(1);
+});
 
 test('the debounced export fired after a stroke’s first stamps but before the drawing flip snapshots nothing of it', async ({ page }) => {
   await openPhoto(page, { name: 'line.png', mimeType: 'image/png', buffer: linePng() });

@@ -93,6 +93,7 @@ v0.3 has no manual liquify (`monalisa_inventory.md:216`). The displacement-textu
   - 恢復: white, dashed 4/4;
   - `--dim` while the brush resists (the last stamp was skipped by the guard, §4.3) or after a cap is hit (§3.6).
 - The ring hides while pinching, while 按住對比 is held, and when the mode ends.
+- **按住對比 does not end the mode** (v0.4 cleanup, step-6 review): the brush bar, the 整張照片 strip, the boxes being hidden and zoomPan's gesture reducer all stay. While it is held no stroke starts (two fingers still pinch), a tap selects nobody, and a stroke that was live at the press commits (one undo step). The release is no re-entry, so the hint pill does not show again. The Editor splits the flag: `brushMode` (bar, strip, hint, hooks) and `brushDraws` (`brushMode` and not held and not lost: the ring, a stroke start).
 - Hint pill: top centre of `.frame` (also outside the zoom layer), `--panel` background. It shows 「單指推動，雙指縮放」 (推) or 「單指塗抹恢復，雙指縮放」 (恢復) for 2.5 s on entering the mode and on each mode switch, and fades out over 300 ms.
 
 ### 2.4 Copy (new strings; the contract's strings are kept exactly)
@@ -510,7 +511,7 @@ Without a frame (the camera look) every stroke is dropped. Otherwise, in order, 
 | 儲存 during a live stroke | Commit first, then export with `model.snapshot()` |
 | The debounced autosave fires during a live stroke or a chunked rebuild | Skipped; `liquifyTick` re-arms it when the stroke ends or the rebuild finishes (§3.5). The timer checks again when it fires, reading the live stroke from its ref (`editorModel.outputWaits`): Preact runs the cleanup that cancels a timer armed before the stroke only after the next frame, whose queue drain already applied the first stamps (v0.4 cleanup, step-6 review) |
 | An export waits for a filter LUT while the user keeps drawing | The export uses the snapshot taken at the tap (the `snapshotField` rule, `Editor.tsx:533-541`) |
-| WebGL context loss mid-stroke | The field lives on the CPU. After restore, the pipeline re-uploads it (the new texture has no upload key) and the stroke continues. |
+| WebGL context loss mid-stroke | **The stroke drawn so far is committed** (one undo step) when the context is lost, and no stroke starts until the restore; the brush bar stays (the mode is not left). The field lives on the CPU, so after restore the pipeline re-uploads it (the new texture has no upload key) and the next stroke draws on it. Decision (v0.4 cleanup, step-6 review): continuing the live stroke through the loss was the earlier text, but nothing can be drawn or shown meanwhile, recoverEngine may replace the session, and a finger moving blind would keep stamping a stroke the user cannot see; committing keeps what was seen, as one ↶ step. |
 | Engine swap or re-detect replaces the session | The replacement is created with `liquify: model.field` (§3.7), so its first frame has the strokes |
 | Cap reached before or during a gesture | Toast 推臉筆筆畫已達上限 once. Before: nothing is drawn. During: further stamps are refused, the ring dims, and finger up commits. 全部清除 or ↶ frees room. |
 | A push the guard stops completely, or a 恢復 over an unpushed area | No record, no undo step |

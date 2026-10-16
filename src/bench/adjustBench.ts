@@ -1,11 +1,16 @@
-// 調節 cost row (v0.4 step-2 spec §6.4): median GPU-complete render time at 1080 × 1920 (the largest live frame) for
-// (a) neutral — the base composite program, (b) all 12 調節 items at ±40, (c) each 質感 look at 0.8; the cold
-// compile + link of the 調節 program; and a bit-exact probe of the grain hash (GPU lowbias32 vs adjustMath.ts).
+// 調節 cost row (v0.4 step-2 spec §6.4): median GPU-complete render time, on a synthetic 1080 × 1920 bitmap (the largest
+// live frame, as a still) and on the live camera frame at tier H, for (a) neutral — the base composite program, (b) all
+// 12 調節 items at ±40, (c) each 質感 look at 0.8; per frame source, the first 調節 frame's overhead over its median; the
+// compile + link of the 調節 program alone, timed on a fresh context before any engine here builds it; and a
+// bit-exact probe of the grain hash (GPU lowbias32 vs adjustMath.ts).
 // Decisions (spec §6.4): (b) − (a) ≤ 1.5 ms ships as is; > 3 ms → ADJUST_FAST in the camera; compile > 50 ms → pre-warm.
 import { ADJUST_IDS, ADJUST_ONE_WAY, lowbias32, seedMix } from '../engine/adjustMath';
+import { createProgram } from '../engine/gl/gl';
 import { createEngine } from '../engine/index';
 import { LOOK_IDS } from '../engine/looks';
 import { GRAIN_HASH_GLSL } from '../engine/shaders/adjust';
+import { compositeFs } from '../engine/shaders/composite';
+import { PRESENT_VS } from '../engine/shaders/present';
 import { defaultPhoto } from '../edit/state';
 import type { PhotoParams, RenderInput } from '../types';
 
@@ -15,9 +20,23 @@ export interface AdjustBenchRow {
   /** the frame drew with the 調節 program */
   adjust: boolean;
 }
-export interface AdjustBenchResult {
+export interface AdjustBenchFrame {
+  /** 合成 (the synthetic bitmap, drawn as a still) or 相機 H (the live camera frame, drawn at tier H) */
+  label: string;
+  /** source size → processing size */
   size: string;
   rows: AdjustBenchRow[];
+  /**
+   * the first 調節 frame of this source minus its 調節 median: uploads and first-draw driver work, plus, on the first
+   * source, the engine's own build of the 調節 program unless the browser's program cache already holds it
+   */
+  firstFrameMs: number;
+}
+export interface AdjustBenchResult {
+  frames: AdjustBenchFrame[];
+  /** why the camera frame was not measured; null when it was */
+  cameraNote: string | null;
+  /** compile + link of the 調節 program alone, on a fresh context, before any engine of this run builds it */
   compileMs: number;
   hash: { checked: number; mismatches: number };
 }
@@ -54,42 +73,83 @@ async function syntheticFrame(): Promise<ImageBitmap> {
   return createImageBitmap(img);
 }
 
-export async function runAdjustBench(): Promise<AdjustBenchResult> {
+/**
+ * The 調節 program's compile + link alone (createProgram waits for LINK_STATUS), on a fresh context: the number the
+ * > 50 ms pre-warm rule reads. It runs before any engine of the bench builds the program, so it is cold for this page;
+ * the browser's own program cache may still hold it from an earlier visit.
+ */
+export function compileAdjustMs(now: () => number = () => performance.now()): number {
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl2');
+  if (!gl) throw new Error('WebGL2 unavailable');
+  try {
+    const t0 = now();
+    const p = createProgram(gl, PRESENT_VS, compositeFs({ adjust: true }), 'composite-adjust (bench)');
+    const ms = now() - t0;
+    p.dispose();
+    return ms;
+  } finally {
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+  }
+}
+
+/** the live camera's video when it has a frame to draw, else why not */
+function cameraSource(video: HTMLVideoElement | null): { video: HTMLVideoElement } | { note: string } {
+  if (!video) return { note: '未開相機（先按「開始」）' };
+  if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) return { note: '相機還沒有畫面' };
+  return { video };
+}
+
+/**
+ * The rows on the synthetic bitmap and, with `video` (the bench's live camera), on the camera frame at tier H as the
+ * live loop draws it (not a still: processing at the tier's short edge, the video uploaded every frame).
+ */
+export async function runAdjustBench(video: HTMLVideoElement | null = null): Promise<AdjustBenchResult> {
+  const compileMs = compileAdjustMs();
   const canvas = document.createElement('canvas');
   const engine = createEngine(canvas, { mirror: false });
   const bmp = await syntheticFrame();
   try {
     await engine.ready;
+    engine.setTier('H');
     await Promise.all(LOOK_IDS.map((id) => engine.loadLut('look', id)));
     const gl = canvas.getContext('webgl2') as WebGL2RenderingContext;
     const px = new Uint8Array(4);
-    const input = (photo: PhotoParams): RenderInput => ({ source: bmp, width: W, height: H, faces: [], globalSkin: null, photo });
-    /** one render, waited on until the GPU is done (renderMs alone is CPU issue time) */
-    const once = (photo: PhotoParams) => {
-      const t0 = performance.now();
-      const s = engine.render(input(photo), { still: true });
-      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
-      return { ms: performance.now() - t0, adjust: s.passes.includes('adjust') };
+    const measure = (label: string, src: { source: TexImageSource; width: number; height: number; still: boolean }): AdjustBenchFrame => {
+      const input = (photo: PhotoParams): RenderInput => ({ source: src.source, width: src.width, height: src.height, faces: [], globalSkin: null, photo });
+      let size = '';
+      /** one render, waited on until the GPU is done (renderMs alone is CPU issue time) */
+      const once = (photo: PhotoParams) => {
+        const t0 = performance.now();
+        const s = engine.render(input(photo), { still: src.still });
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        size = `${src.width}×${src.height} → ${s.width}×${s.height}`;
+        return { ms: performance.now() - t0, adjust: s.passes.includes('adjust') };
+      };
+      const median = (config: string, photo: PhotoParams): AdjustBenchRow => {
+        const t: number[] = [];
+        let adjust = false;
+        for (let i = 0; i < RUNS; i++) {
+          const r = once(photo);
+          t.push(r.ms);
+          adjust = r.adjust;
+        }
+        t.sort((a, b) => a - b);
+        return { config, medianMs: t[RUNS >> 1], adjust };
+      };
+      const base = neutralPhoto();
+      once(base); // warm the base program and this source's upload path
+      const rows: AdjustBenchRow[] = [median('neutral', base)];
+      const first = once(all12(base)).ms; // the first 調節 frame of this source
+      const all = median('調節 ×12', all12(base));
+      rows.push(all);
+      for (const id of LOOK_IDS) rows.push(median(`質感 ${id}`, { ...base, look: { id, amount: 0.8 } }));
+      return { label, size, rows, firstFrameMs: Math.max(0, first - all.medianMs) };
     };
-    const median = (config: string, photo: PhotoParams): AdjustBenchRow => {
-      const t: number[] = [];
-      let adjust = false;
-      for (let i = 0; i < RUNS; i++) {
-        const r = once(photo);
-        t.push(r.ms);
-        adjust = r.adjust;
-      }
-      t.sort((a, b) => a - b);
-      return { config, medianMs: t[RUNS >> 1], adjust };
-    };
-    const base = neutralPhoto();
-    once(base); // warm the base program and the upload path
-    const rows: AdjustBenchRow[] = [median('neutral', base)];
-    const cold = once(all12(base)).ms; // the first 調節 frame compiles and links the program
-    const all = median('調節 ×12', all12(base));
-    rows.push(all);
-    for (const id of LOOK_IDS) rows.push(median(`質感 ${id}`, { ...base, look: { id, amount: 0.8 } }));
-    return { size: `${W}×${H}`, rows, compileMs: Math.max(0, cold - all.medianMs), hash: probeGrainHash() };
+    const frames = [measure('合成', { source: bmp, width: W, height: H, still: true })];
+    const cam = cameraSource(video);
+    if ('video' in cam) frames.push(measure('相機 H', { source: cam.video, width: cam.video.videoWidth, height: cam.video.videoHeight, still: false }));
+    return { frames, cameraNote: 'note' in cam ? cam.note : null, compileMs, hash: probeGrainHash() };
   } finally {
     bmp.close();
     engine.dispose();
@@ -161,8 +221,14 @@ export function probeGrainHash(): { checked: number; mismatches: number } {
 }
 
 export function formatAdjustBench(r: AdjustBenchResult): string {
-  const lines = r.rows.map((row) => `${row.config.padEnd(10)} ${row.medianMs.toFixed(2)} ms${row.adjust ? ' 調節' : ''}`);
-  lines.push(`編譯 ${r.compileMs.toFixed(1)} ms`);
+  const lines: string[] = [];
+  for (const f of r.frames) {
+    lines.push(`${f.label} ${f.size}`);
+    for (const row of f.rows) lines.push(`${row.config.padEnd(10)} ${row.medianMs.toFixed(2)} ms${row.adjust ? ' 調節' : ''}`);
+    lines.push(`首幀額外 ${f.firstFrameMs.toFixed(1)} ms`);
+  }
+  if (r.cameraNote) lines.push(`相機 H：${r.cameraNote}`);
+  lines.push(`編譯 ${r.compileMs.toFixed(1)} ms（獨立 context，冷）`);
   lines.push(`顆粒雜湊 ${r.hash.checked - r.hash.mismatches}/${r.hash.checked} 一致`);
-  return `調節效能 ${r.size}（中位數，含 GPU 完成）\n${lines.join('\n')}`;
+  return `調節效能（中位數，含 GPU 完成）\n${lines.join('\n')}`;
 }

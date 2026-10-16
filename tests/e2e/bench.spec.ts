@@ -29,19 +29,40 @@ test('bench.html: 多臉 section keeps its own classes (the 美體偵測 / gate-
   await expect(page.locator('.panel .note')).toHaveCount(1);
 });
 
-test('bench.html: 調節效能 — base vs 調節 program, compile time, grain hash bit-exact on the GPU', async ({ page }) => {
-  test.setTimeout(180_000);
+test('bench.html: 調節效能 — base vs 調節 program on the synthetic and the camera frame, compile time, grain hash bit-exact on the GPU', async ({ page }) => {
+  test.setTimeout(300_000);
   await page.goto('/bench.html');
   await page.getByRole('button', { name: '調節效能', exact: true }).click();
   const out = page.locator('#adjust-bench');
   await expect(out).toHaveAttribute('data-state', 'done', { timeout: 150_000 });
+  const rowsOf = (text: string, label: string) => {
+    const block = text.slice(text.indexOf(`${label} `));
+    expect(block, label).toMatch(/^\S+( H)? \d+×\d+ → \d+×\d+\nneutral\s+[\d.]+ ms\n調節 ×12\s+[\d.]+ ms 調節\n/);
+    for (const id of ['film', 'ccd', 'flash', 'blue', 'cinema']) expect(block).toMatch(new RegExp(`質感 ${id}\\s+[\\d.]+ ms 調節`));
+    expect(block).toMatch(/首幀額外 [\d.]+ ms/);
+  };
   const text = (await out.textContent()) ?? '';
   console.log(text);
+  rowsOf(text, '合成');
+  expect(text).toContain('合成 1080×1920 → 1080×1920');
+  // the start screen has no camera: the row says so instead of timing a camera frame
+  expect(text).toContain('相機 H：未開相機');
+  // the compile is timed on its own context, not folded into the first 調節 frame
+  expect(text).toMatch(/編譯 [\d.]+ ms（獨立 context，冷）/);
   expect(text).toContain('顆粒雜湊 4096/4096 一致');
-  expect(text).toMatch(/neutral\s+[\d.]+ ms\n/);
-  expect(text).toMatch(/調節 ×12\s+[\d.]+ ms 調節/);
-  for (const id of ['film', 'ccd', 'flash', 'blue', 'cinema']) expect(text).toMatch(new RegExp(`質感 ${id}\\s+[\\d.]+ ms 調節`));
   await shot(page, '41-bench-adjust');
+
+  // after 開始, the panel's 調節效能 also times the camera frame at tier H (S §6.4)
+  await page.getByRole('button', { name: '開始', exact: true }).click();
+  await expect.poll(async () => (await debugState(page)).cameraState, { timeout: 120_000, intervals: [500] }).toBe('live');
+  await page.getByRole('button', { name: '調節效能', exact: true }).click();
+  await expect(out).toContainText('相機 H ', { timeout: 150_000 });
+  await expect(out).toHaveAttribute('data-state', 'done');
+  const live = (await out.textContent()) ?? '';
+  console.log(live);
+  rowsOf(live, '合成');
+  rowsOf(live, '相機 H');
+  expect(live).not.toContain('未開相機');
 });
 
 test('bench.html 推臉筆: liquify.frame is the 2048 editor frame with strokes and every effect on (PB §6.2), GPU-complete without a readback', async ({ page }) => {

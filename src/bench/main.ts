@@ -211,6 +211,8 @@ const gateMsg = el('p', { textContent: '測量即時美顏在這台裝置上的�
 const gateProgress = el('div', { className: 'note' });
 const gateBodyBtn = button('美體偵測', () => bodyTest());
 const gateAdjustBtn = button('調節效能', () => void runAdjust());
+// in the live panel too: after 開始 the row also times the camera frame at tier H (step-2 spec §6.4)
+const adjustBtn = button('調節效能', () => void runAdjust());
 // own class, not .note: tests/harness/t8/run-bench.mjs and bench.spec.ts need '.gate .note' to be gateProgress alone
 const adjustOut = el('div', { className: 'adjust-note', id: 'adjust-bench' });
 const gateLiquifyBtn = button('推臉筆', () => void liquifyBench());
@@ -227,7 +229,7 @@ const gate = el(
   el('p', { textContent: '美體偵測：選一張全身照，量測姿態模型的載入、偵測時間與遮罩（不需相機）。' }),
   gateBodyBtn,
   gateLiquifyBtn,
-  el('p', { textContent: '調節效能：在 1080×1920 量測調節與質感的 GPU 時間、調節程式的編譯時間，並檢查顆粒雜湊與 CPU 版本一致（不需相機）。' }),
+  el('p', { textContent: '調節效能：在 1080×1920 量測調節與質感的 GPU 時間、調節程式的編譯時間，並檢查顆粒雜湊與 CPU 版本一致（不需相機；按「開始」後在面板再量一次，會加上相機畫面）。' }),
   gateAdjustBtn,
   adjustOut,
 );
@@ -299,7 +301,7 @@ const panel = el(
   { className: 'panel' },
   el('div', { className: 'row' }, el('span', { textContent: '畫質' }), ...tierBtns),
   el('div', { className: 'row' }, el('span', { textContent: '參數' }), ...modeBtns),
-  el('div', { className: 'row' }, delegateBtn, landmarksBtn, compareBtn, captureBtn, stillBtn, faceDetailBtn, bodyBtn, liquifyBtn, toneBtn, exportBtn, exportPhotoBtn, resumeBtn),
+  el('div', { className: 'row' }, delegateBtn, landmarksBtn, compareBtn, captureBtn, stillBtn, faceDetailBtn, bodyBtn, liquifyBtn, toneBtn, adjustBtn, exportBtn, exportPhotoBtn, resumeBtn),
   el('div', { className: 'row' }, copyBtn, note),
   table,
   copyArea,
@@ -634,11 +636,17 @@ async function runExport(picked?: File): Promise<void> {
 async function runAdjust(): Promise<void> {
   if (busy) return;
   busy = true;
-  gateAdjustBtn.disabled = true;
+  gateAdjustBtn.disabled = adjustBtn.disabled = true;
+  (gate.hidden ? panel : gate).append(adjustOut);
   adjustOut.dataset.state = 'running';
   adjustOut.textContent = '量測中…';
+  // the camera frame at tier H (S §6.4) needs the live camera; the live loop pauses meanwhile, as the export bench does
+  const video = camera?.snapshot.state === 'live' ? camera.video : null;
+  const wasLive = loop !== null;
+  loop?.stop();
+  loop = null;
   try {
-    const r = await runAdjustBench();
+    const r = await runAdjustBench(video);
     adjustOut.replaceChildren(el('pre', { textContent: formatAdjustBench(r) }));
     adjustOut.dataset.state = 'done';
   } catch (err) {
@@ -647,7 +655,8 @@ async function runAdjust(): Promise<void> {
     adjustOut.dataset.state = 'failed';
   } finally {
     busy = false;
-    gateAdjustBtn.disabled = false;
+    gateAdjustBtn.disabled = adjustBtn.disabled = false;
+    if (wasLive && !still) startLoop();
   }
 }
 

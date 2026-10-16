@@ -5447,6 +5447,8 @@ git commit -m "test(liquify): restore, persistence, gestures, clear, no-face, pe
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
+Landed as `c96d7b5`, which carries a stale step-3 subject (`v0.4 step 3 task 14: editor 裁切 mode, frame aspect and overlays through the view`, from a leftover message file in the scratchpad). Its content is this task's `liquify.spec.ts` tests and its ticks. The `v0.4 step 6 task 14 fix:` commit on top of it records this note, and no commit was amended.
+
 ---
 
 ### Task 15: Bench rows for the brush

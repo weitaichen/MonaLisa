@@ -5110,12 +5110,13 @@ The rest of PB §8.3 (tests 2 and 4–8), the four Review Focus cases that only 
 
 **Files:**
 - Modify: `tests/e2e/liquify.spec.ts`
+- Changed while implementing (each test was also run against a deliberately broken build to see it fail; no production code changed): (1) 「half a stroke is never exported」 also checks the 最近編輯 thumbnail (new local helpers `historyThumb`, `thumbLineShift`): every commit and ↶ drop a cached share file (`dropFinished`), so with the encode effect's `drawing` guard removed the shared file still matched, but the mid-stroke export was saved as the pre-stroke params' thumbnail (its line 4 px off at the stroke row) and stayed there; the thumbnail assertion fails on that build. (2) The group-photo test taps the centre of another face's debug box (`boxCentre`, `__meiyan.boxes`) instead of the frame point (0.55, 0.4), which on `group_faces.png` is above every face box, so the tap could not select anyone even with brush mode's tap blocking removed. (3) The two-finger test's first finger moves 12 px before the second lands (still within the 200 ms grace), so a cancel that committed instead would leave a stroke; without it the stroke had no stamps and both behaved alike. The file has 15 tests (Task 12's two, its reopen-in-slices fix test, and these twelve), not 13.
 
 **Interfaces:**
 - Consumes: Task 12's helpers in `tests/e2e/fixtures.ts` (`brushDrag`, `touch`, `liquifyState`, `savedPixels`, `emptyPng`, `linePng`, `LINE`) and in `liquify.spec.ts`; `debugState`, `SAMPLE_FACE` (`fixtures.ts`); step 1's debug fields `__meiyan.detectCalls`, `persons`, `selected` (PS §3.2) and fixture `tests/fixtures/group_faces.png` (PS §8.3); the v0.3 no-face note 「未偵測到臉部，臉型與美妝不會套用」 (`Editor.tsx:1619` at `d09e608`, kept by step 1, PS §2.6).
 - Produces: nothing new (tests only).
 
-- [ ] **Step 1: Write the tests**
+- [x] **Step 1: Write the tests**
 
 Extend the import from `'./fixtures'` in `tests/e2e/liquify.spec.ts` with `debugState, emptyPng, SAMPLE_FACE, savedPixels, touch` and add `import { resolve } from 'node:path';`, then append:
 
@@ -5432,12 +5433,12 @@ test('↶ and 全部清除 wait while a finger draws; finger-up makes exactly on
 
 (`option` is defined at the top of the file by Task 12; `settled` and `mad` are already imported there.)
 
-- [ ] **Step 2: Run them**
+- [x] **Step 2: Run them**
 
 Run: `npm run build && npx playwright test tests/e2e/liquify.spec.ts`
 Expected: PASS, 13 tests. If one fails, it is a defect in Tasks 8–13, not in the test: fix the code (the expected values come from PB §8.3 and the measured behaviour in Task 2), keeping the assertions.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/e2e/liquify.spec.ts

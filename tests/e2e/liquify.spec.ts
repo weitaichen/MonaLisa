@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Page } from '@playwright/test';
-import { brushDrag, emptyPng, expect, LINE, linePng, liquifyState, mad, meanLuma, settled, test, type Pixels } from './fixtures';
+import { boxCentre, brushDrag, debugState, decodeDataUrl, emptyPng, expect, LINE, linePng, liquifyState, mad, meanLuma, SAMPLE_FACE, savedPixels, settled, test, touch, type Pixels } from './fixtures';
 
 const option = (page: Page, name: string) => page.getByRole('option', { name, exact: true });
 
@@ -57,6 +57,47 @@ async function photoToClient(page: Page, size: { width: number; height: number }
 }
 
 const strokes = async (page: Page) => (await liquifyState(page))?.strokes ?? -1;
+
+/** the 最近編輯 thumbnail of the one history record (IndexedDB meiyan / edits), decoded; null before it is written */
+async function historyThumb(page: Page): Promise<Pixels | null> {
+  const url = await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((res, rej) => {
+      const q = indexedDB.open('meiyan', 1);
+      q.onsuccess = () => res(q.result);
+      q.onerror = () => rej(q.error);
+    });
+    const all = await new Promise<{ thumb?: Blob }[]>((res, rej) => {
+      const q = db.transaction('edits').objectStore('edits').getAll();
+      q.onsuccess = () => res(q.result as { thumb?: Blob }[]);
+      q.onerror = () => rej(q.error);
+    });
+    db.close();
+    const thumb = all[0]?.thumb;
+    if (!thumb) return null;
+    const bmp = await createImageBitmap(thumb);
+    const c = document.createElement('canvas');
+    c.width = bmp.width;
+    c.height = bmp.height;
+    c.getContext('2d')!.drawImage(bmp, 0, 0);
+    bmp.close();
+    return c.toDataURL('image/png');
+  });
+  return url ? decodeDataUrl(url) : null;
+}
+
+/**
+ * How far (thumbnail px) linePng's line sits, in the 最近編輯 thumbnail, at photo row `py` from where it is at row 135
+ * (more than two 中 radii above a stroke at row 450); Infinity before a thumbnail is written.
+ */
+async function thumbLineShift(page: Page, py: number): Promise<number> {
+  const t = await historyThumb(page);
+  if (!t) return Infinity;
+  const band = (y: number): [number, number] => {
+    const r = Math.round((y / LINE.height) * t.height);
+    return [r - 3, r + 3];
+  };
+  return Math.abs(darkestColumn(t, band(py), [0, t.width - 1]) - darkestColumn(t, band(135), [0, t.width - 1]));
+}
 
 test('美體 › 推臉筆: one finger moves the line under the brush, nothing far away; one stroke is one ↶ step', async ({ page }) => {
   await openPhoto(page, { name: 'line.png', mimeType: 'image/png', buffer: linePng() });
@@ -181,4 +222,320 @@ test('a reopen whose replay runs in slices: 儲存 during it finishes the rebuil
   const l1 = meanLuma(reopened);
   console.log(`推臉筆 reopen + 儲存: mean luma ${l1.toFixed(1)} (first open ${l0.toFixed(1)})`);
   expect(Math.abs(l1 - l0)).toBeLessThan(12);
+});
+
+const GROUP = resolve(import.meta.dirname, '../fixtures/group_faces.png');
+const FULLBODY_LINES = resolve(import.meta.dirname, '../fixtures/fullbody_lines.jpg');
+
+/** The row (grab px) with the lowest mean luma over columns x0…x1, searched within rows y0…y1. */
+function darkestRow(p: Pixels, [x0, x1]: [number, number], [y0, y1]: [number, number]): number {
+  let best = y0;
+  let bestV = Infinity;
+  for (let y = Math.max(0, y0); y <= Math.min(p.height - 1, y1); y++) {
+    let s = 0;
+    for (let x = x0; x <= x1; x++) {
+      const i = (y * p.width + x) * 4;
+      s += 0.299 * p.data[i] + 0.587 * p.data[i + 1] + 0.114 * p.data[i + 2];
+    }
+    if (s < bestV) {
+      bestV = s;
+      best = y;
+    }
+  }
+  return best;
+}
+
+/** push the line right by 24 CSS px at photo row 450 with the current brush; returns the measurement inputs */
+async function pushLine(page: Page) {
+  const frame = page.locator('.editor-stage .frame');
+  const before = await settled(frame);
+  const { box, at } = await photoToClient(page, LINE);
+  const k = before.width / box.width;
+  const start = at(LINE.x, 450);
+  await brushDrag(page, start, { x: start.x + 24, y: start.y });
+  await expect.poll(() => strokes(page)).toBeGreaterThan(0);
+  const after = await settled(frame);
+  const row = Math.round((450 / LINE.height) * before.height);
+  const band: [number, number] = [row - 6, row + 6];
+  const x0 = darkestColumn(before, band, [0, before.width - 1]);
+  const x1 = darkestColumn(after, band, [x0 - Math.round(4 * k), x0 + Math.round(40 * k)]);
+  return { frame, before, after, start, k, row, band, x0, x1 };
+}
+
+/** the zoom layer's scale (1 = fitted) */
+const zoomScale = (page: Page) =>
+  page.locator('.zoom-layer').evaluate((el) => {
+    const t = getComputedStyle(el).transform;
+    return t === 'none' ? 1 : new DOMMatrixReadOnly(t).a;
+  });
+
+test('恢復 (大, two passes along the push) brings the photo back; the hint follows the mode', async ({ page }) => {
+  await openPhoto(page, { name: 'line.png', mimeType: 'image/png', buffer: linePng() });
+  await enterBrush(page, '美體');
+  const { frame, before, start, k, row, x0 } = await pushLine(page);
+  const pushed = (await liquifyState(page))!.maxDisp;
+  expect(pushed).toBeGreaterThan(0);
+  await page.getByRole('radio', { name: '恢復' }).click();
+  await expect(page.getByText('單指塗抹恢復，雙指縮放')).toBeVisible();
+  await expect(page.locator('.brush-hint')).toHaveCount(0, { timeout: 5_000 });
+  await page.getByRole('radio', { name: '大' }).click();
+  for (let pass = 0; pass < 2; pass++) await brushDrag(page, { x: start.x - 22, y: start.y }, { x: start.x + 24 + 22, y: start.y }, 16);
+  await expect.poll(() => strokes(page)).toBe(3);
+  const restored = await settled(frame);
+  const R = Math.round(2 * 44 * k); // two 大 radii around the push
+  const box = { x: Math.max(0, x0 - R), y: Math.max(0, row - R), w: 2 * R, h: 2 * R };
+  expect(mad(before, restored, box)).toBeLessThanOrEqual(1);
+  expect((await liquifyState(page))!.maxDisp).toBeLessThanOrEqual(0.05 * pushed);
+});
+
+test('strokes persist: reopening from 最近編輯 shows them with no detector call and no pending rebuild', async ({ page }) => {
+  await openPhoto(page, { name: 'line.png', mimeType: 'image/png', buffer: linePng() });
+  await enterBrush(page, '美體');
+  const { band, x1, k } = await pushLine(page);
+  const calls = (await debugState(page)).detectCalls;
+  await page.getByRole('button', { name: '關閉' }).click();
+  await expect.poll(async () => (await debugState(page)).screen).toBe('home');
+  await page.getByRole('button', { name: '開啟編輯' }).first().click();
+  await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 60_000 });
+  await expect.poll(() => strokes(page)).toBe(1);
+  expect((await liquifyState(page))!.pending).toBe(false);
+  expect((await debugState(page)).detectCalls).toBe(calls);
+  const reopened = await settled(page.locator('.editor-stage .frame'));
+  // the stored original is a JPEG re-encode, so compare where the line is, not every pixel
+  const xr = darkestColumn(reopened, band, [x1 - Math.round(20 * k), x1 + Math.round(20 * k)]);
+  expect(Math.abs(xr - x1)).toBeLessThanOrEqual(2);
+});
+
+test('two fingers pinch and never draw (second finger 30 ms after the first)', async ({ page }) => {
+  await openPhoto(page, { name: 'line.png', mimeType: 'image/png', buffer: linePng() });
+  await enterBrush(page, '美體');
+  const { at } = await photoToClient(page, LINE);
+  const c = at(300, 450);
+  const frames = [
+    // the first finger already moves (its stamps preview) before the second lands: the stroke is cancelled, not committed
+    { type: 'touchStart' as const, points: [{ x: c.x - 52, y: c.y, id: 1 }] },
+    { type: 'touchMove' as const, points: [{ x: c.x - 40, y: c.y, id: 1 }], waitMs: 30 },
+    { type: 'touchStart' as const, points: [{ x: c.x - 40, y: c.y, id: 1 }, { x: c.x + 40, y: c.y, id: 2 }] },
+    ...[1, 2, 3, 4, 5, 6].map((i) => ({
+      type: 'touchMove' as const,
+      points: [{ x: c.x - 40 - 7 * i, y: c.y, id: 1 }, { x: c.x + 40 + 7 * i, y: c.y, id: 2 }],
+      waitMs: 16,
+    })),
+    { type: 'touchEnd' as const, points: [] },
+  ];
+  await touch(page, frames);
+  await expect.poll(() => zoomScale(page)).toBeGreaterThan(1);
+  expect(await strokes(page)).toBe(0);
+  await expect(page.getByRole('button', { name: '復原' })).toBeDisabled();
+});
+
+test('a second finger after the grace commits the stroke drawn so far (one ↶ step), then pinches', async ({ page }) => {
+  await openPhoto(page, { name: 'line.png', mimeType: 'image/png', buffer: linePng() });
+  await enterBrush(page, '美體');
+  const { at } = await photoToClient(page, LINE);
+  const c = at(300, 450);
+  const draw = [1, 2, 3, 4, 5, 6].map((i) => ({ type: 'touchMove' as const, points: [{ x: c.x + 4 * i, y: c.y, id: 1 }], waitMs: 50 }));
+  const last = { x: c.x + 24, y: c.y, id: 1 };
+  await touch(page, [
+    { type: 'touchStart', points: [{ x: c.x, y: c.y, id: 1 }], waitMs: 16 },
+    ...draw, // 300 ms of drawing
+    { type: 'touchStart', points: [last, { x: c.x + 120, y: c.y + 60, id: 2 }] },
+    ...[1, 2, 3, 4].map((i) => ({ type: 'touchMove' as const, points: [{ ...last, x: last.x - 8 * i }, { x: c.x + 120 + 8 * i, y: c.y + 60, id: 2 }], waitMs: 16 })),
+    { type: 'touchEnd', points: [] },
+  ]);
+  await expect.poll(() => strokes(page)).toBe(1);
+  expect(await zoomScale(page)).not.toBe(1);
+  const undo = page.getByRole('button', { name: '復原' });
+  await expect(undo).toBeEnabled();
+  await undo.click();
+  await expect.poll(() => strokes(page)).toBe(0);
+  await expect(undo).toBeDisabled();
+});
+
+test('美型 › 推臉筆 on a face; 全部清除 needs 確定清除？ and is one ↶ step', async ({ page }) => {
+  await openPhoto(page, SAMPLE_FACE);
+  await enterBrush(page, '美型');
+  const { at } = await photoToClient(page, { width: 1000, height: 1500 });
+  const s = at(330, 820); // the left cheek
+  await brushDrag(page, s, { x: s.x + 24, y: s.y });
+  await expect.poll(() => strokes(page)).toBe(1);
+  await expect(option(page, '推臉筆')).toHaveClass(/has-value/);
+  await page.getByRole('button', { name: '全部清除' }).click();
+  await expect(page.getByRole('button', { name: '確定清除？' })).toBeVisible();
+  expect(await strokes(page)).toBe(1); // the first tap only arms it
+  await page.getByRole('button', { name: '確定清除？' }).click();
+  await expect.poll(() => strokes(page)).toBe(0);
+  await expect(page.getByRole('button', { name: '全部清除' })).toBeDisabled();
+  await page.getByRole('button', { name: '復原' }).click();
+  await expect.poll(() => strokes(page)).toBe(1);
+});
+
+test('no face: 推臉筆 stays enabled under the face note and pushes the floor line down', async ({ page }) => {
+  await openPhoto(page, { name: 'empty.png', mimeType: 'image/png', buffer: emptyPng() });
+  await page.getByRole('tab', { name: '美型' }).click();
+  await expect(page.getByText('未偵測到臉部，臉型與美妝不會套用')).toBeVisible();
+  await expect(option(page, '推臉筆')).not.toHaveAttribute('aria-disabled', 'true');
+  await option(page, '推臉筆').click();
+  await expect(page.getByRole('radiogroup', { name: '筆刷模式' })).toBeVisible();
+  await expect(page.locator('.brush-hint')).toHaveCount(0, { timeout: 5_000 });
+  const frame = page.locator('.editor-stage .frame');
+  const before = await settled(frame);
+  const size = { width: 600, height: 900 };
+  const { box, at } = await photoToClient(page, size);
+  const k = before.width / box.width;
+  const s = at(300, 650);
+  await brushDrag(page, s, { x: s.x, y: s.y + 24 });
+  await expect.poll(() => strokes(page)).toBe(1);
+  const after = await settled(frame);
+  const col = Math.round((300 / size.width) * before.width);
+  const cols: [number, number] = [col - 6, col + 6];
+  const y0 = darkestRow(before, cols, [0, before.height - 1]);
+  const y1 = darkestRow(after, cols, [y0 - Math.round(4 * k), y0 + Math.round(40 * k)]);
+  expect((y1 - y0) / (24 * k)).toBeGreaterThanOrEqual(0.45);
+});
+
+test('美體 › 推臉筆 on a person works while 美體 detection is still running', async ({ page }) => {
+  await openPhoto(page, FULLBODY_LINES);
+  await page.getByRole('tab', { name: '美體' }).click();
+  // not gated by bodyGate: enabled whatever the detection is doing
+  await expect(option(page, '推臉筆')).not.toHaveAttribute('aria-disabled', 'true');
+  await option(page, '推臉筆').click();
+  await expect(page.getByRole('radiogroup', { name: '筆刷模式' })).toBeVisible();
+  await expect(page.locator('.brush-hint')).toHaveCount(0, { timeout: 5_000 });
+  const frame = page.locator('.editor-stage .frame');
+  const before = await settled(frame);
+  const { box, at } = await photoToClient(page, { width: 638, height: 1000 });
+  const k = before.width / box.width;
+  const s = at(230, 130); // the left door line on the wall
+  await brushDrag(page, s, { x: s.x + 24, y: s.y });
+  await expect.poll(() => strokes(page)).toBe(1);
+  const after = await settled(frame);
+  const near = { x: Math.round((s.x - box.x - 30) * k), y: Math.round((s.y - box.y - 30) * k), w: Math.round(84 * k), h: Math.round(60 * k) };
+  expect(mad(before, after, near)).toBeGreaterThan(1);
+  const far = { x: 0, y: Math.round(before.height * 0.85), w: Math.round(before.width * 0.25), h: Math.round(before.height * 0.15) - 1 };
+  expect(mad(before, after, far)).toBeLessThan(0.5);
+});
+
+test('half a stroke is never exported: a slow stroke past the 400 ms debounce, then ↶, shares the pre-stroke file', async ({ page }) => {
+  await openPhoto(page, { name: 'line.png', mimeType: 'image/png', buffer: linePng() });
+  const a = await savedPixels(page);
+  await page.getByRole('tab', { name: '美體' }).click();
+  const { at } = await photoToClient(page, LINE);
+  const s = at(LINE.x, 450);
+  // an edit that arms the debounced encode / autosave (背景保護 has no visible effect on a photo without a person) …
+  await option(page, '背景保護').click();
+  // … and the stroke starts before the 400 ms debounce has fired: without the export gating it would fire mid-stroke
+  await option(page, '推臉筆').click();
+  await page.mouse.move(s.x, s.y);
+  await page.mouse.down();
+  for (let i = 1; i <= 6; i++) await page.mouse.move(s.x + 2 * i, s.y);
+  await page.waitForTimeout(700); // finger held still past the encode debounce (ENCODE_DEBOUNCE_MS 400)
+  for (let i = 7; i <= 12; i++) await page.mouse.move(s.x + 2 * i, s.y);
+  await page.mouse.up();
+  await expect.poll(() => strokes(page)).toBe(1);
+  await page.getByRole('button', { name: '復原' }).click();
+  await expect.poll(() => strokes(page)).toBe(0);
+  const b = await savedPixels(page);
+  expect([b.width, b.height]).toEqual([a.width, a.height]);
+  expect(mad(a, b)).toBeLessThanOrEqual(0.5);
+  // … nor saved as the 最近編輯 thumbnail of the pre-stroke params (the commit and the ↶ drop a cached share file, so
+  // the thumbnail is where a mid-stroke export would stay): the line in it is straight at the stroke's row
+  await expect.poll(() => thumbLineShift(page, 450), { timeout: 10_000 }).toBeLessThanOrEqual(1);
+});
+
+test('a press on 按住對比 in brush mode never draws, and nothing is half-committed', async ({ page }) => {
+  await openPhoto(page, { name: 'line.png', mimeType: 'image/png', buffer: linePng() });
+  await enterBrush(page, '美體');
+  const holdBtn = page.getByRole('button', { name: '按住對比' });
+  const hb = (await holdBtn.boundingBox())!;
+  const { at } = await photoToClient(page, LINE);
+  const target = at(LINE.x, 450);
+  await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) await page.mouse.move(hb.x + hb.width / 2 + ((target.x - hb.x - hb.width / 2) * i) / 10, hb.y + hb.height / 2 + ((target.y - hb.y - hb.height / 2) * i) / 10);
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  expect(await strokes(page)).toBe(0);
+  await expect(page.getByRole('button', { name: '復原' })).toBeDisabled();
+  await expect(page.locator('.brush-ring.hidden')).toHaveCount(1); // the ring is not left on screen
+});
+
+test('group photo: brush mode dims the person strip with 整張照片, and a tap selects nobody', async ({ page }) => {
+  await openPhoto(page, GROUP);
+  await expect.poll(async () => (await debugState(page)).persons).toBeGreaterThanOrEqual(2);
+  await enterBrush(page, '美型');
+  await expect(page.getByText('整張照片', { exact: true }).first()).toBeVisible();
+  const { selected, boxes } = await debugState(page);
+  // on the centre of another face's box: outside brush mode this tap selects that person; here a tap is not a stroke
+  const other = boxes.find((b) => b.id !== selected)!;
+  const p = await boxCentre(page, other.id);
+  await page.mouse.click(p.x, p.y);
+  await page.waitForTimeout(300);
+  expect((await debugState(page)).selected).toBe(selected);
+  expect(await strokes(page)).toBe(0);
+});
+
+/** what iOS does when the user swipes home or a call comes in: the page turns hidden (Editor's flushHistory listener) */
+const setVisibility = (page: Page, state: 'hidden' | 'visible') =>
+  page.evaluate((s) => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => s });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, state);
+
+test('backgrounding mid-stroke commits and saves the stroke; the rest of the drag draws nothing', async ({ page }) => {
+  await openPhoto(page, { name: 'line.png', mimeType: 'image/png', buffer: linePng() });
+  await enterBrush(page, '美體');
+  const { at } = await photoToClient(page, LINE);
+  const s = at(LINE.x, 450);
+  await page.mouse.move(s.x, s.y);
+  await page.mouse.down();
+  for (let i = 1; i <= 8; i++) await page.mouse.move(s.x + 3 * i, s.y);
+  await setVisibility(page, 'hidden');
+  // committed by the hidden-flush while the finger is still down: one record, one undo step
+  await expect.poll(() => strokes(page)).toBe(1);
+  for (let i = 9; i <= 16; i++) await page.mouse.move(s.x + 3 * i, s.y); // the finger keeps moving
+  await page.mouse.up();
+  await setVisibility(page, 'visible');
+  await page.waitForTimeout(300);
+  expect(await strokes(page)).toBe(1);
+  const undo = page.getByRole('button', { name: '復原' });
+  await undo.click();
+  await expect.poll(() => strokes(page)).toBe(0);
+  await expect(undo).toBeDisabled(); // the drag after the flush made no second step
+  await page.getByRole('button', { name: '重做' }).click();
+  await expect.poll(() => strokes(page)).toBe(1);
+  // the flush wrote the entry: a reopen shows the stroke
+  await page.getByRole('button', { name: '關閉' }).click();
+  await expect.poll(async () => (await debugState(page)).screen).toBe('home');
+  await page.getByRole('button', { name: '開啟編輯' }).first().click();
+  await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 60_000 });
+  await expect.poll(() => strokes(page)).toBe(1);
+});
+
+test('↶ and 全部清除 wait while a finger draws; finger-up makes exactly one undo step', async ({ page }) => {
+  await openPhoto(page, { name: 'line.png', mimeType: 'image/png', buffer: linePng() });
+  await enterBrush(page, '美體');
+  const { at } = await photoToClient(page, LINE);
+  const a = at(LINE.x, 300);
+  await brushDrag(page, a, { x: a.x + 24, y: a.y });
+  await expect.poll(() => strokes(page)).toBe(1);
+  const undo = page.getByRole('button', { name: '復原' });
+  const clear = page.getByRole('button', { name: '全部清除' });
+  await expect(undo).toBeEnabled();
+  await expect(clear).toBeEnabled();
+  const b = at(LINE.x, 600);
+  await page.mouse.move(b.x, b.y);
+  await page.mouse.down();
+  for (let i = 1; i <= 8; i++) await page.mouse.move(b.x + 3 * i, b.y);
+  // a stroke is live: nothing may undo or clear a half-built stroke
+  await expect(undo).toBeDisabled();
+  await expect(page.getByRole('button', { name: '重做' })).toBeDisabled();
+  await expect(clear).toBeDisabled();
+  await page.mouse.up();
+  await expect.poll(() => strokes(page)).toBe(2);
+  await expect(undo).toBeEnabled();
+  await undo.click();
+  await expect.poll(() => strokes(page)).toBe(1); // only the second stroke went
+  await undo.click();
+  await expect.poll(() => strokes(page)).toBe(0);
 });

@@ -40,8 +40,9 @@ export function shareNow(startedAt: number, now: number): boolean {
 
 /**
  * What a finished export does (S §2.3): inside the tap's 4 s it is shared at once (the state at the tap). Later the pill
- * turns 「分享」 only while the file still matches the edit (`current`); one an edit superseded while it ran (準備中
- * leaves a working-size export's panel usable) is dropped like a finished file on the next edit, and the pill is 儲存.
+ * turns 「分享」 only while the file is still for the user's edit (`current`: the edit key, not the share cache's test,
+ * since a field or limit the system settled meanwhile is no edit); one an edit superseded while it ran (準備中 leaves a
+ * working-size export's panel usable) is dropped like a finished file on the next edit, and the pill is 儲存.
  */
 export function deliverAction(startedAt: number, now: number, current: boolean): 'share' | 'pending' | 'drop' {
   if (shareNow(startedAt, now)) return 'share';

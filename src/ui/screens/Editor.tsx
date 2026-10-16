@@ -22,7 +22,7 @@ import type { SessionFace, StillSession } from '../../app/still';
 import { forwardY, heightBandStretch } from '../../body/bands';
 import { bodyFieldCacheStats, buildBodyField, fieldBands, type BodyFieldInput } from '../../body/field';
 import { measureBody, paramAvailability } from '../../body/measure';
-import { SPOT_CAP } from '../../config/limits';
+import { SPOT_CAP, STAMP_COMMIT_MS } from '../../config/limits';
 import { bodyBox, personInfos } from '../../detect/cache';
 import { hitPerson } from '../../detect/persons';
 import { backMapCpu } from '../../engine/backMapCpu';
@@ -179,8 +179,21 @@ export function Editor({ source }: { source: EditorSource }) {
   const [hint, setHint] = useState<{ kind: BrushKind; gen: number } | null>(null);
   const ring = useRef<RingHandle | null>(null);
   const frameEl = useRef<HTMLDivElement>(null); // the .frame element (frameOf builds the StillFrame)
-  /** the live stroke; `kind` is the one it started with (a 推／恢復 switch mid-stroke applies to the next stroke) */
-  const live = useRef<{ stroke: LiveStroke; kind: BrushKind; queue: BrushQueue; ringPx: number; last: { x: number; y: number }; capToast: boolean } | null>(null);
+  /**
+   * the live stroke; `kind` is the one it started with (a 推／恢復 switch mid-stroke applies to the next stroke).
+   * `upBy`: the finger-up deadline of its synchronous drain (STAMP_COMMIT_MS from the first finger-up hook); `ending`:
+   * the finger is up and the queue's backlog drains frame by frame before the commit (commitLive(true))
+   */
+  const live = useRef<{
+    stroke: LiveStroke;
+    kind: BrushKind;
+    queue: BrushQueue;
+    ringPx: number;
+    last: { x: number; y: number };
+    capToast: boolean;
+    upBy: number | null;
+    ending: boolean;
+  } | null>(null);
   /** the stroke list the last commit replaced and the one it made: an edit computed before it keeps the stroke (update) */
   const committed = useRef<{ from: readonly Stroke[]; to: readonly Stroke[] } | null>(null);
 
@@ -195,10 +208,26 @@ export function Editor({ source }: { source: EditorSource }) {
       },
     });
 
-  /** finger up, a late second finger, pointercancel, or anything that ends the editing context: one undo step */
-  const commitLive = () => {
+  /**
+   * finger up, a late second finger, pointercancel, or anything that ends the editing context: one undo step.
+   * `fingerUp` (the brush hooks' commit): a backlog the frames have not drained yet is applied only until the
+   * finger-up deadline, the rest one STAMP_FRAME_MS per frame, and the stroke commits from the frame that empties the
+   * queue (BrushQueue.end): the same stamps in the same order as a full drain, without blocking finger up on the
+   * backlog. Meanwhile the stroke stays live (`drawing`: no export, no undo), and any other caller (an edit, 儲存,
+   * leaving the mode, a new stroke, hidden, unmount) commits it at once.
+   */
+  const commitLive = (fingerUp = false) => {
     const cur = live.current;
     if (!cur) return;
+    if (fingerUp) {
+      if (cur.ending) return; // its backlog is draining: the frame that empties the queue commits it
+      cur.ending = true;
+      ring.current?.hide();
+      const now = cur.queue.end(() => {
+        if (live.current === cur) commitRef.current();
+      }, cur.upBy ?? performance.now() + STAMP_COMMIT_MS);
+      if (!now) return;
+    }
     live.current = null;
     cur.queue.finish(); // stamps still queued are applied first: what was drawn is what is committed
     const taken = new Set(editRef.current.photo.strokes.map((s) => s.id));
@@ -1340,6 +1369,8 @@ export function Editor({ source }: { source: EditorSource }) {
     if (!brushOn) return null;
     return {
       start(p) {
+        // a stroke whose backlog still drains after its finger up commits now; any other live stroke keeps the input
+        if (live.current?.ending) commitRef.current();
         if (live.current) return;
         const r = layerRect();
         if (!r) return;
@@ -1358,8 +1389,11 @@ export function Editor({ source }: { source: EditorSource }) {
             sessionRef.current?.setLiquify(liquify.field); // the session coalesces renders to one per frame
             const cur = live.current;
             if (!cur || cur.stroke !== stroke) return; // drained by a commit: the ring is already hidden
-            const f = frameXY(cur.last);
-            ring.current?.show(f.x, f.y, cur.ringPx, ringLook(kind, stroke.state));
+            if (!cur.ending) {
+              // (after finger up the backlog still drains, but the ring is gone)
+              const f = frameXY(cur.last);
+              ring.current?.show(f.x, f.y, cur.ringPx, ringLook(kind, stroke.state));
+            }
             if (stroke.state === 'capped' && !cur.capToast) {
               cur.capToast = true; // once per gesture (push-brush spec §2.4)
               toast('推臉筆筆畫已達上限', 2600);
@@ -1369,7 +1403,7 @@ export function Editor({ source }: { source: EditorSource }) {
           raf: (cb) => requestAnimationFrame(cb),
           cancelRaf: (id) => cancelAnimationFrame(id),
         });
-        live.current = { stroke, kind, queue, ringPx: b.ringPx, last: p, capToast: false };
+        live.current = { stroke, kind, queue, ringPx: b.ringPx, last: p, capToast: false, upBy: null, ending: false };
         setDrawing(true);
         const f = frameXY(p);
         ring.current?.show(f.x, f.y, b.ringPx, ringLook(kind, stroke.state));
@@ -1384,13 +1418,16 @@ export function Editor({ source }: { source: EditorSource }) {
         const f = frameXY(cur.last);
         ring.current?.show(f.x, f.y, cur.ringPx, ringLook(cur.kind, cur.stroke.state));
       },
-      commit: () => commitRef.current(),
+      commit: () => commitRef.current(true),
       cancel: () => cancelRef.current(),
       stamped() {
         const cur = live.current;
         if (!cur) return false;
-        cur.queue.finish();
-        return cur.stroke.stamped;
+        // finger up: the backlog only until the deadline the commit that follows shares (STAMP_COMMIT_MS in all); points
+        // still queued then are a drawn stroke, never a tap (a tap's few points drain well within it)
+        cur.upBy ??= performance.now() + STAMP_COMMIT_MS;
+        cur.queue.drainUntil(cur.upBy);
+        return cur.stroke.stamped || cur.queue.size > 0;
       },
       pinch(on) {
         if (on) ring.current?.hide();

@@ -101,3 +101,8 @@ export const PATCH_TILE = 32;
 export const PINCH_GRACE_MS = 200;
 /** stamps applied per animation frame while drawing, ms */
 export const STAMP_FRAME_MS = 6;
+/**
+ * stamps applied synchronously at finger up, ms (push-brush spec §6.1 "Commit ≤ 5 ms", with the commit itself): a
+ * longer backlog drains STAMP_FRAME_MS per frame after the finger is up, and the stroke commits when it is empty
+ */
+export const STAMP_COMMIT_MS = 4;

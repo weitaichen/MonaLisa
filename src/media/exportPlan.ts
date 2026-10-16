@@ -119,7 +119,10 @@ export interface TileBounds {
   body: BodyField | null;
   /** every face with an active warp */
   faces: readonly FaceBound[];
-  /** step 6: the liquify model's max |L| over an O rect, UV; absent = no strokes */
+  /**
+   * step 6: the liquify model's max |L| over an O rect (LiquifyModel.maxDisp), in long-edge units: × the decode's long
+   * edge = px (displacementPx); absent = no strokes
+   */
   liquifyMaxDisp?: (rectO: Rect) => number;
   /** step 4: grows an O-normalized window around the spots (and donors) that meet it; absent = identity */
   spotWindowGrowth?: (winO: Rect) => Rect;

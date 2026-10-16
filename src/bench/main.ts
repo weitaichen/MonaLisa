@@ -6,17 +6,19 @@
 // no camera, so it can run from the start screen too.
 // 輸出測試 (step-3 spec §6.4): decode, tiled render, encode, canvas-area and P2-with-geometry rows on synthetic frames
 // (or a picked photo's decode, 輸出測試（選照片）), added to 複製結果. It needs the engine, so it sits in the live panel.
-// 推臉筆 (push-brush spec §6.2): stamp, replay and field-upload rows (no camera, so on the start screen too) and, once
-// 開始 made the engine, a 2048 frame with strokes; added to 複製結果 with each row's budget (ok / OVER).
+// 推臉筆 (push-brush spec §6.2): stamp, replay and field-upload rows (no camera, so on the start screen too) and the
+// editor frame at 2048 with the strokes and every effect on (the 靜態圖片測試 photo's face, else sample_face.png from the
+// dev server), on its own engine, GPU-complete without a readback, next to the strokes alone; added to 複製結果 with
+// each row's budget (ok / OVER).
 import { debugState, reportError } from '../app/debug';
 import { type LiveLoop, type LiveStats, autoTierSession, resetAutoTierSession, startLiveLoop } from '../app/live';
 import { type StillSession, createStillSession } from '../app/still';
-import { buildFrame, legacyFrame } from '../edit/frame';
+import { legacyFrame } from '../edit/frame';
 import { splitLegacy } from '../edit/legacy';
 import { LiquifyModel } from '../edit/liquify';
 import { patchPlan, readPatch } from '../edit/patch';
 import { planSpot, spotRadius } from '../edit/spots';
-import { defaultPhoto, naturalPerson, neutralPerson } from '../edit/state';
+import { defaultPhoto, neutralPerson } from '../edit/state';
 import { strokesS30 } from '../edit/strokeFixtures';
 import { ENGINE_PATHS, loadEngineAssets, loadPoseModel } from '../engine/assets';
 import { createEngine, isWebGL2Supported } from '../engine/index';
@@ -46,7 +48,7 @@ import { primaryBody } from '../detect/cache';
 import { formatAdjustBench, runAdjustBench } from './adjustBench';
 import { runExportBench } from './exportBench';
 import { runFaceDetailRows } from './faceDetailBench';
-import { benchReplay, benchStamps, formatLiquifyReport, uploadMs, type LiquifyBenchRow } from './liquifyBench';
+import { benchReplay, benchStamps, formatLiquifyReport, liquifyFrameRows, uploadMs, type LiquifyBenchRow, type LiquifyFrameScene } from './liquifyBench';
 import { mountMultiFace } from './multiFace';
 import { formatToneBench, runToneBench, spotGrid, type ToneBenchCase } from './toneBench';
 import {
@@ -695,28 +697,61 @@ async function runBodyBench(file: File): Promise<void> {
   }
 }
 
-/** A 1536 × 2048 frame through the whole pipeline with the S30 strokes: the readback makes it a complete GPU frame. */
-function liquifyFrameMs(eng: Engine, m: LiquifyModel): number {
-  const src = el('canvas', { width: 1536, height: 2048 });
-  const ctx = src.getContext('2d');
-  if (ctx) {
-    const grad = ctx.createLinearGradient(0, 0, 1536, 2048);
-    grad.addColorStop(0, '#806050');
-    grad.addColorStop(1, '#d0b0a0');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 1536, 2048);
+/**
+ * The liquify.frame photo (PB §6.2, "Editor frame at 2048"): the 靜態圖片測試 photo and its first face when one is open
+ * (importPhoto keeps it at ≤ 2048 on the long edge); else sample_face.png with its recorded landmarks, scaled to 2048
+ * (the dev server serves /tests/fixtures); else a 1536 × 2048 gradient without a face.
+ */
+async function liquifyScene(): Promise<{ scene: LiquifyFrameScene; label: string }> {
+  const face = still?.faces[0]?.face;
+  if (stillBitmap && face) return { scene: { source: stillBitmap, width: stillBitmap.width, height: stillBitmap.height, face }, label: '靜態圖片' };
+  try {
+    const [img, lm] = await Promise.all([
+      fetch('/tests/fixtures/sample_face.png').then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`${r.status}`)))),
+      fetch('/tests/fixtures/landmarks_sample_face.json').then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${r.status}`)))),
+    ]);
+    const bmp = await createImageBitmap(img as Blob);
+    const k = 2048 / Math.max(bmp.width, bmp.height);
+    const width = Math.round(bmp.width * k);
+    const height = Math.round(bmp.height * k);
+    const c = el('canvas', { width, height });
+    c.getContext('2d')?.drawImage(bmp, 0, 0, width, height);
+    bmp.close();
+    const points = (lm as { points: number[] }).points;
+    return { scene: { source: c, width, height, face: adapt({ points: new Float32Array(points) }, width, height) }, label: 'sample_face.png' };
+  } catch {
+    const c = el('canvas', { width: 1536, height: 2048 });
+    const ctx = c.getContext('2d');
+    if (ctx) {
+      const grad = ctx.createLinearGradient(0, 0, 1536, 2048);
+      grad.addColorStop(0, '#806050');
+      grad.addColorStop(1, '#d0b0a0');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 1536, 2048);
+    }
+    return { scene: { source: c, width: 1536, height: 2048, face: null }, label: '無臉（先開靜態圖片測試）' };
   }
-  const edit = { v: 2 as const, photo: { ...defaultPhoto(), strokes: m.records }, persons: { p0: naturalPerson() }, template: neutralPerson(), primaryInit: null };
-  // no faces, no obstacles, no protects: the strokes-only frame (step 1's buildFrame with its empty inputs; p0 is the primary)
-  const input = { ...buildFrame(edit, [], [], new Map(), 'p0'), source: src, width: 1536, height: 2048, liquify: m.field };
-  const times: number[] = [];
-  for (let i = 0; i < 6; i++) {
-    const t0 = performance.now();
-    eng.renderToImageData(input, { mirror: false });
-    if (i > 0) times.push(performance.now() - t0); // the first one compiles and uploads
+}
+
+/** liquify.frame on its own engine (the live engine keeps its state and loop): every effect on, and the strokes alone */
+async function liquifyFrame(): Promise<string> {
+  const { scene, label } = await liquifyScene();
+  const frame = { width: scene.width, height: scene.height };
+  const m = new LiquifyModel(frame, { syncWork: Infinity });
+  m.sync(strokesS30(frame));
+  const canvas = el('canvas');
+  const eng = createEngine(canvas, { mirror: false });
+  try {
+    await eng.ready;
+    await eng.loadLut('look', 'film');
+    const { rows, passes } = liquifyFrameRows(eng, scene, m, 'film');
+    liquifyRows.push(...rows);
+    return `${label}：${passes.filter((p) => !p.startsWith('mk.')).join(' ')}`;
+  } finally {
+    m.dispose();
+    eng.dispose();
+    canvas.getContext('webgl2')?.getExtension('WEBGL_lose_context')?.loseContext();
   }
-  times.sort((a, b) => a - b);
-  return times[2];
 }
 
 async function liquifyBench(): Promise<void> {
@@ -739,10 +774,20 @@ async function liquifyBench(): Promise<void> {
     if (gl && m.field) liquifyRows.push({ name: 'liquify.upload', value: uploadMs(gl, m.field), unit: 'ms', budget: 2 });
     // free the throwaway context now: past the browser's context limit the oldest one (the engine's) would be lost
     gl?.getExtension('WEBGL_lose_context')?.loseContext();
-    // the frame row needs the engine: run 開始 first
-    if (engine) liquifyRows.push({ name: 'liquify.frame', value: liquifyFrameMs(engine, m), unit: 'ms', budget: 33 });
     m.dispose();
-    liquifyOut.textContent = formatLiquifyReport(liquifyRows).trim();
+    liquifyOut.textContent = '推臉筆：量測 2048 畫面…';
+    await nextPaint();
+    // the live loop pauses meanwhile: its frames would share the GPU with the timed ones
+    const wasLive = loop !== null;
+    loop?.stop();
+    loop = null;
+    let scene = '';
+    try {
+      scene = await liquifyFrame();
+    } finally {
+      if (wasLive && !still) startLoop();
+    }
+    liquifyOut.textContent = `${formatLiquifyReport(liquifyRows).trim()}\n${scene}`;
   } catch (err) {
     showError('liquify', err);
     liquifyOut.textContent = `失敗：${errText(err)}`;

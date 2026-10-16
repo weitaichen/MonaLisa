@@ -1,11 +1,17 @@
 // 推臉筆 bench rows (push-brush spec §6.2): ns per texel-stamp for push (straight, no bisection), push into a stretched
-// area (bisecting) and restore, at 小／中／大; the replay of S30 and SCAP; the share of bisected work on S30; and the
-// RG16F upload of a full field. Pure apart from `uploadMs`, which takes a WebGL2 context. Rules if the iPhone misses a
+// area (bisecting) and restore, at 小／中／大; the replay of S30 and SCAP; the share of bisected work on S30; the
+// RG16F upload of a full field; and the editor frame at 2048 with the strokes and every effect on (liquifyFrameRows).
+// Pure apart from `uploadMs` and `frameTimeMs`, which take a WebGL2 context or an engine. Rules if the iPhone misses a
 // budget are in the spec's table (rescale LIQUIFY_WORK_CAP / LIQUIFY_SYNC_WORK, dirty-tile uploads, a smaller ring).
 import { BRUSH_PX, GUARD_STEPS } from '../config/limits';
 import { LiquifyModel, liquifyGrid, strokeWork } from '../edit/liquify';
+import { defaultPhoto } from '../edit/state';
 import { straightStroke, strokesCap, strokesS30 } from '../edit/strokeFixtures';
-import type { BrushSize, LiquifyField, LiquifyFrame, Stroke } from '../types';
+import { ADJUST_IDS, ADJUST_ONE_WAY } from '../engine/adjustMath';
+import { neutralValue, paramDef } from '../engine/params';
+import type { BodyField, BrushSize, Engine, Face, LiquifyField, LiquifyFrame, LookId, PersonParamId, PersonParams, PhotoParamId, RenderInput, Spot, Stroke } from '../types';
+import { makeupBenchPerson, warpBenchPerson } from './faceDetailBench';
+import { spotGrid } from './toneBench';
 
 export interface LiquifyBenchRow {
   /** e.g. liquify.stamp push 中 */
@@ -115,4 +121,128 @@ export function formatLiquifyReport(rows: readonly LiquifyBenchRow[]): string {
     ].join('\t'),
   );
   return ['', '推臉筆', ['row', 'value', 'unit', 'budget', ''].join('\t'), ...lines].join('\n');
+}
+
+/** the photo the frame row draws: a 2048-long-edge image with its face (the bench's still photo, or sample_face.png) */
+export interface LiquifyFrameScene {
+  source: TexImageSource;
+  width: number;
+  height: number;
+  /** null: no face found, so only the photo-level effects and the strokes draw */
+  face: Face | null;
+}
+
+/** 美型 at max (both sides), every 美妝 part with a shade, 美膚 and every 膚質 tool on (PB §6.2 "every effect on") */
+export function everyEffectPerson(): PersonParams {
+  const warp = warpBenchPerson(1);
+  const makeup = makeupBenchPerson();
+  const values = { ...warp.values };
+  for (const [id, v] of Object.entries(makeup.values)) if (id.startsWith('makeup.')) values[id as PersonParamId] = v;
+  Object.assign(values, {
+    'skin.smooth': 0.8,
+    'skin.rosy': 0.5,
+    'tone.even': 0.5,
+    'tone.warmth': 0.65,
+    'tone.darkCircle': 0.5,
+    'tone.nasolabial': 0.5,
+    'tone.teeth': 0.5,
+    'tone.eyeBright': 0.5,
+  });
+  return { ...warp, values, shades: makeup.shades };
+}
+
+/** a smooth 美體 field (24 × 18 texels, ≤ 1 % of the frame) */
+export function benchBodyField(): BodyField {
+  const bw = 24;
+  const bh = 18;
+  const data = new Float32Array(bw * bh * 2);
+  for (let y = 0; y < bh; y++)
+    for (let x = 0; x < bw; x++) {
+      data[(y * bw + x) * 2] = 0.01 * Math.sin((x / bw) * 6) * Math.cos((y / bh) * 4);
+      data[(y * bw + x) * 2 + 1] = 0.008 * Math.cos((x / bw) * 5);
+    }
+  return { width: bw, height: bh, data, version: 1 };
+}
+
+/**
+ * PB §6.2's liquify.frame: the editor frame at 2048 with the strokes and every effect on — the face's 美型, 美膚, 美妝
+ * and 膚質 (everyEffectPerson), 20 祛痘 spots on it, a 美體 field, 美白 and 銳化, the 自然 filter, all 12 調節 items at
+ * ±40 and the look `lookId` at 0.8 (its LUT must be resident to draw). `everything` false: the strokes alone, with every
+ * other effect neutral, so the difference is what the rest costs.
+ */
+export function liquifyFrameInput(scene: LiquifyFrameScene, field: LiquifyField | null, strokes: readonly Stroke[], lookId: LookId | null, everything = true): RenderInput {
+  const base = defaultPhoto();
+  if (!everything) {
+    const values = { ...base.values };
+    for (const id of Object.keys(values) as PhotoParamId[]) values[id] = neutralValue(paramDef(id));
+    return {
+      source: scene.source,
+      width: scene.width,
+      height: scene.height,
+      faces: [],
+      obstacles: [],
+      globalSkin: null,
+      photo: { ...base, values, filterId: 'none', look: null, strokes: [...strokes] },
+      liquify: field,
+    };
+  }
+  const values = { ...base.values, 'skin.whiten': 0.4, 'skin.sharpen': 0.3 };
+  ADJUST_IDS.forEach((id, i) => {
+    values[id] = ADJUST_ONE_WAY.has(id) ? 0.4 : i % 2 === 0 ? 0.9 : 0.1;
+  });
+  const face = scene.face;
+  let spots: Spot[] = [];
+  if (face) {
+    const xs = Array.from(face.oval).filter((_, i) => i % 2 === 0);
+    const ys = Array.from(face.oval).filter((_, i) => i % 2 === 1);
+    const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    spots = spotGrid(20, { x: x0 + 0.25 * (x1 - x0), y: y0 + 0.45 * (y1 - y0), w: 0.5 * (x1 - x0), h: 0.25 * (y1 - y0) });
+  }
+  return {
+    source: scene.source,
+    width: scene.width,
+    height: scene.height,
+    faces: face ? [{ face, weight: 1, person: everyEffectPerson(), protect: null }] : [],
+    obstacles: [],
+    globalSkin: face ? null : { smooth: 0.8, rosy: 0.5, weight: 1 },
+    photo: { ...base, values, look: lookId ? { id: lookId, amount: 0.8 } : null, strokes: [...strokes], spots },
+    body: benchBodyField(),
+    liquify: field,
+  };
+}
+
+/**
+ * The median of `runs` editor frames (engine.render with `still`, to the engine's canvas), each waited on with a 1 × 1
+ * readPixels so the GPU work is complete; no frame readback (PB §6.2). The first `warmup` frames compile, upload and
+ * build the tone field; they are not counted.
+ */
+export function frameTimeMs(engine: Engine, input: RenderInput, runs = 9, warmup = 2, now: () => number = () => performance.now()): { ms: number; passes: string[]; width: number; height: number } {
+  const gl = engine.canvas.getContext('webgl2');
+  if (!gl) throw new Error('frameTimeMs: no WebGL2 context');
+  const px = new Uint8Array(4);
+  const times: number[] = [];
+  let last = engine.render(input, { still: true });
+  gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  for (let i = 1; i < warmup + runs; i++) {
+    const t0 = now();
+    last = engine.render(input, { still: true });
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    if (i >= warmup) times.push(now() - t0);
+  }
+  times.sort((a, b) => a - b);
+  return { ms: times[times.length >> 1], passes: last.passes, width: last.width, height: last.height };
+}
+
+/** the two liquify.frame rows: every effect on (the PB §6.2 row, budget 33 ms) and the strokes alone (for the split) */
+export function liquifyFrameRows(engine: Engine, scene: LiquifyFrameScene, model: LiquifyModel, lookId: LookId | null): { rows: LiquifyBenchRow[]; passes: string[] } {
+  const all = frameTimeMs(engine, liquifyFrameInput(scene, model.field, model.records, lookId));
+  const strokes = frameTimeMs(engine, liquifyFrameInput(scene, model.field, model.records, null, false));
+  const size = `${all.width}×${all.height}`;
+  return {
+    rows: [
+      { name: `liquify.frame ${size} every effect${scene.face ? '' : ' (no face)'}`, value: all.ms, unit: 'ms', budget: 33 },
+      { name: `liquify.frame ${size} strokes only`, value: strokes.ms, unit: 'ms', budget: null },
+    ],
+    passes: all.passes,
+  };
 }

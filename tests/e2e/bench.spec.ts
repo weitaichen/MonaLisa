@@ -44,6 +44,22 @@ test('bench.html: 調節效能 — base vs 調節 program, compile time, grain h
   await shot(page, '41-bench-adjust');
 });
 
+test('bench.html 推臉筆: liquify.frame is the 2048 editor frame with strokes and every effect on (PB §6.2), GPU-complete without a readback', async ({ page }) => {
+  test.setTimeout(240_000);
+  // the dev server: it serves /tests/fixtures, so the row draws sample_face.png with its recorded landmarks
+  await page.goto('http://127.0.0.1:5190/bench.html');
+  await page.getByRole('button', { name: '推臉筆', exact: true }).click();
+  const out = page.locator('.liquify-note');
+  await expect(out).toContainText('sample_face.png：', { timeout: 200_000 });
+  const text = (await out.textContent()) ?? '';
+  console.log(text);
+  // the budget column says 33 ms; SwiftShader is far slower than a GPU, so only the rows' presence is checked here
+  expect(text).toMatch(/liquify\.frame 1365×2048 every effect\t[\d.]+\tms\t33\t/);
+  expect(text).toMatch(/liquify\.frame 1365×2048 strokes only\t[\d.]+\tms\t–\t/);
+  const passes = text.slice(text.indexOf('sample_face.png：') + 'sample_face.png：'.length).trim().split(' ');
+  for (const p of ['mask', 'heal', 'toneField', 'retouch', 'makeup', 'reshape', 'body', 'liquify', 'meanH', 'composite', 'adjust']) expect(passes, p).toContain(p);
+});
+
 test('輸出測試 frame: photo-like file sizes through the export encoders (S §4.5 estimates, S §6.4 rows 1 and 3)', async ({ page }) => {
   // the dev server: the harness imports src/bench/exportBench.ts directly
   await page.goto('http://127.0.0.1:5190/tests/e2e/pages/exportBench.html');

@@ -160,6 +160,17 @@ test('a lashes.png that fails to load: ready still settles, only 睫毛 is skipp
   guard.consoleErrors = guard.consoleErrors.filter((t) => !expected(t));
 });
 
+test('a lashes.png that never answers does not hold back 口紅: the GPUPixel meshes draw once their own textures load', async ({ page }) => {
+  // held, never fulfilled: only the page's close releases it
+  await page.route('**/makeup/own/lashes.png', () => undefined);
+  await page.goto(`${DEV_URL}/tests/e2e/pages/makeup.html`);
+  await page.waitForFunction(() => typeof window.runMakeupLashesHung === 'function');
+  const r = await page.evaluate(() => window.runMakeupLashesHung!());
+  console.log(`口紅 drew after ${r.ms} ms; engine.ready settled: ${r.settled}; passes ${r.passes.join(',')}`);
+  expect(r.settled, 'engine.ready still waits for lashes.png (the still-render wait)').toBe(false);
+  expect(r.passes).toContain('makeup');
+});
+
 test('procedural makeup survives a lost and restored WebGL context (S5 §7; Review Focus 2)', async ({ page }) => {
   await page.goto(`${DEV_URL}/tests/e2e/pages/makeup.html`);
   await page.waitForFunction(() => typeof window.runMakeupContextLoss === 'function');

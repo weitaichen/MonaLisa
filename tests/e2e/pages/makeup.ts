@@ -52,6 +52,7 @@ declare global {
     runMakeupRegions?: () => Promise<MakeupRegions>;
     runMakeupBlink?: () => Promise<Record<string, string>>;
     runMakeupLashesFail?: () => Promise<{ settled: boolean; meshReady: boolean; compiled: boolean; layers: string[] }>;
+    runMakeupLashesHung?: () => Promise<{ settled: boolean; passes: string[]; ms: number }>;
     runMakeupContextLoss?: () => Promise<{ before: string; after: string; noLashes: string; restored: boolean }>;
     runMakeupSheet?: () => Promise<{ name: string; png: string }[]>;
   }
@@ -332,6 +333,36 @@ window.runMakeupLashesFail = async () => {
   const meshReady = pass.meshReady;
   pass.dispose();
   return { settled, meshReady, compiled, layers };
+};
+
+/**
+ * The engine with lashes.png held unanswered (the spec routes it and never replies): 口紅 must draw once its own
+ * GPUPixel textures are in (makeup readiness per resource), while engine.ready (which also waits for lashes) is pending.
+ * Polls engine.render for up to 15 s; returns whether ready settled meanwhile and the passes of the last 口紅 frame.
+ */
+window.runMakeupLashesHung = async () => {
+  const blob = await (await fetch('/tests/fixtures/sample_face.png')).blob();
+  const bitmap = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+  const canvas = document.getElementById('gl') as HTMLCanvasElement;
+  const engine = createEngine(canvas, { mirror: false });
+  let settled = false;
+  void engine.ready.then(
+    () => (settled = true),
+    () => (settled = true),
+  );
+  const face = adapt({ points: new Float32Array(landmarks.points) }, bitmap.width, bitmap.height);
+  const input: RenderInput = { source: bitmap, width: bitmap.width, height: bitmap.height, faces: [{ face, weight: 1, person: partOn('lip'), protect: null }], globalSkin: null, photo: neutralPhoto() };
+  let passes: string[] = [];
+  const t0 = performance.now();
+  while (performance.now() - t0 < 15_000) {
+    passes = engine.render(input, { still: true }).passes;
+    if (passes.includes('makeup')) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  const ms = Math.round(performance.now() - t0);
+  engine.dispose();
+  bitmap.close();
+  return { settled, passes, ms };
 };
 
 /**

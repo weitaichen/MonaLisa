@@ -406,7 +406,6 @@ export function createPipeline(gl: GL): Pipeline {
 
   let mask: MaskPass | null = null;
   let makeup: MakeupPass | null = null;
-  let makeupReady = false;
   let reshape: ReshapePass | null = null;
   let overlay: LandmarkOverlay | null = null;
   let bodyTex: Texture | null = null;
@@ -503,14 +502,7 @@ export function createPipeline(gl: GL): Pipeline {
   }
 
   function getMakeup(): MakeupPass {
-    if (!makeup) {
-      const m = createMakeupPass(gl);
-      makeup = m;
-      // never rejects: each texture set logs its own failure and only disables its own parts
-      void m.ready.then(() => {
-        if (makeup === m) makeupReady = m.meshReady;
-      });
-    }
+    makeup ??= createMakeupPass(gl);
     return makeup;
   }
 
@@ -552,7 +544,10 @@ export function createPipeline(gl: GL): Pipeline {
       const procReady = proc !== null && makeup !== null && makeup.ensureProc();
       const body = bodyTexture(job.body);
       const liq = liquifyTexture(job.liquify);
-      const plan = planFrame(job, makeupReady, body !== null, { active: proc !== null, ready: procReady }, liq !== null);
+      // 口紅 / 腮紅 draw once their own GPUPixel textures are in (MakeupPass.meshReady), whatever lashes.png is doing:
+      // only the still-render wait (preloadMakeup, MakeupPass.ready) waits for both
+      const meshReady = makeup?.meshReady ?? false;
+      const plan = planFrame(job, meshReady, body !== null, { active: proc !== null, ready: procReady }, liq !== null);
 
       let maskTex: Texture | null = null;
       if (plan.mask) {
@@ -778,7 +773,6 @@ export function createPipeline(gl: GL): Pipeline {
       bodyKey = null;
       liqTex = null;
       liqKey = null;
-      makeupReady = false;
       // the field's textures die with the FBOs: the next frame on a restored context rebuilds it (Review Focus 1)
       heal = null;
       toneMask = toneField = retouch = null;

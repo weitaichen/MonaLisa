@@ -14,7 +14,7 @@ const flush = async () => {
 
 describe('failure notices', () => {
   it('a failed 質感 LUT is announced once per look per session; a failed 濾鏡 only logged', async () => {
-    const engine = { loadLut: vi.fn(() => Promise.reject(new Error('offline'))) } as unknown as Engine;
+    const engine = { loadLut: vi.fn(() => Promise.reject(new Error('offline'))), lutState: () => 'failed', lost: false } as unknown as Engine;
     requestLut(engine, 'look', 'ccd');
     requestLut(engine, 'look', 'ccd');
     requestLut(engine, 'look', 'film');
@@ -22,6 +22,22 @@ describe('failure notices', () => {
     await flush();
     expect(vi.mocked(toast).mock.calls.map((c) => c[0])).toEqual(['無法載入「CCD」質感，請稍後再試', '無法載入「膠片」質感，請稍後再試']);
     expect(engine.loadLut).toHaveBeenCalledTimes(4);
+  });
+
+  it('a load the WebGL context lost under it is no LUT failure: no toast, and the look can still be announced later', async () => {
+    vi.mocked(toast).mockClear();
+    // lost mid-load: the engine dropped the entry (lutState 'none'), engine.lost true
+    const lost = { loadLut: vi.fn(() => Promise.reject(new Error('createTexture failed'))), lutState: () => 'none', lost: true } as unknown as Engine;
+    await expect(requestLut(lost, 'look', 'blue')).resolves.toBe(false);
+    // restored already, but the load settled against the dead context (no 'failed' mark)
+    const after = { loadLut: vi.fn(() => Promise.reject(new Error('stale context'))), lutState: () => 'none', lost: false } as unknown as Engine;
+    await expect(requestLut(after, 'look', 'blue')).resolves.toBe(false);
+    expect(vi.mocked(toast)).not.toHaveBeenCalled();
+    // a genuine failure afterwards is still announced, once
+    const failed = { loadLut: vi.fn(() => Promise.reject(new Error('offline'))), lutState: () => 'failed', lost: false } as unknown as Engine;
+    await requestLut(failed, 'look', 'blue');
+    await requestLut(failed, 'look', 'blue');
+    expect(vi.mocked(toast).mock.calls.map((c) => c[0])).toEqual(['無法載入「藍調」質感，請稍後再試']);
   });
 
   it('requestLut resolves true once the LUT loaded and false when it failed (the editor redraws after a good retry)', async () => {

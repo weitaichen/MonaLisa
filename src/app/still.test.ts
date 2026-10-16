@@ -569,6 +569,26 @@ describe('濾鏡 and 質感 LUTs in the still session (step-2 spec §3.5)', () =
     expect(s.exportReady(f)).toBe(true);
   });
 
+  it('prepareExport retrying a failed look that now loads redraws the preview: the file and the screen agree (step-2 review)', async () => {
+    const engine = fakeEngine();
+    engine.loadLook.mockImplementationOnce(() => Promise.reject(new Error('offline')));
+    const s = createStillSession(engine, fakeTracker(), bitmap());
+    const f = frameOf({ look: { id: 'blue', amount: 0.8 } });
+    s.render(f);
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+    vi.advanceTimersByTime(16);
+    expect(engine.lutState('look', 'blue')).toBe('failed');
+    const renders = engine.render.mock.calls.length;
+    await s.prepareExport(f); // the retry works this time
+    expect(engine.lutState('look', 'blue')).toBe('ready');
+    vi.advanceTimersByTime(16);
+    expect(engine.render.mock.calls.length).toBe(renders + 1);
+    // a prepare that changes nothing (everything resident) draws nothing more
+    await s.prepareExport(f);
+    vi.advanceTimersByTime(16);
+    expect(engine.render.mock.calls.length).toBe(renders + 1);
+  });
+
   it('redraws when a LUT that the screen started loading arrives', async () => {
     const engine = fakeEngine();
     let done!: () => void;

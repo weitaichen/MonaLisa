@@ -295,7 +295,11 @@ export function createStillSession(
     const ready = engine.ready;
     const g = gen;
     const statics = ready.catch(() => undefined);
-    const loads = photoLuts(f.photo).map((r) => {
+    const luts = photoLuts(f.photo);
+    // loadLut retries a failed LUT: one that loads now is in the export, so the preview must redraw with it too
+    // (ensureLuts skips failed ones, so nothing else would ask for that frame; step-2 review)
+    const retried = luts.filter((r) => engine.lutState(r.kind, r.id) === 'failed');
+    const loads = luts.map((r) => {
       try {
         return engine.loadLut(r.kind, r.id).catch(() => undefined);
       } catch {
@@ -312,6 +316,7 @@ export function createStillSession(
         return;
       }
       staticsSettled = true;
+      if (retried.some((r) => engine.lutState(r.kind, r.id) === 'ready')) schedule();
     });
   }
 

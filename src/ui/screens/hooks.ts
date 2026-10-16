@@ -27,7 +27,16 @@ export function requestLut(engine: Engine, kind: LutKind, id: string): Promise<b
     () => true,
     (e: unknown) => {
       reportError(e, `loadLut(${kind}, ${id})`);
-      if (kind === 'look' && !lookFailNoted.has(id)) {
+      // only the LUT's own failure is announced (and spends the once-per-look notice): a load the WebGL context lost
+      // under it leaves no 'failed' mark, and the restored context loads it again (the still session's onRestored,
+      // the live loop's next frame), so it says nothing (step-2 review)
+      let failed = false;
+      try {
+        failed = !engine.lost && engine.lutState(kind, id) === 'failed';
+      } catch {
+        // no state to read: say nothing rather than blame the LUT
+      }
+      if (kind === 'look' && failed && !lookFailNoted.has(id)) {
         lookFailNoted.add(id);
         toast(lookFailedNotice(id), 3200);
       }

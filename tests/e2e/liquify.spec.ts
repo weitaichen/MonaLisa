@@ -708,3 +708,51 @@ test('the debounced export fired after a stroke’s first stamps but before the 
   expect(shift).toBeLessThanOrEqual(1);
   expect(await thumbLineShift(page, 450)).toBeLessThanOrEqual(1);
 });
+
+test('at 320 pt the brush bar fits without a horizontal scroll; every target stays ≥ 44 pt', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 });
+  await openPhoto(page, { name: 'line.png', mimeType: 'image/png', buffer: linePng() });
+  await enterBrush(page, '美體');
+  // one stroke enables 全部清除; its first tap shows 確定清除？, the longest label
+  const { at } = await photoToClient(page, LINE);
+  const c = at(LINE.x, 450);
+  await brushDrag(page, c, { x: c.x + 20, y: c.y });
+  await expect.poll(() => strokes(page)).toBe(1);
+  await page.getByRole('button', { name: '全部清除' }).click();
+  await expect(page.getByRole('button', { name: '確定清除？' })).toBeVisible();
+  const m = await page.evaluate(() => {
+    const bar = document.querySelector<HTMLElement>('.brush-bar')!;
+    const lines = (el: Element) => {
+      const r = document.createRange();
+      r.selectNodeContents(el);
+      return new Set([...r.getClientRects()].map((c) => Math.round(c.top))).size;
+    };
+    const kids = [...bar.querySelectorAll<HTMLElement>('button')].map((b) => ({ r: b.getBoundingClientRect(), over: b.scrollWidth > b.clientWidth, lines: lines(b) }));
+    // the three groups (推／恢復, 小／中／大, 全部清除) and the space between them
+    const groups = [...bar.children].map((c) => c.getBoundingClientRect());
+    return {
+      vw: window.innerWidth,
+      doc: document.documentElement.scrollWidth,
+      bar: { scroll: bar.scrollWidth, client: bar.clientWidth },
+      right: Math.max(...kids.map((k) => k.r.right)),
+      left: Math.min(...kids.map((k) => k.r.left)),
+      minW: Math.min(...kids.map((k) => k.r.width)),
+      minH: Math.min(...kids.map((k) => k.r.height)),
+      clipped: kids.filter((k) => k.over).length,
+      wrapped: kids.filter((k) => k.lines > 1).length,
+      gaps: groups.slice(1).map((g, i) => Math.round(g.left - groups[i].right)),
+    };
+  });
+  console.log(`brush bar at 320: ${JSON.stringify(m)}`);
+  expect(m.vw).toBe(320);
+  expect(m.bar.scroll).toBeLessThanOrEqual(m.bar.client);
+  expect(m.right).toBeLessThanOrEqual(320);
+  expect(m.left).toBeGreaterThanOrEqual(0);
+  expect(m.doc).toBeLessThanOrEqual(320);
+  expect(m.minW).toBeGreaterThanOrEqual(44);
+  expect(m.minH).toBeGreaterThanOrEqual(44);
+  expect(m.clipped).toBe(0);
+  // not squeezed either: one line per label (確定清除？ included), and the groups do not touch
+  expect(m.wrapped).toBe(0);
+  for (const g of m.gaps) expect(g).toBeGreaterThanOrEqual(4);
+});

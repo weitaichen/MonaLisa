@@ -2015,6 +2015,21 @@ button:focus-visible {
 .brush-clear:disabled {
   opacity: 0.38;
 }
+/* below 360 pt the bar's 356 px would scroll: 44 px 推／恢復, a 64 px 全部清除 at 12 px, 8 px margins and 6 px gaps
+   (292 + 12 + 16 = 320); every target stays 44 pt tall and at least 44 pt wide */
+@media (max-width: 359px) {
+  .editor-panel .brush-bar {
+    padding: 0 8px;
+    gap: 6px;
+  }
+  .brush-bar .segmented:nth-of-type(1) button {
+    min-width: 44px;
+  }
+  .brush-clear {
+    width: 64px;
+    font-size: 12px;
+  }
+}
 .brush-overlay {
   position: absolute;
   inset: 0;

@@ -82,6 +82,7 @@ v0.3 has no manual liquify (`monalisa_inventory.md:216`). The displacement-textu
 
 - The mode and size are remembered for the app session (module level, like `lastSel`). They are not persisted and are not undo steps. A change while a stroke is live applies to the next stroke.
 - Width at 375 pt: 2 × 48 + 3 × 44 + 88 + 2 × 12 gaps = 340 pt, which fits inside the 16 pt margins. `Segmented` buttons are 44 px tall plus 2 px padding (`theme.css:1853-1861`), so every target is ≥ 44 pt (DS §7.1) and the bar fits the 50 px row.
+- Below 360 pt (v0.4 cleanup, step-6 review) the bar would need 356 px: 推／恢復 shrink to 44 px, 全部清除 to 64 px at 12 px type, with 8 px margins and 6 px gaps (2 × 44 + 3 × 44 + 8 + 64 + 2 × 6 + 2 × 8 = 320 pt). Every label stays on one line and every target ≥ 44 pt (`liquify.spec.ts` checks it at 320 pt). Without the rule, flex shrink squeezed 全部清除 to 52 px with a two-line label and the groups touched.
 - The bar sits outside `.editor-stage`, so the stage's gesture handler never sees it.
 
 ### 2.3 Canvas overlay (`src/ui/components/BrushOverlay.tsx`, new)
@@ -655,3 +656,4 @@ This spec refines C in the places below. The critic applied the ones marked **ap
 5. **§C8.4 step 6 (applied):** "a push moves an edge by the drag distance" → by 0.45–0.85× the drag (content moves about ¾ of a short drag).
 6. **§C2.3 (detail, not applied):** the brush bar replaces the slider row; double tap to fit stays for stamp-free taps; ↶ ↷ are disabled during a live stroke; the second-finger rule (cancel ≤ 200 ms, commit after). Brush mode joins the photo-level modes where the person strip is dimmed with 「整張照片」 (§C2.2 already hides face boxes in 推臉筆 mode).
 7. **§C4.5 / §C11 (not applied):** 背景保護 is not applied to strokes in v0.4; this spec's §11 Q1 owns the question.
+8. **v0.4 cleanup (step-6 review; detail, C says nothing about it):** §7 now commits a stroke at a WebGL context loss instead of continuing it after the restore; §2.3 keeps brush mode while 按住對比 is held; §3.5 shows the replay status as a pill; §2.2 has a rule below 360 pt.

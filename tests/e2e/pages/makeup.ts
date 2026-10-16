@@ -34,6 +34,8 @@ export interface MakeupPinCase {
   changed: number;
   maxErr255: number;
   samples: number[][];
+  /** the blend state draw() leaves: [BLEND enabled, SRC_RGB, DST_RGB, SRC_ALPHA, DST_ALPHA, EQUATION_RGB] */
+  blendAfter: number[];
 }
 export interface MakeupRegions {
   width: number;
@@ -148,6 +150,7 @@ window.runMakeupPin = async () => {
     const layer = KIND_LAYER[c.kind];
     const ranges = Object.fromEntries(LAYER_ORDER.map((l) => [l, [0, l === layer ? 4 : 0]])) as MakeupGeometry['ranges'];
     pass.draw(target, { data, ranges }, src, lashes);
+    const blendAfter = [gl.isEnabled(gl.BLEND) ? 1 : 0, ...[gl.BLEND_SRC_RGB, gl.BLEND_DST_RGB, gl.BLEND_SRC_ALPHA, gl.BLEND_DST_ALPHA, gl.BLEND_EQUATION_RGB].map((q) => gl.getParameter(q) as number)];
     const gpu = new Uint8Array(W * H * 4);
     gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo);
     gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, gpu);
@@ -180,7 +183,7 @@ window.runMakeupPin = async () => {
         }
         if (i % 64 === 32 && j % 64 === 32) samples.push([i, j, gpu[o], gpu[o + 1], gpu[o + 2], want[0] * 255, want[1] * 255, want[2] * 255]);
       }
-    out.push({ name: c.name, mode: LAYER_MODE[layer], n: W * H, changed: Math.round(changed / 3), maxErr255: maxErr, samples });
+    out.push({ name: c.name, mode: LAYER_MODE[layer], n: W * H, changed: Math.round(changed / 3), maxErr255: maxErr, samples, blendAfter });
   }
   pass.dispose();
   return out;

@@ -52,6 +52,8 @@ test('PMAKEUP: GPU == CPU port for every kind and blend mode (S5 §8.3 item 2)',
     console.log(`${c.name} (mode ${c.mode}): ${c.n} px, max |GPU − CPU| = ${c.maxErr255.toFixed(2)}/255, ${c.changed} px changed`);
     expect(c.maxErr255, `${c.name}: ${JSON.stringify(c.samples.slice(0, 3))}`).toBeLessThanOrEqual(2);
     expect(c.changed, c.name).toBeGreaterThan(500);
+    // draw() leaves no layer's blend factors behind: blending off, (ONE, ZERO) and FUNC_ADD, as heal.ts does
+    expect(c.blendAfter, c.name).toEqual([0, 1, 0, 1, 0, 0x8006]);
   }
 });
 

@@ -693,6 +693,9 @@ export function createProcMakeupPass(gl: GL): ProcMakeupPass {
         gl.drawArrays(gl.TRIANGLE_STRIP, first, count);
         drawn.push(layer);
       }
+      // back to the default factors, as heal.ts does: the MIN / MAX passes ignore them, but no later pass inherits a
+      // layer's (DST_COLOR, …), (ONE, ONE_MINUS_SRC_COLOR, …) or (SRC_ALPHA, ONE_MINUS_SRC_ALPHA, …)
+      gl.blendFunc(gl.ONE, gl.ZERO);
       gl.disable(gl.BLEND);
       gl.bindVertexArray(null);
       gl.bindBuffer(gl.ARRAY_BUFFER, null);

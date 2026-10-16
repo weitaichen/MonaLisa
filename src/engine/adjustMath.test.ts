@@ -7,6 +7,7 @@ import {
   ADJUST_ONE_WAY,
   adjustRgb,
   adjustUniforms,
+  adjustValuesNeutral,
   adjustWanted,
   curveAt,
   curveKnots,
@@ -15,6 +16,7 @@ import {
   frameFor,
   lin,
   luma,
+  neutralAdjust as neutralOf,
   seedMix,
   type AdjustFrame,
   type AdjustValues,
@@ -226,6 +228,33 @@ describe('effective values and the look (step-2 spec §4.3)', () => {
     expect(adjustUniforms({}, { def: film, amount: 0 }, true, F).on).toBe(false);
     expect(U({ 'adjust.vibrance': 0.51 }).on).toBe(true);
     expect(U({ 'adjust.vignette': 0.01 }).on).toBe(true);
+  });
+
+  it('adjustValuesNeutral is exactly "no look drawn → on is false", near neutral, at the ends and on junk', () => {
+    const near = [0, 1e-5, 5e-5, 1e-4, 1.5e-4, 0.01];
+    const raws: unknown[] = [undefined, NaN, Infinity, -Infinity, -1, 2, 0, 1, 0.3, ...near, ...near.map((d) => 0.5 + d), ...near.map((d) => 0.5 - d)];
+    for (const id of ADJUST_IDS) {
+      for (const raw of raws) {
+        const values = { [id]: raw } as AdjustValues;
+        expect(adjustValuesNeutral(values), `${id} = ${String(raw)}`).toBe(!U(values).on);
+      }
+    }
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32);
+    for (let k = 0; k < 500; k++) {
+      const values: Record<string, number> = {};
+      for (const id of ADJUST_IDS) if (rnd() < 0.3) values[id] = rnd() < 0.5 ? neutralOf(id) + (rnd() - 0.5) * 4e-4 : rnd();
+      expect(adjustValuesNeutral(values)).toBe(!U(values).on);
+    }
+  });
+
+  it('the curve uniform while the curve is off is curveKnots(0, 0, 0, 0)', () => {
+    const k = curveKnots(0, 0, 0, 0);
+    const u = U({ 'adjust.vignette': 1 });
+    expect(u.curveOn).toBe(false);
+    expect(u.curve).toEqual(k.y.flatMap((y, i) => [y, k.m[i] / 8]));
+    // each frame gets its own array: a caller that edits one changes no other frame
+    expect(U({ 'adjust.vignette': 1 }).curve).not.toBe(u.curve);
   });
 
   it('adjustWanted: any non-neutral user value, or any look (resident or not)', () => {

@@ -4,7 +4,16 @@ import { debugState } from '../app/debug';
 import { MAX_RENDER_FACES } from '../config/limits';
 import { glMat3, IDENTITY_GEOMETRY, IDENTITY_MAT3, isIdentity, viewSize, vToO } from '../geometry/view';
 import type { Engine, EngineOptions, Geometry, LookDef, LutKind, LutState, Rect, RenderInput, RenderStats, Tier } from '../types';
-import { ADJUST_IDS, adjustUniforms, type AdjustFrame, type AdjustUniforms, type AdjustValues } from './adjustMath';
+import {
+  ADJUST_IDS,
+  adjustUniforms,
+  adjustValuesNeutral,
+  frameFor,
+  seedMix,
+  type AdjustFrame,
+  type AdjustUniforms,
+  type AdjustValues,
+} from './adjustMath';
 import {
   createTexture,
   deleteTexture,
@@ -55,6 +64,12 @@ interface LutEntry {
   used: number;
 }
 
+/**
+ * The 調節 uniforms of every frame with neutral values and no drawable look (adjustFor): `on` false, so the composite
+ * runs its base program and never reads the frame fields, which are those of a 1 × 1 frame.
+ */
+const ADJUST_OFF: AdjustUniforms = adjustUniforms({}, null, false, frameFor({ width: 1, height: 1 }));
+
 /** λ_f (S §4.4): every warp strength × k; k = 1 returns `u` itself, so the unguarded table is bit-identical */
 function scaleUniforms(u: ReshapeUniforms, k: number): ReshapeUniforms {
   if (k === 1) return u;
@@ -89,7 +104,10 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
   let lutTick = 0;
   /** keys the latest frame drew with: the LRU never evicts these */
   let frameLuts = new Set<string>();
-  let adjustMemo: { key: string; u: AdjustUniforms } | null = null;
+  /** adjustFor's last build: its inputs but the seed (12 values, look amount and readiness, the frame), and the look id */
+  let adjustMemo: { key: number[]; lookId: string | null; u: AdjustUniforms } | null = null;
+  /** the scratch key adjustFor fills each frame (no allocation on a hit) */
+  const adjustKey: number[] = new Array<number>(ADJUST_IDS.length + 10).fill(0);
   /** the procedural makeup vertex data of the last frame, reused by the next one (no GL object: survives a context loss) */
   let procScratch: Float32Array | undefined;
 
@@ -260,12 +278,36 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
     return null;
   }
 
-  /** adjustUniforms, memoized on its inputs (a drag rebuilds 9 knots; an unchanged frame rebuilds nothing) */
+  /**
+   * adjustUniforms, memoized on its inputs (step-2 spec §4.3: a drag rebuilds 9 knots; an unchanged frame rebuilds
+   * nothing). Neutral values without a drawable look build nothing at all (every v0.3 camera frame and plain photo):
+   * the composite then runs the base program and reads no 調節 uniform. The grain seed is not in the key, since the
+   * camera advances it every frame: a new seed only replaces seedMix (a fresh object, so a job keeps its own frame's).
+   */
   function adjustFor(values: AdjustValues, look: { def: LookDef; amount: number } | null, ready: boolean, frame: AdjustFrame): AdjustUniforms {
-    const key = JSON.stringify([ADJUST_IDS.map((id) => values[id]), look?.def.id ?? null, look?.amount ?? null, ready, frame]);
-    if (adjustMemo?.key === key) return adjustMemo.u;
+    if (!(look && ready) && adjustValuesNeutral(values)) return ADJUST_OFF;
+    const lookId = look?.def.id ?? null;
+    const key = adjustKey;
+    let n = 0;
+    for (const id of ADJUST_IDS) {
+      const v = values[id];
+      key[n++] = typeof v === 'number' ? v : NaN;
+    }
+    key[n++] = look ? look.amount : NaN;
+    key[n++] = ready ? 1 : 0;
+    for (let i = 0; i < 4; i++) key[n++] = frame.vMap[i];
+    key[n++] = frame.vSize[0];
+    key[n++] = frame.vSize[1];
+    key[n++] = frame.fullShortEdge;
+    key[n++] = frame.thumb ? 1 : 0;
+    const mix = seedMix(frame.seed);
+    const m = adjustMemo;
+    if (m && m.lookId === lookId && m.key.every((v, i) => Object.is(v, key[i]))) {
+      if (m.u.seedMix !== mix) m.u = { ...m.u, seedMix: mix };
+      return m.u;
+    }
     const u = adjustUniforms(values, look, ready, frame);
-    adjustMemo = { key, u };
+    adjustMemo = { key: key.slice(), lookId, u };
     return u;
   }
 

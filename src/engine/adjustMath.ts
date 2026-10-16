@@ -141,6 +141,21 @@ export function isNeutralAdjust(id: AdjustId, v: number): boolean {
   return ADJUST_ONE_WAY.has(id) ? !(v > EPS) : !(Math.abs(v) > EPS);
 }
 
+/**
+ * Every stored value is neutral in shader space: effectiveAdjust(values, null, 0) gives isNeutralAdjust for all 12
+ * items, without building the record (the engine's per-frame check before any 調節 work, step-2 spec §4.3).
+ */
+export function adjustValuesNeutral(values: AdjustValues): boolean {
+  for (const id of ADJUST_IDS) {
+    const raw = values[id];
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) continue;
+    const u = clamp01(raw);
+    // effectiveAdjust's expressions with no look (its + 0 offset changes no value)
+    if (!isNeutralAdjust(id, ADJUST_ONE_WAY.has(id) ? u : clampS((u - 0.5) * 2))) return false;
+  }
+  return true;
+}
+
 // ───────────── tone curve: 亮度, 對比, 高光, 陰影 (step-2 spec §4.2) ─────────────
 
 export interface CurveKnots {
@@ -310,6 +325,20 @@ export interface AdjustUniforms {
   seedMix: number;
 }
 
+/** uCurve[9] as 18 floats: (y_i, m_i / 8) */
+function curveUniform(knots: CurveKnots): number[] {
+  const curve: number[] = [];
+  for (let i = 0; i < 9; i++) curve.push(knots.y[i], knots.m[i] / 8);
+  return curve;
+}
+
+let identity: readonly number[] | null = null;
+/** the curve uniform while uCurveOn is 0 (the shader skips the curve): curveKnots(0, 0, 0, 0), built once */
+function identityCurve(): readonly number[] {
+  identity ??= curveUniform(curveKnots(0, 0, 0, 0));
+  return identity;
+}
+
 /** Uniforms of one frame. `lookReady` false → the look is drawn neither in part nor in full (spec §1.4). */
 export function adjustUniforms(
   values: AdjustValues,
@@ -333,9 +362,7 @@ export function adjustUniforms(
   const sh = e['adjust.highlights'];
   const ss = e['adjust.shadows'];
   const curveOn = [sb, sc, sh, ss].some((v) => Math.abs(v) > EPS);
-  const knots = curveOn ? curveKnots(sb, sc, sh, ss) : curveKnots(0, 0, 0, 0);
-  const curve: number[] = [];
-  for (let i = 0; i < 9; i++) curve.push(knots.y[i], knots.m[i] / 8);
+  const curve = curveOn ? curveUniform(curveKnots(sb, sc, sh, ss)) : [...identityCurve()];
 
   const st = e['adjust.temperature'];
   const sn = e['adjust.tint'];

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { legacyFrame } from '../edit/frame';
 import { defaultPhoto, neutralPerson } from '../edit/state';
 import { glMat3, IDENTITY_GEOMETRY, IDENTITY_MAT3, rotateLeft, vToO } from '../geometry/view';
-import { seedMix } from './adjustMath';
+import { adjustUniforms, seedMix } from './adjustMath';
 import { loadImageTexture } from './gl/gl';
 import { createEngine, MAX_RESIDENT_LUTS } from './index';
 import { defaultParams } from './params';
@@ -21,6 +21,12 @@ vi.mock('./gl/gl', async (importOriginal) => ({
   shrinkTexture: vi.fn(),
   uploadSource: vi.fn(),
 }));
+
+// counted, not replaced: the 調節 memo tests check how often the engine builds the uniforms
+vi.mock('./adjustMath', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./adjustMath')>();
+  return { ...actual, adjustUniforms: vi.fn(actual.adjustUniforms) };
+});
 
 vi.mock('./pipeline', () => ({
   createPipeline: vi.fn(() => ({
@@ -342,6 +348,45 @@ describe('createEngine: 濾鏡 and 質感 LUT cache (step-2 spec §3.5)', () => 
     expect(engine.adjustUnavailable).toBe(false);
     (vi.mocked(createPipeline).mock.results.at(-1)!.value as { adjustFailed?: boolean }).adjustFailed = true;
     expect(engine.adjustUnavailable).toBe(true);
+  });
+
+  it('neutral camera frames build no 調節 uniforms, whatever the grain seed (the v0.3 live path)', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    const built = vi.mocked(adjustUniforms).mock.calls.length;
+    for (let seed = 0; seed < 5; seed++) engine.render(photoInput({}, { grainSeed: seed }));
+    expect(latestJob().adjust.on).toBe(false);
+    expect(vi.mocked(adjustUniforms).mock.calls.length).toBe(built);
+    // a look whose LUT is not resident draws nothing either (all-or-nothing): still no build
+    loadTex.mockImplementationOnce(() => new Promise(() => {}) as never);
+    engine.render(photoInput({ look: { id: 'cinema', amount: 0.8 } }, { grainSeed: 9 }));
+    expect(latestJob().adjust.on).toBe(false);
+    expect(vi.mocked(adjustUniforms).mock.calls.length).toBe(built);
+  });
+
+  it('the memo leaves the grain seed out: a new seed only changes seedMix', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    const p = defaultPhoto();
+    const photo = { values: { ...p.values, 'adjust.contrast': 0.8, 'adjust.grain': 0.5 } };
+    const built = vi.mocked(adjustUniforms).mock.calls.length;
+    engine.render(photoInput(photo, { grainSeed: 1 }));
+    const first = latestJob().adjust;
+    for (let seed = 2; seed < 6; seed++) {
+      engine.render(photoInput(photo, { grainSeed: seed }));
+      const u = latestJob().adjust;
+      expect(u.seedMix).toBe(seedMix(seed));
+      expect({ ...u, seedMix: 0 }).toEqual({ ...first, seedMix: 0 });
+    }
+    expect(vi.mocked(adjustUniforms).mock.calls.length).toBe(built + 1);
+    // the frame the camera uniforms were built for is untouched by later seeds
+    expect(first.seedMix).toBe(seedMix(1));
+    // any other input still rebuilds
+    engine.render(photoInput({ values: { ...photo.values, 'adjust.contrast': 0.7 } }, { grainSeed: 6 }));
+    expect(vi.mocked(adjustUniforms).mock.calls.length).toBe(built + 2);
+    expect(latestJob().adjust.seedMix).toBe(seedMix(6));
   });
 });
 

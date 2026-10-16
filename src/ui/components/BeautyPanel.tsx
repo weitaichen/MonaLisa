@@ -12,6 +12,7 @@ import { Icon } from '../icons';
 import {
   activate,
   bodyNoteFor,
+  BRUSH_KEY,
   EDITOR_TABS,
   itemsFor,
   leadChip,
@@ -151,7 +152,8 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
       a === 'part' ||
       a === 'makeupReset' ||
       a === 'makeupOn' ||
-      a === 'split'
+      a === 'split' ||
+      a === 'brush'
     )
       haptic();
     if (r.sel !== sel) onSel(r.sel);
@@ -238,12 +240,12 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
                 type="button"
                 role="option"
                 aria-selected={item.selected}
-                aria-disabled={faceOff || item.disabled ? 'true' : undefined}
+                aria-disabled={(faceOff && item.key !== BRUSH_KEY) || item.disabled ? 'true' : undefined}
                 aria-pressed={item.pressed}
                 aria-description={item.disabled ? (item.reason ?? undefined) : item.badge === SPLIT_BADGE ? '左右分開' : item.badge ? '整張照片' : undefined}
                 class={`item${item.selected ? ' selected' : ''}${item.hasValue ? ' has-value' : ''}${item.disabled ? ' disabled' : ''}${
                   item.pressed === undefined ? '' : item.pressed ? ' switchable on' : ' switchable'
-                }`}
+                }${item.key === BRUSH_KEY ? ' brush-item' : ''}`}
                 onClick={() => tapItem(item)}
               >
                 <span class="item-tile">

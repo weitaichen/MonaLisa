@@ -156,7 +156,11 @@ test('no face in the photo: 美型 / 美妝 are dimmed with a note and no slider
   await expect(note).toHaveText('未偵測到臉部，臉型與美妝不會套用');
   const options = page.getByRole('option');
   expect(await options.count()).toBeGreaterThan(0);
-  for (const o of await options.all()) await expect(o).toHaveAttribute('aria-disabled', 'true');
+  for (const o of await options.all()) {
+    // 推臉筆 is never gated: it stays enabled while the face note dims the rest of 美型 (push-brush spec §2.1)
+    if ((await o.locator('.item-label').textContent()) === '推臉筆') await expect(o).not.toHaveAttribute('aria-disabled', 'true');
+    else await expect(o).toHaveAttribute('aria-disabled', 'true');
+  }
   await expect(tab('美型')).toHaveClass(/\bunavailable\b/);
   await expect(tab('美妝')).toHaveClass(/\bunavailable\b/);
   await expect(tab('美膚')).not.toHaveClass(/\bunavailable\b/);

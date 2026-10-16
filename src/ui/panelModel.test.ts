@@ -10,10 +10,10 @@ import {
   setParam,
   SHADES,
 } from '../engine/params';
-import type { BeautyParams, EditState, ParamId, PersonParams, RegionStatus, Selection } from '../types';
+import type { BeautyParams, EditState, ParamId, PersonParams, RegionStatus, Selection, Stroke } from '../types';
 import { lensFor, NO_BODY_NOTE, NO_FACE_NOTE, P0_INFO, type PersonInfo } from '../edit/lens';
 import { editFromLegacy, legacyProjection } from '../edit/legacy';
-import { assignPersons, defaultPhoto, emptyShades, naturalPerson, neutralPerson, personFromPreset, withPersons } from '../edit/state';
+import { assignPersons, defaultPhoto, emptyShades, naturalPerson, neutralPerson, personFromPreset, withPersons, withStrokes } from '../edit/state';
 import { TONE_COPY } from '../edit/toneCopy';
 import { heightBandStretch } from '../body/bands';
 import { bandEdges, bandToDisplay, defaultStretch, displayToBand, dragEdge, keyStep, MIN_GAP, moveEdge } from './components/HeightBandOverlay';
@@ -29,6 +29,8 @@ import {
   BODY_UNSUPPORTED_NOTE,
   bodyNote,
   bodyNoteFor,
+  BRUSH_KEY,
+  brushItem,
   CAMERA_BODY,
   clearArmKey,
   clearLabel,
@@ -53,7 +55,9 @@ import {
   photoScoped,
   photoTouchToast,
   rememberable,
+  rememberSel,
   selectTab,
+  showsBrush,
   showsHeightBand,
   showsSpotMode,
   skinNote,
@@ -92,11 +96,11 @@ const lensOf = (p: BeautyParams) => lensOfEdit(editFromLegacy(p));
 const proj = (e: EditState) => legacyProjection(e, 'p0');
 
 describe('itemsFor', () => {
-  it('skin / shape strips start with ⊘ 原圖 then every param of the group', () => {
+  it('skin / shape strips start with ⊘ 原圖 then every param of the group (美型 closes with 左右分開 and 推臉筆)', () => {
     for (const tab of ['skin', 'shape'] as const) {
       const items = itemsFor(lensOf(defaultParams()), sel({ tab }));
       expect(items[0]).toMatchObject({ key: 'reset', label: '原圖' });
-      expect(items.slice(1).map((i) => i.key)).toEqual([...paramsInGroup(tab).map((d) => d.id), ...(tab === 'shape' ? ['split'] : [])]);
+      expect(items.slice(1).map((i) => i.key)).toEqual([...paramsInGroup(tab).map((d) => d.id), ...(tab === 'shape' ? ['split', BRUSH_KEY] : [])]);
     }
   });
   it('has-value dots follow hasValue (bidirectional neutral at 0.5)', () => {
@@ -250,9 +254,9 @@ describe('美體 tab', () => {
   it('sits after 美型: 一鍵 · 美膚 · 美型 · 美體 · 濾鏡 · 美妝 · 調節', () => {
     expect(TABS.map((t) => t.label)).toEqual(['一鍵', '美膚', '美型', '美體', '濾鏡', '美妝', '調節']);
   });
-  it('strip: ⊘ 原圖 · 增高 · the 10 sliders in schema order · 背景保護', () => {
+  it('strip: ⊘ 原圖 · 增高 · the 10 sliders in schema order · 背景保護 · 推臉筆', () => {
     const items = itemsFor(lensOf(defaultParams()), bodySel(), ready());
-    expect(items.map((i) => i.key)).toEqual(['reset', 'height', ...paramsInGroup('body').map((d) => d.id), 'protect']);
+    expect(items.map((i) => i.key)).toEqual(['reset', 'height', ...paramsInGroup('body').map((d) => d.id), 'protect', BRUSH_KEY]);
     expect(items.map((i) => i.label).slice(2, 12)).toEqual(['長腿', '瘦身', '細腰', '腰臀比', '美臀', '瘦腿', '瘦手臂', '直角肩', '天鵝頸', '小頭']);
     expect(byKey(items, 'protect')).toMatchObject({ pressed: true, disabled: false });
   });
@@ -276,10 +280,10 @@ describe('美體 tab', () => {
     expect(r.edit).toBe(l.edit);
     expect(r.sel).toBe(s);
   });
-  it('while idle / loading / none / error only 原圖 · 增高 · 背景保護 work', () => {
+  it('while idle / loading / none / error only 原圖 · 增高 · 背景保護 · 推臉筆 work', () => {
     for (const status of ['idle', 'loading', 'none', 'error'] as const) {
       const items = itemsFor(lensOf(defaultParams()), bodySel(), { ...ready(), status, progress: 0.4 });
-      expect(items.filter((i) => !i.disabled).map((i) => i.key), status).toEqual(['reset', 'height', 'protect']);
+      expect(items.filter((i) => !i.disabled).map((i) => i.key), status).toEqual(['reset', 'height', 'protect', BRUSH_KEY]);
       expect(items.every((i) => !i.disabled || !!i.reason)).toBe(true);
       expect(sliderFor(lensOf(defaultParams()), bodySel('body.slim'), { ...ready(), status })).toBeNull();
     }
@@ -1058,10 +1062,11 @@ describe('左右分開 interaction (face-detail spec §2.2)', () => {
 describe('美型 wiring: itemsFor, sliderFor, tabHasValue, activate (face-detail spec §2.1–2.2)', () => {
   const s = { ...INITIAL_SELECTION, tab: 'shape' as const, shape: 'shape.faceSlim' as const, side: 'R' as const };
 
-  it('the 美型 strip keeps ⊘ 原圖 first, badges the split items and ends with the pressed switch', () => {
+  it('the 美型 strip keeps ⊘ 原圖 first, badges the split items and ends with the pressed switch, then 推臉筆', () => {
     const items = itemsFor(L5(splitOnEdit()), s);
     expect(items[0]).toMatchObject({ key: 'reset', label: '原圖' });
-    expect(items.at(-1)).toMatchObject({ key: 'split', pressed: true });
+    expect(items.at(-2)).toMatchObject({ key: 'split', pressed: true });
+    expect(items.at(-1)!.key).toBe(BRUSH_KEY);
     expect(byKey(items, 'shape.faceSlim')).toMatchObject({ badge: SPLIT_BADGE, divider: 'before', selected: true });
     expect(itemsFor(L5(splitOnEdit()), { ...s, tab: 'skin' }).some((i) => i.key === 'split')).toBe(false);
   });
@@ -1293,5 +1298,79 @@ describe('美妝 strip notes (face-detail spec §2.4)', () => {
     expect(makeupNote(S14({ makeupPart: 'lip' }), { ...none, procFailed: true })).toBeNull();
     expect(makeupNote(S14({ makeupPart: 'lens', makeupView: 'parts' }), { ...none, lensClosed: true })).toBeNull();
     expect(makeupNote(S14({ tab: 'shape' }), { ...none, procFailed: true })).toBeNull();
+  });
+});
+
+describe('推臉筆 in the strips (push-brush spec §2.1)', () => {
+  const rec: Stroke = { id: 'k', kind: 'push', radius: 0.05, strength: 0.75, points: Float32Array.of(0.3, 0.3, 0.3125, 0.3) };
+  const edit0 = (): EditState => ({ v: 2, photo: defaultPhoto(), persons: { p0: naturalPerson() }, template: neutralPerson(), primaryInit: null });
+  // P0_INFO[0] carries every PersonInfo field later steps may add; only face / body vary here
+  const lensOf = (e: EditState, face = true, body = true) => lensFor(e, { kind: 'person', id: 'p0' }, [{ ...P0_INFO[0], face, body }], 'p0');
+  const at = (tab: 'shape' | 'body', brush = false): PanelSelection => ({
+    ...INITIAL_SELECTION,
+    tab,
+    ...(brush ? (tab === 'shape' ? { shape: 'brush' as const } : { body: 'brush' as const }) : {}),
+  });
+
+  it('is the last item of 美型 and of 美體, selected only in brush mode', () => {
+    for (const tab of ['shape', 'body'] as const) {
+      const items = itemsFor(lensOf(edit0()), at(tab));
+      expect(items.at(-1)!.key).toBe(BRUSH_KEY);
+      expect(items.at(-1)!.label).toBe('推臉筆');
+      expect(items.at(-1)!.selected).toBe(false);
+      expect(itemsFor(lensOf(edit0()), at(tab, true)).at(-1)!.selected).toBe(true);
+    }
+  });
+
+  it('is never gated: a body-only person, 美體 idle / loading / none / error', () => {
+    const shape = itemsFor(lensOf(edit0(), false, true), at('shape')).at(-1)!;
+    expect(shape.disabled).toBe(false);
+    for (const status of ['idle', 'loading', 'none', 'error'] as const) {
+      const body: BodyContext = { status, availability: () => ({ ok: false, reason: 'x' }), people: 0 };
+      const item = itemsFor(lensOf(edit0()), at('body'), body).at(-1)!;
+      expect(item.key).toBe(BRUSH_KEY);
+      expect(item.disabled).toBe(false);
+    }
+  });
+
+  it('shows the has-value dot when the photo has strokes; tab dots ignore strokes', () => {
+    const e = withStrokes(edit0(), [rec]);
+    expect(brushItem(at('shape'), 1).hasValue).toBe(true);
+    expect(brushItem(at('body'), 0).hasValue).toBe(false);
+    expect(itemsFor(lensOf(e), at('body')).at(-1)!.hasValue).toBe(true);
+    expect(itemsFor(lensOf(edit0()), at('body')).at(-1)!.hasValue).toBe(false);
+    // a tab dot keeps meaning "a slider item here has a value": strokes never change it
+    for (const tab of ['shape', 'body'] as const) expect(tabHasValue(lensOf(e), tab)).toBe(tabHasValue(lensOf(edit0()), tab));
+  });
+
+  it('activate selects the brush without an edit (no undo step); sliderFor is null in brush mode', () => {
+    const e = edit0();
+    const item = brushItem(at('shape'), 0);
+    const r = activate(item, lensOf(e), at('shape'));
+    expect(r.changed).toBe(true);
+    expect(r.sel.shape).toBe('brush');
+    expect(r.edit).toBe(e);
+    expect(activate(item, lensOf(e), at('shape', true)).changed).toBe(false);
+    expect(showsBrush(at('shape', true))).toBe(true);
+    expect(showsBrush(at('body', true))).toBe(true);
+    expect(showsBrush({ ...at('shape', true), tab: 'skin' })).toBe(false);
+    expect(sliderFor(lensOf(e), at('shape', true))).toBeNull();
+    expect(sliderFor(lensOf(e), at('body', true))).toBeNull();
+  });
+
+  it('is editor-only: the camera context drops it from 美型 and 美體 (live: false, C §2.4)', () => {
+    for (const tab of ['shape', 'body'] as const) {
+      expect(itemsFor(lensOf(edit0()), at(tab), CAMERA_BODY).some((i) => i.key === BRUSH_KEY)).toBe(false);
+    }
+  });
+
+  it('lastSel never holds the brush: it keeps the item selected before it', () => {
+    const last = { ...INITIAL_SELECTION, tab: 'shape' as const, shape: 'shape.faceSlim' as const };
+    const next = rememberSel({ ...last, shape: 'brush' }, last);
+    expect(next.shape).toBe('shape.faceSlim');
+    expect(next.tab).toBe('shape');
+    const body = rememberSel({ ...last, tab: 'body', body: 'brush' }, last);
+    expect(body.body).toBe(last.body);
+    expect(rememberSel(last, INITIAL_SELECTION)).toEqual(last);
   });
 });

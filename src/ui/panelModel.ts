@@ -66,8 +66,10 @@ export const PRESET_PARTS: readonly { id: PresetPart; label: string; icon: strin
 export interface PanelSelection {
   tab: TabId;
   skin: SkinSel;
-  shape: ParamId;
-  body: BodySel;
+  /** a 美型 slider, or 推臉筆 (push-brush spec §2.1) */
+  shape: ParamId | 'brush';
+  /** a 美體 item, or 推臉筆 */
+  body: BodySel | 'brush';
   makeupPart: MakeupPart;
   /** 美妝 strip level (S5 §2.3) */
   makeupView: 'parts' | 'shades';
@@ -308,6 +310,43 @@ export function showsHeightBand(sel: PanelSelection, body: BodyContext | undefin
   return sel.tab === 'body' && sel.body === 'height' && (body ?? IDLE_BODY).status !== 'unsupported';
 }
 
+export const BRUSH_KEY = 'brush';
+export const BRUSH_LABEL = '推臉筆';
+
+/** brush mode: 推臉筆 is the selected item of 美型 or 美體 (push-brush spec §2.1) */
+export function showsBrush(sel: PanelSelection): boolean {
+  return (sel.tab === 'shape' && sel.shape === 'brush') || (sel.tab === 'body' && sel.body === 'brush');
+}
+
+/** The 推臉筆 strip item: last in 美型 and 美體, never gated; the dot shows when the photo has strokes. */
+export function brushItem(sel: PanelSelection, strokes: number): PanelItem {
+  return {
+    key: BRUSH_KEY,
+    label: BRUSH_LABEL,
+    visual: { kind: 'icon', icon: 'brush' },
+    selected: showsBrush(sel),
+    hasValue: strokes > 0,
+    action: { type: 'brush' },
+    ...ENABLED,
+  };
+}
+
+/** 推臉筆 closes the 美型 and 美體 strips in the editor; the camera (CAMERA_BODY, status 'unsupported') has no brush (live: false, C §2.4) */
+function withBrush(items: PanelItem[], lens: Lens, sel: PanelSelection, body: BodyContext | undefined): PanelItem[] {
+  return body?.status === 'unsupported' ? items : [...items, brushItem(sel, lens.edit.photo.strokes.length)];
+}
+
+/** What the module-level lastSel keeps (Editor.tsx lastSel): never 'brush', so the next photo never opens in brush mode. */
+export function rememberSel(next: PanelSelection, last: PanelSelection): PanelSelection {
+  if (next.shape !== 'brush' && next.body !== 'brush') return next;
+  return { ...next, shape: next.shape === 'brush' ? last.shape : next.shape, body: next.body === 'brush' ? last.body : next.body };
+}
+
+/** the selection with 推臉筆 selected in the current tab (美型 or 美體) */
+export function brushSel(sel: PanelSelection): PanelSelection {
+  return sel.tab === 'shape' ? { ...sel, shape: 'brush' } : { ...sel, body: 'brush' };
+}
+
 /** The band the overlay shows: the stored one, else where a new one would start (amount 0). */
 export function bandOrSuggested(edit: EditState, body: BodyContext | undefined): HeightBand {
   if (edit.photo.heightBand) return edit.photo.heightBand;
@@ -348,6 +387,8 @@ export type ItemAction =
   | { type: 'protect' }
   /** 美型: toggle 左右分開 */
   | { type: 'split' }
+  /** 美型 / 美體: select 推臉筆 (the screen shows the brush bar and draws strokes) */
+  | { type: 'brush' }
   /** 一鍵 › 質感: pick a look, or 無 (null) */
   | { type: 'look'; id: LookId | null }
   /** 裁切: a ratio, 旋轉, 翻轉 or 還原 (BeautyPanel hands it to the Editor through cropActivate, never to activate) */
@@ -1026,15 +1067,18 @@ export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext, sk
         // personNote, as v0.3 did for a photo without a face
         return multiPerson(lens) && sel.tab === 'skin' ? gated(it, lens.applies(d.id)) : it;
       });
-      return [
+      const items: PanelItem[] = [
         RESET_ITEM(),
         // 美型: group dividers, 左右 badges, two-sided dots and the 左右分開 switch last (S5 §2.1)
         ...(sel.tab === 'shape' ? decorateShapeItems(defs, lens) : defs),
         ...(sel.tab === 'skin' && skin ? [...toneItems(lens, sel, skin), spotItem(sel, skin)] : []),
       ];
+      // 推臉筆 closes 美型, after 左右分開 (push-brush spec §2.1); 美膚 has none
+      return sel.tab === 'shape' ? withBrush(items, lens, sel, body) : items;
     }
     case 'body':
-      return bodyItems(lens, sel, body);
+      // 推臉筆 after 背景保護, never through bodyGate (push-brush spec §2.1)
+      return withBrush(bodyItems(lens, sel, body), lens, sel, body);
     case 'filter':
       return FILTERS.map((f) =>
         badged(lens, {
@@ -1120,6 +1164,9 @@ export function activate(item: PanelItem, lens: Lens, sel: PanelSelection, ctx: 
       return done(edit, sel.tab === 'shape' ? { ...sel, shape: a.id } : { ...sel, skin: a.id });
     case 'height':
       return done(edit, sel.body === 'height' ? sel : { ...sel, body: 'height' });
+    case 'brush':
+      // selection only: no edit, so no undo step and no flip to 自訂
+      return done(edit, showsBrush(sel) ? sel : brushSel(sel));
     case 'spot':
       // select only, like 增高 (S §3.6): a param tile (case 'param') leaves the mode again
       return done(edit, sel.skin === 'spot' ? sel : { ...sel, skin: 'spot' });
@@ -1243,6 +1290,7 @@ export function sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext, s
     case 'shape': {
       const id = sel[sel.tab];
       if (id === 'spot') return null; // 祛痘: SpotControls take the slider row
+      if (id === 'brush') return null; // the brush bar replaces the slider row (push-brush spec §2.2)
       if (sel.tab === 'skin' && isToneId(id) && !(skin && toneGate(lens, id, skin).ok)) return null;
       if (!usable(lens, id)) return null;
       const b = decorate(paramBinding(lens, id), lens, photoLike(lens, id));
@@ -1250,7 +1298,7 @@ export function sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext, s
     }
     case 'body':
       // the tile's own gate: an item the selected person cannot use has no slider, an enabled one always has one
-      if (!bodyItemGate(lens, body, sel.body).ok) return null;
+      if (sel.body === 'brush' || !bodyItemGate(lens, body, sel.body).ok) return null;
       if (sel.body === 'height') return decorate(heightBinding(edit, body), lens, true);
       return decorate(paramBinding(lens, sel.body), lens, isPhotoItem(sel.body));
     case 'filter': {

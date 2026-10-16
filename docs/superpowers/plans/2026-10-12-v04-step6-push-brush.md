@@ -4021,6 +4021,7 @@ PB §2.1: last item of both strips (after step 5's 左右分開 in 美型, after
 - Modify: `src/ui/panelModel.ts` (CRLF; at `d09e608`: `BodySel` `:14`, `PanelSelection` `66-80`, `showsHeightBand` `306-309`, `ItemAction` `328-354`, `bodyItems` `420-461`, `rememberable` `559-562`, `itemsFor` `992-1058` (shared `'skin'` / `'shape'` case `1012-1035`, `'body'` `1036-1037`), `activate` `1077-1153` (`'height'` case `1121-1122`), `sliderFor` `1226-1276` (shared case `1242-1250`, `'body'` `1251-1255`))
 - Modify: `src/ui/panelModel.test.ts` (LF)
 - Modify: `src/ui/components/BeautyPanel.tsx` (CRLF; at `d09e608`: `faceOff` `:112`, `tapItem` `121-157` (its haptic list `141-151`), the items map `233-262`)
+- Modify (found while implementing): `tests/e2e/editor.spec.ts` (LF): the test 「no face in the photo: 美型 / 美妝 are dimmed…」 expected every 美型 option to be `aria-disabled`; 推臉筆 is exempt (PB §2.1), so its loop now expects 推臉筆 enabled and every other option disabled. Four existing `panelModel.test.ts` strip-order assertions (the 美型 and 美體 key lists, the idle / loading / none / error enabled list, and the 美型 wiring test that ended with the 左右分開 switch) now end with `BRUSH_KEY`. These are intended assertion changes for Task 17's kept-assertions check.
 
 **Interfaces:**
 - Consumes (step-1 plan Task 10, step-4 plan Tasks 16–17): `itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext, skin?: SkinPanelContext): PanelItem[]` (step 4 added `skin`, which the camera never passes), `activate(item, lens, sel, ctx?): ActivateResult` with `ActivateResult { edit: EditState; sel; changed; notice?; retryLook? }` and its local `done(next = edit, nextSel = sel, notice?)` (the `'height'` case is `return done(edit, sel.body === 'height' ? sel : { ...sel, body: 'height' });`; `makeupAction` answers first and returns null for every non-美妝 action, and the switch has no `default`, so `'brush'` needs its own case), `sliderFor(lens, sel, body?, skin?)` (the shared `'skin'` / `'shape'` case starts `const id = sel[sel.tab]; if (id === 'spot') return null;`, and the `'body'` case starts `if (!bodyItemGate(lens, body, sel.body).ok) return null;`), `Lens.edit`; `lensFor`, `CAMERA_BODY` (`panelModel.ts:141-145` at `d09e608`, what the camera passes as `body`), `INITIAL_SELECTION`, `PanelSelection` (step 4: `skin: SkinSel`), `BodySel`; step 4's `rememberable(sel)` (lastSel never keeps `'spot'`); step 5's 左右分開 toggle item at the end of the 美型 strip (FD §2.2); Task 3's `withStrokes`, `defaultPhoto`; Task 10's `brush` icon.
@@ -4029,7 +4030,7 @@ PB §2.1: last item of both strips (after step 5's 左右分開 in 美型, after
   - `BRUSH_KEY = 'brush'`, `BRUSH_LABEL = '推臉筆'`; `brushItem(sel: PanelSelection, strokes: number): PanelItem`; `showsBrush(sel: PanelSelection): boolean`; `brushSel(sel: PanelSelection): PanelSelection`; `rememberSel(next: PanelSelection, last: PanelSelection): PanelSelection` (composed with step 4's `rememberable` by the Editor, Task 12).
   - The strip reads the stroke count from `lens.edit.photo.strokes.length` (no new parameter).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/ui/panelModel.test.ts` (step 1's port already imports `activate`, `itemsFor`, `sliderFor`, `tabHasValue`, `INITIAL_SELECTION` and `CAMERA_BODY`; add any of them that is missing, and merge the imports below into the file's):
 
@@ -4115,12 +4116,12 @@ describe('推臉筆 in the strips (push-brush spec §2.1)', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run src/ui/panelModel.test.ts`
 Expected: FAIL — `brushItem` / `showsBrush` / `rememberSel` are not exported.
 
-- [ ] **Step 3: Implement the panel model**
+- [x] **Step 3: Implement the panel model**
 
 In `src/ui/panelModel.ts` (CRLF):
 
@@ -4222,19 +4223,19 @@ With the brush already selected the selection is returned unchanged, so `changed
 
 7. `npm run typecheck` now reports every place that still treats `sel.shape` / `sel.body` as a `ParamId` (at `d09e608` the readers are `panelModel.ts` itself, with `sliderFor` covered by item 6, and Editor's `ruler: sel.tab === 'body' && sel.body === 'body.legs' …`, which compiles as is). Narrow each one it reports with the brush check above; none of them may run for `'brush'`.
 
-- [ ] **Step 4: Exempt the item from the face-off dimming**
+- [x] **Step 4: Exempt the item from the face-off dimming**
 
 In `src/ui/components/BeautyPanel.tsx` (CRLF):
 1. Add `BRUSH_KEY` to the existing import from `'../panelModel'`.
 2. In the items map (`:233-262` at `d09e608`): `aria-disabled={(faceOff && item.key !== BRUSH_KEY) || item.disabled ? 'true' : undefined}` (`:241`) and add `${item.key === BRUSH_KEY ? ' brush-item' : ''}` to the item's class list (`:244`; Task 10's `.strip.face-off .item.brush-item` keeps it bright).
 3. In `tapItem` (`:121-157`): add `a === 'brush'` to the actions that call `haptic()` (the `a === 'preset' || … || a === 'split'` list, `:141-151`).
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `npx vitest run src/ui && npm run typecheck`
 Expected: PASS; no errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/ui/panelModel.ts src/ui/panelModel.test.ts src/ui/components/BeautyPanel.tsx
@@ -5950,7 +5951,7 @@ Expected: PASS.
 3. Existing tests kept their assertions: the only intended assertion changes in this step are the `RESHAPE_FS` hash pin and the moved `emptyPng` helper.
 
 Run: `STEP6_BASE=$(cat "$(git rev-parse --git-dir)/STEP6_BASE") && git diff --stat "$STEP6_BASE" -- '*.test.ts' '*.test.tsx' 'tests/e2e/*.spec.ts'` (the commit recorded before Task 1, see Global Constraints) and read every changed hunk of a file that existed before this step.
-Expected: additions only, except `reshapeCpu.test.ts` (the pinned hash), `body.spec.ts` (`emptyPng` now imported from `fixtures.ts`, its local copy and the `PNG` import removed), and import declarations that gained names (for example `state.test.ts`, `migrate.test.ts`, `history.test.ts`, `panelModel.test.ts`, `backMapCpu.test.ts`, `backMapFrame.test.ts`, `exportPlan.test.ts`). (The `liquifyOn: false` line in `pipeline.test.ts`'s `base` fixture and the appended `export.spec.ts` case names are additions.)
+Expected: additions only, except `reshapeCpu.test.ts` (the pinned hash), `body.spec.ts` (`emptyPng` now imported from `fixtures.ts`, its local copy and the `PNG` import removed), Task 11's 推臉筆 changes (four `panelModel.test.ts` strip assertions now end with `BRUSH_KEY`; `editor.spec.ts`'s no-face loop expects 推臉筆 enabled, see Task 11's **Files**), and import declarations that gained names (for example `state.test.ts`, `migrate.test.ts`, `history.test.ts`, `panelModel.test.ts`, `backMapCpu.test.ts`, `backMapFrame.test.ts`, `exportPlan.test.ts`). (The `liquifyOn: false` line in `pipeline.test.ts`'s `base` fixture and the appended `export.spec.ts` case names are additions.)
 
 4. The camera never gets the brush (`live: false`, C §2.4):
 

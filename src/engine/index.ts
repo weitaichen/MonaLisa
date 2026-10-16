@@ -3,7 +3,7 @@
 import { debugState } from '../app/debug';
 import { MAX_RENDER_FACES } from '../config/limits';
 import { glMat3, IDENTITY_GEOMETRY, IDENTITY_MAT3, isIdentity, viewSize, vToO } from '../geometry/view';
-import type { Engine, EngineOptions, Geometry, LookDef, LutKind, LutState, Rect, RenderInput, RenderStats, Tier } from '../types';
+import type { Engine, EngineOptions, Geometry, LookDef, LutKind, LutState, Rect, RenderFace, RenderInput, RenderStats, Tier } from '../types';
 import {
   ADJUST_IDS,
   adjustUniforms,
@@ -28,7 +28,7 @@ import { probeFaceTable, probeR16FArray, readGlLimits } from './glProbe';
 import { lookDef } from './looks';
 import { boxCentre, capsFor, ovalBox } from './passes/faceCap';
 import { makeupUniformsFor } from './passes/makeup';
-import { buildMakeupGeometry, geometryVertexCount, oAspectOf, procMakeupWanted } from './passes/makeupProc';
+import { buildMakeupGeometry, geometryVertexCount, type MakeupGeometry, oAspectOf, procMakeupKey, procMakeupWanted } from './passes/makeupProc';
 import { reshapeUniforms, type ReshapeUniforms } from './passes/reshape';
 import type { ToneCap } from './passes/toneGeometry';
 import { createPipeline, type FrameFace, type FrameJob, type Pipeline, type StaticLuts } from './pipeline';
@@ -108,8 +108,21 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
   let adjustMemo: { key: number[]; lookId: string | null; u: AdjustUniforms } | null = null;
   /** the scratch key adjustFor fills each frame (no allocation on a hit) */
   const adjustKey: number[] = new Array<number>(ADJUST_IDS.length + 10).fill(0);
-  /** the procedural makeup vertex data of the last frame, reused by the next one (no GL object: survives a context loss) */
-  let procScratch: Float32Array | undefined;
+  /**
+   * the procedural makeup geometry of the last build and its procMakeupKey: a frame with the same faces and values
+   * (every still re-render, a camera frame without a new detection, every tile of an export) reuses it, and the next
+   * build reuses its vertex buffer (no GL object: survives a context loss)
+   */
+  let procMemo: { key: unknown[]; geom: MakeupGeometry } | null = null;
+
+  function procGeometry(faces: readonly RenderFace[], aspect: number): MakeupGeometry {
+    const key = procMakeupKey(faces, aspect);
+    const m = procMemo;
+    if (m && m.key.length === key.length && m.key.every((v, i) => Object.is(v, key[i]))) return m.geom;
+    const geom = buildMakeupGeometry(faces, aspect, m?.geom.data);
+    procMemo = { key, geom };
+    return geom;
+  }
 
   /** makeup textures of the current pipeline (see Pipeline.preloadMakeup) */
   let makeupLoad: Promise<void> = Promise.resolve();
@@ -381,9 +394,8 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
     const toneCaps = capsFor(faces.map((f) => f.centre), input.obstacles ?? [], view.oAspect, faces.map((f) => f.presence));
     // the tone field is built from the working image: the preview's source, or a tile's toneSource (S §4.6)
     const work = input.toneSource ?? input;
-    // procedural makeup (S5 §4.6): rebuilt every frame from the listed faces (≤ MAX_RENDER_FACES), in O-space
-    const proc = procMakeupWanted(listed) ? buildMakeupGeometry(listed, oAspectOf(input), procScratch) : null;
-    if (proc) procScratch = proc.data;
+    // procedural makeup (S5 §4.6), in O-space from the listed faces (≤ MAX_RENDER_FACES); none once PMAKEUP failed
+    const proc = procMakeupWanted(listed) && pipeline?.procMakeupFailed() !== true ? procGeometry(listed, oAspectOf(input)) : null;
     return {
       src,
       size,

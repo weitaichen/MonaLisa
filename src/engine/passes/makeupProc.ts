@@ -468,6 +468,22 @@ export function procMakeupWanted(faces: readonly RenderFace[]): boolean {
   return faces.some((f) => clamp01(f.weight) > 0 && PROC_IDS.some((id) => clamp01(f.person.values[id]) > 0));
 }
 
+/**
+ * Everything buildMakeupGeometry reads, as a flat list compared with Object.is (the engine's per-frame memo): the aspect,
+ * then per face its Face object (landmarks and yaw: never mutated, a new detection is a new object), weight, the eight
+ * procedural values and the four procedural shades.
+ */
+export function procMakeupKey(faces: readonly RenderFace[], aspect: number): unknown[] {
+  const k: unknown[] = [aspect];
+  for (const f of faces) {
+    k.push(f.face, f.weight);
+    for (const id of PROC_IDS) k.push(f.person.values[id]);
+    const s = f.person.shades;
+    k.push(s.brow, s.eyeshadow, s.liner, s.lens);
+  }
+  return k;
+}
+
 export function geometryVertexCount(g: MakeupGeometry): number {
   return LAYER_ORDER.reduce((n, l) => n + g.ranges[l][1], 0);
 }

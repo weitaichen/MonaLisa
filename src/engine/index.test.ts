@@ -9,6 +9,7 @@ import { loadImageTexture } from './gl/gl';
 import { createEngine, MAX_RESIDENT_LUTS } from './index';
 import { defaultParams } from './params';
 import { createPipeline, type FrameJob } from './pipeline';
+import { buildMakeupGeometry } from './passes/makeupProc';
 import { adapt } from '../tracking/adapter111';
 import type { BodyField, PersonParamId, PhotoParams, RenderInput } from '../types';
 
@@ -26,6 +27,11 @@ vi.mock('./gl/gl', async (importOriginal) => ({
 vi.mock('./adjustMath', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./adjustMath')>();
   return { ...actual, adjustUniforms: vi.fn(actual.adjustUniforms) };
+});
+// counted, not replaced: the procedural makeup tests check how often a frame builds the geometry
+vi.mock('./passes/makeupProc', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./passes/makeupProc')>();
+  return { ...actual, buildMakeupGeometry: vi.fn(actual.buildMakeupGeometry) };
 });
 
 vi.mock('./pipeline', () => ({
@@ -534,5 +540,41 @@ describe('createEngine: procedural makeup in the frame job (face-detail spec §4
     expect(engine.procMakeupFailed).toBe(false);
     (vi.mocked(createPipeline).mock.results.at(-1)!.value as { procMakeupFailed: () => boolean }).procMakeupFailed = () => true;
     expect(engine.procMakeupFailed).toBe(true);
+  });
+
+  it('after PMAKEUP failed to compile, no frame builds procedural geometry (nothing could draw it)', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    (vi.mocked(createPipeline).mock.results.at(-1)!.value as { procMakeupFailed: () => boolean }).procMakeupFailed = () => true;
+    const before = vi.mocked(buildMakeupGeometry).mock.calls.length;
+    for (let i = 0; i < 3; i++) engine.render(input({ 'makeup.brow': 0.6 + i / 10 }), { still: true });
+    expect(latestJob().procMakeup).toBeNull();
+    expect(vi.mocked(buildMakeupGeometry).mock.calls.length).toBe(before);
+  });
+
+  it('the geometry is rebuilt only when a face, its weight, a procedural value or shade, or the aspect changes', async () => {
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    const builds = () => vi.mocked(buildMakeupGeometry).mock.calls.length;
+    const a = input({ 'makeup.brow': 0.6 });
+    const n0 = builds();
+    engine.render(a, { still: true });
+    const g = latestJob().procMakeup;
+    // the same faces and person values in new objects (a re-render for a filter tap, a later camera frame without a
+    // new detection): the same geometry
+    engine.render({ ...a, faces: a.faces.map((f) => ({ ...f, person: { ...f.person, values: { ...f.person.values } } })) }, { still: true });
+    engine.render({ ...a, photo: { ...a.photo, filterId: 'warm' } }, { still: true });
+    expect(latestJob().procMakeup).toBe(g);
+    expect(builds()).toBe(n0 + 1);
+    // each input buildMakeupGeometry reads rebuilds once
+    const f0 = a.faces[0];
+    engine.render(input({ 'makeup.brow': 0.7 }), { still: true });
+    engine.render({ ...a, faces: [{ ...f0, person: { ...f0.person, shades: { ...f0.person.shades, brow: 'black' } } }] }, { still: true });
+    engine.render({ ...a, faces: [{ ...f0, weight: 0.5 }] }, { still: true });
+    engine.render({ ...a, faces: [{ ...f0, face: { ...f0.face } }] }, { still: true });
+    engine.render({ ...a, oAspect: 0.5 }, { still: true });
+    expect(builds()).toBe(n0 + 6);
   });
 });

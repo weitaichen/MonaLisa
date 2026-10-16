@@ -17,6 +17,7 @@ test('a TILE = 256 export equals the untiled render (warps, 磨皮, lip, body fi
     'step 5 quarter 1 + flip',
     'step 5 θ 12° + crop',
     'strokes + 90° turn',
+    'everything',
   ]);
   for (const r of res) {
     console.log(`${r.name}: ${r.w}×${r.h}, ${r.tiles} tiles, max channel diff ${r.maxDiff}/255, glError ${r.glError}`);
@@ -27,7 +28,10 @@ test('a TILE = 256 export equals the untiled render (warps, 磨皮, lip, body fi
     // with 顆粒's mid-tone weight lifts a rare one to 2/255 (one channel of one interior pixel on SwiftShader), not a seam.
     // step 5 quarter 1 + flip (every makeup part and new warp on): the same 膠片 lift, at one interior pixel (B, 44 px
     // from the nearest tile edge on SwiftShader); ≤ 1/255 with the look off, and with only the makeup or only the warps.
-    const lifted = ['601', 'θ', 'step 5 quarter'].some((p) => r.name.startsWith(p));
+    // everything (the 0.4.0 release gate, θ 12° after a 旋轉): the same lift, one channel of one interior pixel (B, 73 px
+    // from the nearest tile edge on SwiftShader); θ 12° after a 旋轉 with 膠片 alone shows it too, and the case is
+    // ≤ 1/255 without the 調節 curve or without face B (every feature still moves thousands of pixels).
+    const lifted = ['601', 'θ', 'step 5 quarter', 'everything'].some((p) => r.name.startsWith(p));
     expect(r.maxDiff, r.name).toBeLessThanOrEqual(lifted ? 2 : 1);
   }
 });

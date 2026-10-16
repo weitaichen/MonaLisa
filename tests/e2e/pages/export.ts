@@ -6,9 +6,9 @@ import { defaultPhoto, emptyShades, neutralPerson } from '../../../src/edit/stat
 import { createEngine } from '../../../src/engine/index';
 import { MAKEUP_PARAM } from '../../../src/engine/params';
 import { IDENTITY_GEOMETRY, rotateLeft, setStraighten, snapCrop, viewSize } from '../../../src/geometry/view';
-import { faceBoundsFor, planTiles, type TileGrid } from '../../../src/media/exportPlan';
+import { faceBoundsFor, planTiles, spotBounds, type TileGrid } from '../../../src/media/exportPlan';
 import { adapt } from '../../../src/tracking/adapter111';
-import type { BodyField, Geometry, PersonParams, PhotoParams, Rect, RenderFace, RenderInput } from '../../../src/types';
+import type { BodyField, Geometry, PersonParams, PhotoParamId, PhotoParams, Rect, RenderFace, RenderInput, Spot } from '../../../src/types';
 import { buildStrokeCase } from './strokeCases';
 
 export interface TileCheck {
@@ -54,6 +54,12 @@ function bodyField(): BodyField {
   return { width: bw, height: bh, data, version: 1 };
 }
 
+/** step 4 in the release gate: two 祛痘 spots on face A's cheeks (O, r and donor offset in short edges) */
+const GATE_SPOTS: Spot[] = [
+  { x: 0.4, y: 0.6, r: 0.012, dx: 0.03, dy: 0, owner: null },
+  { x: 0.6, y: 0.62, r: 0.012, dx: -0.03, dy: 0, owner: null },
+];
+
 /** step 5's tile person (S5 §8.3 item 9): every procedural makeup part at 100 with a shade, every new warp at max */
 const step5Person = (): PersonParams => {
   const p = neutralPerson();
@@ -75,7 +81,17 @@ window.runExportTiles = async () => {
     values: { ...neutralPerson().values, 'shape.eyeEnlarge': 1, 'shape.faceSlim': 1, 'skin.smooth': 0.8, 'makeup.lip': 0.8 },
   };
   const out: TileCheck[] = [];
-  const cases: { name: string; w: number; h: number; geometry: (size: { width: number; height: number }) => Geometry; faceDetail?: boolean; strokes?: boolean }[] = [
+  const cases: {
+    name: string;
+    w: number;
+    h: number;
+    geometry: (size: { width: number; height: number }) => Geometry;
+    faceDetail?: boolean;
+    strokes?: boolean;
+    twoFaces?: boolean;
+    skinTools?: boolean;
+    adjust?: Partial<Record<PhotoParamId, number>>;
+  }[] = [
     { name: 'identity', w: 800, h: 600, geometry: () => IDENTITY_GEOMETRY },
     { name: 'quarter 1 + flip', w: 800, h: 600, geometry: () => ({ ...IDENTITY_GEOMETRY, flipH: true, quarter: 1 }) },
     { name: 'θ 12° + crop', w: 800, h: 600, geometry: (size) => setStraighten(IDENTITY_GEOMETRY, 12, size) },
@@ -86,6 +102,18 @@ window.runExportTiles = async () => {
     { name: 'step 5 θ 12° + crop', w: 800, h: 600, geometry: (size) => setStraighten(IDENTITY_GEOMETRY, 12, size), faceDetail: true },
     // step 6 (push-brush spec §8.3 test 9): 推臉筆 strokes (two pushes and a restore) with a 90° turn
     { name: 'strokes + 90° turn', w: 800, h: 600, geometry: () => rotateLeft(IDENTITY_GEOMETRY), strokes: true },
+    // the 0.4.0 release gate (C §8.4): every v0.4 feature at once
+    {
+      name: 'everything',
+      w: 800,
+      h: 600,
+      // a crop at θ = 12° after a 旋轉 (setStraighten keeps the max-fit crop)
+      geometry: (size) => setStraighten(rotateLeft(IDENTITY_GEOMETRY), 12, size),
+      strokes: true,
+      twoFaces: true,
+      skinTools: true,
+      adjust: { 'adjust.contrast': 0.7, 'adjust.temperature': 0.35 },
+    },
   ];
   for (const c of cases) {
     const decode = { width: c.w, height: c.h };
@@ -99,27 +127,60 @@ window.runExportTiles = async () => {
       pts[i + 2] = (landmarks.points[i + 2] * landmarks.width * place.s) / c.w;
     }
     const face = adapt({ points: pts }, c.w, c.h);
-    const faces: RenderFace[] = [{ face, weight: 1, person: c.faceDetail ? step5Person() : person, protect: null }];
+    const personBase: PersonParams = c.faceDetail ? step5Person() : person;
+    const personA: PersonParams = c.skinTools
+      ? { ...personBase, values: { ...personBase.values, 'tone.even': 0.5, 'tone.darkCircle': 1, 'shape.jawline': 0.6, 'makeup.contour': 0.6 } }
+      : personBase;
+    const faces: RenderFace[] = [{ face, weight: 1, person: personA, protect: null }];
+    if (c.twoFaces) {
+      // the fixture face again at 0.45 scale towards the top left, with its own 美型 and makeup
+      const ptsB = new Float32Array(pts.length);
+      for (let i = 0; i < pts.length; i += 3) {
+        ptsB[i] = 0.08 + pts[i] * 0.45;
+        ptsB[i + 1] = 0.05 + pts[i + 1] * 0.45;
+        ptsB[i + 2] = pts[i + 2] * 0.45;
+      }
+      const personB: PersonParams = {
+        ...neutralPerson(),
+        values: { ...neutralPerson().values, 'shape.faceV': 0.8, 'shape.noseSlim': 0.6, 'shape.noseWing': 0.7, 'makeup.blush': 0.6, 'makeup.lashes': 0.7 },
+      };
+      faces.push({ face: adapt({ points: ptsB }, c.w, c.h), weight: 1, person: personB, protect: null });
+    }
     const g = snapCrop(c.geometry(decode), decode);
     // 銳化 and 美白 at 0 (S §8.2 lists neither): a warped P2 resample differs from the untiled one by fp32 coordinate
     // rounding (≤ 1/255 in B at scattered interior pixels, not at tile edges), and 自然's sharpen gain and the whiten
     // curve's shadow slope each lift such a 1-LSB flip to 2/255 (measured on SwiftShader). The 自然 filter stays on.
     const photo: PhotoParams = {
       ...defaultPhoto(),
-      values: { ...defaultPhoto().values, 'skin.sharpen': 0, 'skin.whiten': 0, 'adjust.grain': 0.5, 'adjust.vignette': 0.5 },
+      values: { ...defaultPhoto().values, 'skin.sharpen': 0, 'skin.whiten': 0, 'adjust.grain': 0.5, 'adjust.vignette': 0.5, ...c.adjust },
       look: { id: 'film', amount: 0.8 },
       geometry: g,
       strokes: sc ? sc.strokes : [],
+      spots: c.skinTools ? GATE_SPOTS : [],
     };
     const V = viewSize(g, decode);
     const fullShortEdge = Math.min(c.w, c.h);
     const oAspect = c.w / c.h;
-    const base: Omit<RenderInput, 'source' | 'width' | 'height'> = { faces, obstacles: [], globalSkin: null, photo, body: bodyField(), geometry: g, oAspect, liquify: sc ? sc.field : null };
+    const base: Omit<RenderInput, 'source' | 'width' | 'height'> = {
+      faces,
+      obstacles: [],
+      globalSkin: null,
+      photo,
+      body: bodyField(),
+      geometry: g,
+      oAspect,
+      liquify: sc ? sc.field : null,
+      // step 4: every tile rebuilds the tone field from the whole working image, as step 4's runner does
+      ...(c.skinTools ? { toneSource: { source: bitmap, width: c.w, height: c.h } } : {}),
+    };
     const grid: TileGrid = { V, decode, geometry: g, oAspect, fullShortEdge };
     const bounds = {
       body: base.body ?? null,
       faces: faceBoundsFor(faces, oAspect),
       ...(sc ? { liquifyMaxDisp: (r: Rect) => sc.model.maxDisp(r) } : {}),
+      // step 4: the window holds every spot (and donor) whose quad meets it, and B is budgeted at window size while a
+      // 膚質 pass runs (spotBounds: TileBounds.spotWindowGrowth, O-normalized, and oSpacePasses)
+      ...(c.skinTools ? spotBounds({ faces, photo }, decode) : {}),
     };
     const render = async (T: number): Promise<{ data: Uint8ClampedArray; tiles: number }> => {
       const tiles = planTiles(grid, bounds, T);

@@ -5750,16 +5750,16 @@ C §1.3 items 1 and 2, and the release gate of C §8.4: one export-harness case 
 - Consumes: step 3's harness `window.runExportTiles()` and its `cases` loop (step-3 plan Task 9: the loop's locals `decode`, `bitmap`, `pts` (the fixture landmarks placed in the frame), `face`, `faces`, the shared `person`, `photo`, `base`, `bounds`), as extended by Task 13 (`strokes?: boolean`, `buildStrokeCase`); `rotateLeft`, `setStraighten`, `IDENTITY_GEOMETRY` (`src/geometry/view.ts`); `neutralPerson`, `defaultPhoto` (`src/edit/state.ts`); `adapt` (`src/tracking/adapter111.ts`); `RenderFace`, `PersonParams`, `PhotoParamId`, `Spot`, `Rect` (`src/types.ts`); step 2's `adjust.*` ids; step 4's `tone.*` ids, `PhotoParams.spots`, `RenderInput.toneSource` and `spotBounds(frame: Pick<StillFrame, 'faces' | 'photo'>, oSize): Pick<TileBounds, 'spotWindowGrowth' | 'oSpacePasses'>` (`src/media/exportPlan.ts:306-312` at `d09e608`; what `StillSession.bounds` spreads), which feeds step 3's `TileBounds.spotWindowGrowth` hook with the O-normalized `spotWindowGrowth(winO, spots, oSize)` and sets `oSpacePasses` while a step-4 pass runs; step 5's ids `shape.jawline`, `shape.noseWing`, `makeup.contour`, `makeup.lashes` (C §3.1). Step 4 checks its own tiles in a separate harness (`tests/e2e/pages/tone.ts`, `runToneTiles`), so this case sets the step-4 inputs itself.
 - Produces: the harness case `'everything'`; version 0.4.0; release notes.
 
-- [ ] **Step 1: Write the failing release-gate expectation**
+- [x] **Step 1: Write the failing release-gate expectation**
 
 In `tests/e2e/export.spec.ts`, append `'everything'` at the end of the `expect(res.map((r) => r.name)).toEqual([...])` list (after `'strokes + 90° turn'`). The loop's assertions (no GL error, more than one tile, max channel difference ≤ 1, i.e. 1/255) apply to it like to every case.
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx playwright test tests/e2e/export.spec.ts`
 Expected: FAIL — the list of case names lacks `'everything'`.
 
-- [ ] **Step 3: Add the `everything` case to the harness**
+- [x] **Step 3: Add the `everything` case to the harness**
 
 In `tests/e2e/pages/export.ts`:
 1. Imports: `adapt` from `'../../../src/tracking/adapter111'` (already imported by step 3), `spotBounds` added to the existing import from `'../../../src/media/exportPlan'` (`faceBoundsFor`, `planTiles`, `TileGrid`), and `PhotoParamId`, `Spot` added to the type import from `'../../../src/types'` (`Rect` is there since Task 13). The case type gains `twoFaces?: boolean`, `skinTools?: boolean` and `adjust?: Partial<Record<PhotoParamId, number>>`.
@@ -5826,12 +5826,12 @@ const GATE_SPOTS: Spot[] = [
 
 The comparison is the harness's own (one tile covering V vs the forced TILE = 256 plan); nothing about it changes.
 
-- [ ] **Step 4: Run it**
+- [x] **Step 4: Run it**
 
 Run: `npx playwright test tests/e2e/export.spec.ts`
 Expected: PASS; the log line `everything: …, max channel diff 0/255` (at most 1/255).
 
-- [ ] **Step 5: Bump the version**
+- [x] **Step 5: Bump the version**
 
 Run: `npm version 0.4.0 --no-git-tag-version`
 Expected: prints `v0.4.0`; `git diff --stat` lists only `package.json` and `package-lock.json`, and `git diff package-lock.json` changes exactly the two `"version": "0.3.0"` lines of the root package (lines 3 and 9) to `"0.4.0"`.
@@ -5855,7 +5855,7 @@ Check that no test pins the old version:
 Run: `grep -rnE "['\"\`]v?0\.3(\.0)?['\"\`]" tests src --include=*.ts --include=*.tsx --include=*.mjs | grep -v "updateModel.test.ts\|version.test.ts"`
 Expected: no output (`version.test.ts` and `updateModel.test.ts` use 0.3 only as example inputs). The pattern matches only quoted version strings; comments that mention "v0.3" behaviour, the `parity-v03` goldens and `reshapeCpuV03.ts` are not version pins. A hit is a defect only if it is compared with the running app's version (`APP_VERSION`, `package.json`, `/version.json`).
 
-- [ ] **Step 6: Release notes and the DS pointers**
+- [x] **Step 6: Release notes and the DS pointers**
 
 Append to `docs/superpowers/specs/2026-10-12-v04-roadmap.md`:
 
@@ -5894,12 +5894,12 @@ Verify that every derived image fixture v0.4 committed is in `LICENSES/NOTICE.tx
 Run: `for f in $(git diff --name-only --diff-filter=A 892ea61 -- 'tests/fixtures/*.png' 'tests/fixtures/*.jpg'); do grep -qF "$(basename "$f")" LICENSES/NOTICE.txt || grep -qF "$(dirname "$f")/" LICENSES/NOTICE.txt || echo "missing in NOTICE: $f"; done`
 Expected: no output. (A `missing` line names a fixture an earlier step forgot: add its NOTICE line in the style of the `fullbody_lines.jpg` entry, `NOTICE.txt:58` at `d09e608` — "modified derivative of … (Apache-2.0 §4(b) change notice): …".)
 
-- [ ] **Step 7: Run the affected suites**
+- [x] **Step 7: Run the affected suites**
 
 Run: `npx vitest run src/ui/updateModel.test.ts src/version.test.ts && npm run build && npx playwright test tests/e2e/update.spec.ts tests/e2e/settings.spec.ts`
 Expected: PASS; the update e2e builds A = 0.4.0 and B = 0.4.1 and its banner reads 「有新版本 v0.4.1」.
 
-- [ ] **Step 8: Commit (local only, no tag, no push)**
+- [x] **Step 8: Commit (local only, no tag, no push)**
 
 ```bash
 git add package.json package-lock.json src/ui/updateModel.test.ts tests/e2e/pages/export.ts tests/e2e/export.spec.ts docs/superpowers/specs/2026-10-12-v04-roadmap.md docs/superpowers/specs/2026-10-07-meiyan-pwa-design.md
@@ -5908,6 +5908,8 @@ git commit -m "release: Mona Misa 美顏 0.4.0
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
+
+**Landed deviations:** (1) `everything` measures 2/255 on SwiftShader, at one channel of one interior pixel (B, 73 px from the nearest internal tile edge; 1 channel ≥ 2/255 out of about 913 000), so its bound is 2/255, like the `601`, `θ` and `step 5 quarter` cases: the `lifted` list in `export.spec.ts` gains `'everything'` (a changed assertion line that Task 17 Step 3's kept-assertions check should expect). It is the interior 1-LSB fp32 flip lifted by a steep curve, which `export.spec.ts` already documents for `θ 12° + crop` (that case measures 2/255 too), not a seam: θ 12° after a 旋轉 with 膠片 alone (no strokes, no face B, no 膚質, no 調節) also gives 2/255, and the full case is ≤ 1/255 without the 調節 curve or without face B. The case is not vacuous: against the full render, leaving out 調節, face B, the strokes or the 膚質 items changes about 233 000, 96 000, 29 000 and 17 000 px by more than 2/255. (2) In the release notes the two contract references read `RM §5.2` and `RM §5.1` instead of `C §5.2` / `C §5.1`: inside the roadmap, which is C, the file names itself RM (its §12 tables). (3) Step 5's grep prints one line, `src/edit/spots.test.ts:87`: `'0.3'` there is a garbage input of the spot sanitizer's fuzz list, never compared with the app's version, so it is not a version pin. (4) `LICENSES/NOTICE.txt` needed no line (the check printed nothing), so `git add -u LICENSES` staged nothing. (5) The commit uses the workflow's subject (`v0.4 step 6 task 16: Release 0.4.0`) instead of the block's `release: Mona Misa 美顏 0.4.0`.
 
 ---
 

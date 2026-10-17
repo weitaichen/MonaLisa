@@ -1,7 +1,10 @@
 // Root component: one screen at a time (no router), plus global overlays.
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { EXPORT_COPY } from '../media/exportPlan';
 import { Status } from './components/Status';
 import { UpdateBanner } from './components/UpdateBanner';
+import { reportError } from './debug';
+import { deps } from './deps';
 import { Icon } from './icons';
 import { Camera } from './screens/Camera';
 import { Editor } from './screens/Editor';
@@ -9,7 +12,7 @@ import { Home } from './screens/Home';
 import { Review } from './screens/Review';
 import { SettingsSheet } from './screens/Settings';
 import { applyPrefsToEngine, bindPrefs, prefetchWhenIdle, svc, webgl2Supported } from './services';
-import { app, closeSaveFallback } from './state';
+import { app, closeSaveFallback, toast } from './state';
 import { useStore } from './store';
 
 bindPrefs(() => app.get().prefs);
@@ -20,6 +23,12 @@ export function App() {
   const screen = useStore(app, (s) => s.screen);
 
   useEffect(() => {
+    // a full-resolution export died last time (S §3.7): from now on 標準, told once
+    try {
+      if (deps.consumeExportGuardAtLaunch()) toast(EXPORT_COPY.breadcrumb, 4000);
+    } catch (e) {
+      reportError(e, 'export guard');
+    }
     if (webgl2) prefetchWhenIdle();
     // keep engine options in sync with prefs (and push them once the engine exists)
     let last = app.get().prefs;
@@ -43,7 +52,7 @@ export function App() {
   if (!webgl2) {
     return (
       <div class="screen">
-        <Status icon="warning" tone="danger" title="此裝置不支援 WebGL2" body="MonaLisa 美顏需要 WebGL2 才能處理影像。請更新 iOS，或改用較新的瀏覽器開啟。" />
+        <Status icon="warning" tone="danger" title="此裝置不支援 WebGL2" body="Mona Misa 美顏需要 WebGL2 才能處理影像。請更新 iOS，或改用較新的瀏覽器開啟。" />
       </div>
     );
   }
@@ -86,6 +95,7 @@ function Busy() {
 /** Share sheet unavailable → long-press the image to save (RB §4 "Capture and save"). */
 function SaveFallback() {
   const url = useStore(app, (s) => s.saveFallback);
+  const name = useStore(app, (s) => s.saveFallbackName);
   const dlg = useRef<HTMLDivElement>(null);
   // aria-modal: start VoiceOver / keyboard focus inside the dialog
   useEffect(() => {
@@ -102,7 +112,7 @@ function SaveFallback() {
         <span style={{ width: 44 }} />
       </div>
       <div class="fallback-img">
-        <img src={url} alt="編輯結果" />
+        <img src={url} alt="編輯結果" data-name={name ?? undefined} />
       </div>
       <div class="fallback-hint">
         <b>長按圖片 → 儲存到照片</b>

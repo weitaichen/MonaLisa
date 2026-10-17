@@ -12,10 +12,11 @@ void main() {
   gl_Position = vec4((p * 2.0 - 1.0) * uOut, 0.0, 1.0);
 }`;
 
-/** Plain source draw for hold-to-compare (renderOriginal). */
+/** Plain source draw for hold-to-compare (renderOriginal); uGeo = V → O, identity in 裁切 mode and in the camera. */
 export const PRESENT_FS = /* glsl */ `#version 300 es
 precision highp float;
 in vec2 vUv;
 uniform sampler2D uSrc;
+uniform mat3 uGeo;
 out vec4 outColor;
-void main() { outColor = vec4(texture(uSrc, vUv).rgb, 1.0); }`;
+void main() { outColor = vec4(texture(uSrc, (uGeo * vec3(vUv, 1.0)).xy).rgb, 1.0); }`;

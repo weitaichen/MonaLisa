@@ -4,10 +4,10 @@
 // 腰臀比; manual 增高 overlay; reopening from 最近編輯 uses the cached detection (no pose-model request). Plus the
 // portrait gating, manual 增高 without a person, and the camera's note. The shared guard fails every test on
 // console errors and non-localhost requests.
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Locator, Page } from '@playwright/test';
-import { PNG } from 'pngjs';
-import { dragSlider, expect, grab, mad, SAMPLE_FACE, settled, shot, test, type Pixels, type Rect } from './fixtures';
+import { debugState, dragSlider, emptyPng, expect, grab, GROUP_PEOPLE, importFixture, mad, regionDiff, SAMPLE_FACE, selectPerson, settled, shot, test, type Guard, type Pixels, type Rect } from './fixtures';
 
 const FULLBODY = resolve(import.meta.dirname, '../fixtures/fullbody.jpg');
 // (its fullbody_lines.json, the drawn lines' geometry, is metadata kept for the stage-2 per-line bend check: unused yet)
@@ -38,22 +38,6 @@ function maxDiff(a: Pixels, b: Pixels, r: Rect): number {
     }
   }
   return m;
-}
-
-/** A person-free photo: a soft gradient with a straight dark line (a floor edge for 增高 to move). */
-function emptyPng(width = 600, height = 900): Buffer {
-  const png = new PNG({ width, height });
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = (y * width + x) * 4;
-      const v = y > 640 && y < 660 ? 40 : 120 + Math.round((80 * (x + y)) / (width + height));
-      png.data[i] = v;
-      png.data[i + 1] = v;
-      png.data[i + 2] = v + 4;
-      png.data[i + 3] = 255;
-    }
-  }
-  return PNG.sync.write(png);
 }
 
 async function importPhoto(page: Page, file: string | { name: string; mimeType: string; buffer: Buffer }): Promise<void> {
@@ -246,6 +230,210 @@ test('full-body photo: 美體 progress → sliders; 細腰 / 長腿 / 腰臀比 
   expect(poseRequests.filter((r) => r.phase === 'reopen'), 'pose-model requests after reopening').toEqual([]);
 });
 
+/**
+ * The face tracker's GPU context is lost as soon as each of its instances is built (the call tracker.ts makes right after
+ * building one: the first caller in the stack past MediaPipe's own getContext wrapper is the tracker chunk), so it stays
+ * 'lost' and every face detection is unsure until faceTrackerLives lets the next replacement live. The pose model's
+ * canvases (the bodyTracker chunk) are left alone.
+ */
+async function killFaceTracker(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __faceKill: boolean };
+    w.__faceKill = true;
+    const get = OffscreenCanvas.prototype.getContext as (this: OffscreenCanvas, type: string, ...rest: unknown[]) => unknown;
+    (OffscreenCanvas.prototype as unknown as { getContext: typeof get }).getContext = function (this: OffscreenCanvas, type: string, ...rest: unknown[]) {
+      const ctx = get.call(this, type, ...rest) as WebGL2RenderingContext | null;
+      if (w.__faceKill && type === 'webgl2' && ctx) {
+        const caller = (new Error().stack ?? '').split('\n').slice(1).find((l) => !/<anonymous>|fixedGetContext/.test(l)) ?? '';
+        if (/\/assets\/tracker-[^/]*\.js/.test(caller)) ctx.getExtension('WEBGL_lose_context')?.loseContext();
+      }
+      return ctx;
+    };
+  });
+}
+
+const faceTrackerLives = (page: Page): Promise<boolean> => page.evaluate(() => ((window as unknown as { __faceKill: boolean }).__faceKill = false));
+
+/**
+ * MediaPipe's own log of the graphs killFaceTracker killed (its glog FATAL line and the wasm abort, through
+ * console.error): the only console errors these cases allow; the shared guard still checks everything else
+ */
+function forgiveKilledGraphs(guard: Guard): void {
+  guard.consoleErrors = guard.consoleErrors.filter((t) => !/tensor\.cc:\d+\] The tensor can't fit into OpenGL Texture2D View\.$|^Aborted\(\)$/.test(t));
+}
+
+interface StoredEntry {
+  detect: {
+    faceScans: number;
+    bodyScans: number[] | null;
+    primary: string;
+    persons: { id: string; face: string | null; body: string | null }[];
+    /** each body's pose as plain numbers (33 × x, y, z, visibility) */
+    bodies: { id: string; points: number[] }[] | null;
+  } | null;
+  waist: Record<string, number>;
+}
+
+/** the one 最近編輯 entry as stored: its cache (or null) and every person's 細腰 */
+const storedEntry = (page: Page): Promise<StoredEntry | null> =>
+  page.evaluate(
+    () =>
+      new Promise<StoredEntry | null>((res, rej) => {
+        const q = indexedDB.open('meiyan', 1);
+        q.onerror = () => rej(q.error);
+        q.onsuccess = () => {
+          const all = q.result.transaction('edits').objectStore('edits').getAll();
+          all.onsuccess = () => {
+            type Row = {
+              updatedAt?: number;
+              detect?: { faceScans: unknown[]; bodyScans?: number[]; primary: string; persons: { id: string; face: string | null; body: string | null }[]; bodies: { id: string; pose: { points: ArrayLike<number> } }[] | null };
+              edit?: { persons: Record<string, { values: Record<string, number> }> };
+            };
+            const e = (all.result as Row[]).find((r) => typeof r.updatedAt === 'number');
+            q.result.close();
+            if (!e) return res(null);
+            const d = e.detect;
+            res({
+              detect: d
+                ? { faceScans: d.faceScans.length, bodyScans: d.bodyScans ?? null, primary: d.primary, persons: d.persons, bodies: d.bodies?.map((b) => ({ id: b.id, points: Array.from(b.pose.points) })) ?? null }
+                : null,
+              waist: Object.fromEntries(Object.entries(e.edit?.persons ?? {}).map(([id, p]) => [id, p.values['body.waist']])),
+            });
+          };
+        };
+      }),
+  );
+
+test('a face tracker that cannot answer: 美體 does not wait for it; its bodies are the cache the first answer merges into (S §7)', async ({ page, guard }) => {
+  test.setTimeout(360_000);
+  await killFaceTracker(page);
+  await importPhoto(page, FULLBODY);
+  const frame = page.locator('.editor-stage .frame');
+  const before = await settled(frame);
+  const calls = (await debugState(page)).detectCalls;
+  await page.getByRole('tab', { name: '美體' }).click();
+  // v0.3 detected the body whatever the face detection said: no 「準備偵測人物…」 forever
+  await expect(option(page, '細腰')).not.toHaveAttribute('aria-disabled', 'true', { timeout: 90_000 });
+  await bodyReady(page);
+  expect((await debugState(page)).detectCalls, 'no face answer meanwhile').toBe(calls);
+  await pick(page, '細腰');
+  await sliderToMax(page);
+  const waist = await settled(frame);
+  const torso = frac(before, { x: 0.3, y: 0.33, w: 0.4, h: 0.17 });
+  expect(mad(before, waist, torso)).toBeGreaterThan(0.5);
+  // the tracker recovers: its first definite answer (no face in this photo) merges into the bodies' cache; the edit stays
+  await faceTrackerLives(page);
+  await expect.poll(async () => (await debugState(page)).detectCalls, { timeout: 90_000 }).toBeGreaterThan(calls);
+  await expect(page.getByText('未偵測到臉部，臉型、美妝與膚質工具不會套用')).toBeVisible({ timeout: 30_000 });
+  await expect(floatSlider(page)).toHaveAttribute('aria-valuenow', '100');
+  expect(mad(waist, await settled(frame), torso)).toBeLessThan(0.3);
+  expect((await debugState(page)).persons).toBe(1);
+  // the cache now holds the upright face scan; the body person holds the 細腰 edit
+  const summary = (e: StoredEntry | null) => e && { faceScans: e.detect?.faceScans, persons: e.detect?.persons, bodies: e.detect?.bodies?.length, waist: e.waist.b0 };
+  await expect.poll(async () => summary(await storedEntry(page)), { timeout: 30_000 }).toEqual({ faceScans: 1, persons: [{ id: 'b0', face: null, body: 'b0' }], bodies: 1, waist: 1 });
+  forgiveKilledGraphs(guard);
+});
+
+test('a face tracker that never answers: the bodies are written with the 美體 edit, and a reopen with a working tracker keeps 細腰 on the same body (D4)', async ({ page, guard }) => {
+  test.setTimeout(480_000);
+  await killFaceTracker(page);
+  await importPhoto(page, GROUP_PEOPLE);
+  await page.addStyleTag({ content: '.face-boxes, .toast { display: none !important; }' });
+  const frame = page.locator('.editor-stage .frame');
+  const before = await settled(frame);
+  const calls = (await debugState(page)).detectCalls;
+  await page.getByRole('tab', { name: '美體' }).click();
+  await expect(option(page, '細腰')).not.toHaveAttribute('aria-disabled', 'true', { timeout: 150_000 });
+  await bodyReady(page);
+  // 細腰 on the person selected at first: the primary, the best-scoring body
+  const st = await debugState(page);
+  expect(st.detectCalls, 'no face answer meanwhile').toBe(calls);
+  const owner = st.selected!;
+  await pick(page, '細腰');
+  await sliderToMax(page);
+  const edited = await settled(frame);
+  // the autosave writes the bodies with the edit, although the face tracker never answered
+  await expect
+    .poll(async () => {
+      const e = await storedEntry(page);
+      return e && { faceScans: e.detect?.faceScans, bodies: e.detect?.bodies?.length, primary: e.detect?.primary, waist: e.waist[owner] };
+    }, { timeout: 30_000 })
+    .toEqual({ faceScans: 0, bodies: 2, primary: owner, waist: 1 });
+  // both bodies are persons before any face answer (the 基本模式 form)
+  expect((await debugState(page)).persons).toBe(2);
+  const pre = (await storedEntry(page))!;
+  const body = pre.detect!.persons.find((p) => p.id === owner)!.body!;
+  const pose = pre.detect!.bodies!.find((b) => b.id === body)!.points;
+  // the slimmed waist: that body's lower torso (shoulders → hips, below any face effect a later face answer adds)
+  const xs = [11, 12, 23, 24].map((i) => pose[i * 4]);
+  const shoulders = Math.max(pose[11 * 4 + 1], pose[12 * 4 + 1]);
+  const hips = Math.max(pose[23 * 4 + 1], pose[24 * 4 + 1]);
+  const top = shoulders + 0.4 * (hips - shoulders);
+  const torso = frac(before, { x: Math.min(...xs) - 0.05, y: top, w: Math.max(...xs) - Math.min(...xs) + 0.1, h: hips + 0.02 - top });
+  expect(mad(before, edited, torso)).toBeGreaterThan(0.15);
+  // closed before any face answer; the tracker lives again; reopened from 最近編輯
+  await page.getByRole('button', { name: '關閉' }).click();
+  await expect(page.getByRole('button', { name: '開啟編輯' })).toHaveCount(1, { timeout: 15_000 });
+  await faceTrackerLives(page);
+  await page.getByRole('button', { name: '開啟編輯' }).click();
+  await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 90_000 });
+  await page.addStyleTag({ content: '.face-boxes, .toast { display: none !important; }' });
+  // its face answer merges into the stored cache (A15): the body keeps its id and pose, its person keeps 細腰
+  await expect.poll(async () => (await storedEntry(page))?.detect?.faceScans ?? 0, { timeout: 150_000 }).toBeGreaterThan(0);
+  const post = (await storedEntry(page))!;
+  expect(post.detect!.bodies!.find((b) => b.id === body)?.points).toEqual(pose);
+  const now = post.detect!.persons.find((p) => p.body === body)!;
+  expect(post.waist[now.id]).toBe(1);
+  expect(Object.entries(post.waist).filter(([id, v]) => id !== now.id && v !== 0)).toEqual([]);
+  // the editor says so for that person, and draws it there: the reopened waist (decoded from the stored, re-encoded
+  // original) looks like the edited one more than like the photo before the edit
+  await selectPerson(page, post.detect!.persons.findIndex((p) => p.id === now.id) + 1);
+  await pick(page, '細腰');
+  await expect(floatSlider(page)).toHaveAttribute('aria-valuenow', '100');
+  const reopened = await settled(frame);
+  expect(mad(reopened, edited, torso)).toBeLessThan(mad(reopened, before, torso));
+  forgiveKilledGraphs(guard);
+});
+
+test('nobody found while the face tracker cannot answer: a turned photo asks the pose model again in its new up-frame (D5)', async ({ page, guard }) => {
+  test.setTimeout(360_000);
+  await killFaceTracker(page);
+  await importPhoto(page, { name: 'nobody.png', mimeType: 'image/png', buffer: emptyPng() });
+  const calls = (await debugState(page)).detectCalls;
+  // each 美體 detection shows its progress note at least once (BODY_PAINT_MS): count how often one appears
+  await page.evaluate(() => {
+    const w = window as unknown as { __bodyRuns: number };
+    w.__bodyRuns = 0;
+    let on = false;
+    const scan = () => {
+      const now = document.querySelector('.body-note.progress') !== null;
+      if (now && !on) w.__bodyRuns++;
+      on = now;
+    };
+    new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+  });
+  const runs = () => page.evaluate(() => (window as unknown as { __bodyRuns: number }).__bodyRuns);
+  await page.getByRole('tab', { name: '美體' }).click();
+  await expect(page.locator('.body-note')).toContainText('未偵測到人物', { timeout: 150_000 });
+  expect(await runs()).toBe(1);
+  // 旋轉 in 裁切, then 美體 again: once more, on the turned U image
+  await page.getByRole('tab', { name: '裁切' }).click();
+  await option(page, '旋轉').click();
+  await page.getByRole('tab', { name: '美體' }).click();
+  await expect.poll(runs, { timeout: 150_000 }).toBe(2);
+  await expect(page.locator('.body-note')).toContainText('未偵測到人物', { timeout: 150_000 });
+  // both up-frames tried are in the cache, and no face scan was forced meanwhile (none comes before the upright answer)
+  await expect.poll(async () => (await storedEntry(page))?.detect?.bodyScans, { timeout: 30_000 }).toEqual([0, 3]);
+  expect((await debugState(page)).detectCalls).toBe(calls);
+  // back upright: tried already, no third run
+  await page.getByRole('tab', { name: '裁切' }).click();
+  for (let i = 0; i < 3; i++) await option(page, '旋轉').click();
+  await page.getByRole('tab', { name: '美體' }).click();
+  await page.waitForTimeout(1500);
+  expect(await runs()).toBe(2);
+  forgiveKilledGraphs(guard);
+});
+
 // The drawn-lines fixture (reports/美體修圖 背景扭曲 抑制技術.md stage 0: fullbody.jpg with straight lines drawn on the
 // background only, scripts/gen-lines-fixture.mjs) through the real app: 瘦身 + 細腰 and 瘦手臂 at max (the stage-1
 // background relaxation is on the commit path) change the person, never the far background, and the frames are kept
@@ -364,4 +552,36 @@ test('camera: the 美體 tab says photo editing only and offers 匯入照片', a
   await expect(option(page, '增高')).toHaveAttribute('aria-disabled', 'true');
   await shot(page, 'b11-camera-body-note');
   expect(poseRequests).toEqual([]);
+});
+
+test.describe('two persons on group_people.jpg (S §8.4)', () => {
+  test('a tap on the right body selects person 2; 細腰 on 2 leaves person 1 untouched with λ = 1; bands note only for 增高 / 長腿', async ({ page }) => {
+    await importFixture(page, GROUP_PEOPLE);
+    await page.getByRole('tab', { name: '美體' }).click();
+    await expect.poll(async () => (await debugState(page)).persons, { timeout: 120_000 }).toBeGreaterThanOrEqual(2);
+    // the bodies are in the cache once the detection finished (a body tap needs them): 細腰 turns usable
+    await expect(page.getByRole('option', { name: '細腰', exact: true })).not.toHaveAttribute('aria-disabled', 'true', { timeout: 120_000 });
+    // the right person's hip centre (pose 23 / 24 of the recorded fixture, Task 1): inside its mask, far from any face box
+    const pj = JSON.parse(readFileSync(resolve(import.meta.dirname, '../fixtures/group_people.pose.json'), 'utf8')) as { poses: { points: number[] }[] };
+    const hips = pj.poses.map((p) => [(p.points[23 * 4] + p.points[24 * 4]) / 2, (p.points[23 * 4 + 1] + p.points[24 * 4 + 1]) / 2]);
+    const [hx, hy] = hips.sort((a, b) => b[0] - a[0])[0];
+    const layer = (await page.locator('.editor-stage .zoom-layer').boundingBox())!;
+    await page.mouse.click(layer.x + layer.width * hx, layer.y + layer.height * hy);
+    await expect(page.getByRole('radio', { name: /^人物 2/ })).toHaveAttribute('aria-checked', 'true');
+    await page.addStyleTag({ content: '.face-boxes, .toast { display: none !important; }' });
+    const before = await grab(page.locator('.editor-stage .frame'));
+    await page.getByRole('option', { name: '細腰', exact: true }).click();
+    const s = page.getByRole('slider');
+    await s.focus();
+    for (let i = 0; i < 60; i++) await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(800);
+    const after = await grab(page.locator('.editor-stage .frame'));
+    // person 1 stands in the left half: its left 40 % (outside the rect) must not move at all
+    expect(regionDiff(before, after, { x: 0.4, y: 0, w: 0.6, h: 1 }).outsideMax).toBeLessThanOrEqual(1);
+    expect((await debugState(page)).lambdaGlobal).toBe(1);
+    await expect(page.getByText('偵測到多人')).toHaveCount(0);
+    await expect(page.getByText('增高、長腿會拉伸整排畫面')).toHaveCount(0);
+    await page.getByRole('option', { name: '增高', exact: true }).click();
+    await expect(page.getByText('增高、長腿會拉伸整排畫面，套用於整張照片')).toBeVisible();
+  });
 });

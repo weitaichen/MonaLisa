@@ -7,7 +7,9 @@ import '../../../src/ui/theme.css';
 import { render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { defaultParams, setHeightBand, setParam } from '../../../src/engine/params';
-import type { BeautyParams, HeightBand, ParamId, RegionStatus } from '../../../src/types';
+import type { BeautyParams, EditState, HeightBand, ParamId, RegionStatus } from '../../../src/types';
+import { lensFor, P0_INFO } from '../../../src/edit/lens';
+import { editFromLegacy, legacyProjection } from '../../../src/edit/legacy';
 import { BeautyPanel } from '../../../src/ui/components/BeautyPanel';
 import { IconButton } from '../../../src/ui/components/Controls';
 import { HeightBandOverlay, defaultStretch } from '../../../src/ui/components/HeightBandOverlay';
@@ -133,6 +135,9 @@ function Harness() {
   const [sel, setSelState] = useState<PanelSelection>({ ...INITIAL_SELECTION, tab: 'body', ...scenario.sel });
   const paramsRef = useRef(params);
   paramsRef.current = params;
+  const lensOf = (p: BeautyParams) => lensFor(editFromLegacy(p), { kind: 'person', id: 'p0' }, P0_INFO, 'p0');
+  const lens = lensOf(params);
+  const back = (e: EditState) => legacyProjection(e, 'p0');
   harness.params = params;
   harness.sel = sel;
   const update = (p: BeautyParams, commit: boolean) => {
@@ -141,7 +146,7 @@ function Harness() {
     if (commit) harness.commits++;
   };
   const body = scenario.body;
-  const binding = sliderFor(params, sel, body);
+  const binding = sliderFor(lens, sel, body);
   const ratio = img.naturalWidth / img.naturalHeight || 0.638;
 
   if (scenario.screen === 'camera') {
@@ -167,9 +172,9 @@ function Harness() {
               <img src={img.src} class="display-canvas" style={{ objectFit: 'cover' }} alt="" />
             </div>
           </div>
-          <SliderRow float binding={binding} onChange={(v) => binding && update(binding.apply(paramsRef.current, v), false)} onCommit={() => undefined} />
+          <SliderRow float binding={binding} onChange={(v) => binding && update(back(binding.apply(lensOf(paramsRef.current), v)), false)} onCommit={() => undefined} />
         </div>
-        <BeautyPanel params={params} sel={sel} onSel={setSelState} onParams={(p) => update(p, true)} body={body} />
+        <BeautyPanel lens={lens} sel={sel} onSel={setSelState} onEdit={(e) => update(back(e), true)} body={body} />
         <div class="cam-controls">
           <button type="button" class="side-btn">
             <span class="side-icon">
@@ -211,7 +216,7 @@ function Harness() {
               <Photo band={params.heightBand} />
             </div>
             {showsHeightBand(sel, body) && (
-              <HeightBandOverlay band={bandOrSuggested(params, body)} onChange={(b, commit) => update(setHeightBand(paramsRef.current, b), commit)} />
+              <HeightBandOverlay band={bandOrSuggested(editFromLegacy(params), body)} onChange={(b, commit) => update(setHeightBand(paramsRef.current, b), commit)} />
             )}
           </div>
           <div class="editor-tools">
@@ -233,10 +238,10 @@ function Harness() {
       <div class="editor-panel">
         <SliderRow
           binding={binding}
-          onChange={(v) => binding && update(binding.apply(paramsRef.current, v), false)}
-          onCommit={(v) => binding && update(binding.apply(paramsRef.current, v), true)}
+          onChange={(v) => binding && update(back(binding.apply(lensOf(paramsRef.current), v)), false)}
+          onCommit={(v) => binding && update(back(binding.apply(lensOf(paramsRef.current), v)), true)}
         />
-        <BeautyPanel params={params} sel={sel} onSel={setSelState} onParams={(p) => update(p, true)} body={body} />
+        <BeautyPanel lens={lens} sel={sel} onSel={setSelState} onEdit={(e) => update(back(e), true)} body={body} />
       </div>
       <div class="editor-bottom-pad" />
       <Toast />

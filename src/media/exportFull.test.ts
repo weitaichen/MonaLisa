@@ -1,0 +1,222 @@
+import { describe, expect, it, vi } from 'vitest';
+import { IDENTITY_GEOMETRY } from '../geometry/view';
+import { defaultPhoto } from '../edit/state';
+import type { ExportPlan } from './exportPlan';
+import { abortable, ExportError, runTiledExport, type RunnerDeps, type TileInputBase } from './exportFull';
+
+const plan: ExportPlan = {
+  mode: 'tiled',
+  format: 'jpeg',
+  quality: 0.95,
+  width: 8,
+  height: 4,
+  decode: { width: 8, height: 4 },
+  fullShortEdge: 4,
+  tile: 4,
+  tiles: [
+    { out: { x: 0, y: 0, w: 4, h: 4 }, buf: { x: 0, y: 0, w: 8, h: 4 }, win: { x: 0, y: 0, w: 8, h: 4 } },
+    { out: { x: 4, y: 0, w: 4, h: 4 }, buf: { x: 0, y: 0, w: 8, h: 4 }, win: { x: 0, y: 0, w: 8, h: 4 } },
+  ],
+  fallback: null,
+};
+const input = { faces: [], obstacles: [], globalSkin: null, photo: defaultPhoto(), geometry: IDENTITY_GEOMETRY, oAspect: 2 } as unknown as TileInputBase;
+const working = { width: 4, height: 2 };
+
+function fakes(decoded = { width: 8, height: 4 }) {
+  const log: string[] = [];
+  const full = { width: decoded.width, height: decoded.height, close: vi.fn(() => log.push('close full')) };
+  const canvas = {
+    put: vi.fn((_img: ImageData, x: number) => log.push(`put ${x}`)),
+    encode: vi.fn(async (q?: number) => {
+      log.push(`encode ${q}`);
+      return new Blob(['x']);
+    }),
+    release: vi.fn(() => log.push('release canvas')),
+  };
+  const renderer = {
+    renderTile: vi.fn((i: { sourceWindow?: unknown; output?: unknown }, read: { w: number; h: number }) => {
+      log.push('tile');
+      return { width: read.w, height: read.h, data: new Uint8ClampedArray(read.w * read.h * 4), input: i } as unknown as ImageData;
+    }),
+    releaseBuffers: vi.fn(() => log.push('releaseBuffers')),
+  };
+  const deps: RunnerDeps = {
+    decode: vi.fn(async () => {
+      log.push('decode');
+      return full as unknown as ImageBitmap;
+    }),
+    crop: vi.fn(async () => ({ width: 8, height: 4, close: vi.fn() }) as unknown as ImageBitmap),
+    createCanvas: vi.fn(() => canvas),
+    nextFrame: vi.fn(async () => undefined),
+    sleep: vi.fn(async () => undefined),
+    writeGuard: vi.fn(() => log.push('guard')),
+    clearGuard: vi.fn(() => log.push('clear guard')),
+  };
+  return { log, full, canvas, renderer, deps };
+}
+
+describe('runTiledExport (S §4.4)', () => {
+  it('guard → decode → tiles (progress) → close → release → encode → clear guard; a named JPEG File', async () => {
+    const f = fakes();
+    const progress: number[] = [];
+    const file = await runTiledExport(f.renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working, onProgress: (p) => progress.push(p) }, f.deps);
+    expect(f.log).toEqual(['guard', 'decode', 'tile', 'put 0', 'tile', 'put 4', 'close full', 'releaseBuffers', 'encode 0.95', 'release canvas', 'clear guard']);
+    expect(progress).toEqual([0.5, 1]);
+    expect(file.type).toBe('image/jpeg');
+    expect(file.name).toMatch(/^meiyan-\d{8}-\d{6}\.jpg$/);
+    expect(f.deps.writeGuard).toHaveBeenCalledWith(expect.objectContaining({ w: 8, h: 4, format: 'jpeg' }));
+    const call = f.renderer.renderTile.mock.calls[1];
+    expect(call[0]).toMatchObject({
+      sourceWindow: { x: 0, y: 0, w: 1, h: 1 },
+      output: { tile: { x: 0, y: 0, w: 1, h: 1 }, pixelSize: { width: 8, height: 4 }, fullShortEdge: 4 },
+      oAspect: 2,
+    });
+    expect(call[1]).toEqual({ x: 4, y: 0, w: 4, h: 4 });
+  });
+
+  it('PNG is encoded without a quality', async () => {
+    const f = fakes();
+    const file = await runTiledExport(f.renderer, new Blob(['s']), { ...plan, format: 'png' }, input, { signal: new AbortController().signal, working }, f.deps);
+    expect(f.canvas.encode).toHaveBeenCalledWith(undefined);
+    expect(file.type).toBe('image/png');
+    expect(f.deps.createCanvas).toHaveBeenCalledWith(8, 4, 'image/png');
+  });
+
+  it('an abort frees everything synchronously inside abort(); the pending step rejects with AbortError', async () => {
+    const f = fakes();
+    let resume!: () => void;
+    f.deps.nextFrame = vi.fn(() => new Promise<void>((r) => (resume = r)));
+    const ac = new AbortController();
+    const p = runTiledExport(f.renderer, new Blob(['s']), plan, input, { signal: ac.signal, working }, f.deps);
+    await vi.waitFor(() => expect(f.renderer.renderTile).toHaveBeenCalledTimes(1));
+    ac.abort();
+    expect(f.full.close).toHaveBeenCalled();
+    expect(f.canvas.release).toHaveBeenCalled();
+    expect(f.renderer.releaseBuffers).toHaveBeenCalled();
+    expect(f.deps.clearGuard).toHaveBeenCalled();
+    resume();
+    await expect(p).rejects.toMatchObject({ name: 'AbortError' });
+    expect(f.renderer.renderTile).toHaveBeenCalledTimes(1);
+    expect(f.canvas.encode).not.toHaveBeenCalled();
+  });
+
+  it.each(['decode', 'tile', 'encode'] as const)('the %s knob fails the export; memory and guard are released', async (failAt) => {
+    const f = fakes();
+    const run = runTiledExport(f.renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working, knob: { failAt } }, f.deps);
+    await expect(run).rejects.toBeInstanceOf(ExportError);
+    expect(f.deps.clearGuard).toHaveBeenCalled();
+    expect(f.renderer.releaseBuffers).toHaveBeenCalled();
+    expect(f.full.close).toHaveBeenCalled();
+  });
+
+  it('a decode whose aspect is off by > 1 % (orientation ignored) throws ExportError aspect', async () => {
+    const f = fakes({ width: 4, height: 8 });
+    await expect(runTiledExport(f.renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working }, f.deps)).rejects.toMatchObject({
+      name: 'ExportError',
+      kind: 'aspect',
+    });
+  });
+
+  it('a renderer failure (context lost) rejects with it and releases', async () => {
+    const f = fakes();
+    f.renderer.renderTile.mockImplementationOnce(() => {
+      throw new Error('renderTile: WebGL context unavailable');
+    });
+    await expect(runTiledExport(f.renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working }, f.deps)).rejects.toThrow('context unavailable');
+    expect(f.deps.clearGuard).toHaveBeenCalled();
+  });
+
+  it('a context loss reported only after the last tile (renderer.lost) fails before encode: no file, memory and guard released', async () => {
+    const f = fakes();
+    const renderer = { ...f.renderer, lost: false };
+    // the webglcontextlost event lands in the rAF gap after the last tile
+    f.deps.nextFrame = vi.fn(async () => {
+      if (renderer.renderTile.mock.calls.length === plan.tiles.length) renderer.lost = true;
+    });
+    const run = runTiledExport(renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working }, f.deps);
+    await expect(run).rejects.toMatchObject({ name: 'ExportError', kind: 'lost' });
+    expect(f.canvas.encode).not.toHaveBeenCalled();
+    expect(f.canvas.release).toHaveBeenCalled();
+    expect(f.full.close).toHaveBeenCalled();
+    expect(f.deps.clearGuard).toHaveBeenCalled();
+  });
+
+  it('the slow knob waits after the decode', async () => {
+    const f = fakes();
+    await runTiledExport(f.renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working, knob: { slowMs: 4500 } }, f.deps);
+    expect(f.deps.sleep).toHaveBeenCalledWith(4500);
+  });
+});
+
+describe('runTiledExport drawState: one file never mixes tiles drawn with and without a LUT', () => {
+  const ready = Promise.resolve();
+
+  it('is read right before every tile; an unchanged state renders them all', async () => {
+    const f = fakes();
+    const drawState = vi.fn(() => {
+      f.log.push('state');
+      return [ready, 'ready'];
+    });
+    await runTiledExport(f.renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working, drawState }, f.deps);
+    expect(f.log.slice(0, 7)).toEqual(['guard', 'decode', 'state', 'tile', 'put 0', 'state', 'tile']);
+    expect(f.renderer.renderTile).toHaveBeenCalledTimes(2);
+  });
+
+  it('a LUT still loading at the first tile (null) fails before any tile is drawn; memory and guard are released', async () => {
+    const f = fakes();
+    const run = runTiledExport(f.renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working, drawState: () => null }, f.deps);
+    await expect(run).rejects.toMatchObject({ name: 'ExportError', kind: 'draw' });
+    expect(f.renderer.renderTile).not.toHaveBeenCalled();
+    expect(f.full.close).toHaveBeenCalled();
+    expect(f.renderer.releaseBuffers).toHaveBeenCalled();
+    expect(f.deps.clearGuard).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['evicted (no longer resident)', 'ready', null],
+    ['a failed one that loaded after all', 'failed', 'ready'],
+  ])('a LUT %s between tiles fails the export instead of drawing the rest differently', async (_name, first, later) => {
+    const f = fakes();
+    let look: string | null = first;
+    f.deps.nextFrame = vi.fn(async () => {
+      look = later; // (changes while the runner yields after the first tile)
+    });
+    const drawState = () => (look ? [ready, look] : null);
+    const run = runTiledExport(f.renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working, drawState }, f.deps);
+    await expect(run).rejects.toMatchObject({ name: 'ExportError', kind: 'draw' });
+    expect(f.renderer.renderTile).toHaveBeenCalledTimes(1);
+    expect(f.canvas.encode).not.toHaveBeenCalled();
+    expect(f.deps.clearGuard).toHaveBeenCalled();
+  });
+
+  it('a context restore between tiles (a new engine.ready) fails it too', async () => {
+    const f = fakes();
+    let statics = ready;
+    f.deps.nextFrame = vi.fn(async () => {
+      statics = Promise.resolve();
+    });
+    const run = runTiledExport(f.renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working, drawState: () => [statics] }, f.deps);
+    await expect(run).rejects.toMatchObject({ kind: 'draw' });
+    expect(f.renderer.renderTile).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('abortable', () => {
+  it('passes the promise through', async () => {
+    await expect(abortable(Promise.resolve(7), new AbortController().signal)).resolves.toBe(7);
+    await expect(abortable(Promise.reject(new Error('x')), new AbortController().signal)).rejects.toThrow('x');
+  });
+
+  it('rejects with AbortError as soon as the signal aborts, without waiting for the promise', async () => {
+    const ac = new AbortController();
+    const p = abortable(new Promise<void>(() => undefined), ac.signal);
+    ac.abort();
+    await expect(p).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('rejects at once on a signal aborted already', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    await expect(abortable(Promise.resolve(1), ac.signal)).rejects.toMatchObject({ name: 'AbortError' });
+  });
+});

@@ -1,20 +1,40 @@
 // OWNER: app-glue agent. Editor session for one still image: detect once, render on demand (rAF-coalesced).
-import { adapt } from '../tracking/adapter111';
-import type { BeautyParams, BodyField, Engine, Face, FaceProtect, RenderInput, Tracker } from '../types';
+// v0.4 (S §3.4 S1): every selectable face of the photo (cache order f0…) plus the obstacles; the caller builds the
+// frame (src/edit/frame.ts buildFrame), each face carrying its own 瘦臉 limit (A6).
+import { EDIT_DETECT_FACES } from '../config/limits';
+import { adaptCached, prepareFaces } from '../detect/faces';
+import { photoLuts } from '../engine/looks';
+import { IDENTITY_GEOMETRY, snapCrop, viewSize } from '../geometry/view';
+import type { TileInputBase } from '../media/exportFull';
+import { faceBoundsFor, spotBounds, type TileBounds } from '../media/exportPlan';
+import type { BodyField, CachedFace, CachedObstacle, Engine, Face, Geometry, LiquifyField, Rect, RenderInput, RenderStats, Size, StillFrame, Tracker } from '../types';
 import { debugState, reportError } from './debug';
+
+export interface SessionFace {
+  id: string;
+  face: Face;
+  box: Rect;
+  /** the raw 478×3 landmarks (the cache keeps them) */
+  lm: Float32Array;
+}
 
 export interface StillSession {
   readonly width: number;
   readonly height: number;
-  readonly face: Face | null;
+  /** the selectable faces (cache order f0…), adapted at this bitmap's size */
+  readonly faces: readonly SessionFace[];
+  /** faces dropped by the size filter or the cap: no effects, they bound the caps */
+  readonly obstacles: readonly CachedObstacle[];
+  /** this session's detection drops (zeros when the faces were given) */
+  readonly dropped: { tooSmall: number; overCap: number };
   /**
-   * false when the detector threw, so `face: null` is not a real "no face" (the tracker rebuilds its graph
-   * on the next call). A null from a tracker that is recovering cannot be told apart here: callers combine
-   * this with the tracker health (svc.tracker).
+   * false when the detector threw, so no faces is not a real "no face" (the tracker rebuilds its graph
+   * on the next call). An empty answer from a tracker that is recovering cannot be told apart here: callers
+   * combine this with the tracker health (svc.tracker).
    */
   readonly faceKnown: boolean;
-  /** schedule a render with these params (coalesced to one per animation frame) */
-  render(params: BeautyParams): void;
+  /** schedule a render of `frame` (coalesced to one per animation frame) */
+  render(frame: StillFrame): void;
   /** show the original while held */
   setCompare(on: boolean): void;
   /**
@@ -25,30 +45,47 @@ export interface StillSession {
   /** the field set last (a replacement session is seeded with it) */
   readonly body: BodyField | null;
   /**
-   * 瘦臉 background limit for this photo's face (src/tracking/faceProtect.ts; null = the unlimited contour warps),
-   * applied to every later render and export like the body field. Immutable: pass a new object to change it.
+   * 推臉筆 field (null = no strokes), applied to every later render and export like the body field. The editor's
+   * LiquifyModel refills it in place (new `version`): pass the same object again and it redraws.
    */
-  setFaceProtect(protect: FaceProtect | null): void;
-  readonly faceProtect: FaceProtect | null;
+  setLiquify(field: LiquifyField | null): void;
+  /** the field set last (a replacement session is seeded with it) */
+  readonly liquify: LiquifyField | null;
   /**
-   * Resolves once what an export of `params` needs is resident (the filter LUT may still be downloading:
+   * Resolves once what an export of `frame` needs is resident (the 濾鏡 and 質感 LUTs may still be downloading:
    * no SW, Lockdown Mode, slow network). Never rejects: a LUT that fails to load is skipped by the preview
-   * too, so the export then matches it without the filter.
+   * too, so the export then matches it without that LUT.
    */
-  prepareExport(params: BeautyParams): Promise<void>;
+  prepareExport(frame: StillFrame): Promise<void>;
   /**
-   * true when an export of `params` would match the preview right now: the static textures and the filter
-   * LUT have settled (loaded or failed) on the current context. false → prepareExport first.
+   * true when an export of `frame` would match the preview right now: the static textures and the engine's 濾鏡 and
+   * 質感 LUT states have settled (ready or failed) on the current context. false → prepareExport first.
    */
-  exportReady(params: BeautyParams): boolean;
+  exportReady(frame: StillFrame): boolean;
   /**
-   * full-resolution export, never mirrored (synchronous; call prepareExport first so it matches the preview).
-   * `params` and `body` are the user's state captured when the export was asked for (a 美體 edit while it waits for
-   * a filter LUT must not leak into it); `body` omitted → the field set last. What the system settles by itself is
-   * not part of that snapshot: the filter LUT and the 瘦臉 limit (setFaceProtect) are the session's at export time,
-   * as the settled preview draws them.
+   * full-resolution export of `frame`, never mirrored (synchronous; call prepareExport first so it matches the
+   * preview). `frame` (with each face's 瘦臉 limit) and `body` are what the caller captured when the export was asked
+   * for (a 美體 edit while it waits for a filter LUT must not leak into it); `body` omitted → the field set last. The
+   * filter LUT is the session's at export time, as the settled preview draws it. `liquify` as `body`: the snapshot
+   * taken when the export was asked for; omitted → the field set last.
    */
-  exportImageData(params: BeautyParams, body?: BodyField | null): ImageData;
+  exportImageData(frame: StillFrame, body?: BodyField | null, liquify?: LiquifyField | null): ImageData;
+  /** V pixel size of `g` at the working density (the editor frame's aspect) */
+  viewSizeFor(g: Geometry): Size;
+  /**
+   * 'crop' (the 裁切 tab): display frames draw the whole O image (identity geometry; CSS turns the canvas) and a
+   * geometry-only change draws nothing. Exports always apply the frame's geometry.
+   */
+  setViewMode(mode: ViewMode): void;
+  /** held during a tiled export: no display frame at all (the last one stays on screen); lifting it draws once */
+  pauseDisplay(on: boolean): void;
+  /**
+   * the tile runner's input: the frame plus the session's body and 推臉筆 fields (`liquify` as `body`: undefined → the
+   * field set last, null → none), the working aspect and (step 4) the working bitmap as toneSource, geometry unsnapped
+   */
+  tileInput(frame: StillFrame, body?: BodyField | null, liquify?: LiquifyField | null): TileInputBase;
+  /** the planner's displacement bounds for this frame, with step 4's spot windows and GL budget hooks, and the 推臉筆 term when given */
+  bounds(frame: StillFrame, body?: BodyField | null, liquifyMaxDisp?: (rectO: Rect) => number): TileBounds;
   /**
    * The screen is closing but an export is still pending: stop drawing to the shared display canvas (another
    * screen owns it now). prepareExport / exportImageData keep working until dispose.
@@ -57,18 +94,51 @@ export interface StillSession {
   dispose(): void;
 }
 
+export type ViewMode = 'crop' | 'normal';
+
+function shallowSame(x: unknown, y: unknown): boolean {
+  if (Object.is(x, y)) return true;
+  if (Array.isArray(x) && Array.isArray(y)) return x.length === y.length && x.every((v, i) => shallowSame(v, y[i]));
+  if (x && y && typeof x === 'object' && typeof y === 'object' && Object.getPrototypeOf(x) === Object.prototype && Object.getPrototypeOf(y) === Object.prototype) {
+    const a = x as Record<string, unknown>;
+    const b = y as Record<string, unknown>;
+    const ka = Object.keys(a);
+    return ka.length === Object.keys(b).length && ka.every((k) => Object.is(a[k], b[k]));
+  }
+  return false;
+}
+
+/** two frames draw the same crop-mode display (the geometry is the only difference): edits share their unchanged parts */
+export function sameDisplayFrame(a: StillFrame, b: StillFrame): boolean {
+  const ra = a as unknown as Record<string, unknown>;
+  const rb = b as unknown as Record<string, unknown>;
+  for (const k of new Set([...Object.keys(ra), ...Object.keys(rb)])) {
+    if (k === 'geometry') continue;
+    if (k === 'photo') {
+      const pa = ra.photo as Record<string, unknown>;
+      const pb = rb.photo as Record<string, unknown>;
+      for (const q of new Set([...Object.keys(pa), ...Object.keys(pb)])) if (q !== 'geometry' && !Object.is(pa[q], pb[q])) return false;
+      continue;
+    }
+    if (!shallowSame(ra[k], rb[k])) return false;
+  }
+  return true;
+}
+
 export interface StillSessionOptions {
   /** close `bitmap` on dispose (default true). false lets the caller rebind the same photo to a new engine. */
   ownsBitmap?: boolean;
   /**
-   * The face already detected on this same bitmap (e.g. by the session this one replaces after an engine
-   * swap): used as is, without detecting again. undefined → detect.
+   * Faces already known for this bitmap (the detection cache, or the session a lost engine took along): adapted at
+   * the bitmap size and used without detecting again, with or without a tracker. undefined → detect.
    */
-  face?: Face | null;
+  faces?: readonly CachedFace[];
+  /** the obstacles that go with `faces` */
+  obstacles?: readonly CachedObstacle[];
   /** 美體 field to start with (a replacement session keeps the edit on its first frame) */
   body?: BodyField | null;
-  /** 瘦臉 background limit to start with; only meaningful together with `face` (it was built for that face) */
-  faceProtect?: FaceProtect | null;
+  /** 推臉筆 field to start with (a replacement session draws the strokes on its first frame) */
+  liquify?: LiquifyField | null;
 }
 
 /** prepareExport re-waits after a loss + restore during its wait at most this often (repeated cycles cannot loop) */
@@ -84,47 +154,55 @@ export function createStillSession(
   const ownsBitmap = opts.ownsBitmap ?? true;
   const width = bitmap.width;
   const height = bitmap.height;
-  const detected = opts.face !== undefined ? { face: opts.face, known: true } : detectOnce(tracker, bitmap, width, height);
-  const face = detected.face;
+  const detected =
+    opts.faces !== undefined ? fromCache(opts.faces, opts.obstacles ?? [], width, height) : detectOnce(tracker, bitmap, width, height);
   // window.__meiyan.face describes whatever is on screen: the photo now (the live loop is stopped)
   const dbg = debugState();
-  if (dbg) dbg.face = face !== null;
-  const faceWeight = face ? 1 : 0;
-  const requestedFilters = new Set<string>();
-  /** filters whose load settled (loaded or failed) on the current context, and whether `ready` has */
-  const settledFilters = new Set<string>();
+  if (dbg) {
+    dbg.face = detected.faces.length > 0;
+    dbg.faces = detected.faces.length;
+    dbg.boxes = detected.faces.map((f) => ({ id: f.id, ...f.box }));
+  }
+  /** LUT loads this session waits on to redraw (`${kind}:${id}`); cleared on restore */
+  const waiting = new Set<string>();
+  /** whether `ready` (the static textures) has settled on the current context */
   let staticsSettled = false;
   /** bumped on every restore: loads started against the old context no longer count as settled */
   let gen = 0;
   let displayOff = false;
 
-  let params: BeautyParams | null = null;
+  let frame: StillFrame | null = null;
   let body: BodyField | null = opts.body ?? null;
-  // a limit built for another face would bound the wrong contour: only kept with the face it came with
-  let faceProtect: FaceProtect | null = opts.face !== undefined ? (opts.faceProtect ?? null) : null;
+  let liquify: LiquifyField | null = opts.liquify ?? null;
   let compare = false;
   let raf = 0;
   let disposed = false;
+  let mode: ViewMode = 'normal';
+  let paused = false;
+  /** the frame the display last drew (crop mode compares against it) */
+  let drawn: StillFrame | null = null;
+  const oSize: Size = { width, height };
+  const viewGeometry = (f: StillFrame) => (mode === 'crop' ? IDENTITY_GEOMETRY : snapCrop(f.geometry ?? IDENTITY_GEOMETRY, oSize));
 
-  const input = (p: BeautyParams, b: BodyField | null = body): RenderInput => ({
+  // exports and thumbnails: V, the crop snapped to whole working pixels
+  const input = (f: StillFrame, b: BodyField | null = body, l: LiquifyField | null = liquify): RenderInput => ({
     source: bitmap,
     width,
     height,
-    face,
-    faceWeight,
-    params: p,
+    ...f,
+    geometry: snapCrop(f.geometry ?? IDENTITY_GEOMETRY, oSize),
     body: b,
-    faceProtect,
+    liquify: l,
   });
 
   function schedule(): void {
-    if (disposed || displayOff || raf || !params) return;
+    if (disposed || displayOff || paused || raf || !frame) return;
     raf = requestAnimationFrame(flush);
   }
 
   function flush(): void {
     raf = 0;
-    if (disposed || displayOff || !params) return;
+    if (disposed || displayOff || paused || !frame) return;
     // context lost: keep the pending render and retry next frame (the engine rebuilds itself on restore)
     if (engine.lost) {
       schedule();
@@ -133,31 +211,47 @@ export function createStillSession(
     try {
       // the engine is shared with the live loop, whose front-camera preview is mirrored
       engine.setOptions({ mirror: false });
-      if (compare) engine.renderOriginal({ source: bitmap, width, height }, { still: true });
-      else engine.render(input(params), { still: true });
+      let st: RenderStats | null = null;
+      if (compare) engine.renderOriginal({ source: bitmap, width, height, geometry: viewGeometry(frame) }, { still: true });
+      else st = engine.render({ ...input(frame), geometry: viewGeometry(frame) }, { still: true });
+      drawn = frame;
+      const d = debugState();
+      if (d) {
+        d.renderCount = (d.renderCount ?? 0) + 1;
+        // skin-cleanup spec §3.2: the display frame's passes, and the tone-field rebuilds (e2e: a 瘦臉 drag rebuilds nothing)
+        if (st) {
+          d.passes = st.passes;
+          if (st.toneBuilt) d.toneBuilds += 1;
+        }
+      }
     } catch (err) {
       reportError('still render', err);
     }
   }
 
-  function ensureFilter(id: string): void {
-    if (id === 'none' || requestedFilters.has(id)) return;
-    requestedFilters.add(id);
-    const g = gen;
-    const settled = () => {
-      if (g === gen) settledFilters.add(id);
-    };
-    // the first render may have gone out before the LUT was uploaded → draw again once it is
-    engine.loadFilter(id).then(
-      () => {
-        settled();
-        schedule();
-      },
-      (err: unknown) => {
-        settled();
-        reportError(`filter ${id}`, err);
-      },
-    );
+  /**
+   * Ask for every LUT the photo draws with (濾鏡 and 質感) and redraw when one arrives: the first frame may have gone
+   * out without it. A LUT already resident needs nothing; a failed one is retried only by an explicit tap (the
+   * screen's requestLut), so the preview and the export both skip it.
+   */
+  function ensureLuts(photo: StillFrame['photo']): void {
+    for (const r of photoLuts(photo)) {
+      const state = engine.lutState(r.kind, r.id);
+      if (state === 'ready' || state === 'failed') continue;
+      const key = `${r.kind}:${r.id}`;
+      if (waiting.has(key)) continue;
+      waiting.add(key);
+      engine.loadLut(r.kind, r.id).then(
+        () => {
+          waiting.delete(key);
+          schedule();
+        },
+        (err: unknown) => {
+          waiting.delete(key);
+          reportError(`${r.kind} ${r.id}`, err);
+        },
+      );
+    }
   }
 
   function trackStatics(): void {
@@ -181,59 +275,64 @@ export function createStillSession(
   trackStatics();
 
   // After a restore the drawing buffer is blank and every texture reloads asynchronously, but nothing
-  // else asks for a frame: redraw now, re-request the filter (dropped with the old context) and redraw
+  // else asks for a frame: redraw now, re-request the LUTs (dropped with the old context) and redraw
   // again once the static textures are back. The engine's own listener was added first, so it has
   // already rebuilt by the time this runs.
   const onRestored = () => {
     if (disposed) return;
     gen++;
-    requestedFilters.clear();
-    settledFilters.clear();
+    waiting.clear();
     staticsSettled = false;
-    if (params) ensureFilter(params.filterId);
+    if (frame) ensureLuts(frame.photo);
     trackStatics();
     schedule();
   };
   engine.canvas.addEventListener('webglcontextrestored', onRestored);
 
-  function prepare(p: BeautyParams, retries: number): Promise<void> {
+  function prepare(f: StillFrame, retries: number): Promise<void> {
     if (disposed) return Promise.resolve();
     // static textures (skin LUTs, makeup) too: after a context restore they reload asynchronously
     const ready = engine.ready;
     const g = gen;
     const statics = ready.catch(() => undefined);
-    let load: Promise<void>;
-    if (p.filterId === 'none') load = Promise.resolve();
-    else {
+    const luts = photoLuts(f.photo);
+    // loadLut retries a failed LUT: one that loads now is in the export, so the preview must redraw with it too
+    // (ensureLuts skips failed ones, so nothing else would ask for that frame; step-2 review)
+    const retried = luts.filter((r) => engine.lutState(r.kind, r.id) === 'failed');
+    const loads = luts.map((r) => {
       try {
-        load = engine.loadFilter(p.filterId);
-      } catch (err) {
-        load = Promise.reject(err);
+        return engine.loadLut(r.kind, r.id).catch(() => undefined);
+      } catch {
+        return Promise.resolve(undefined);
       }
-    }
-    return Promise.all([statics, load.catch(() => undefined)]).then(() => {
+    });
+    return Promise.all([statics, ...loads]).then(() => {
       // still lost (or closed): exportImageData throws and the callers handle that
       if (disposed || engine.lost) return;
-      // lost and restored meanwhile: the loads above settled against the dead context without leaving
-      // their textures behind, so wait for the reloaded ones (new `ready`, a fresh filter load)
+      // lost and restored meanwhile: the loads above settled against the dead context without leaving their
+      // textures behind, so wait for the reloaded ones (new `ready`, fresh LUT loads)
       if (engine.ready !== ready || g !== gen) {
-        if (retries > 0) return prepare(p, retries - 1);
+        if (retries > 0) return prepare(f, retries - 1);
         return;
       }
       staticsSettled = true;
-      if (p.filterId !== 'none') settledFilters.add(p.filterId);
+      if (retried.some((r) => engine.lutState(r.kind, r.id) === 'ready')) schedule();
     });
   }
 
   return {
     width,
     height,
-    face,
+    faces: detected.faces,
+    obstacles: detected.obstacles,
+    dropped: detected.dropped,
     faceKnown: detected.known,
-    render(p) {
+    render(f) {
       if (disposed) return;
-      params = p;
-      ensureFilter(p.filterId);
+      frame = f;
+      ensureLuts(f.photo);
+      // 裁切: a geometry-only change draws nothing (CSS shows it)
+      if (mode === 'crop' && drawn && !raf && sameDisplayFrame(drawn, f)) return;
       schedule();
     },
     setCompare(on) {
@@ -249,28 +348,67 @@ export function createStillSession(
       body = field;
       schedule();
     },
-    get faceProtect() {
-      return faceProtect;
+    get liquify() {
+      return liquify;
     },
-    setFaceProtect(p) {
-      if (disposed || p === faceProtect) return;
-      faceProtect = p;
+    setLiquify(field) {
+      if (disposed) return;
+      liquify = field;
       schedule();
     },
-    prepareExport(p) {
-      return prepare(p, PREPARE_RETRIES);
+    prepareExport(f) {
+      return prepare(f, PREPARE_RETRIES);
     },
-    exportReady(p) {
+    exportReady(f) {
       if (disposed || engine.lost || !staticsSettled) return false;
-      return p.filterId === 'none' || settledFilters.has(p.filterId);
+      // ask the engine, not a local set: the LRU may have evicted a LUT this session loaded earlier
+      return photoLuts(f.photo).every((r) => {
+        const s = engine.lutState(r.kind, r.id);
+        return s === 'ready' || s === 'failed';
+      });
     },
-    exportImageData(p, b) {
+    exportImageData(f, b, l) {
       if (disposed) throw new Error('StillSession: disposed');
-      ensureFilter(p.filterId);
-      const img = engine.renderToImageData(input(p, b === undefined ? body : b), { mirror: false });
-      // the display keeps showing the last params; redraw in case the offscreen render disturbed it
-      schedule();
+      ensureLuts(f.photo);
+      const img = engine.renderToImageData(input(f, b === undefined ? body : b, l === undefined ? liquify : l), { mirror: false });
+      // the display keeps showing the last frame; redraw in case the offscreen render disturbed it. Not in 裁切 mode: the
+      // debounced autosave after a gesture must draw no engine frame (S §6.3)
+      if (mode !== 'crop') schedule();
       return img;
+    },
+    viewSizeFor(g) {
+      return viewSize(snapCrop(g, oSize), oSize);
+    },
+    setViewMode(m) {
+      if (disposed || m === mode) return;
+      mode = m;
+      schedule();
+    },
+    pauseDisplay(on) {
+      if (disposed || on === paused) return;
+      paused = on;
+      if (on) {
+        if (raf) cancelAnimationFrame(raf);
+        raf = 0;
+      } else schedule();
+    },
+    tileInput(f, b, l) {
+      // the runner sets source, size, window and output per tile; the 推臉筆 field is the export's snapshot
+      const all: Partial<RenderInput> = { ...input(f, b === undefined ? body : b, l === undefined ? liquify : l) };
+      delete all.source;
+      delete all.width;
+      delete all.height;
+      // skin-cleanup spec §4.6: every tile carries the working image, so a tile engine without the preview's tone field rebuilds it
+      return { ...(all as TileInputBase), geometry: f.geometry ?? IDENTITY_GEOMETRY, oAspect: width / height, toneSource: { source: bitmap, width, height } };
+    },
+    bounds(f, b, liquifyMaxDisp) {
+      // step 4 (skin-cleanup spec §4.6): B at window size while a 膚質 pass runs, and the spot windows; step 6: the strokes' reach
+      return {
+        body: b === undefined ? body : b,
+        faces: faceBoundsFor(f.faces, width / height),
+        ...spotBounds(f, { width, height }),
+        ...(liquifyMaxDisp ? { liquifyMaxDisp } : {}),
+      };
     },
     stopDisplay() {
       displayOff = true;
@@ -283,6 +421,15 @@ export function createStillSession(
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
       engine.canvas.removeEventListener('webglcontextrestored', onRestored);
+      // the pipeline's 美體 / 推臉筆 textures and its references to this photo's fields (the 推臉筆 buffer is 1.5 MB):
+      // nothing draws with them after the session; a session that follows on this engine uploads its own again
+      try {
+        engine.releaseFields();
+      } catch (e) {
+        reportError('releaseFields', e);
+      }
+      liquify = null;
+      body = null;
       if (!ownsBitmap) return;
       try {
         bitmap.close();
@@ -293,18 +440,34 @@ export function createStillSession(
   };
 }
 
-function detectOnce(
-  tracker: Tracker | null,
-  bitmap: ImageBitmap,
-  width: number,
-  height: number,
-): { face: Face | null; known: boolean } {
-  if (!tracker) return { face: null, known: true };
+interface Detected {
+  faces: SessionFace[];
+  obstacles: CachedObstacle[];
+  dropped: { tooSmall: number; overCap: number };
+  known: boolean;
+}
+
+const NO_DROPS = { tooSmall: 0, overCap: 0 };
+
+function fromCache(faces: readonly CachedFace[], obstacles: readonly CachedObstacle[], width: number, height: number): Detected {
+  return {
+    faces: faces.map((c) => ({ id: c.id, face: adaptCached(c, width, height), box: c.box, lm: c.lm })),
+    obstacles: [...obstacles],
+    dropped: { ...NO_DROPS },
+    known: true,
+  };
+}
+
+function detectOnce(tracker: Tracker | null, bitmap: ImageBitmap, width: number, height: number): Detected {
+  if (!tracker) return { faces: [], obstacles: [], dropped: { ...NO_DROPS }, known: true };
   try {
-    const lm = tracker.detectImage(bitmap);
-    return { face: lm ? adapt(lm, width, height) : null, known: true };
+    const lms = tracker.detectImage(bitmap, { maxFaces: EDIT_DETECT_FACES });
+    const dbg = debugState();
+    if (dbg) dbg.detectCalls++;
+    const p = prepareFaces(lms, width, height);
+    return { faces: p.faces, obstacles: p.obstacles, dropped: p.dropped, known: true };
   } catch (err) {
     reportError('still detect', err);
-    return { face: null, known: false };
+    return { faces: [], obstacles: [], dropped: { ...NO_DROPS }, known: false };
   }
 }

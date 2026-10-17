@@ -1,11 +1,14 @@
 // Review 預覽 (spec §7.2.3): the captured result; 重拍 · 編輯 · 儲存. The JPEG is encoded right after
 // capture so 儲存 can call the share sheet synchronously inside the tap (RB §1 #10).
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { cameraShotEdit } from '../../edit/migrate';
+import { handOverLook } from '../../edit/sides';
 import { errorText, reportError } from '../debug';
 import { deps } from '../deps';
+import { freshSource } from '../flows';
 import { Icon } from '../icons';
 import { haptic } from '../platform';
-import { go, showSaveFallback, toast, type Shot } from '../state';
+import { app, go, showSaveFallback, toast, type Shot } from '../state';
 
 export function Review({ shot }: { shot: Shot }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -46,7 +49,8 @@ export function Review({ shot }: { shot: Shot }) {
         setEncodeErr(null);
         let p: Promise<File>;
         try {
-          p = deps.encodeJpeg(shot.image, 0.92);
+          // a camera frame is ≤ 1920 px, so 輸出解析度 does not apply; 輸出格式 does (S §2.4)
+          p = deps.encodeOutput(shot.image, app.get().prefs.exportFormat, 0.92);
         } catch (e) {
           p = Promise.reject(e);
         }
@@ -88,7 +92,7 @@ export function Review({ shot }: { shot: Shot }) {
       return;
     }
     handedOff.current = true;
-    go({ name: 'editor', source: { bitmap: shot.original, params: shot.params, historyId: null, returnTo: 'camera' } });
+    go({ name: 'editor', source: freshSource(shot.original, cameraShotEdit(handOverLook(shot.look, shot.mirrored), shot.faceSeed), 'camera', shot.faceSeed) });
   };
 
   const busy = !file && !encodeErr;

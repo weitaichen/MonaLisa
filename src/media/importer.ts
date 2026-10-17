@@ -12,6 +12,25 @@ export async function importPhoto(file: Blob, maxLongEdge: number): Promise<Imag
   }
 }
 
+export interface ImportInfo {
+  bitmap: ImageBitmap;
+  /** the oriented size of the file itself (probeSize, or the full decode when the header is unreadable) */
+  oriented: { width: number; height: number };
+  /** the decoder that produced `bitmap`: createImageBitmap, or the <img> fallback (HEIC on some WebKit builds) */
+  path: 'bitmap' | 'img';
+}
+
+/** importPhoto plus the file's oriented size (the source-retention rule needs it, with one header read, S §3.7) */
+export async function importPhotoInfo(file: Blob, maxLongEdge: number): Promise<ImportInfo> {
+  if (typeof createImageBitmap !== 'function') throw new Error('importPhoto: createImageBitmap unsupported');
+  try {
+    return await importViaBitmapInfo(file, maxLongEdge);
+  } catch (e) {
+    console.warn('[importer] createImageBitmap path failed, falling back to <img>', e);
+    return importViaImageElementInfo(file, maxLongEdge);
+  }
+}
+
 /** Pure helper: target size for a w×h image so the long edge ≤ maxLongEdge (never upscales). */
 export function fitLongEdge(w: number, h: number, maxLongEdge: number): { width: number; height: number } {
   if (!(w > 0 && h > 0)) return { width: 0, height: 0 };
@@ -46,11 +65,11 @@ export function probeSize(file: Blob): Promise<{ width: number; height: number }
  * Note: WebKit's createImageBitmap(Blob) still decodes the full frame once internally (no subsampling for
  * ImageBitmap), so this halves the peak rather than removing it.
  */
-export async function importViaBitmap(
+export async function importViaBitmapInfo(
   file: Blob,
   maxLongEdge: number,
   probe: (file: Blob) => Promise<{ width: number; height: number }> = probeSize,
-): Promise<ImageBitmap> {
+): Promise<ImportInfo> {
   let pw: number;
   let ph: number;
   try {
@@ -60,14 +79,18 @@ export async function importViaBitmap(
     // A format only createImageBitmap reads: fall back to a full decode for the size (the old behaviour).
     const full = await createImageBitmap(file, { imageOrientation: 'from-image' });
     const fit = fitLongEdge(full.width, full.height, maxLongEdge);
-    if (fit.width === full.width && fit.height === full.height) return full;
+    if (fit.width === full.width && fit.height === full.height) {
+      return { bitmap: full, oriented: { width: full.width, height: full.height }, path: 'bitmap' };
+    }
     pw = full.width;
     ph = full.height;
     full.close();
   }
   const target = fitLongEdge(pw, ph, maxLongEdge);
   if (!target.width || !target.height) throw new Error('importPhoto: image has no size');
-  if (target.width === pw && target.height === ph) return createImageBitmap(file, { imageOrientation: 'from-image' });
+  if (target.width === pw && target.height === ph) {
+    return { bitmap: await createImageBitmap(file, { imageOrientation: 'from-image' }), oriented: { width: pw, height: ph }, path: 'bitmap' };
+  }
 
   let bmp = await decodeResized(file, target.width, target.height);
   if (bmp.width === target.height && bmp.height === target.width && target.width !== target.height) {
@@ -76,11 +99,21 @@ export async function importViaBitmap(
     bmp.close();
     bmp = await decodeResized(file, target.height, target.width);
   }
-  if (bmp.width === target.width && bmp.height === target.height) return bmp;
+  if (bmp.width === target.width && bmp.height === target.height) return { bitmap: bmp, oriented: { width: pw, height: ph }, path: 'bitmap' };
   // resize* ignored (older engines ignore unknown dictionary members): scale the full decode on a canvas.
-  if (bmp.width === pw && bmp.height === ph) return scaleBitmap(bmp, target.width, target.height);
+  if (bmp.width === pw && bmp.height === ph) {
+    return { bitmap: await scaleBitmap(bmp, target.width, target.height), oriented: { width: pw, height: ph }, path: 'bitmap' };
+  }
   bmp.close();
   throw new Error(`importPhoto: unexpected decode size ${bmp.width}×${bmp.height}, wanted ${target.width}×${target.height}`);
+}
+
+export async function importViaBitmap(
+  file: Blob,
+  maxLongEdge: number,
+  probe: (file: Blob) => Promise<{ width: number; height: number }> = probeSize,
+): Promise<ImageBitmap> {
+  return (await importViaBitmapInfo(file, maxLongEdge, probe)).bitmap;
 }
 
 function decodeResized(file: Blob, w: number, h: number): Promise<ImageBitmap> {
@@ -93,7 +126,7 @@ function decodeResized(file: Blob, w: number, h: number): Promise<ImageBitmap> {
 }
 
 /** Fallback path: <img> decode (applies EXIF orientation by default) + canvas downscale. */
-export async function importViaImageElement(file: Blob, maxLongEdge: number): Promise<ImageBitmap> {
+export async function importViaImageElementInfo(file: Blob, maxLongEdge: number): Promise<ImportInfo> {
   const url = URL.createObjectURL(file);
   try {
     const img = new Image();
@@ -102,10 +135,18 @@ export async function importViaImageElement(file: Blob, maxLongEdge: number): Pr
     await img.decode();
     const { width, height } = fitLongEdge(img.naturalWidth, img.naturalHeight, maxLongEdge);
     if (!width || !height) throw new Error('importPhoto: image has no size');
-    return await drawToBitmap(img, width, height);
+    return {
+      bitmap: await drawToBitmap(img, width, height),
+      oriented: { width: img.naturalWidth, height: img.naturalHeight },
+      path: 'img',
+    };
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+export async function importViaImageElement(file: Blob, maxLongEdge: number): Promise<ImageBitmap> {
+  return (await importViaImageElementInfo(file, maxLongEdge)).bitmap;
 }
 
 async function scaleBitmap(src: ImageBitmap, w: number, h: number): Promise<ImageBitmap> {

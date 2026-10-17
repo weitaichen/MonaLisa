@@ -100,6 +100,10 @@ describe('banner text', () => {
     expect(bannerTitle(available({ next: '0.3.0' }))).toBe('有新版本 v0.3');
     expect(bannerTitle(available())).toBe('有新版本');
   });
+
+  it('names 0.4.0 as v0.4 (C §1.3)', () => {
+    expect(bannerTitle(available({ next: '0.4.0' }))).toBe('有新版本 v0.4');
+  });
 });
 
 describe('update checks', () => {
@@ -139,5 +143,9 @@ describe('已更新至 notice (first launch of a new version)', () => {
   it('nothing for the same version or a rollback', () => {
     expect(updatedNotice('0.2.0', '0.2.0', true)).toBeNull();
     expect(updatedNotice('0.3.0', '0.2.0', true)).toBeNull();
+  });
+
+  it('after the 0.4.0 update', () => {
+    expect(updatedNotice('0.3.0', '0.4.0', true)).toBe('已更新至 v0.4');
   });
 });

@@ -332,7 +332,8 @@ async function entries(page: Page): Promise<EntryInfo[]> {
         all.onsuccess = () => {
           db.close();
           resolve(
-            (all.result as { faceProtect?: boolean; faceMask?: { width: number; height: number } }[]).map((e) => ({
+            // entries only (a kept source file is a record of its own, without updatedAt)
+            (all.result as { updatedAt?: number; faceProtect?: boolean; faceMask?: { width: number; height: number } }[]).filter((e) => typeof e.updatedAt === 'number').map((e) => ({
               faceProtect: e.faceProtect === true,
               ...(e.faceMask ? { mask: [e.faceMask.width, e.faceMask.height] as [number, number] } : {}),
             })),
@@ -453,6 +454,56 @@ test('face protect: persisted with the edit, a reopen exports the same limited p
   expect(near.mad, 'the wall beside the cheek: the same limited warp').toBeLessThan(5);
 });
 
+test('face protect: the limit landing while a slow 儲存 waits is no edit: the pill still turns 分享 and shares', async ({ page }) => {
+  test.setTimeout(300_000);
+  // the 膠片 LUT is held, so the working-size 儲存 waits in 準備中 past the 4 s share window
+  const FILM = /\/luts\/looks\/look_film\.png$/;
+  let releaseLut!: () => void;
+  const lutGate = new Promise<void>((r) => (releaseLut = r));
+  await page.route(FILM, async (r) => {
+    await lutGate;
+    await r.continue();
+  });
+  // the segmenter model is held, so the 瘦臉 limit lands only once the export is already waiting
+  let releaseSeg!: () => void;
+  const segGate = new Promise<void>((r) => (releaseSeg = r));
+  await page.route(SEGMENTER, async (r) => {
+    await segGate;
+    await r.continue();
+  });
+  await importWallPortrait(page);
+  await page.getByRole('tab', { name: '一鍵', exact: true }).click();
+  await page.getByRole('button', { name: '質感', exact: true }).click();
+  const askedLut = page.waitForRequest(FILM);
+  await page.getByRole('option', { name: '膠片', exact: true }).click();
+  await askedLut;
+  // 瘦臉: the contour drag asks for the segmenter
+  const askedSeg = page.waitForRequest(SEGMENTER);
+  const slim = page.getByRole('option', { name: '瘦臉', exact: true });
+  await page.getByRole('tab', { name: '美型', exact: true }).click();
+  await slim.click();
+  await expect(slim).toHaveAttribute('aria-selected', 'true');
+  await page.waitForTimeout(250);
+  await dragSlider(page, 400);
+  await askedSeg;
+  const frame = page.locator('.editor-stage .frame');
+  const unlimited = await settled(frame);
+  const pill = page.locator('.topbar .pill');
+  await pill.click();
+  await expect(pill).toHaveText('準備中');
+  // the limit lands while the export waits: the system settling an input, not an edit (the preview redraws with it)
+  releaseSeg();
+  const whole = [{ x: 0, y: 0, w: unlimited.width, h: unlimited.height }];
+  await expect.poll(async () => diff(unlimited, await settled(frame), whole).max, { timeout: 60_000 }).toBeGreaterThan(0);
+  await page.waitForTimeout(4500);
+  releaseLut();
+  // only an edit drops a finished file (S §2.3): this one is for the state the user tapped 儲存 on
+  await expect(pill).toHaveText('分享', { timeout: 120_000 });
+  await pill.click();
+  await expect(page.getByRole('dialog', { name: '儲存照片' })).toBeVisible();
+  expect((await debugState(page)).lastError).toBeNull();
+});
+
 test('face protect: a contour edit flushed while the WebGL context is lost keeps the request (M2)', async ({ page }) => {
   test.setTimeout(240_000);
   await importWallPortrait(page);
@@ -481,4 +532,18 @@ test('face protect: a contour edit flushed while the WebGL context is lost keeps
   await expect.poll(async () => (await debugState(page)).screen).toBe('home');
   // the flushed params carry the request: a reopen draws them with the limit the user saw them with
   await expect.poll(async () => (await entries(page)).map((e) => e.faceProtect), { timeout: 15_000 }).toEqual([true]);
+});
+
+bare('per-face limits in 128² windows: GPU == CPU port for two faces and a small face, both carriers (S §8.2)', async ({ page }) => {
+  await page.goto(`${DEV_URL}/tests/e2e/pages/reshape.html`);
+  await page.waitForFunction(() => typeof window.runProtectPinMulti === 'function');
+  for (const carrier of ['texture', 'ubo'] as const) {
+    const cases = await page.evaluate((c) => window.runProtectPinMulti!(c), carrier);
+    expect(cases).toHaveLength(2);
+    for (const c of cases) {
+      console.log(`${c.name}: ${c.n} px, ${c.moved} moved, max |GPU − CPU| = ${c.maxErrPx.toFixed(4)} px`);
+      expect(c.moved).toBeGreaterThan(0);
+      expect(c.maxErrPx).toBeLessThan(0.05);
+    }
+  }
 });

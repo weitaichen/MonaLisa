@@ -1,15 +1,35 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyPreset, defaultParams, PARAM_DEFS, setFilter, setParam, setShade } from '../engine/params';
+import { splitLegacy } from '../edit/legacy';
 import type { Prefs } from '../types';
 import {
+  clearExportCap,
+  clearExportGuard,
+  consumeExportGuardAtLaunch,
   DEFAULT_PREFS,
+  EXPORT_CAP_KEY,
+  EXPORT_DEBUG_KEY,
+  EXPORT_GUARD_KEY,
+  exportCapped,
+  hasSavedSettings,
+  loadLook,
+  loadMakeupPartsSeen,
   loadParams,
   loadPrefs,
+  LOOK_KEY,
   PARAMS_KEY,
+  PERSONS_HINT_KEY,
   PREFS_KEY,
+  readExportDebug,
+  readExportGuard,
   sanitizePrefs,
+  saveLook,
+  saveMakeupPartsSeen,
   saveParams,
   savePrefs,
+  SEEN_MAKEUP_PARTS_KEY,
+  takePersonsHint,
+  writeExportGuard,
 } from './settings';
 
 /** Minimal Map-backed Storage. */
@@ -191,6 +211,8 @@ describe('loadPrefs / savePrefs', () => {
       showLandmarks: true,
       delegate: 'CPU',
       installHintDismissed: true,
+      exportFormat: 'png',
+      exportSize: 'standard',
     };
     savePrefs(p);
     expect([...store.map.keys()]).toEqual([PREFS_KEY]);
@@ -291,5 +313,150 @@ describe('sanitizePrefs', () => {
   it('is idempotent on valid prefs', () => {
     const p: Prefs = { ...DEFAULT_PREFS, tier: 'M', delegate: 'CPU', mirrorOnSave: false };
     expect(sanitizePrefs(sanitizePrefs(p))).toEqual(p);
+  });
+});
+
+describe('camera look meiyan.look.v1 (RM §3.7, C3)', () => {
+  it('first load without it migrates meiyan.params.v1 and leaves that key alone', () => {
+    const p = setParam(applyPreset('glow', 1), 'skin.whiten', 0.9);
+    store.setItem(PARAMS_KEY, JSON.stringify(p));
+    const look = loadLook();
+    expect(look).toEqual(splitLegacy(p));
+    expect(JSON.parse(store.getItem(LOOK_KEY)!)).toEqual(look);
+    expect(JSON.parse(store.getItem(PARAMS_KEY)!)).toEqual(p);
+    // the next launch reads the migrated look back unchanged
+    expect(loadLook()).toEqual(look);
+  });
+  it('round-trips and sanitizes', () => {
+    const look = splitLegacy(applyPreset('refined', 0.4));
+    saveLook(look);
+    expect(loadLook()).toEqual(look);
+    store.setItem(LOOK_KEY, JSON.stringify({ photo: { filterId: 'nope' }, person: { values: { 'skin.smooth': 7 } } }));
+    const s = loadLook();
+    expect(s.photo.filterId).toBe('none');
+    expect(s.person.values['skin.smooth']).toBe(1);
+  });
+  it('a fresh install gets the 自然 look; hasSavedSettings sees the new key', () => {
+    expect(loadLook()).toEqual(splitLegacy(defaultParams()));
+    store.clear();
+    expect(hasSavedSettings()).toBe(false);
+    store.setItem(LOOK_KEY, '{}');
+    expect(hasSavedSettings()).toBe(true);
+  });
+  it('a fresh install writes nothing: the next announceUpdate must not take it for a returning user', () => {
+    expect(loadLook()).toEqual(splitLegacy(defaultParams()));
+    expect(store.map.size).toBe(0);
+    expect(hasSavedSettings()).toBe(false);
+  });
+});
+
+describe('first group photo hint (S §1.1 item 11)', () => {
+  it('is true exactly once per install and survives a failing storage as false', () => {
+    expect(takePersonsHint()).toBe(true);
+    expect(store.getItem(PERSONS_HINT_KEY)).not.toBeNull();
+    expect(takePersonsHint()).toBe(false);
+    // storage that cannot keep the flag would repeat the hint on every photo: never shown there
+    stubThrowingGetter();
+    expect(takePersonsHint()).toBe(false);
+  });
+});
+
+describe('camera look: 調節 and 質感 (step-2 spec §5)', () => {
+  it('a migrated meiyan.params.v1 opens with neutral 調節 and no look', () => {
+    store.setItem(PARAMS_KEY, JSON.stringify(applyPreset('glow', 1)));
+    const look = loadLook();
+    const values = look.photo.values as Record<string, number>;
+    for (const d of PARAM_DEFS.filter((x) => x.group === 'adjust')) expect(values[d.id], d.id).toBe(d.bidirectional ? 0.5 : 0);
+    expect(look.photo.look).toBeNull();
+  });
+
+  it('a meiyan.look.v1 written by a step-1 build (no look, no adjust keys) or holding junk opens neutral', () => {
+    const raw = JSON.parse(JSON.stringify(loadLook())) as { photo: { values: Record<string, unknown>; look?: unknown } };
+    for (const k of Object.keys(raw.photo.values)) if (k.startsWith('adjust.')) delete raw.photo.values[k];
+    delete raw.photo.look;
+    store.setItem(LOOK_KEY, JSON.stringify(raw));
+    expect(loadLook().photo.look).toBeNull();
+    expect(loadLook().photo.values['adjust.vignette']).toBe(0);
+    raw.photo.look = { id: 'ccd', amount: 'x' };
+    raw.photo.values['adjust.exposure'] = Number.POSITIVE_INFINITY;
+    store.setItem(LOOK_KEY, JSON.stringify(raw));
+    expect(loadLook().photo.look).toBeNull();
+    expect(loadLook().photo.values['adjust.exposure']).toBe(0.5);
+  });
+
+  it('round-trips 調節 values and the look', () => {
+    const l = loadLook();
+    const styled = { ...l, photo: { ...l.photo, values: { ...l.photo.values, 'adjust.fade': 0.3 }, look: { id: 'blue' as const, amount: 0.6 } } };
+    store.setItem(LOOK_KEY, JSON.stringify(styled));
+    expect(loadLook().photo.look).toEqual({ id: 'blue', amount: 0.6 });
+    expect(loadLook().photo.values['adjust.fade']).toBe(0.3);
+  });
+});
+
+describe('export prefs and keys (step 3)', () => {
+  it('default to JPEG at full resolution; invalid values fall back to the defaults', () => {
+    expect(DEFAULT_PREFS).toMatchObject({ exportFormat: 'jpeg', exportSize: 'full' });
+    expect(sanitizePrefs({ exportFormat: 'png', exportSize: 'standard' })).toMatchObject({ exportFormat: 'png', exportSize: 'standard' });
+    expect(sanitizePrefs({ exportFormat: 'heic', exportSize: 4096 })).toMatchObject({ exportFormat: 'jpeg', exportSize: 'full' });
+  });
+
+  it('the breadcrumb is written, read with a shape check, and cleared', () => {
+    writeExportGuard({ at: 5, w: 4096, h: 3072, format: 'png' });
+    expect(EXPORT_GUARD_KEY).toBe('meiyan.exportGuard.v1');
+    expect(readExportGuard()).toEqual({ at: 5, w: 4096, h: 3072, format: 'png' });
+    clearExportGuard();
+    expect(readExportGuard()).toBeNull();
+    store.setItem(EXPORT_GUARD_KEY, '{"at":"x"}');
+    expect(readExportGuard()).toBeNull();
+  });
+
+  it('at launch a breadcrumb sets the 2048 cap once and is removed; a malformed one is removed without a cap', () => {
+    writeExportGuard({ at: 1, w: 4000, h: 3000, format: 'jpeg' });
+    expect(consumeExportGuardAtLaunch()).toBe(true);
+    expect(store.getItem(EXPORT_GUARD_KEY)).toBeNull();
+    expect(store.getItem(EXPORT_CAP_KEY)).toBe('2048');
+    expect(exportCapped()).toBe(true);
+    expect(consumeExportGuardAtLaunch()).toBe(false);
+    clearExportCap();
+    expect(exportCapped()).toBe(false);
+    store.setItem(EXPORT_GUARD_KEY, 'not json');
+    expect(consumeExportGuardAtLaunch()).toBe(false);
+    expect(store.getItem(EXPORT_GUARD_KEY)).toBeNull();
+    expect(exportCapped()).toBe(false);
+  });
+
+  it('the test knob keeps only valid fields', () => {
+    expect(readExportDebug()).toEqual({});
+    store.setItem(EXPORT_DEBUG_KEY, JSON.stringify({ tile: 256, slowMs: 4500, failAt: 'tile' }));
+    expect(readExportDebug()).toEqual({ tile: 256, slowMs: 4500, failAt: 'tile' });
+    store.setItem(EXPORT_DEBUG_KEY, JSON.stringify({ tile: 300, slowMs: -1, failAt: 'boom' }));
+    expect(readExportDebug()).toEqual({});
+  });
+
+  it('every key access survives a throwing storage', () => {
+    const boom = () => {
+      throw new Error('blocked');
+    };
+    vi.stubGlobal('localStorage', { getItem: boom, setItem: boom, removeItem: boom });
+    expect(() => writeExportGuard({ at: 1, w: 1, h: 1, format: 'jpeg' })).not.toThrow();
+    expect(consumeExportGuardAtLaunch()).toBe(false);
+    expect(exportCapped()).toBe(false);
+    expect(readExportDebug()).toEqual({});
+    expect(() => clearExportCap()).not.toThrow();
+  });
+});
+
+describe('美妝 part-list seen flag (face-detail spec §2.3)', () => {
+  it('is false until saved, then true, under its own new key', () => {
+    expect(SEEN_MAKEUP_PARTS_KEY).toBe('meiyan.seen.makeupParts.v1');
+    expect(loadMakeupPartsSeen()).toBe(false);
+    saveMakeupPartsSeen();
+    expect(store.getItem(SEEN_MAKEUP_PARTS_KEY)).toBe('true');
+    expect(loadMakeupPartsSeen()).toBe(true);
+  });
+  it('blocked storage reads as not seen and never throws', () => {
+    stubThrowingGetter();
+    expect(loadMakeupPartsSeen()).toBe(false);
+    expect(() => saveMakeupPartsSeen()).not.toThrow();
   });
 });

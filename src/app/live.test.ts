@@ -1,39 +1,47 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { splitLegacy } from '../edit/legacy';
+import { defaultPhoto, naturalPerson } from '../edit/state';
 import { applyPreset } from '../engine/params';
-import type { DebugState, Face, Prefs } from '../types';
+import { adapt } from '../tracking/adapter111';
+import type { CameraLook, DebugState, Face, Prefs, Rect } from '../types';
 import { AUTO_TIER, FACE_EASE_MS } from './liveCore';
 import { type LiveDeps, type LiveStats, autoTierSession, resetAutoTierSession, startLiveLoop } from './live';
 import {
   FakeVideo,
+  faceOf,
   fakeCamera,
   fakeEngine,
   fakeTracker,
   installWorkClock,
   makeFace,
+  makeLandmarks,
   prefs as makePrefs,
   stubRaf,
+  weightOf,
 } from './testFakes';
 
 let faceSeq = 0;
 vi.mock('../tracking/adapter111', () => ({
-  adapt: vi.fn(() => makeFace(++faceSeq)),
+  adapt: vi.fn((lm: { points: Float32Array }) => makeFace(++faceSeq, lm.points[0] > 0.5005 ? 0.75 : 0.25)),
 }));
 
 const params = applyPreset('natural');
 
-function setup(opts: { prefs?: Partial<Prefs>; tracker?: boolean; engineTier?: 'H' | 'M' | 'L'; period?: number } = {}) {
+function setup(opts: { prefs?: Partial<Prefs>; tracker?: boolean; engineTier?: 'H' | 'M' | 'L'; period?: number; faces?: number } = {}) {
+  let all = false;
   const clock = installWorkClock();
   const video = new FakeVideo();
   const camera = fakeCamera(video);
   const engine = fakeEngine(clock, opts.engineTier ?? 'M');
-  const tracker = opts.tracker === false ? null : fakeTracker(clock);
+  const tracker = opts.tracker === false ? null : fakeTracker(clock, true, opts.faces ?? 1);
   let p = makePrefs(opts.prefs);
   const stats: LiveStats[] = [];
   const deps: LiveDeps = {
     camera,
     engine,
     tracker,
-    getParams: () => params,
+    getLook: () => splitLegacy(params),
+    getAll: () => all,
     getPrefs: () => p,
     onStats: (s) => stats.push(s),
   };
@@ -49,6 +57,9 @@ function setup(opts: { prefs?: Partial<Prefs>; tracker?: boolean; engineTier?: '
     stats,
     setPrefs(over: Partial<Prefs>) {
       p = { ...p, ...over };
+    },
+    setAll(on: boolean) {
+      all = on;
     },
   };
 }
@@ -77,7 +88,7 @@ describe('frame loop basics', () => {
     const input = engine.lastInput()!;
     expect(input.width).toBe(1280);
     expect(input.height).toBe(720);
-    expect(input.params).toBe(params);
+    expect(input.photo).toEqual(splitLegacy(params).photo);
     expect(input.source).toBeDefined();
     loop.stop();
   });
@@ -114,7 +125,8 @@ describe('frame loop basics', () => {
       camera: fakeCamera(video),
       engine,
       tracker: null,
-      getParams: () => p,
+      getLook: () => splitLegacy(p),
+      getAll: () => false,
       getPrefs: () => makePrefs(),
     });
     video.play();
@@ -160,7 +172,7 @@ describe('frame loop basics', () => {
     });
     vi.advanceTimersByTime(33 * 5 + 1);
     expect(engine.render).toHaveBeenCalledTimes(5);
-    expect(engine.lastInput()!.face).toBeNull();
+    expect(faceOf(engine.lastInput())).toBeNull();
     loop.stop();
   });
 });
@@ -207,13 +219,13 @@ describe('pausing', () => {
   it('a resumed stream fades the face back in from zero', () => {
     const { engine, camera, loop } = setup();
     vi.advanceTimersByTime(33 * 10 + 1);
-    expect(engine.lastInput()!.faceWeight).toBe(1);
+    expect(weightOf(engine.lastInput())).toBe(1);
     camera.set({ state: 'interrupted' });
     camera.set({ state: 'live' });
     vi.advanceTimersByTime(33);
-    expect(engine.lastInput()!.faceWeight).toBe(0);
+    expect(weightOf(engine.lastInput())).toBe(0);
     vi.advanceTimersByTime(33 * 6);
-    expect(engine.lastInput()!.faceWeight).toBe(1);
+    expect(weightOf(engine.lastInput())).toBe(1);
     loop.stop();
   });
 });
@@ -225,7 +237,7 @@ describe('face weight easing', () => {
     const weights: number[] = [];
     for (let i = 0; i < 8; i++) {
       vi.advanceTimersByTime(33);
-      weights.push(engine.lastInput()!.faceWeight);
+      weights.push(weightOf(engine.lastInput()));
     }
     for (let i = 1; i < weights.length; i++) expect(weights[i]).toBeGreaterThanOrEqual(weights[i - 1]);
     expect(weights[0]).toBeGreaterThan(0);
@@ -240,18 +252,18 @@ describe('face weight easing', () => {
   it('holds the last face while fading out, then renders without a face', () => {
     const { engine, tracker, loop } = setup();
     vi.advanceTimersByTime(33 * 10 + 1);
-    const lastFace = engine.lastInput()!.face as Face;
+    const lastFace = faceOf(engine.lastInput()) as Face;
     expect(lastFace).not.toBeNull();
     tracker!.face = false;
     vi.advanceTimersByTime(33);
     const a = engine.lastInput()!;
-    expect(a.face).toBe(lastFace);
-    expect(a.faceWeight).toBeGreaterThan(0);
-    expect(a.faceWeight).toBeLessThan(1);
+    expect(faceOf(a)).toBe(lastFace);
+    expect(weightOf(a)).toBeGreaterThan(0);
+    expect(weightOf(a)).toBeLessThan(1);
     vi.advanceTimersByTime(33 * 5);
     const b = engine.lastInput()!;
-    expect(b.face).toBeNull();
-    expect(b.faceWeight).toBe(0);
+    expect(faceOf(b)).toBeNull();
+    expect(weightOf(b)).toBe(0);
     expect(dbg()?.face).toBe(false);
     loop.stop();
   });
@@ -260,7 +272,7 @@ describe('face weight easing', () => {
     const { engine, loop } = setup({ tracker: false });
     vi.advanceTimersByTime(33 * 10 + 1);
     expect(engine.render).toHaveBeenCalledTimes(10);
-    expect(engine.render.mock.calls.every((c) => c[0].face === null && c[0].faceWeight === 0)).toBe(true);
+    expect(engine.render.mock.calls.every((c) => faceOf(c[0]) === null && weightOf(c[0]) === 0)).toBe(true);
     loop.stop();
   });
 });
@@ -271,7 +283,7 @@ describe('tier L detection cadence', () => {
     vi.advanceTimersByTime(33 * 20 + 1);
     expect(engine.render).toHaveBeenCalledTimes(20);
     expect(tracker!.detectVideo).toHaveBeenCalledTimes(10);
-    const faces = engine.render.mock.calls.slice(10).map((c) => c[0].face);
+    const faces = engine.render.mock.calls.slice(10).map((c) => faceOf(c[0]));
     for (let i = 0; i < faces.length; i += 2) expect(faces[i + 1]).toBe(faces[i]);
     expect(faces[2]).not.toBe(faces[0]);
     loop.stop();
@@ -424,11 +436,13 @@ describe('compare and capture', () => {
     const { engine, loop } = setup();
     expect(loop.capture()).toBeNull();
     vi.advanceTimersByTime(33 * 10 + 1);
-    const img = loop.capture();
+    const img = loop.capture()?.image ?? null;
     expect(img).not.toBeNull();
     const [input, opts] = engine.renderToImageData.mock.calls[0];
-    expect(input).toMatchObject({ width: 1280, height: 720, faceWeight: 1, params });
-    expect(input.face).toBe(engine.lastInput()!.face);
+    expect(input).toMatchObject({ width: 1280, height: 720 });
+    expect(weightOf(input)).toBe(1);
+    expect(input.photo).toEqual(splitLegacy(params).photo);
+    expect(faceOf(input)).toBe(faceOf(engine.lastInput()));
     expect(opts).toEqual({ mirror: true });
     loop.stop();
   });
@@ -494,6 +508,125 @@ describe('rVFC watchdog', () => {
     video.rvfcSilent = true;
     vi.advanceTimersByTime(5000);
     expect(err).not.toHaveBeenCalled();
+    loop.stop();
+  });
+});
+
+describe('live loop on face tracks (S §3.3 Live camera, §3.4 T4)', () => {
+  it('lists every shown track: the auto face at weight 1, the other at 0 (caps only); 全部套用 beautifies both', () => {
+    const { engine, loop, setAll } = setup({ faces: 2 });
+    vi.advanceTimersByTime(600);
+    const input = engine.lastInput()!;
+    expect(input.faces.map((f) => f.weight).sort()).toEqual([0, 1]);
+    expect(input.globalSkin?.weight).toBe(0);
+    setAll(true);
+    vi.advanceTimersByTime(300);
+    expect(engine.lastInput()!.faces.map((f) => f.weight)).toEqual([1, 1]);
+    loop.stop();
+  });
+  it('select pins a track; capture returns the beautified raw box centre, or all', () => {
+    const { loop, setAll } = setup({ faces: 2 });
+    vi.advanceTimersByTime(600);
+    const right = loop.tracks().find((t) => t.box.x > 0.5)!;
+    expect(loop.hitTest(right.box.x + right.box.w / 2, 0.5, 0.01, 0.01)).toBe(right.id);
+    loop.select(right.id);
+    expect(loop.selection()).toBe(right.id);
+    vi.advanceTimersByTime(300);
+    expect(loop.capture()!.seed).toEqual({ x: right.rawBox.x + right.rawBox.w / 2, y: right.rawBox.y + right.rawBox.h / 2 });
+    setAll(true);
+    expect(loop.capture()!.seed).toBe('all');
+    loop.stop();
+  });
+  it('LiveStats.faces counts the shown tracks', () => {
+    const { stats, loop } = setup({ faces: 2 });
+    vi.advanceTimersByTime(600);
+    expect(stats.at(-1)!.faces).toBe(2);
+    loop.stop();
+  });
+  it('LiveStats.gpLeftOnLeft follows the tracked face: upright true, turned upside down false, emitted at once (S5 §3.4)', () => {
+    // the mocked adapt: points[1] = 1 marks a face turned upside down (its GPUPixel-left eye p74 right of p77)
+    const orig = vi.mocked(adapt).getMockImplementation()!;
+    vi.mocked(adapt).mockImplementation((lm) => {
+      const f = makeFace(++faceSeq, 0.25);
+      const turned = lm.points[1] === 1;
+      f.pts111.set(turned ? [0.3, 0.6] : [0.2, 0.4], 74 * 2);
+      f.pts111.set(turned ? [0.2, 0.6] : [0.3, 0.4], 77 * 2);
+      return f;
+    });
+    try {
+      const { stats, loop, tracker } = setup();
+      let turned = false;
+      tracker!.detectVideo.mockImplementation(() => {
+        const l = makeLandmarks();
+        if (turned) l.points[1] = 1;
+        return [l];
+      });
+      vi.advanceTimersByTime(600);
+      expect(stats.at(-1)!.gpLeftOnLeft).toBe(true);
+      turned = true;
+      const n = stats.length;
+      vi.advanceTimersByTime(600);
+      // emitted as soon as it changed (no 250 ms throttle), then held
+      expect(stats.slice(n).some((s) => s.gpLeftOnLeft === false)).toBe(true);
+      expect(stats.at(-1)!.gpLeftOnLeft).toBe(false);
+      loop.stop();
+    } finally {
+      vi.mocked(adapt).mockImplementation(orig);
+    }
+  });
+});
+
+describe('調節 and 質感 in the live loop (step-2 spec §2.3, §4.4–4.5)', () => {
+  const lookWith = (photo: Partial<CameraLook['photo']> = {}): CameraLook => ({
+    photo: { ...defaultPhoto(), ...photo },
+    person: naturalPerson(),
+  });
+
+  it('reads the picture frame every frame; the grain seed advances once per drawn frame, not on redraw; capture uses it', () => {
+    const clock = installWorkClock();
+    const video = new FakeVideo();
+    const engine = fakeEngine(clock);
+    let frame: Rect = { x: 0.25, y: 0, w: 0.5, h: 1 };
+    const look = lookWith();
+    const loop = startLiveLoop({
+      camera: fakeCamera(video),
+      engine,
+      tracker: null,
+      getLook: () => look,
+      getAll: () => false,
+      getPrefs: () => makePrefs(),
+      getFrame: () => frame,
+    });
+    video.play();
+    vi.advanceTimersByTime(33 * 4 + 1);
+    const seeds = engine.render.mock.calls.map(([i]) => i.grainSeed!);
+    expect(seeds.length).toBeGreaterThanOrEqual(2);
+    for (let i = 1; i < seeds.length; i++) expect(seeds[i]).toBe(seeds[i - 1] + 1);
+    expect(engine.lastInput()!.pictureFrame).toEqual(frame);
+    frame = { x: 0, y: 0.2, w: 1, h: 0.6 }; // ratio change: the vignette follows at once
+    vi.advanceTimersByTime(33);
+    expect(engine.lastInput()!.pictureFrame).toEqual(frame);
+    const seed = engine.lastInput()!.grainSeed;
+    loop.setCompare(true);
+    loop.setCompare(false); // a redraw of the same video frame keeps its grain
+    expect(engine.lastInput()!.grainSeed).toBe(seed);
+    expect(loop.capture()).not.toBeNull();
+    const [shot] = engine.renderToImageData.mock.calls.at(-1)!;
+    expect(shot.grainSeed).toBe(seed);
+    expect(shot.pictureFrame).toEqual(frame);
+    loop.stop();
+  });
+
+  it('requests the 質感 LUT with the 濾鏡 LUT, once each', () => {
+    const clock = installWorkClock();
+    const video = new FakeVideo();
+    const engine = fakeEngine(clock);
+    const look = lookWith({ filterId: 'warm', look: { id: 'ccd', amount: 0.8 } });
+    const loop = startLiveLoop({ camera: fakeCamera(video), engine, tracker: null, getLook: () => look, getAll: () => false, getPrefs: () => makePrefs() });
+    video.play();
+    vi.advanceTimersByTime(33 * 5 + 1);
+    expect(engine.loadLut.mock.calls.filter(([k, id]) => k === 'filter' && id === 'warm')).toHaveLength(1);
+    expect(engine.loadLut.mock.calls.filter(([k, id]) => k === 'look' && id === 'ccd')).toHaveLength(1);
     loop.stop();
   });
 });

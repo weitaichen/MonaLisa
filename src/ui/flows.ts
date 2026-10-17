@@ -1,10 +1,12 @@
 // Multi-step user flows shared by several screens.
-import type { BeautyParams } from '../types';
+import { importEdit, openState } from '../edit/migrate';
+import type { EditState, FaceSeed, HistoryEntry } from '../types';
 import { reportError } from './debug';
 import { deps } from './deps';
 import { app, go, toast, type EditorSource } from './state';
 
-function maxImportEdge(): number {
+/** the working copy's long edge an import or a reopen decodes at; also the edge 設定 names for 標準 (C D6) */
+export function maxImportEdge(): number {
   // RB §4: long edge 2048, 1440 on tier L. 'auto' means the tier the live loop settled on this session
   // (H until the camera has run, so an import before that still decodes at 2048).
   const pref = app.get().prefs.tier;
@@ -12,30 +14,39 @@ function maxImportEdge(): number {
   return tier === 'L' ? 1440 : 2048;
 }
 
-/** Decode a photo (file or history original) and open it in the editor. */
-export async function openInEditor(
-  blob: Blob,
-  opts: {
-    params?: BeautyParams;
-    historyId?: string | null;
-    body?: EditorSource['body'];
-    faceProtect?: EditorSource['faceProtect'];
-    faceMask?: EditorSource['faceMask'];
-    returnTo: EditorSource['returnTo'];
-  },
-): Promise<void> {
+/** A new photo's editor source (an import or a camera shot): nothing cached (the editor detects once, sessionPlan). */
+export function freshSource(bitmap: ImageBitmap, edit: EditState, returnTo: EditorSource['returnTo'], faceSeed: FaceSeed = null): EditorSource {
+  return { bitmap, edit, historyId: null, detect: null, rematch: null, v1Body: null, cacheDropped: false, faceSeed, frame: { width: bitmap.width, height: bitmap.height }, returnTo };
+}
+
+/**
+ * Decode a photo (file or history original) and open it in the editor; an entry goes through openState (S §5.3).
+ * `picked`: a file the user just picked, decoded with its oriented size so the Editor can decide to keep it (S §3.7);
+ * a reopen carries the entry's kept source.
+ */
+export async function openInEditor(blob: Blob, opts: { entry?: HistoryEntry | null; returnTo: EditorSource['returnTo']; picked?: boolean }): Promise<void> {
   app.set({ busy: '正在開啟照片…' });
   try {
-    const bitmap = await deps.importPhoto(blob, maxImportEdge());
-    const source: EditorSource = {
-      bitmap,
-      params: opts.params ?? app.get().params,
-      historyId: opts.historyId ?? null,
-      returnTo: opts.returnTo,
-    };
-    if (opts.body !== undefined) source.body = opts.body;
-    if (opts.faceProtect === true) source.faceProtect = true;
-    if (opts.faceMask) source.faceMask = opts.faceMask;
+    let bitmap: ImageBitmap;
+    let oriented: { width: number; height: number } | null = null;
+    if (opts.picked) {
+      const info = await deps.importPhotoInfo(blob, maxImportEdge());
+      bitmap = info.bitmap;
+      oriented = info.oriented;
+    } else bitmap = await deps.importPhoto(blob, maxImportEdge());
+    const entry = opts.entry ?? null;
+    let source: EditorSource;
+    if (entry) {
+      const o = openState(entry, { width: bitmap.width, height: bitmap.height });
+      source = { ...freshSource(bitmap, o.edit, opts.returnTo), historyId: entry.id, detect: o.detect, rematch: o.rematch, v1Body: o.v1Body, cacheDropped: o.cacheDropped, frame: o.frame };
+      if (entry.faceProtect === true) source.faceProtect = true;
+      if (entry.faceMask) source.faceMask = entry.faceMask;
+    } else source = freshSource(bitmap, importEdit(app.get().look), opts.returnTo);
+    if (entry) source.source = { blob: entry.source ?? null, width: entry.sourceWidth ?? null, height: entry.sourceHeight ?? null };
+    else if (opts.picked && oriented) {
+      source.picked = blob as File;
+      source.source = { blob: null, width: oriented.width, height: oriented.height };
+    }
     go({ name: 'editor', source });
   } catch (e) {
     toast(`無法開啟照片：${reportError(e, 'importPhoto')}`, 4000);

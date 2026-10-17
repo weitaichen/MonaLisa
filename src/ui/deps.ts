@@ -6,11 +6,13 @@ import { createStillSession } from '../app/still';
 import { ENGINE_PATHS, loadEngineAssets, loadPoseModel, loadSegmenterModel } from '../engine/assets';
 import { createEngine, isWebGL2Supported } from '../engine/index';
 import { createCamera } from '../media/camera';
-import { encodeJpeg, saveFile, toJpegBlob } from '../media/exporter';
-import { importPhoto } from '../media/importer';
+import { encodeJpeg, encodeOutput, encodePng, saveFile, toJpegBlob } from '../media/exporter';
+import { runTiledExport } from '../media/exportFull';
+import { shouldKeepSource } from '../media/exportPlan';
+import { importPhoto, importPhotoInfo } from '../media/importer';
 import { addEntry, deleteEntry, getEntry, listEntries, updateEntry } from '../store/history';
-import { loadParams, loadPrefs, saveParams, savePrefs } from '../store/settings';
-import { UndoStack } from '../store/undo';
+import { clearExportCap, consumeExportGuardAtLaunch, exportCapped, loadLook, loadPrefs, readExportDebug, saveLook, savePrefs } from '../store/settings';
+import { UndoStack, type UndoOptions } from '../store/undo';
 import type { PersonSegmenter, PersonSegmenterOptions } from '../tracking/segmenter';
 import type { BodyTracker, BodyTrackerOptions, Tracker, TrackerOptions } from '../types';
 
@@ -32,6 +34,7 @@ export interface UndoLike<T> {
   push(state: T): void;
   undo(): T | null;
   redo(): T | null;
+  rebase(fn: (s: T) => T): void;
   readonly current: T | null;
   readonly canUndo: boolean;
   readonly canRedo: boolean;
@@ -49,19 +52,28 @@ export const deps = {
   createPersonSegmenter,
   createCamera,
   importPhoto,
+  importPhotoInfo,
   encodeJpeg,
+  encodeOutput,
+  encodePng,
   toJpegBlob,
   saveFile,
+  shouldKeepSource,
+  runTiledExport,
   addEntry,
   updateEntry,
   listEntries,
   getEntry,
   deleteEntry,
-  loadParams,
-  saveParams,
+  loadLook,
+  saveLook,
   loadPrefs,
   savePrefs,
-  createUndo: <T>(limit?: number): UndoLike<T> => new UndoStack<T>(limit),
+  consumeExportGuardAtLaunch,
+  exportCapped,
+  clearExportCap,
+  readExportDebug,
+  createUndo: <T>(limit?: number, opts?: UndoOptions<T>): UndoLike<T> => new UndoStack<T>(limit, opts),
   startLiveLoop,
   autoTierSession,
   createStillSession,

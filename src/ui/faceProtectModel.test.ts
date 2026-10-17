@@ -4,23 +4,26 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { loadPoseFixture } from '../body/fixtures.node';
 import { addEntry, closeHistory, getEntry, updateEntry } from '../store/history';
-import { adapt } from '../tracking/adapter111';
+import { adapt, blankEyes } from '../tracking/adapter111';
 import { buildFaceProtect } from '../tracking/faceProtect';
-import { applyPreset, setParam } from '../engine/params';
+import { applyPreset, sanitizeParams, setParam } from '../engine/params';
+import { editFromLegacy, legacyProjection } from '../edit/legacy';
+import { stableKey } from '../store/undo';
 import { SegmenterContextLostError } from '../tracking/segmenter';
 import type { BeautyParams, Face, FaceProtect, PersonMask } from '../types';
 import {
   CONTOUR_IDS,
-  contourActive,
+  contourActiveValues,
   FaceProtectSource,
   isContourEdit,
   maskCoversFace,
   paramsPatch,
   PROTECT_WAIT_MS,
   type FaceProtectDeps,
+  type ProtectRequest,
 } from './faceProtectModel';
 
-const face = (): Face => ({ pts111: new Float32Array(222), ext: new Float32Array(16), oval: new Float32Array(72), yaw: 0 });
+const face = (): Face => ({ pts111: new Float32Array(222), ext: new Float32Array(16), oval: new Float32Array(72), yaw: 0, ...blankEyes() });
 const mask = (): PersonMask => ({ width: 1, height: 1, data: new Uint8Array(1) });
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -42,21 +45,33 @@ function harness(
     now: vi.fn(() => 1000),
     cancelled: vi.fn(() => false),
     report: vi.fn(),
+    schedule: vi.fn((fn: () => void) => fn()),
   } satisfies FaceProtectDeps;
   const changed = vi.fn();
   return { deps, changed, built, src: new FaceProtectSource(deps, changed, savedMask, requested) };
 }
 
-describe('contourActive', () => {
+const NO_OTHERS: ProtectRequest['others'] = { otherCentres: [], otherOvals: [], otherMasks: [], window: null };
+/**
+ * One face, 'f0', alone (no other face, obstacle or person, no window), through updateAll as the editor's protect
+ * effect calls it (protectRequests); no face found yet: no request. Returns its limit, null = unlimited.
+ */
+function one(src: FaceProtectSource, f: Face | null, contour: boolean, pose: PersonMask | null, requested: boolean): FaceProtect | null {
+  return src.updateAll(f ? [{ id: 'f0', face: f, contour, pose, others: NO_OTHERS }] : [], requested).get('f0') ?? null;
+}
+/** what the editor hands record(): the limits drawn, by face id */
+const drawnBy = (p: FaceProtect | null): ReadonlyMap<string, FaceProtect> | null => (p ? new Map([['f0', p]]) : null);
+
+describe('contourActiveValues', () => {
   const original = applyPreset('original', 1);
   it('is true only when a contour warp (瘦臉 / V臉 / 窄臉 / 下巴 / 額頭) is off neutral', () => {
-    expect(contourActive(original)).toBe(false);
-    expect(contourActive(setParam(original, 'shape.eyeEnlarge', 1))).toBe(false);
-    expect(contourActive(setParam(original, 'shape.noseSlim', 1))).toBe(false);
-    for (const id of ['shape.faceSlim', 'shape.faceV', 'shape.faceNarrow'] as const) expect(contourActive(setParam(original, id, 0.3))).toBe(true);
-    expect(contourActive(setParam(original, 'shape.chin', 0.2))).toBe(true);
-    expect(contourActive(setParam(original, 'shape.forehead', 0.8))).toBe(true);
-    expect(contourActive(applyPreset('natural', 1))).toBe(true); // 自然 uses light 瘦臉 / V臉
+    expect(contourActiveValues(original.values)).toBe(false);
+    expect(contourActiveValues(setParam(original, 'shape.eyeEnlarge', 1).values)).toBe(false);
+    expect(contourActiveValues(setParam(original, 'shape.noseSlim', 1).values)).toBe(false);
+    for (const id of ['shape.faceSlim', 'shape.faceV', 'shape.faceNarrow'] as const) expect(contourActiveValues(setParam(original, id, 0.3).values)).toBe(true);
+    expect(contourActiveValues(setParam(original, 'shape.chin', 0.2).values)).toBe(true);
+    expect(contourActiveValues(setParam(original, 'shape.forehead', 0.8).values)).toBe(true);
+    expect(contourActiveValues(applyPreset('natural', 1).values)).toBe(true); // 自然 uses light 瘦臉 / V臉
   });
 });
 
@@ -132,17 +147,17 @@ describe('FaceProtectSource', () => {
     const h = harness();
     const f = face();
     const natural = applyPreset('natural', 1);
-    expect(contourActive(natural)).toBe(true);
-    expect(h.src.update(f, contourActive(natural), null, false)).toBeNull(); // photo import, preset, undo, reopen
+    expect(contourActiveValues(natural.values)).toBe(true);
+    expect(one(h.src, f, contourActiveValues(natural.values), null, false)).toBeNull(); // photo import, preset, undo, reopen
     await flush();
     expect(h.src.segPhase).toBe('idle');
     expect(h.deps.segmenter).not.toHaveBeenCalled();
     expect(h.changed).not.toHaveBeenCalled(); // nothing re-renders on its own
-    expect(h.src.update(f, true, null, true)).toBeNull(); // the user dragged 瘦臉
+    expect(one(h.src, f, true, null, true)).toBeNull(); // the user dragged 瘦臉
     expect(h.src.segPhase).toBe('working');
     await flush();
     expect(h.deps.segmenter).toHaveBeenCalledTimes(1);
-    expect(h.src.update(f, true, null, true)).not.toBeNull();
+    expect(one(h.src, f, true, null, true)).not.toBeNull();
   });
 
   it('an export waits for a segmentation in flight, at most PROTECT_WAIT_MS from its start (K12)', async () => {
@@ -151,9 +166,9 @@ describe('FaceProtectSource', () => {
     h.deps.segmenter.mockImplementationOnce(() => new Promise((r) => (release = r)));
     const f = face();
     expect(h.src.outputHoldMs()).toBe(0); // nothing in flight
-    h.src.update(f, true, null, false);
+    one(h.src, f, true, null, false);
     expect(h.src.outputHoldMs()).toBe(0); // the default look alone starts nothing to wait for
-    h.src.update(f, true, null, true); // started at now() = 1000
+    one(h.src, f, true, null, true); // started at now() = 1000
     expect(h.src.outputHoldMs()).toBe(PROTECT_WAIT_MS);
     h.deps.now.mockReturnValue(1000 + PROTECT_WAIT_MS - 300);
     expect(h.src.outputHoldMs()).toBe(300);
@@ -171,17 +186,17 @@ describe('FaceProtectSource', () => {
     const f = face();
     const foreign = mask();
     h.deps.covers.mockReturnValue(false);
-    expect(h.src.update(f, true, foreign, false)).toBeNull(); // not the bare oval: today's unlimited warp
+    expect(one(h.src, f, true, foreign, false)).toBeNull(); // not the bare oval: today's unlimited warp
     expect(h.deps.build).not.toHaveBeenCalled();
     expect(h.deps.segmenter).not.toHaveBeenCalled(); // still only on the user's contour edit
-    h.src.update(f, true, foreign, true);
+    one(h.src, f, true, foreign, true);
     expect(h.src.segPhase).toBe('working');
     await flush();
-    const p = h.src.update(f, true, foreign, true);
+    const p = one(h.src, f, true, foreign, true);
     expect(p).not.toBeNull();
     expect(h.built).toHaveLength(1);
     expect(h.built[0].mask).not.toBe(foreign); // the segmenter's
-    h.src.update(f, true, foreign, true);
+    one(h.src, f, true, foreign, true);
     expect(h.deps.covers).toHaveBeenCalledTimes(1); // the verdict is cached per (face, mask)
   });
 
@@ -190,15 +205,15 @@ describe('FaceProtectSource', () => {
     h.deps.covers.mockReturnValue(false);
     const f = face();
     const foreign = mask();
-    h.src.update(f, true, foreign, true);
+    one(h.src, f, true, foreign, true);
     await flush();
-    expect(h.src.update(f, true, foreign, true)).toBeNull();
+    expect(one(h.src, f, true, foreign, true)).toBeNull();
     expect(h.deps.build).not.toHaveBeenCalled();
   });
 
   it('a 美體 mask without the request is not used: the default look stays unlimited (L2)', () => {
     const h = harness();
-    expect(h.src.update(face(), true, mask(), false)).toBeNull();
+    expect(one(h.src, face(), true, mask(), false)).toBeNull();
     expect(h.deps.build).not.toHaveBeenCalled();
     expect(h.deps.covers).not.toHaveBeenCalled();
     expect(h.deps.segmenter).not.toHaveBeenCalled();
@@ -206,16 +221,16 @@ describe('FaceProtectSource', () => {
 
   it('with the request, a 美體 mask is used as is and no segmenter loads', () => {
     const h = harness();
-    expect(h.src.update(face(), true, mask(), true)).not.toBeNull();
+    expect(one(h.src, face(), true, mask(), true)).not.toBeNull();
     expect(h.deps.segmenter).not.toHaveBeenCalled();
   });
 
   it('a 美體 detection landing live on the 自然 default (no contour edit) changes nothing shown (L2)', () => {
     const h = harness();
     const f = face();
-    const natural = contourActive(applyPreset('natural', 1));
-    expect(h.src.update(f, natural, null, false)).toBeNull(); // import: 自然 drawn unlimited
-    expect(h.src.update(f, natural, mask(), false)).toBeNull(); // the user opened 美體, the pose model finished
+    const natural = contourActiveValues(applyPreset('natural', 1).values);
+    expect(one(h.src, f, natural, null, false)).toBeNull(); // import: 自然 drawn unlimited
+    expect(one(h.src, f, natural, mask(), false)).toBeNull(); // the user opened 美體, the pose model finished
     expect(h.deps.build).not.toHaveBeenCalled();
     expect(h.changed).not.toHaveBeenCalled();
     expect(h.src.outputHoldMs()).toBe(0); // nothing re-arms the export either
@@ -223,7 +238,7 @@ describe('FaceProtectSource', () => {
 
   it('no face → no limit and no segmenter', () => {
     const h = harness();
-    expect(h.src.update(null, true, mask(), false)).toBeNull();
+    expect(one(h.src, null, true, mask(), false)).toBeNull();
     expect(h.deps.segmenter).not.toHaveBeenCalled();
   });
 
@@ -231,13 +246,13 @@ describe('FaceProtectSource', () => {
     const h = harness();
     const f = face();
     const m = mask();
-    expect(h.src.update(f, false, m, true)).toBeNull(); // no contour warp drawn
+    expect(one(h.src, f, false, m, true)).toBeNull(); // no contour warp drawn
     expect(h.deps.build).not.toHaveBeenCalled();
-    const p = h.src.update(f, true, m, true);
+    const p = one(h.src, f, true, m, true);
     expect(p).not.toBeNull();
     expect(h.built).toEqual([{ face: f, mask: m }]);
-    expect(h.src.update(f, true, m, true)).toBe(p); // unchanged inputs: same object, no rebuild
-    expect(h.src.update(f, false, m, true)).toBe(p); // sliders back to neutral (undo / 重置): kept (no effect there)
+    expect(one(h.src, f, true, m, true)).toBe(p); // unchanged inputs: same object, no rebuild
+    expect(one(h.src, f, false, m, true)).toBe(p); // sliders back to neutral (undo / 重置): kept (no effect there)
     expect(h.deps.build).toHaveBeenCalledTimes(1);
     expect(h.deps.segmenter).not.toHaveBeenCalled();
   });
@@ -245,9 +260,9 @@ describe('FaceProtectSource', () => {
   it('a new face (re-detection) rebuilds from the same mask', () => {
     const h = harness();
     const m = mask();
-    const p1 = h.src.update(face(), true, m, true);
+    const p1 = one(h.src, face(), true, m, true);
     const f2 = face();
-    const p2 = h.src.update(f2, false, m, true);
+    const p2 = one(h.src, f2, false, m, true);
     expect(p2).not.toBe(p1);
     expect(h.built[1].face).toBe(f2);
   });
@@ -255,30 +270,30 @@ describe('FaceProtectSource', () => {
   it('without a 美體 mask: the segmenter runs once, only when a contour warp is drawn, then the limit is built', async () => {
     const h = harness();
     const f = face();
-    expect(h.src.update(f, false, null, true)).toBeNull();
+    expect(one(h.src, f, false, null, true)).toBeNull();
     expect(h.deps.segmenter).not.toHaveBeenCalled();
-    expect(h.src.update(f, true, null, true)).toBeNull(); // unlimited until the mask arrives
+    expect(one(h.src, f, true, null, true)).toBeNull(); // unlimited until the mask arrives
     expect(h.src.segPhase).toBe('working');
-    h.src.update(f, true, null, true);
+    one(h.src, f, true, null, true);
     await flush();
     expect(h.deps.segmenter).toHaveBeenCalledTimes(1);
     expect(h.deps.pause).toHaveBeenCalledTimes(1);
     expect(h.changed).toHaveBeenCalledTimes(1);
     expect(h.src.segPhase).toBe('done');
-    const p = h.src.update(f, true, null, true);
+    const p = one(h.src, f, true, null, true);
     expect(p).not.toBeNull();
-    expect(h.src.update(f, true, null, true)).toBe(p);
+    expect(one(h.src, f, true, null, true)).toBe(p);
     expect(h.deps.segmenter).toHaveBeenCalledTimes(1);
   });
 
   it('a 美體 mask arriving later replaces the segmenter one', async () => {
     const h = harness();
     const f = face();
-    h.src.update(f, true, null, true);
+    one(h.src, f, true, null, true);
     await flush();
-    const p1 = h.src.update(f, true, null, true);
+    const p1 = one(h.src, f, true, null, true);
     const body = mask();
-    const p2 = h.src.update(f, true, body, true);
+    const p2 = one(h.src, f, true, body, true);
     expect(p2).not.toBe(p1);
     expect(h.built[1].mask).toBe(body);
   });
@@ -298,11 +313,11 @@ describe('FaceProtectSource', () => {
     for (const [seg, reports] of cases) {
       const h = harness(seg);
       const f = face();
-      h.src.update(f, true, null, true);
+      one(h.src, f, true, null, true);
       await flush();
-      expect(h.src.update(f, true, null, true)).toBeNull();
+      expect(one(h.src, f, true, null, true)).toBeNull();
       expect(h.deps.build).not.toHaveBeenCalled();
-      h.src.update(f, true, null, true);
+      one(h.src, f, true, null, true);
       await flush();
       expect(h.deps.segmenter).toHaveBeenCalledTimes(1);
       expect(h.deps.report).toHaveBeenCalledTimes(reports);
@@ -319,10 +334,10 @@ describe('FaceProtectSource', () => {
       });
       const h = harness({ segment });
       const f = face();
-      h.src.update(f, true, null, true);
+      one(h.src, f, true, null, true);
       await flush();
       await flush();
-      expect(h.src.update(f, true, null, true)).toBeNull();
+      expect(one(h.src, f, true, null, true)).toBeNull();
       expect(h.src.segPhase).toBe('failed');
       expect(h.deps.build).not.toHaveBeenCalled();
       expect(h.deps.report).not.toHaveBeenCalled();
@@ -330,7 +345,7 @@ describe('FaceProtectSource', () => {
       // one retry, never a loop: two asks, two segmentations, and nothing more for this photo
       expect(h.deps.segmenter).toHaveBeenCalledTimes(2);
       expect(segment).toHaveBeenCalledTimes(2);
-      h.src.update(f, true, null, true);
+      one(h.src, f, true, null, true);
       await flush();
       expect(h.deps.segmenter).toHaveBeenCalledTimes(2);
       expect(h.changed).toHaveBeenCalledTimes(1);
@@ -353,7 +368,7 @@ describe('FaceProtectSource', () => {
       h.deps.segmenter.mockReset();
       h.deps.segmenter.mockResolvedValueOnce(lostOne).mockResolvedValueOnce(fresh);
       const f = face();
-      h.src.update(f, true, null, true);
+      one(h.src, f, true, null, true);
       await flush();
       await flush();
       expect(h.deps.segmenter).toHaveBeenCalledTimes(2);
@@ -362,10 +377,11 @@ describe('FaceProtectSource', () => {
       expect(fresh.segment).toHaveBeenCalledTimes(1);
       expect(h.src.segPhase).toBe('done');
       expect(h.changed).toHaveBeenCalledTimes(1);
-      expect(h.src.update(f, true, null, true)).not.toBeNull();
+      const drawn = one(h.src, f, true, null, true);
+      expect(drawn).not.toBeNull();
       expect(h.built).toEqual([{ face: f, mask: m }]);
       expect(h.deps.report).not.toHaveBeenCalled();
-      expect(h.src.record(h.src.protect)).toEqual({ faceProtect: true, faceMask: m });
+      expect(h.src.record(drawnBy(drawn))).toEqual({ faceProtect: true, faceMask: m });
     } finally {
       warn.mockRestore();
     }
@@ -384,12 +400,12 @@ describe('FaceProtectSource', () => {
         })
         .mockResolvedValueOnce(null);
       const f = face();
-      h.src.update(f, true, null, true);
+      one(h.src, f, true, null, true);
       await flush();
       await flush();
       expect(h.deps.segmenter).toHaveBeenCalledTimes(2);
       expect(h.src.segPhase).toBe('failed');
-      expect(h.src.update(f, true, null, true)).toBeNull();
+      expect(one(h.src, f, true, null, true)).toBeNull();
       expect(h.deps.report).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
@@ -405,7 +421,7 @@ describe('FaceProtectSource', () => {
           throw new SegmenterContextLostError();
         },
       });
-      h.src.update(face(), true, null, true);
+      one(h.src, face(), true, null, true);
       await flush();
       await flush();
       expect(h.deps.segmenter).toHaveBeenCalledTimes(1);
@@ -421,7 +437,7 @@ describe('FaceProtectSource', () => {
         throw new Error('abort');
       },
     });
-    h.src.update(face(), true, null, true);
+    one(h.src, face(), true, null, true);
     await flush();
     await flush();
     expect(h.deps.segmenter).toHaveBeenCalledTimes(1);
@@ -433,16 +449,49 @@ describe('FaceProtectSource', () => {
     h.deps.build.mockImplementationOnce(() => {
       throw new Error('bad mask');
     });
-    expect(h.src.update(face(), true, mask(), true)).toBeNull();
+    expect(one(h.src, face(), true, mask(), true)).toBeNull();
     expect(h.deps.report).toHaveBeenCalledWith(expect.any(Error), 'buildFaceProtect');
   });
 
   it('a closed editor drops a late segmentation without notifying', async () => {
     const h = harness();
     h.deps.cancelled.mockReturnValue(true);
-    h.src.update(face(), true, null, true);
+    one(h.src, face(), true, null, true);
     await flush();
     expect(h.changed).not.toHaveBeenCalled();
+  });
+});
+
+describe('FaceProtectSource per face (F1)', () => {
+  // ≥ 2 faces: the others are listed and each face has a window, so the regions form of build is used
+  const others = { otherCentres: [[0.9, 0.5]] as [number, number][], otherOvals: [], otherMasks: [], window: { x: 0, y: 0, w: 0.5, h: 0.5 } };
+  const req = (id: string, f: Face, contour: boolean, pose: PersonMask) => ({ id, face: f, contour, pose, others });
+  it('builds only the faces whose person draws a contour warp, at most one per call; the rest follow on schedule', () => {
+    const h = harness();
+    const [A, B, m] = [face(), face(), mask()];
+    const r1 = h.src.updateAll([req('f0', A, true, m), req('f1', B, true, m)], true);
+    expect(r1.size).toBe(1);
+    expect(h.built).toHaveLength(1);
+    expect(h.deps.schedule).toHaveBeenCalledTimes(1);
+    expect(h.changed).toHaveBeenCalledTimes(1); // the fake schedule runs at once: the editor calls updateAll again
+    const r2 = h.src.updateAll([req('f0', A, true, m), req('f1', B, true, m)], true);
+    expect(r2.size).toBe(2);
+    expect(h.built).toHaveLength(2);
+    expect(h.src.updateAll([req('f0', A, true, m), req('f1', B, false, m)], true).size).toBe(2); // kept once built
+    expect(h.built).toHaveLength(2);
+  });
+  it('a contour edit on person 2 builds only f1; repeating the same requests rebuilds nothing', () => {
+    const h = harness();
+    const [A, B, m] = [face(), face(), mask()];
+    h.src.updateAll([req('f0', A, false, m), req('f1', B, true, m)], true);
+    expect(h.built).toHaveLength(1);
+    h.src.updateAll([req('f0', A, false, m), req('f1', B, true, m)], true);
+    expect(h.built).toHaveLength(1);
+  });
+  it('record stays photo-level: requested and drawn → true with any limit', () => {
+    const h = harness();
+    const drawn = h.src.updateAll([req('f0', face(), true, mask())], true);
+    expect(h.src.record(drawn).faceProtect).toBe(true);
   });
 });
 
@@ -451,49 +500,49 @@ describe('FaceProtectSource.record → reopen (L1: a reopened entry draws what w
     const h = harness();
     const f = face();
     expect(h.src.record(null)).toEqual({ faceProtect: false }); // the unlimited default: never requested
-    h.src.update(f, true, null, false);
+    one(h.src, f, true, null, false);
     expect(h.src.record(null)).toEqual({ faceProtect: false });
-    h.src.update(f, true, null, true);
+    one(h.src, f, true, null, true);
     // a segmentation still in flight: drawn unlimited for now, but requested (a reopen segments again)
     expect(h.src.record(null)).toEqual({ faceProtect: true });
     await flush();
-    const p = h.src.update(f, true, null, true)!;
+    const p = one(h.src, f, true, null, true)!;
     const segMask = h.built[0].mask;
-    expect(h.src.record(p)).toEqual({ faceProtect: true, faceMask: segMask });
+    expect(h.src.record(drawnBy(p))).toEqual({ faceProtect: true, faceMask: segMask });
     // a 美體 mask took over: limited, but its mask is cached with the detection, not here
     const body = mask();
-    const p2 = h.src.update(f, true, body, true)!;
-    expect(h.src.record(p2)).toEqual({ faceProtect: true });
+    const p2 = one(h.src, f, true, body, true)!;
+    expect(h.src.record(drawnBy(p2))).toEqual({ faceProtect: true });
   });
 
   it('a failed segmentation records "unlimited" (what that output was): the reopen stays unlimited', async () => {
     const h = harness(null);
     const f = face();
-    h.src.update(f, true, null, true);
+    one(h.src, f, true, null, true);
     await flush();
-    const drawn = h.src.update(f, true, null, true);
+    const drawn = one(h.src, f, true, null, true);
     expect(drawn).toBeNull();
-    expect(h.src.record(drawn)).toEqual({ faceProtect: false });
+    expect(h.src.record(drawnBy(drawn))).toEqual({ faceProtect: false });
     // nobody found: the same
     const n = harness({ segment: () => null });
-    n.src.update(f, true, null, true);
+    one(n.src, f, true, null, true);
     await flush();
-    expect(n.src.update(f, true, null, true)).toBeNull();
+    expect(one(n.src, f, true, null, true)).toBeNull();
     expect(n.src.record(null)).toEqual({ faceProtect: false });
   });
 
   it('the request is recorded while the limit cannot act yet (M1 / M3): neutral contour, no face, 基本模式', () => {
     // a reopened entry saved with the request and its mask, every contour slider neutral: nothing to limit yet
     const h = harness(undefined, mask(), true);
-    expect(h.src.update(face(), false, null, false)).toBeNull();
+    expect(one(h.src, face(), false, null, false)).toBeNull();
     expect(h.src.record(null)).toEqual({ faceProtect: true });
     // no face found on the reopen (or 基本模式: no tracker): the same
     const g = harness(undefined, mask(), true);
-    expect(g.src.update(null, true, null, false)).toBeNull();
+    expect(one(g.src, null, true, null, false)).toBeNull();
     expect(g.src.record(null)).toEqual({ faceProtect: true });
     // flagged without a saved mask (the 美體 one built it), before the 美體 cache has been read
     const b = harness(undefined, null, true);
-    expect(b.src.update(null, true, null, false)).toBeNull();
+    expect(one(b.src, null, true, null, false)).toBeNull();
     expect(b.src.record(null)).toEqual({ faceProtect: true });
   });
 
@@ -503,30 +552,30 @@ describe('FaceProtectSource.record → reopen (L1: a reopened entry draws what w
     h.src.request(); // the drag, before its effect ran
     expect(h.src.requested).toBe(true);
     expect(h.src.record(null)).toEqual({ faceProtect: true });
-    h.src.update(f, false, null, false); // undo back to neutral: the caller's flag is not consulted any more
+    one(h.src, f, false, null, false); // undo back to neutral: the caller's flag is not consulted any more
     expect(h.src.record(null)).toEqual({ faceProtect: true });
-    expect(h.src.update(f, true, null, false)).toBeNull(); // still requested: segments
+    expect(one(h.src, f, true, null, false)).toBeNull(); // still requested: segments
     expect(h.src.segPhase).toBe('working');
     await flush();
-    expect(h.src.update(f, true, null, false)).not.toBeNull();
+    expect(one(h.src, f, true, null, false)).not.toBeNull();
   });
 
   it('a reopened entry saved with the segmenter mask: the limit at once (before the first frame), no model, no hold', () => {
     const saved = mask();
     const h = harness(undefined, saved);
     const f = face();
-    const p = h.src.update(f, true, null, true); // requested by the entry's faceProtect flag, no edit
+    const p = one(h.src, f, true, null, true); // requested by the entry's faceProtect flag, no edit
     expect(p).not.toBeNull();
     expect(h.built).toEqual([{ face: f, mask: saved }]);
     expect(h.deps.segmenter).not.toHaveBeenCalled();
     expect(h.src.outputHoldMs()).toBe(0);
-    expect(h.src.record(p)).toEqual({ faceProtect: true, faceMask: saved });
+    expect(h.src.record(drawnBy(p))).toEqual({ faceProtect: true, faceMask: saved });
   });
 
   it('a reopened entry with the flag and a covering 美體 cache builds at once from it', () => {
     const h = harness();
     const body = mask();
-    const p = h.src.update(face(), true, body, true);
+    const p = one(h.src, face(), true, body, true);
     expect(p).not.toBeNull();
     expect(h.built[0].mask).toBe(body);
     expect(h.deps.segmenter).not.toHaveBeenCalled();
@@ -535,19 +584,19 @@ describe('FaceProtectSource.record → reopen (L1: a reopened entry draws what w
   it('a reopened entry with the flag but no saved mask and no 美體: segments without any edit, the encode holds meanwhile', async () => {
     const h = harness();
     const f = face();
-    expect(h.src.update(f, true, null, true)).toBeNull();
+    expect(one(h.src, f, true, null, true)).toBeNull();
     expect(h.src.segPhase).toBe('working');
     expect(h.src.outputHoldMs()).toBeGreaterThan(0); // the share-cache encode waits for the limit (K12)
     await flush();
-    expect(h.src.update(f, true, null, true)).not.toBeNull();
+    expect(one(h.src, f, true, null, true)).not.toBeNull();
   });
 
   it('an entry saved unlimited (no flag): a saved mask alone applies nothing until a contour edit', () => {
     const h = harness(undefined, mask());
     const f = face();
-    expect(h.src.update(f, true, null, false)).toBeNull();
+    expect(one(h.src, f, true, null, false)).toBeNull();
     expect(h.deps.build).not.toHaveBeenCalled();
-    expect(h.src.update(f, true, null, true)).not.toBeNull(); // the edit: no model needed
+    expect(one(h.src, f, true, null, true)).not.toBeNull(); // the edit: no model needed
     expect(h.deps.segmenter).not.toHaveBeenCalled();
   });
 
@@ -572,11 +621,11 @@ describe('FaceProtectSource.record → reopen (L1: a reopened entry draws what w
       const s1 = harness({ segment: () => personMask });
       realDeps(s1);
       const f1 = realFace();
-      s1.src.update(f1, true, null, true);
+      one(s1.src, f1, true, null, true);
       await flush();
-      const p1 = s1.src.update(f1, true, null, true)!;
+      const p1 = one(s1.src, f1, true, null, true)!;
       expect(p1).not.toBeNull();
-      const rec = s1.src.record(p1);
+      const rec = s1.src.record(drawnBy(p1));
       const blob = new Blob(['x'], { type: 'image/jpeg' });
       const id = await addEntry({
         original: blob,
@@ -595,7 +644,7 @@ describe('FaceProtectSource.record → reopen (L1: a reopened entry draws what w
       // session 2: reopened from 最近編輯, no contour edit; the face is detected again (a new object)
       const s2 = harness({ segment: () => personMask }, entry.faceMask ?? null);
       realDeps(s2);
-      const p2 = s2.src.update(realFace(), true, null, entry.faceProtect === true)!;
+      const p2 = one(s2.src, realFace(), true, null, entry.faceProtect === true)!;
       expect(p2).not.toBeNull();
       expect(s2.deps.segmenter).not.toHaveBeenCalled();
       expect(p2.width).toBe(p1.width);
@@ -637,14 +686,14 @@ describe('the request survives edits made while the limit cannot act (M1 / M3: L
       h,
       entry,
       /** the protect effect: what the session draws for `p` with `face` */
-      draw: (face: Face | null, p: BeautyParams) => h.src.update(face, contourActive(p), null, requested()),
+      draw: (face: Face | null, p: BeautyParams) => one(h.src, face, contourActiveValues(p.values), null, requested()),
       contourEdit: () => {
         edited = true;
       },
       /** the autosave of an output drawn with `drawn` (writeHistory / the lost-engine flush) */
       save: async (p: BeautyParams, drawn: FaceProtect | null): Promise<string> => {
-        const rec = h.src.record(drawn);
-        const patch = paramsPatch(p, rec, maskStored, blob);
+        const rec = h.src.record(drawnBy(drawn));
+        const patch = paramsPatch(editFromLegacy(p), 'p0', rec, maskStored, blob);
         if (rec.faceMask) maskStored = true;
         if (id) {
           await updateEntry(id, patch);
@@ -757,16 +806,18 @@ describe('the request survives edits made while the limit cannot act (M1 / M3: L
     }));
 });
 
-describe('paramsPatch (M2: every params write carries the limit record)', () => {
-  const p = applyPreset('natural', 1);
-  it('the request rides along with the params, also without a thumbnail (the lost-engine flush)', () => {
-    expect(paramsPatch(p, { faceProtect: true }, true)).toEqual({ params: p, faceProtect: true });
-    expect(paramsPatch(p, { faceProtect: false }, true)).toEqual({ params: p, faceProtect: false });
+describe('paramsPatch (M2: every params write carries the limit record; RM §5.1 v2 fields)', () => {
+  const e = editFromLegacy(applyPreset('natural', 1));
+  const params = sanitizeParams(legacyProjection(e, 'p0'));
+  const v2 = { schema: 2, edit: e, params, paramsKey: stableKey(params) };
+  it('the request rides along with the edit and its legacy projection, also without a thumbnail', () => {
+    expect(paramsPatch(e, 'p0', { faceProtect: true }, true)).toEqual({ ...v2, faceProtect: true });
+    expect(paramsPatch(e, 'p0', { faceProtect: false }, true)).toEqual({ ...v2, faceProtect: false });
   });
   it('the segmenter mask only while none is stored; a thumbnail when given', () => {
     const m = mask();
     const t = new Blob(['t']);
-    expect(paramsPatch(p, { faceProtect: true, faceMask: m }, false, t)).toEqual({ params: p, thumb: t, faceProtect: true, faceMask: m });
-    expect(paramsPatch(p, { faceProtect: true, faceMask: m }, true, t)).toEqual({ params: p, thumb: t, faceProtect: true });
+    expect(paramsPatch(e, 'p0', { faceProtect: true, faceMask: m }, false, t)).toEqual({ ...v2, thumb: t, faceProtect: true, faceMask: m });
+    expect(paramsPatch(e, 'p0', { faceProtect: true, faceMask: m }, true, t)).toEqual({ ...v2, thumb: t, faceProtect: true });
   });
 });

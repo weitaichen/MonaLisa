@@ -57,7 +57,7 @@ test('camera: gate → live beautified preview with face → panel → slider �
   expect(meanLuma(b)).toBeGreaterThan(meanLuma(a1));
   // persisted live look (debounced 300 ms)
   await expect
-    .poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('meiyan.params.v1') ?? '{}').values?.['skin.whiten']))
+    .poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('meiyan.look.v1') ?? '{}').photo?.values?.['skin.whiten']))
     .toBe(1);
 
   // hold-to-compare shows the unprocessed frame

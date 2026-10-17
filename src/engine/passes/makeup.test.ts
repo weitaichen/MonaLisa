@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { splitLegacy } from '../../edit/legacy';
+import type { BeautyParams } from '../../types';
 import { applyPreset, setParam, setShade } from '../params';
-import { BLUSH_SEAM, blushFade, makeupActive, makeupUniforms } from './makeup';
+import { BLUSH_SEAM, blushFade, makeupActive, makeupUniformsFor } from './makeup';
 
-describe('makeupUniforms', () => {
+/** the makeup uniforms of the person `p` describes (its person part), at a face weight */
+const of = (p: BeautyParams, weight: number) => makeupUniformsFor(splitLegacy(p).person, weight);
+
+describe('makeupUniformsFor', () => {
   it('no makeup in the natural preset', () => {
-    const u = makeupUniforms(applyPreset('natural'), 1);
+    const u = of(applyPreset('natural'), 1);
     expect(u.lip).toBe(0);
     expect(u.blush).toBe(0);
     expect(makeupActive(u)).toBe(false);
@@ -12,19 +17,19 @@ describe('makeupUniforms', () => {
 
   it('glow preset: bean lip + peach blush tints, intensities × faceWeight', () => {
     const p = applyPreset('glow');
-    const u = makeupUniforms(p, 0.5);
+    const u = of(p, 0.5);
     expect(u.lip).toBeCloseTo(0.15);
     expect(u.blush).toBeCloseTo(0.15);
     expect(u.lipColor).toEqual([0xc9 / 255, 0x76 / 255, 0x7a / 255]);
     expect(u.blushColor).toEqual([0xff / 255, 0x9e / 255, 0x8a / 255]);
     expect(makeupActive(u)).toBe(true);
-    expect(makeupActive(makeupUniforms(p, 0))).toBe(false);
+    expect(makeupActive(of(p, 0))).toBe(false);
   });
 
   it('null shade = original GPUPixel texture colour', () => {
     let p = setParam(applyPreset('natural'), 'makeup.lip', 0.6);
     p = setShade(p, 'lip', null);
-    const u = makeupUniforms(p, 1);
+    const u = of(p, 1);
     expect(u.lipColor).toBeNull();
     expect(u.lip).toBeCloseTo(0.6);
   });
@@ -37,7 +42,7 @@ describe('makeupUniforms', () => {
       blushShade: 'rose',
       values: { ...base.values, 'makeup.lip': 3, 'makeup.blush': -1 },
     };
-    const u = makeupUniforms(p, 1);
+    const u = of(p, 1);
     expect(u.lipColor).toBeNull();
     expect(u.blushColor).toEqual([0xe7 / 255, 0x7a / 255, 0x93 / 255]);
     expect(u.lip).toBe(1);

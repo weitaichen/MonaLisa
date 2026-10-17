@@ -1,6 +1,7 @@
-// Pure engine math: tier sizes, buffer sizes, mean-kernel geometry and the BeautyParams → skin
-// uniform mapping (RB §5 "Engine mapping" column). No GL here, so all of it is unit-tested.
-import type { BeautyParams, Tier } from '../types';
+// Pure engine math: tier sizes, buffer sizes, mean-kernel geometry and the params → skin uniform mapping (RB §5
+// "Engine mapping" column: skinMaxima, skinUniformsFor). No GL here, so all of it is unit-tested.
+import type { PhotoParams, RenderInput, Tier } from '../types';
+import { frameFor, type AdjustFrame } from './adjustMath';
 import { fitShortEdge } from './gl/gl';
 
 export interface Size {
@@ -52,22 +53,43 @@ export function meanScale(size: Size): number {
 }
 
 /**
- * UV step of one "offset unit" along `axis`, computed from the PROCESSING size (not the mean buffer
- * size), so the half-res mean of tier L covers the same image footprint.
+ * UV step of one "offset unit" along `axis`, from the PROCESSING size (not the mean buffer size), so the half-res mean
+ * of tier L covers the same image footprint. `fullShortEdge` (step 3) is the O short edge in output pixels: a crop or a
+ * tile keeps the kernel of the whole photo. Default = min(size): exactly today's arithmetic.
  */
-export function meanStep(size: Size, axis: 'h' | 'v'): [number, number] {
-  const unit = MEAN_SPACING * meanScale(size);
+export function meanStep(size: Size, axis: 'h' | 'v', fullShortEdge: number = Math.min(size.width, size.height)): [number, number] {
+  const unit = MEAN_SPACING * (fullShortEdge / MEAN_REFERENCE_SHORT_EDGE);
   return axis === 'h' ? [unit / size.width, 0] : [0, unit / size.height];
 }
 
 /**
- * UV step of the P5 sharpen taps: GPUPixel's 1 px at a 720 short edge, scaled by shortEdge/720
- * like the mean (unclamped, as meanStep), so the live tiers and the full-resolution capture
- * sharpen the same image footprint.
+ * UV step of the P5 sharpen taps: GPUPixel's 1 px at a 720 short edge, scaled by fullShortEdge/720 like the mean
+ * (unclamped, as meanStep), so the live tiers, the full-resolution capture, a crop and a tile sharpen the same image
+ * footprint. Default = min(size): exactly today's arithmetic.
  */
-export function sharpenTexel(size: Size): [number, number] {
-  const k = meanScale(size);
+export function sharpenTexel(size: Size, fullShortEdge: number = Math.min(size.width, size.height)): [number, number] {
+  const k = fullShortEdge / MEAN_REFERENCE_SHORT_EDGE;
   return [k / size.width, k / size.height];
+}
+
+/**
+ * The composite's picture frame (S2 §4.5, S §4.2 P5) as step 2's AdjustFrame: without a tile it is step 2's
+ * frameFor(size, pictureFrame, seed) with the O short edge of the photo (a crop keeps the grain cell of the whole
+ * photo); a tile maps its buffer uv into the whole V (vMap from output.tile) and vSize is the whole V in output pixels,
+ * so 暗角 and 顆粒 depend only on global V and tiles match the untiled render.
+ */
+export function adjustFrameFor(
+  input: Pick<RenderInput, 'output' | 'pictureFrame' | 'grainSeed'>,
+  size: Size,
+  fullShortEdge: number,
+): AdjustFrame {
+  const seed = input.grainSeed ?? 0;
+  const o = input.output;
+  if (!o) return { ...frameFor(size, input.pictureFrame, seed), fullShortEdge };
+  const t = o.tile;
+  // the seed as frameFor sanitizes it (a uint)
+  const s = Number.isFinite(seed) ? seed >>> 0 : 0;
+  return { vMap: [t.w, t.h, t.x, t.y], vSize: [o.pixelSize.width / t.w, o.pixelSize.height / t.h], fullShortEdge, seed: s };
 }
 
 /** Signed tap offsets in processing pixels along one axis (for tests / docs): {0, ±1.5, ±3.5}·4·scale. */
@@ -99,17 +121,6 @@ export const ROSY_TINT = '#FFB8C2';
 
 const clamp01 = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
 
-export function skinUniforms(params: BeautyParams, filterAvailable: boolean): SkinUniforms {
-  const v = params.values;
-  return {
-    smooth: clamp01(v['skin.smooth']),
-    sharpen: 2 * clamp01(v['skin.sharpen']),
-    whiten: 0.5 * clamp01(v['skin.whiten']),
-    rosy: ROSY_MAX_OPACITY * clamp01(v['skin.rosy']),
-    filterAmount: filterAvailable && params.filterId !== 'none' ? clamp01(v['filter.amount']) : 0,
-  };
-}
-
 /** Mean buffers are needed for smoothing and for the skin ramp `p` that weights rosy. */
 export function needsMean(u: SkinUniforms): boolean {
   return u.smooth > 0 || u.rosy > 0;
@@ -121,4 +132,44 @@ export function needsMean(u: SkinUniforms): boolean {
  */
 export function presentScale(flipY: boolean, mirrorX: boolean): [number, number] {
   return [mirrorX ? -1 : 1, flipY ? -1 : 1];
+}
+
+/**
+ * The frame's skin strengths (S §4.1 item 2): S = max 磨皮 and R = max 0.35·紅潤 over the faces with weight > 0 and the
+ * global skin; each face's relative strengths k = (smooth/S, 0.35·rosy/R) are written into the skin mask; the mask is
+ * cleared to the global skin's (weight · strength / max). With one face this is v0.3 exactly: k = 1, clear 1 − w.
+ */
+export function skinMaxima(
+  faces: readonly { weight: number; smooth: number; rosy: number }[],
+  global: RenderInput['globalSkin'],
+): { S: number; R: number; k: [number, number][]; clear: [number, number] } {
+  let S = 0;
+  let R = 0;
+  for (const f of faces) {
+    if (!(f.weight > 0)) continue;
+    S = Math.max(S, clamp01(f.smooth));
+    R = Math.max(R, ROSY_MAX_OPACITY * clamp01(f.rosy));
+  }
+  if (global) {
+    S = Math.max(S, clamp01(global.smooth));
+    R = Math.max(R, ROSY_MAX_OPACITY * clamp01(global.rosy));
+  }
+  const k = faces.map((f): [number, number] => [S > 0 ? clamp01(f.smooth) / S : 0, R > 0 ? (ROSY_MAX_OPACITY * clamp01(f.rosy)) / R : 0]);
+  const w = global ? clamp01(global.weight) : 0;
+  const clear: [number, number] = global
+    ? [S > 0 ? (w * clamp01(global.smooth)) / S : 0, R > 0 ? (w * ROSY_MAX_OPACITY * clamp01(global.rosy)) / R : 0]
+    : [0, 0];
+  return { S, R, k, clear };
+}
+
+/** composite uniforms from the photo layer and the frame maxima (one face: its own 磨皮 / 紅潤, v0.3's mapping) */
+export function skinUniformsFor(photo: PhotoParams, S: number, R: number, filterAvailable: boolean): SkinUniforms {
+  const v = photo.values;
+  return {
+    smooth: S,
+    sharpen: 2 * clamp01(v['skin.sharpen']),
+    whiten: 0.5 * clamp01(v['skin.whiten']),
+    rosy: R,
+    filterAmount: filterAvailable && photo.filterId !== 'none' ? clamp01(v['filter.amount']) : 0,
+  };
 }

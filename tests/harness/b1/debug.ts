@@ -1,7 +1,7 @@
 // Ad-hoc probes for tuning (run through run.mjs-style SSR loading: node tests/harness/b1/dbg.mjs).
 import type { BodyField, ParamId } from '../../../src/types';
 import { defaultParams, setBodyProtect, setParam } from '../../../src/engine/params';
-import { buildBodyField } from '../../../src/body/field';
+import { buildBodyFieldV1 } from '../../../src/body/field';
 import { measureBody } from '../../../src/body/measure';
 import { syntheticFigure } from '../../../src/body/synthetic';
 
@@ -27,7 +27,7 @@ export function probe(ids: ParamId[], protect = true, armsDown = false): unknown
   const m = measureBody(f.det, f.face);
   let p = setBodyProtect(defaultParams(), protect);
   for (const id of ids) p = setParam(p, id, 1);
-  const field = buildBodyField(m, p, f.width / f.height);
+  const field = buildBodyFieldV1(m, p, f.width / f.height);
   return {
     trunk: m.trunk && { waistT: m.trunk.waistT, waistW: m.trunk.waistW, hipT: m.trunk.hipT, hipW: m.trunk.hipW, torsoW: m.trunk.torsoW, len: m.trunk.len },
     limbs: m.limbs.map((l) => ({ kind: l.kind, w: +l.w.toFixed(4), side: l.side })),
@@ -51,7 +51,7 @@ export function probeFixture(file: string, ids: ParamId[], hipVal?: number): unk
   let p = defaultParams();
   for (const id of ids) p = setParam(p, id, 1);
   if (hipVal !== undefined) p = setParam(p, 'body.hip', hipVal);
-  const field = buildBodyField(m, p, det.width / det.height);
+  const field = buildBodyFieldV1(m, p, det.width / det.height);
   return { facing: m.facing, regions: m.regions, trunk: m.trunk && { waistT: m.trunk.waistT, hipT: m.trunk.hipT, waistW: m.trunk.waistW, hipW: m.trunk.hipW, len: m.trunk.len, s: m.trunk.s, h: m.trunk.h },
     limbs: m.limbs.map((l) => `${l.kind}:${l.w.toFixed(4)}:${l.side}`), worst: field ? worstCells(field, 4) : null };
 }
@@ -71,7 +71,7 @@ import { MaskSampler } from '../../../src/body/mask';
 export function waistSides(file: string | null): unknown {
   const det = file ? fixtureDet(file) : syntheticFigure().det;
   const m = measureBody(det, file ? null : syntheticFigure().face);
-  const f = buildBodyField(m, setParam(defaultParams(), 'body.waist', 1), det.width / det.height)!;
+  const f = buildBodyFieldV1(m, setParam(defaultParams(), 'body.waist', 1), det.width / det.height)!;
   const mk = det.mask!;
   const t = m.trunk!;
   const res: string[] = [];

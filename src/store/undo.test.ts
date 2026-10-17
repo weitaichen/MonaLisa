@@ -289,3 +289,34 @@ describe('stableKey', () => {
     expect(stableKey(o)).toBe('{"a":1,"b":2}');
   });
 });
+
+describe('UndoStack {clone: false, key} and rebase (RM §3.4)', () => {
+  it('stores and returns states by reference and compares by the given key', () => {
+    const key = (s: { id: number; big: Float32Array }) => String(s.id);
+    const u = new UndoStack<{ id: number; big: Float32Array }>(50, { clone: false, key });
+    const a = { id: 1, big: new Float32Array(4) };
+    const b = { id: 2, big: a.big };
+    u.reset(a);
+    u.push(b);
+    u.push({ id: 2, big: new Float32Array(9) }); // same key: ignored
+    expect(u.current).toBe(b);
+    expect(u.undo()).toBe(a);
+    expect(u.redo()).toBe(b);
+  });
+  it('rebase maps every stored state, so undo never brings back a state without the new persons', () => {
+    const u = new UndoStack<{ persons: string[] }>(50, { clone: false });
+    u.reset({ persons: ['p0'] });
+    u.push({ persons: ['p0', 'x'] });
+    u.rebase((s) => ({ persons: s.persons.map((p) => (p === 'p0' ? 'f0' : p)).concat('f1') }));
+    expect(u.current).toEqual({ persons: ['f0', 'x', 'f1'] });
+    expect(u.undo()).toEqual({ persons: ['f0', 'f1'] });
+    expect(u.canRedo).toBe(true);
+  });
+  it('the default (cloning, stableKey) is unchanged', () => {
+    const u = new UndoStack<{ a: number }>();
+    const s = { a: 1 };
+    u.reset(s);
+    expect(u.current).not.toBe(s);
+    expect(u.current).toEqual(s);
+  });
+});

@@ -2,6 +2,7 @@
 import { vi } from 'vitest';
 import type {
   BodyDetection,
+  BodyDetections,
   BodyField,
   BodyTracker,
   CameraController,
@@ -11,7 +12,10 @@ import type {
   Face,
   Facing,
   Landmarks478,
+  LutKind,
+  LutState,
   Prefs,
+  PxRect,
   RenderInput,
   Tier,
   Tracker,
@@ -29,14 +33,29 @@ export function installWorkClock() {
   };
 }
 
-export function makeFace(tag = 0): Face {
+/** the one face a v0.3-style render input carried (legacyFrame), or null */
+export const faceOf = (i: RenderInput | undefined): Face | null => i?.faces[0]?.face ?? null;
+/** its weight (0 without a face) */
+export const weightOf = (i: RenderInput | undefined): number => i?.faces[0]?.weight ?? 0;
+
+export function makeFace(tag = 0, cx = 0.5): Face {
   const pts111 = new Float32Array(222).fill(0.5);
   pts111[0] = tag;
-  return { pts111, ext: new Float32Array(16), oval: new Float32Array(72), yaw: 0 };
+  // a non-degenerate oval (radius 0.2 around (cx, 0.5)): prepareFaces keeps it
+  const oval = new Float32Array(72);
+  for (let i = 0; i < 36; i++) {
+    oval[i * 2] = cx + 0.2 * Math.cos((i / 36) * 2 * Math.PI);
+    oval[i * 2 + 1] = 0.5 + 0.2 * Math.sin((i / 36) * 2 * Math.PI);
+  }
+  // blankEyes() spelled out: live / still tests mock the whole adapter module and call makeFace from their adapt
+  return { pts111, ext: new Float32Array(16), oval, yaw: 0, iris: new Float32Array(20), lids: new Float32Array(64) };
 }
 
-export function makeLandmarks(): Landmarks478 {
-  return { points: new Float32Array(478 * 3).fill(0.5) };
+/** `tag` lands in the first coordinate (0.5 + tag/1000), so a mocked adapt can tell results apart */
+export function makeLandmarks(tag = 0): Landmarks478 {
+  const points = new Float32Array(478 * 3).fill(0.5);
+  points[0] = 0.5 + tag / 1000;
+  return { points };
 }
 
 type FrameCb = (now: number, md: VideoFrameCallbackMetadata) => void;
@@ -111,9 +130,19 @@ export interface FakeEngine extends Engine {
   setTier: ReturnType<typeof vi.fn<(t: Tier) => void>>;
   setOptions: ReturnType<typeof vi.fn<Engine['setOptions']>>;
   loadFilter: ReturnType<typeof vi.fn<Engine['loadFilter']>>;
+  loadLut: ReturnType<typeof vi.fn<Engine['loadLut']>>;
+  lutState: ReturnType<typeof vi.fn<Engine['lutState']>>;
+  /** settles 質感 loads (filter loads go through loadFilter, so v0.3 tests keep counting them there) */
+  loadLook: ReturnType<typeof vi.fn<(id: string) => Promise<void>>>;
+  /** what lutState reports, keyed `${kind}:${id}`; delete a key to simulate the LRU evicting that LUT */
+  lutStates: Map<string, LutState>;
+  adjustUnavailable: boolean;
   render: ReturnType<typeof vi.fn<Engine['render']>>;
   renderToImageData: ReturnType<typeof vi.fn<Engine['renderToImageData']>>;
   renderOriginal: ReturnType<typeof vi.fn<Engine['renderOriginal']>>;
+  renderTile: ReturnType<typeof vi.fn<Engine['renderTile']>>;
+  releaseBuffers: ReturnType<typeof vi.fn<Engine['releaseBuffers']>>;
+  releaseFields: ReturnType<typeof vi.fn<Engine['releaseFields']>>;
   /** last RenderInput passed to render() */
   lastInput(): RenderInput | undefined;
 }
@@ -130,7 +159,37 @@ export function fakeEngine(clock?: { work(ms: number): void }, tier: Tier = 'M')
       e.tier = t;
     }),
     setOptions: vi.fn(),
-    loadFilter: vi.fn(() => Promise.resolve()),
+    loadFilter: vi.fn<Engine['loadFilter']>(() => Promise.resolve()),
+    loadLook: vi.fn<(id: string) => Promise<void>>(() => Promise.resolve()),
+    lutStates: new Map<string, LutState>(),
+    /** in-flight loads (the real cache answers a repeated request with the same promise) */
+    lutPending: new Map<string, Promise<void>>(),
+    /** bumped on webglcontextrestored: loads begun before it settle without leaving a texture, as in the engine */
+    lutGen: 0,
+    adjustUnavailable: false,
+    procMakeupFailed: false,
+    loadLut: vi.fn((kind: LutKind, id: string): Promise<void> => {
+      if (kind === 'filter' && id === 'none') return Promise.resolve();
+      const key = `${kind}:${id}`;
+      const pending = e.lutPending.get(key);
+      if (pending && e.lutStates.get(key) === 'loading') return pending;
+      const gen = e.lutGen;
+      e.lutStates.set(key, 'loading');
+      const p = kind === 'filter' ? e.loadFilter(id) : e.loadLook(id);
+      e.lutPending.set(key, p);
+      p.then(
+        () => {
+          if (gen === e.lutGen) e.lutStates.set(key, 'ready');
+        },
+        () => {
+          if (gen === e.lutGen) e.lutStates.set(key, 'failed');
+        },
+      );
+      return p;
+    }),
+    lutState: vi.fn((kind: LutKind, id: string): LutState =>
+      kind === 'filter' && id === 'none' ? 'ready' : (e.lutStates.get(`${kind}:${id}`) ?? 'none'),
+    ),
     render: vi.fn((input: RenderInput) => {
       clock?.work(e.cost);
       return { cpuMs: e.cost, width: input.width, height: input.height, passes: [] };
@@ -142,12 +201,24 @@ export function fakeEngine(clock?: { work(ms: number): void }, tier: Tier = 'M')
     renderOriginal: vi.fn(() => {
       clock?.work(e.cost);
     }),
+    renderTile: vi.fn(
+      (_input: RenderInput, read: PxRect) =>
+        ({ width: read.w, height: read.h, data: new Uint8ClampedArray(read.w * read.h * 4) }) as unknown as ImageData,
+    ),
+    releaseBuffers: vi.fn(),
+    releaseFields: vi.fn(),
     dispose: vi.fn(),
     lastInput(): RenderInput | undefined {
       const calls = e.render.mock.calls;
       return calls.length ? calls[calls.length - 1][0] : undefined;
     },
   };
+  // registered before any session's listener, as the real engine's own listener is (index.ts:163-164)
+  e.canvas.addEventListener('webglcontextrestored', () => {
+    e.lutGen++;
+    e.lutStates.clear();
+    e.lutPending.clear();
+  });
   return e as unknown as FakeEngine;
 }
 
@@ -189,22 +260,30 @@ export function fakeCamera(video: FakeVideo, state: CameraState = 'live', facing
 
 export interface FakeTracker extends Tracker {
   face: boolean;
+  /** faces per detection */
+  count: number;
+  /** detectVideo answers null (no answer) while set */
+  unusable: boolean;
   /** simulated cost of each detect call, ms */
   cost: number;
   detectVideo: ReturnType<typeof vi.fn<Tracker['detectVideo']>>;
   detectImage: ReturnType<typeof vi.fn<Tracker['detectImage']>>;
 }
 
-export function fakeTracker(clock?: { work(ms: number): void }, face = true): FakeTracker {
+export function fakeTracker(clock?: { work(ms: number): void }, face = true, count = 1): FakeTracker {
+  const faces = () => Array.from({ length: t.count }, (_, i) => makeLandmarks(i));
   const t = {
     delegate: 'GPU' as const,
     face,
+    count,
+    unusable: false,
     cost: 0,
     detectVideo: vi.fn(() => {
       clock?.work(t.cost);
-      return t.face ? makeLandmarks() : null;
+      if (t.unusable) return null;
+      return t.face ? faces() : [];
     }),
-    detectImage: vi.fn(() => (t.face ? makeLandmarks() : null)),
+    detectImage: vi.fn(() => (t.face ? faces() : [])),
     close: vi.fn(),
   };
   return t as unknown as FakeTracker;
@@ -235,15 +314,27 @@ export function makeBodyDetection(people = 1, width = 1536, height = 2048): Body
   return { pose: { points }, mask: { width: 4, height: 8, data: new Uint8Array(32).fill(255) }, people, width, height };
 }
 
+/** `n` standing persons side by side (makeBodyDetection's pose shifted), each with its 4×8 mask */
+export function makeBodyDetections(n = 1, width = 1536, height = 2048): BodyDetections {
+  const one = makeBodyDetection(1, width, height);
+  const bodies = Array.from({ length: n }, (_, i) => {
+    const points = one.pose.points.slice();
+    const dx = n === 1 ? 0 : (i - (n - 1) / 2) * (0.6 / n);
+    for (let k = 0; k < 33; k++) points[k * 4] += dx;
+    return { pose: { points }, mask: one.mask, score: 0.3 - Math.abs(dx) };
+  });
+  return { bodies, width, height };
+}
+
 export interface FakeBodyTracker extends BodyTracker {
   /** what detect() returns next (null = no person) */
-  result: BodyDetection | null;
+  result: BodyDetections | null;
   detect: ReturnType<typeof vi.fn<BodyTracker['detect']>>;
   detectVideo: ReturnType<typeof vi.fn<BodyTracker['detectVideo']>>;
   close: ReturnType<typeof vi.fn<() => void>>;
 }
 
-export function fakeBodyTracker(result: BodyDetection | null = makeBodyDetection()): FakeBodyTracker {
+export function fakeBodyTracker(result: BodyDetections | null = makeBodyDetections()): FakeBodyTracker {
   const t = {
     variant: 'full' as const,
     delegate: 'CPU' as const,
@@ -263,6 +354,8 @@ export function prefs(over: Partial<Prefs> = {}): Prefs {
     showLandmarks: false,
     delegate: 'auto',
     installHintDismissed: false,
+    exportFormat: 'jpeg',
+    exportSize: 'full',
     ...over,
   };
 }

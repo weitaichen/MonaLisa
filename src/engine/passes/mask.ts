@@ -1,15 +1,35 @@
-// P0 face mask (new, not GPUPixel): R8, 1 inside FACE_OVAL with a feathered outer ring, eye and
-// mouth holes punched with MIN blending, then mix(1, mask, faceWeight) (RB §2.5, plan T2).
+// P0 skin mask (new, not GPUPixel): 1 inside FACE_OVAL with a feathered outer ring, eye and mouth holes punched with
+// MIN blending (RB §2.5, plan T2). v0.4 (S §4.2): RGBA8, R = 磨皮 and G = 紅潤 strength, one oval per face at its own
+// relative strength over a clear of the global skin; with one face exactly v0.3's mix(1, mask, faceWeight).
 import type { Face } from '../../types';
 import { bindTarget, createProgram } from '../gl/gl';
 import type { Framebuffer, GL, Program } from '../gl/gl';
 
+export interface MaskFace {
+  face: Face;
+  weight: number;
+  /** (kS, kR): this face's 磨皮 / 紅潤 relative to the frame maxima (uniforms.ts skinMaxima) */
+  k: readonly [number, number];
+}
+
 export interface MaskPass {
-  /** Clear `dst` (R8, typically ¼ processing res) and draw the feathered face mask (1 inside, 0 outside). */
+  /**
+   * Clear `dst` (RGBA8, ¼ res) to `clear` = (gS, gR), then draw every face (S §4.2): all rings with MAX blending, all
+   * oval fans with blending off (inside its own oval a face's strength always wins), all eye / mouth holes with MIN.
+   * R = 磨皮 strength, G = 紅潤 strength. `view` (step 3): `win` = the O rect `dst` covers (a tile's window), `aspect` =
+   * the iso metric of the feathers (the working bitmap's, oAspect); omitted = the whole image at dst's aspect (v0.3).
+   */
+  drawFaces(
+    dst: Framebuffer,
+    faces: readonly MaskFace[],
+    clear: readonly [number, number],
+    view?: { win: readonly [number, number, number, number]; aspect?: number },
+  ): void;
+  /** one face, v0.3's mask in both channels: 1 − w outside, 1 − w + w·m inside */
   draw(dst: Framebuffer, face: Face, faceWeight: number): void;
   /**
-   * Fill `dst` with `value`. The pipeline does not call this: with no face / mask disabled it skips the mask pass
-   * and binds the white texture instead (planPasses). Used by the T2 harness to check the clear path.
+   * Fill both channels of `dst` with `value`. The pipeline does not call this: with no face / mask disabled it skips
+   * the mask pass and binds the white texture instead (planPasses). Used by the T2 harness to check the clear path.
    */
   fill(dst: Framebuffer, value: number): void;
   dispose(): void;
@@ -30,32 +50,36 @@ const EYE_R = [58, 59, 60, 61, 62, 63] as const;
 const MOUTH = [84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95] as const;
 
 const MASK_VS = /* glsl */ `#version 300 es
-in vec2 aPos;   // UV, top-left origin
+in vec2 aPos;   // O-space UV, top-left origin
 in float aVal;  // 1 = mask on, 0 = off
+uniform vec4 uWin; // the O rect the target covers (a tile's window); (0, 0, 1, 1) = the whole image
 out float vVal;
 void main() {
   vVal = aVal;
-  gl_Position = vec4(aPos * 2.0 - 1.0, 0.0, 1.0);
+  vec2 q = (aPos - uWin.xy) / uWin.zw;
+  gl_Position = vec4(q * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
 const MASK_FS = /* glsl */ `#version 300 es
 precision highp float;
 in float vVal;
-uniform float uWeight;
+uniform vec2 uG;   // the clear (gS, gR)
+uniform vec2 uWK;  // this face: weight · (kS, kR)
 out vec4 outColor;
 void main() {
   float m = smoothstep(0.0, 1.0, vVal);
-  outColor = vec4(1.0 - uWeight + uWeight * m, 0.0, 0.0, 1.0);
+  outColor = vec4(uG + uWK * m, 0.0, 1.0);
 }`;
 
 type V2 = [number, number];
 
 /**
- * Triangle list (x, y, value) for the mask. `aspect` = W/H; offsets are isotropic.
- * Returns [vertices, baseVertexCount]: the first `baseVertexCount` vertices are the oval + ring,
- * the rest are the holes (drawn with MIN blending).
+ * Triangle list (x, y, value) for the mask, written into `out` from index 0. `aspect` = W/H; offsets are isotropic.
+ * Returns [vertexCount, base, fanEnd]: fans [0, fanEnd), ring [fanEnd, base), holes [base, vertexCount) (the holes are
+ * drawn with MIN blending; MaskPass.drawFaces draws every face's ring, then every fan, then every hole).
+ * `ringIso`: the outer ring's width in iso units (default `MASK_FEATHER.ring · fw`; 膚色 passes w_T, skin-cleanup spec §4.2).
  */
-export function buildMaskGeometry(face: Face, aspect: number, out: Float32Array): [number, number] {
+export function buildMaskGeometry(face: Face, aspect: number, out: Float32Array, ringIso?: number): [number, number, number] {
   let n = 0;
   const push = (p: V2, v: number) => {
     out[n++] = p[0];
@@ -92,13 +116,14 @@ export function buildMaskGeometry(face: Face, aspect: number, out: Float32Array)
   for (let i = 0; i < face.oval.length; i += 2) oval.push([face.oval[i], face.oval[i + 1]]);
   const oc = centroid(oval);
   const faceW = isoDist(P(0), P(32));
-  const ring = MASK_FEATHER.ring * faceW;
+  const ring = ringIso ?? MASK_FEATHER.ring * faceW;
+  for (let i = 0; i < oval.length; i++) tri(oc, 1, oval[i], 1, oval[(i + 1) % oval.length], 1);
+  const fanEnd = n / 3;
   for (let i = 0; i < oval.length; i++) {
     const a = oval[i];
     const b = oval[(i + 1) % oval.length];
     const ao = away(a, oc, ring);
     const bo = away(b, oc, ring);
-    tri(oc, 1, a, 1, b, 1);
     tri(a, 1, b, 1, bo, 0);
     tri(a, 1, bo, 0, ao, 0);
   }
@@ -121,7 +146,7 @@ export function buildMaskGeometry(face: Face, aspect: number, out: Float32Array)
   hole(EYE_L, [52, 55], MASK_FEATHER.eyePad, MASK_FEATHER.eyeFeather);
   hole(EYE_R, [58, 61], MASK_FEATHER.eyePad, MASK_FEATHER.eyeFeather);
   hole(MOUTH, [84, 90], MASK_FEATHER.mouthPad, MASK_FEATHER.mouthFeather);
-  return [n / 3, base];
+  return [n / 3, base, fanEnd];
 }
 
 /** Upper bound of floats written by buildMaskGeometry (36-pt oval, 6+6+12 hole points). */
@@ -145,45 +170,73 @@ export function createMaskPass(gl: GL): MaskPass {
   gl.bindVertexArray(null);
   gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
-  const clearTo = (dst: Framebuffer, v: number) => {
+  const clearTo = (dst: Framebuffer, c: readonly [number, number]) => {
     bindTarget(gl, dst);
-    gl.clearColor(v, 0, 0, 1);
+    gl.clearColor(c[0], c[1], 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.clearColor(0, 0, 0, 0);
   };
+  const clamp01 = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
+
+  const drawFaces: MaskPass['drawFaces'] = (dst, faces, clear, view) => {
+    const g: [number, number] = [clamp01(clear[0]), clamp01(clear[1])];
+    clearTo(dst, g);
+    const list = faces.filter((f) => f.face.oval.length >= 6);
+    if (!list.length) return;
+    const need = list.reduce((s, f) => s + ((f.face.oval.length / 2) * 3 + (6 + 6 + 12) * 3) * 9, 0);
+    if (need > verts.length) verts = new Float32Array(need);
+    const segs: { start: number; count: number; base: number; fanEnd: number; wk: [number, number] }[] = [];
+    let at = 0;
+    const aspect = view?.aspect ?? dst.width / dst.height;
+    for (const f of list) {
+      const w = clamp01(f.weight);
+      const [count, base, fanEnd] = buildMaskGeometry(f.face, aspect, verts.subarray(at * 3));
+      segs.push({ start: at, count, base, fanEnd, wk: [w * clamp01(f.k[0]), w * clamp01(f.k[1])] });
+      at += count;
+    }
+    prog.use();
+    const win = view?.win ?? [0, 0, 1, 1];
+    gl.uniform4f(prog.u('uWin'), win[0], win[1], win[2], win[3]);
+    gl.uniform2f(prog.u('uG'), g[0], g[1]);
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    if (verts.byteLength > bufBytes) {
+      bufBytes = verts.byteLength;
+      gl.bufferData(gl.ARRAY_BUFFER, bufBytes, gl.DYNAMIC_DRAW);
+    }
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, verts, 0, at * 3);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    gl.disable(gl.CULL_FACE);
+    const each = (from: (s: (typeof segs)[number]) => number, to: (s: (typeof segs)[number]) => number) => {
+      for (const s of segs) {
+        gl.uniform2f(prog.u('uWK'), s.wk[0], s.wk[1]);
+        gl.drawArrays(gl.TRIANGLES, s.start + from(s), to(s) - from(s));
+      }
+    };
+    // 1. rings take the larger strength where they overlap
+    gl.enable(gl.BLEND);
+    gl.blendEquation(gl.MAX);
+    each((s) => s.fanEnd, (s) => s.base);
+    // 2. fans overwrite: inside its own oval each face writes its own strength (a neighbour's ring never lifts it)
+    gl.disable(gl.BLEND);
+    each(() => 0, (s) => s.fanEnd);
+    // 3. holes only ever lower the mask
+    gl.enable(gl.BLEND);
+    gl.blendEquation(gl.MIN);
+    each((s) => s.base, (s) => s.count);
+    gl.blendEquation(gl.FUNC_ADD);
+    gl.disable(gl.BLEND);
+    gl.bindVertexArray(null);
+  };
 
   return {
+    drawFaces,
     draw(dst, face, faceWeight) {
-      const w = Number.isFinite(faceWeight) ? Math.min(1, Math.max(0, faceWeight)) : 0;
-      clearTo(dst, 1 - w);
-      if (w <= 0 || face.oval.length < 6) return;
-      const need = ((face.oval.length / 2) * 3 + (6 + 6 + 12) * 3) * 9;
-      if (need > verts.length) verts = new Float32Array(need);
-      const [count, base] = buildMaskGeometry(face, dst.width / dst.height, verts);
-
-      prog.use();
-      gl.uniform1f(prog.u('uWeight'), w);
-      gl.bindVertexArray(vao);
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      if (verts.byteLength > bufBytes) {
-        bufBytes = verts.byteLength;
-        gl.bufferData(gl.ARRAY_BUFFER, bufBytes, gl.DYNAMIC_DRAW);
-      }
-      gl.bufferSubData(gl.ARRAY_BUFFER, 0, verts, 0, count * 3);
-      gl.bindBuffer(gl.ARRAY_BUFFER, null);
-      gl.disable(gl.CULL_FACE);
-      gl.disable(gl.BLEND);
-      gl.drawArrays(gl.TRIANGLES, 0, base);
-      // Holes take the minimum so they only ever lower the mask, wherever they overlap.
-      gl.enable(gl.BLEND);
-      gl.blendEquation(gl.MIN);
-      gl.drawArrays(gl.TRIANGLES, base, count - base);
-      gl.blendEquation(gl.FUNC_ADD);
-      gl.disable(gl.BLEND);
-      gl.bindVertexArray(null);
+      const w = clamp01(faceWeight);
+      drawFaces(dst, w > 0 ? [{ face, weight: w, k: [1, 1] }] : [], [1 - w, 1 - w]);
     },
     fill(dst, value) {
-      clearTo(dst, value);
+      clearTo(dst, [value, value]);
     },
     dispose() {
       prog.dispose();

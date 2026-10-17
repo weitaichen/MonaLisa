@@ -79,7 +79,7 @@ export function Home() {
 
   const importPhoto = () => {
     haptic();
-    pickPhoto((f) => void openInEditor(f, { returnTo: 'home' }));
+    pickPhoto((f) => void openInEditor(f, { returnTo: 'home', picked: true }));
   };
 
   const openEntry = async (id: string) => {
@@ -91,14 +91,7 @@ export function Home() {
         reload();
         return;
       }
-      await openInEditor(entry.original, {
-        params: entry.params,
-        historyId: entry.id,
-        body: entry.body,
-        faceProtect: entry.faceProtect,
-        faceMask: entry.faceMask,
-        returnTo: 'home',
-      });
+      await openInEditor(entry.original, { entry, returnTo: 'home' });
     } catch (e) {
       toast(`無法開啟紀錄：${reportError(e, 'getEntry')}`, 4000);
     }
@@ -123,7 +116,7 @@ export function Home() {
     <div class={`screen home${updateShown ? ' has-update' : ''}`}>
       <header class="home-head">
         <div class="wordmark">
-          MonaLisa<em>美顏</em>
+          Mona Misa<em>美顏</em>
         </div>
         <IconButton icon="gear" label="設定" onClick={() => app.set({ sheet: 'settings' })} />
       </header>

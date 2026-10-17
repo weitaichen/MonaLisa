@@ -46,6 +46,28 @@ const DIRECT_FIRST = 33;
 /** Extension anchors in the fixed order of `Face.ext`. */
 const EXT: readonly number[] = [10, 151, 9, 168, 152, 199, 234, 454];
 
+/** Face.iris: MediaPipe 468 (centre) + 469–472, then 473 + 474–477; GPUPixel-left eye first (= MediaPipe's RIGHT) */
+export const IRIS_MP: readonly number[] = [468, 469, 470, 471, 472, 473, 474, 475, 476, 477];
+/** Face.lids: per eye the outer corner, 7 upper (outer → inner), the inner corner, 7 lower (outer → inner) */
+export const LIDS_MP: readonly number[] = [
+  33, 246, 161, 160, 159, 158, 157, 173, 133, 7, 163, 144, 145, 153, 154, 155,
+  263, 466, 388, 387, 386, 385, 384, 398, 362, 249, 390, 373, 374, 380, 381, 382,
+];
+
+function pick(p: Float32Array, idx: readonly number[]): Float32Array {
+  const out = new Float32Array(idx.length * 2);
+  idx.forEach((i, k) => {
+    out[k * 2] = p[i * 3];
+    out[k * 2 + 1] = p[i * 3 + 1];
+  });
+  return out;
+}
+
+/** zero-filled eye fields for synthetic faces (eyeFrames then uses its p104 / p105 fallback) */
+export function blankEyes(): Pick<Face, 'iris' | 'lids'> {
+  return { iris: new Float32Array(IRIS_MP.length * 2), lids: new Float32Array(LIDS_MP.length * 2) };
+}
+
 const N_MP = 478;
 const MAX_CHAIN = 13;
 const sx = new Float64Array(MAX_CHAIN);
@@ -136,5 +158,5 @@ export function adapt(l: Landmarks478, width: number, height: number): Face {
     oval[i * 2 + 1] = p[FACE_OVAL[i] * 3 + 1];
   }
 
-  return { pts111, ext, oval, yaw: yawProxy(pts111, w, h) };
+  return { pts111, ext, oval, yaw: yawProxy(pts111, w, h), iris: pick(p, IRIS_MP), lids: pick(p, LIDS_MP) };
 }

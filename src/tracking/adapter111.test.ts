@@ -215,3 +215,55 @@ describe('adapt (synthetic)', () => {
     expect(() => adapt({ points: new Float32Array(468 * 3) }, 10, 10)).toThrow();
   });
 });
+
+describe('iris and lids (face-detail spec §3.3, §4.7)', () => {
+  for (const [name, points] of [
+    ['fixture', fx.points],
+    ['mirrored', fx.mirrored],
+  ] as const) {
+    const f = adapt({ points: new Float32Array(points) }, W, H);
+    const at = (a: Float32Array, k: number): [number, number] => [a[k * 2], a[k * 2 + 1]];
+    const p = (i: number) => at(f.pts111, i);
+    const px = (q: [number, number]): [number, number] => [q[0] * W, q[1] * H];
+
+    it(`${name}: shapes, finite, inside the image`, () => {
+      expect(f.iris.length).toBe(20);
+      expect(f.lids.length).toBe(64);
+      for (const v of [...f.iris, ...f.lids]) {
+        expect(Number.isFinite(v)).toBe(true);
+        expect(v).toBeGreaterThanOrEqual(0);
+        expect(v).toBeLessThanOrEqual(1);
+      }
+    });
+
+    it(`${name}: iris centres are p104 / p105; the radius is 15–30 % of the eye width`, () => {
+      expect(at(f.iris, 0)).toEqual(p(104));
+      expect(at(f.iris, 5)).toEqual(p(105));
+      for (const [c, [outer, inner]] of [
+        [0, [52, 55]],
+        [5, [61, 58]],
+      ] as const) {
+        const ctr = px(at(f.iris, c));
+        let r = 0;
+        for (let b = 1; b <= 4; b++) r += dist(px(at(f.iris, c + b)), ctr) / 4;
+        const ratio = r / dist(px(p(outer)), px(p(inner)));
+        expect(ratio).toBeGreaterThan(0.15);
+        expect(ratio).toBeLessThan(0.3);
+      }
+    });
+
+    it(`${name}: lid corners and mid points are the GPUPixel eye points`, () => {
+      for (const [k, i] of [
+        [0, 52],
+        [8, 55],
+        [4, 72],
+        [12, 73],
+        [16, 61],
+        [24, 58],
+        [20, 75],
+        [28, 76],
+      ] as const)
+        expect(at(f.lids, k)).toEqual(p(i));
+    });
+  }
+});

@@ -13,7 +13,8 @@ import { type FaceScene, portraitScene, sampleFaceScene, sampleWallScene } from 
 import { distanceOutside } from '../../body/mask';
 import { analysisGrid, forwardMap, REF_EDGE, segmentBend } from '../../body/straightness';
 import { syntheticPortrait } from '../../body/synthetic';
-import type { Face, ParamId } from '../../types';
+import { buildFaceProtect, protectWindow } from '../../tracking/faceProtect';
+import type { Face, ParamId, PersonMask } from '../../types';
 import { applyPreset, defaultParams, setParam } from '../params';
 import { PROTECT_SLOPE, reshapeUniforms } from './reshape';
 import { reshapeMapCpu, type UvMap } from './reshapeCpu';
@@ -262,4 +263,51 @@ describe('瘦臉 background limit (FaceProtect) on the reshape map', () => {
     // past the reach the wall does not move (the lines run down past the jaw and neck, which come closer)
     expect(rows[4][2], 'line 0.4 FW').toBeLessThan(0.05 * rows[4][1]);
   });
+});
+
+describe('the limit in a 128² window (≥ 2 selectable faces, S §4.7 item 5)', () => {
+  const raster = (inside: (u: number, v: number) => number): PersonMask => {
+    const mw = 192;
+    const mh = 256;
+    const data = new Uint8Array(mw * mh);
+    for (let y = 0; y < mh; y++) for (let x = 0; x < mw; x++) data[y * mw + x] = Math.round(255 * inside((x + 0.5) / mw, (y + 0.5) / mh));
+    return { width: mw, height: mh, data };
+  };
+  /** a portrait whose face is `fw` of the photo width, limited in its own window next to another face's oval */
+  const windowed = (fw: number): FaceScene => {
+    const pr = syntheticPortrait({ faceWidth: fw });
+    const P = pr.face.pts111;
+    // another face's oval (36 points on a circle, iso), two face widths to the right of this one
+    const r = fw / 2;
+    const cx = P[46 * 2] + 2 * fw;
+    const cy = P[46 * 2 + 1];
+    const other = new Float32Array(72);
+    for (let i = 0; i < 36; i++) {
+      const a = (i / 36) * 2 * Math.PI;
+      other[i * 2] = cx + r * Math.cos(a);
+      other[i * 2 + 1] = cy + ((r * pr.width) / pr.height) * Math.sin(a);
+    }
+    const protect = buildFaceProtect(
+      pr.face,
+      { own: raster(pr.inside), clipToCell: true, otherCentres: [[cx, cy]], otherOvals: [other], otherMasks: [], window: protectWindow(pr.face, pr.width, pr.height) },
+      pr.width,
+      pr.height,
+    );
+    return { name: `portrait fw ${fw}`, face: pr.face, width: pr.width, height: pr.height, inside: pr.inside, protect };
+  };
+  for (const fw of [0.05, 0.1, 0.25]) {
+    it(`a face ${fw} of the width: fold-free, bounded stretch, no crease beyond today's (+1°)`, () => {
+      const s = windowed(fw);
+      expect([s.protect.width, s.protect.height]).toEqual([128, 128]);
+      const aspect = s.width / s.height;
+      const u = reshapeUniforms(at(CONTOUR), 1);
+      const free = reshapeMapCpu(s.face, u, aspect);
+      const lim = reshapeMapCpu(s.face, u, aspect, null, s.protect);
+      const a = measure(s, free);
+      const b = measure(s, lim);
+      expect(b.minDet).toBeGreaterThanOrEqual(Math.max(MIN_DET, 1 - PROTECT_SLOPE - 0.02));
+      expect(b.stretchPct).toBeLessThanOrEqual(Math.max(a.stretchPct, Math.round(100 * (1 / (1 - PROTECT_SLOPE) - 1))) + 3);
+      expect(sharpestTurn(s, lim)).toBeLessThanOrEqual(sharpestTurn(s, free) + 1);
+    });
+  }
 });

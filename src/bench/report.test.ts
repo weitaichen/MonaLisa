@@ -4,7 +4,10 @@ import {
   type BodyBenchRow,
   formatBodyReport,
   formatElapsed,
+  formatExportRows,
+  formatMultiRows,
   formatReport,
+  liveRows,
   maskCoverage,
   median,
   summarize,
@@ -116,5 +119,87 @@ describe('美體偵測 report', () => {
     expect(median([])).toBe(0);
     expect(median([5, 1, 3])).toBe(3);
     expect(median([4, 1, 3, 2])).toBe(2.5);
+  });
+});
+
+describe('bench 多臉 report', () => {
+  it('formats rows as a tab-separated section with a header per row id', () => {
+    const text = formatMultiRows([
+      { row: 'D', config: 'GPU 2048 n8', values: { first_ms: 812.4, median_ms: 120, faces: 3 } },
+      { row: 'D', config: 'CPU 1440 n1', values: { first_ms: 300, median_ms: 90, faces: 1 } },
+      { row: 'GL', config: 'limits', values: { MAX_TEXTURE_SIZE: 16384 } },
+    ]);
+    expect(text).toContain('# 多臉 D');
+    expect(text).toContain('config\tfirst_ms\tmedian_ms\tfaces');
+    expect(text).toContain('GPU 2048 n8\t812.4\t120\t3');
+    expect(text).toContain('# 多臉 GL');
+  });
+});
+
+describe('bench 多臉 L / PL1 / PL2 (S §6.3)', () => {
+  const ms = (center: number, n = 21) => Array.from({ length: n }, (_, i) => center + (i - (n >> 1)) * 0.1);
+  it('one face in view: L rows per delegate and count, and PL2 = p50 at numFaces 3 minus p50 at numFaces 1, ≤ 5 ms', () => {
+    const rows = liveRows([
+      { delegate: 'GPU', numFaces: 1, times: ms(12), fps: 30, faces: 1 },
+      { delegate: 'GPU', numFaces: 2, times: ms(15), fps: 30, faces: 1 },
+      { delegate: 'GPU', numFaces: 3, times: ms(17), fps: 30, faces: 1 },
+      { delegate: 'CPU', numFaces: 1, times: ms(10), fps: 30, faces: 1 },
+      { delegate: 'CPU', numFaces: 3, times: ms(15.5), fps: 29, faces: 1 },
+    ]);
+    expect(rows.filter((r) => r.row === 'L').map((r) => r.config)).toEqual(['GPU numFaces 1', 'GPU numFaces 2', 'GPU numFaces 3', 'CPU numFaces 1', 'CPU numFaces 3']);
+    expect(rows.find((r) => r.config === 'GPU numFaces 3')!.values).toEqual({ p50_ms: 17, p95_ms: 17.9, fps: 30, faces: 1, frames: 21 });
+    const pl2 = rows.filter((r) => r.row === 'PL2');
+    expect(pl2).toEqual([
+      { row: 'PL2', config: 'GPU', values: { delta_p50_ms: 5, delta_p95_ms: 5, delta_pct: 41.7, limit_ms: 5, verdict: 'pass' } },
+      { row: 'PL2', config: 'CPU', values: { delta_p50_ms: 5.5, delta_p95_ms: 5.5, delta_pct: 55, limit_ms: 5, verdict: 'fail' } },
+    ]);
+    expect(rows.some((r) => r.row === 'PL1')).toBe(false);
+  });
+
+  it('three faces in view: PL1 per count ≥ 2 (p50 ≤ 20 ms and fps ≥ 24), no PL2', () => {
+    const rows = liveRows([
+      { delegate: 'GPU', numFaces: 1, times: ms(12), fps: 30, faces: 1 },
+      { delegate: 'GPU', numFaces: 2, times: ms(19), fps: 26, faces: 2 },
+      { delegate: 'GPU', numFaces: 3, times: ms(30), fps: 25, faces: 3 },
+      { delegate: 'CPU', numFaces: 3, times: ms(18), fps: 23.9, faces: 3 },
+    ]);
+    expect(rows.filter((r) => r.row === 'PL1')).toEqual([
+      { row: 'PL1', config: 'GPU numFaces 2', values: { p50_ms: 19, fps: 26, limit: 'p50 ≤ 20 ms, fps ≥ 24', verdict: 'pass' } },
+      { row: 'PL1', config: 'GPU numFaces 3', values: { p50_ms: 30, fps: 25, limit: 'p50 ≤ 20 ms, fps ≥ 24', verdict: 'fail' } },
+      { row: 'PL1', config: 'CPU numFaces 3', values: { p50_ms: 18, fps: 23.9, limit: 'p50 ≤ 20 ms, fps ≥ 24', verdict: 'fail' } },
+    ]);
+    expect(rows.some((r) => r.row === 'PL2')).toBe(false);
+  });
+
+  it('a delegate without a numFaces 1 run (or with no frames) gives no PL2 row', () => {
+    const rows = liveRows([
+      { delegate: 'GPU', numFaces: 3, times: ms(17), fps: 30, faces: 1 },
+      { delegate: 'CPU', numFaces: 1, times: [], fps: 0, faces: 0 },
+      { delegate: 'CPU', numFaces: 3, times: ms(15), fps: 30, faces: 1 },
+    ]);
+    expect(rows.some((r) => r.row === 'PL2')).toBe(false);
+    expect(rows.find((r) => r.config === 'CPU numFaces 1')!.values).toEqual({ p50_ms: 'n/a', p95_ms: 'n/a', fps: 0, faces: 0, frames: 0 });
+  });
+});
+
+describe('bench 多臉 L: the cost of a numFaces switch', () => {
+  it('reports the slowest first inference after a count switch (a graph rebuild) when the run measured one', () => {
+    const rows = liveRows([
+      { delegate: 'GPU', numFaces: 1, times: [12], fps: 30, faces: 1, switchMs: [380.24, 912.36] },
+      { delegate: 'GPU', numFaces: 3, times: [16], fps: 30, faces: 1, switchMs: [] },
+    ]);
+    expect(rows[0].values.switch_ms).toBe(912.4);
+    expect(rows[1].values).not.toHaveProperty('switch_ms');
+  });
+});
+
+describe('formatExportRows (S §6.4)', () => {
+  it('one TSV line per row with ms rounded, and — for manual or failed rows', () => {
+    expect(
+      formatExportRows([
+        { name: 'decode 12MP', ms: 412.6, detail: '4032×3024 from 4032×3024' },
+        { name: 'share after 3.5 / 4.5 / 5.5 s', ms: null, detail: 'manual on the iPhone' },
+      ]),
+    ).toBe('輸出\tms\t說明\ndecode 12MP\t413\t4032×3024 from 4032×3024\nshare after 3.5 / 4.5 / 5.5 s\t—\tmanual on the iPhone');
   });
 });

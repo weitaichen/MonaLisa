@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { h, render } from 'preact';
+import { act } from 'preact/test-utils';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cameraErrorCopy } from './cameraErrors';
 import { dragValue, formatDisplay } from './components/Slider';
 import { progressFraction, progressText } from './format';
-import { centerCropRect, cropPixels } from './imaging';
-import { clampView, pinchView } from './screens/zoomPan';
+import { centerCropRect, cropPixels, shotSeed } from './imaging';
+import { clampView, pinchView, useZoomPan, type ZoomPanOptions } from './screens/zoomPan';
 
 describe('slider maths', () => {
   it('relative drag maps px to value and clamps', () => {
@@ -21,6 +23,23 @@ describe('slider maths', () => {
     expect(formatDisplay(true, 0.62)).toBe('+12');
     expect(formatDisplay(true, 0.3)).toBe('−20');
     expect(formatDisplay(true, 0.5)).toBe('0');
+  });
+});
+
+describe('slider scale (拉直)', () => {
+  const deg = { min: -45, max: 45, step: 0.1, snap: 0.5, suffix: '°' };
+  it('display and text use the scale; no scale keeps today\'s output', () => {
+    expect(formatDisplay(true, (3.5 + 45) / 90, deg)).toBe('+3.5°');
+    expect(formatDisplay(true, (-12 + 45) / 90, deg)).toBe('−12.0°');
+    expect(formatDisplay(true, 0.5, deg)).toBe('0°');
+    expect(formatDisplay(true, 0.62)).toBe('+12');
+  });
+  it('drags quantize to the step and snap to 0 within ±0.5°', () => {
+    expect(dragValue(true, 0.5, 1, 900, deg)).toEqual({ v: 0.5, snapped: true });
+    const r = dragValue(true, 0.5, 10, 900, deg);
+    expect(r.snapped).toBe(false);
+    expect(Math.round((r.v * 90 - 45) * 10) / 10).toBe(1);
+    expect(dragValue(false, 0.5, 100, 200)).toEqual({ v: 1, snapped: false });
   });
 });
 
@@ -52,6 +71,142 @@ describe('zoom maths', () => {
     expect(v.y + v.s * 10).toBeCloseTo(10);
     const moved = pinchView({ s: 2, x: 10, y: 0 }, { x: 0, y: 0 }, { x: 30, y: 0 }, 1);
     expect(moved).toEqual({ s: 2, x: 40, y: 0 });
+  });
+});
+
+describe('zoomPan reset (裁切 opens, S §2.1)', () => {
+  // Preact's render compares its parent with `document`; the harness renders no DOM, so an empty stand-in will do
+  let saved: unknown;
+  beforeAll(() => {
+    saved = (globalThis as { document?: unknown }).document;
+    (globalThis as { document?: unknown }).document = {};
+  });
+  afterAll(() => {
+    (globalThis as { document?: unknown }).document = saved;
+  });
+
+  /** the stage and layer the hook writes to: listeners, capture, rects and the layer's style */
+  function rig() {
+    const listeners: Record<string, (e: unknown) => void> = {};
+    const rect = { left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100 };
+    const stage = {
+      addEventListener: (t: string, fn: (e: unknown) => void) => (listeners[t] = fn),
+      removeEventListener: (t: string) => delete listeners[t],
+      setPointerCapture: () => undefined,
+      getBoundingClientRect: () => rect,
+    };
+    const style: Record<string, string> & { setProperty(k: string, v: string): void } = {
+      setProperty(k: string, v: string) {
+        style[k] = v;
+      },
+    } as never;
+    const layer = { style, offsetWidth: 100, offsetHeight: 100, getBoundingClientRect: () => rect };
+    const stageRef = { current: stage as unknown as HTMLElement };
+    const layerRef = { current: layer as unknown as HTMLElement };
+    const root = { childNodes: [], firstChild: null } as unknown as Element;
+    function Harness({ enabled, opts }: { enabled: boolean; opts: ZoomPanOptions }) {
+      useZoomPan(stageRef, layerRef, enabled, opts);
+      return null;
+    }
+    const show = (enabled: boolean, opts: ZoomPanOptions = {}) => act(() => render(h(Harness, { enabled, opts }), root));
+    const target = { closest: () => null };
+    const fire = (type: string, pointerId: number, x: number, y: number) =>
+      act(() => listeners[type]({ type, pointerId, clientX: x, clientY: y, target }));
+    return { style, show, fire };
+  }
+
+  it('opening 裁切 puts a zoomed layer back to identity (transform, --zs) and the next pan starts from scale 1', () => {
+    const r = rig();
+    r.show(true);
+    r.fire('pointerdown', 1, 40, 50);
+    r.fire('pointerdown', 2, 60, 50);
+    r.fire('pointermove', 2, 80, 50); // pinch ×2
+    r.fire('pointerup', 2, 80, 50);
+    r.fire('pointerup', 1, 40, 50);
+    expect(r.style.transform).toContain('scale(2)');
+    expect(r.style['--zs']).toBe('2');
+    r.show(false, { resetWhen: true });
+    expect(r.style.transform).toBe('');
+    expect(r.style.transition).toBe('none');
+    expect(r.style['--zs']).toBe('1');
+    // back in normal mode: one finger at scale 1 does not pan (the hook's own view was reset too)
+    r.show(true, { resetWhen: false });
+    r.fire('pointerdown', 1, 50, 50);
+    r.fire('pointermove', 1, 80, 50);
+    r.fire('pointerup', 1, 80, 50);
+    expect(r.style.transform).toBe('');
+  });
+
+  it('resetWhen false leaves the zoom alone', () => {
+    const r = rig();
+    r.show(true);
+    r.fire('pointerdown', 1, 40, 50);
+    r.fire('pointerdown', 2, 60, 50);
+    r.fire('pointermove', 2, 80, 50);
+    r.fire('pointerup', 2, 80, 50);
+    r.fire('pointerup', 1, 40, 50);
+    r.show(true, { resetWhen: false });
+    expect(r.style.transform).toContain('scale(2)');
+  });
+
+  describe('the hook taps (step 1 view taps; skin-cleanup spec §2.3 spotTap)', () => {
+    /** a ×2 pinch about the centre, so a fit-to-view shows as an empty transform */
+    const zoomIn = (r: ReturnType<typeof rig>) => {
+      r.fire('pointerdown', 1, 40, 50);
+      r.fire('pointerdown', 2, 60, 50);
+      r.fire('pointermove', 2, 80, 50);
+      r.fire('pointerup', 2, 80, 50);
+      r.fire('pointerup', 1, 40, 50);
+    };
+    const tap = (r: ReturnType<typeof rig>, end = 'pointerup') => {
+      r.fire('pointerdown', 1, 50, 50);
+      r.fire(end, 1, 50, 50);
+    };
+
+    it('view: a quick double tap calls onTap twice and fits; a pinch is no tap', () => {
+      const r = rig();
+      const taps: [number, number][] = [];
+      r.show(true, { onTap: (uv) => taps.push(uv) });
+      zoomIn(r);
+      expect(taps).toEqual([]);
+      tap(r);
+      tap(r);
+      expect(taps).toEqual([[0.5, 0.5], [0.5, 0.5]]);
+      expect(r.style.transform).toBe('');
+    });
+
+    it('view: a pointercancel calls no onTap but still counts toward the double tap', () => {
+      const r = rig();
+      const taps: [number, number][] = [];
+      r.show(true, { onTap: (uv) => taps.push(uv) });
+      zoomIn(r);
+      tap(r, 'pointercancel');
+      expect(taps).toEqual([]);
+      tap(r);
+      expect(taps).toEqual([[0.5, 0.5]]);
+      expect(r.style.transform).toBe('');
+    });
+
+    it('spot: a quick double tap is two spotTaps with the layer rect, no onTap and no fit (Review Focus 2)', () => {
+      const r = rig();
+      const spots: [number, number][] = [];
+      const views: number[] = [];
+      r.show(true, { onTap: (uv) => views.push(uv[0]), spotTap: (uv, rect) => spots.push([uv[0], rect.width]) });
+      zoomIn(r);
+      tap(r);
+      tap(r);
+      expect(spots).toEqual([[0.5, 100], [0.5, 100]]);
+      expect(views).toEqual([]);
+      expect(r.style.transform).toContain('scale(2)');
+    });
+
+    it('spot: a pointercancel adds no spot', () => {
+      const r = rig();
+      const spots: [number, number][] = [];
+      r.show(true, { spotTap: (uv) => spots.push(uv) });
+      tap(r, 'pointercancel');
+      expect(spots).toEqual([]);
+    });
   });
 });
 
@@ -93,5 +248,16 @@ describe('site security headers (vercel.json, mirrored into vite preview)', () =
     const directives = new Map(csp.split(';').map((d) => d.trim().split(/\s+/)).map(([k, ...v]) => [k, v.join(' ')]));
     expect(directives.get('connect-src')).toBe("'self'");
     for (const d of ['frame-ancestors', 'base-uri', 'form-action', 'object-src']) expect(directives.get(d), d).toBe("'none'");
+  });
+});
+
+describe('camera → editor seed (S §3.4 C2)', () => {
+  it('maps into the saved crop, mirrors with the saved image, never clamps', () => {
+    const r = centerCropRect(1280, 720, 3 / 4); // 540 × 720 at x 370
+    expect(shotSeed({ x: 0.5, y: 0.5 }, 1280, 720, 3 / 4, false)).toEqual({ x: (640 - r.x) / r.width, y: 0.5 });
+    expect(shotSeed({ x: 0.5, y: 0.25 }, 1280, 720, 3 / 4, true)).toEqual({ x: 1 - (640 - r.x) / r.width, y: 0.25 });
+    expect((shotSeed({ x: 0.1, y: 0.5 }, 1280, 720, 3 / 4, false) as { x: number }).x).toBeLessThan(0);
+    expect(shotSeed('all', 1280, 720, 1, false)).toBe('all');
+    expect(shotSeed(null, 1280, 720, 1, false)).toBeNull();
   });
 });

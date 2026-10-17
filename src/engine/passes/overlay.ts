@@ -1,25 +1,60 @@
 // Debug overlay: draws the 111 adapted points (lime) + ext anchors (magenta) as round GL_POINTS
-// onto the canvas, with the same flip-Y / mirror-X as the present pass.
+// onto the canvas, with the same flip-Y / mirror-X as the present pass; step 5: the eye frames (cyan). The points are
+// O-space UV and the canvas shows V, so they go through the view's O → V map first (step 3, C §2.2).
+import { IDENTITY_MAT3 } from '../../geometry/view';
 import type { Face } from '../../types';
 import { createProgram } from '../gl/gl';
 import type { GL, Program } from '../gl/gl';
+import { browGapEnd, eyeFrames, eyeToUv, LID_STATIONS, STATION_XS } from './eyeFrame';
 
 export interface LandmarkOverlay {
-  /** Draw onto the currently bound canvas framebuffer using the SAME flipY/mirrorX as the present pass. */
-  draw(face: Face, mirrorX: boolean): void;
+  /**
+   * Draw onto the currently bound canvas framebuffer using the SAME flipY/mirrorX as the present pass. `oToV`: the
+   * view's O → V map of normalized UV (glMat3 of view.ts oToV); the identity in 裁切 mode and in the camera.
+   */
+  draw(face: Face, mirrorX: boolean, aspect?: number, oToV?: Float32Array): void;
   dispose(): void;
 }
 
 const POINT_SIZE = 4;
 
+/** per eye: 17 upper + 17 lower lid stations, the brow end of each upper station's gap, 24 iris-circle points */
+const EYE_POINTS = 2 * (LID_STATIONS * 3 + 24);
+
+/** UV points of the eye frames for the 顯示臉部特徵點 overlay (face-detail spec §3.6) */
+export function eyeDebugPoints(face: Face, aspect: number): Float32Array {
+  const out = new Float32Array(EYE_POINTS * 2);
+  let n = 0;
+  const put = (p: readonly [number, number]) => {
+    out[n++] = p[0];
+    out[n++] = p[1];
+  };
+  for (const f of eyeFrames(face, aspect)) {
+    STATION_XS.forEach((x, k) => {
+      put(eyeToUv(f, x, f.upper[k], aspect));
+      put(eyeToUv(f, x, f.lower[k], aspect));
+      const e = browGapEnd(f, x, f.upper[k]);
+      put(eyeToUv(f, e[0], e[1], aspect));
+    });
+    const iris = f.iris ?? f.irisFallback;
+    for (let j = 0; j < 24; j++) {
+      const t = (j / 24) * 2 * Math.PI;
+      put([iris.c[0] + iris.r * Math.cos(t), (iris.c[1] + iris.r * Math.sin(t)) * aspect]);
+    }
+  }
+  return out;
+}
+
 const OVERLAY_VS = /* glsl */ `#version 300 es
-in vec2 aPos;          // UV, top-left origin
+in vec2 aPos;          // O-space UV, top-left origin
+uniform mat3 uOToV;    // O → V, normalized: the canvas shows V (identity at identity geometry, in 裁切 mode, in the camera)
 uniform float uMirror; // 1 = mirror X
 uniform float uSize;
 void main() {
-  float x = mix(aPos.x, 1.0 - aPos.x, uMirror);
+  vec2 v = (uOToV * vec3(aPos, 1.0)).xy;
+  float x = mix(v.x, 1.0 - v.x, uMirror);
   // Canvas: NDC +1 is the top row, so image top (v=0) maps to +1 (the present flip).
-  gl_Position = vec4(x * 2.0 - 1.0, 1.0 - aPos.y * 2.0, 0.0, 1.0);
+  gl_Position = vec4(x * 2.0 - 1.0, 1.0 - v.y * 2.0, 0.0, 1.0);
   gl_PointSize = uSize;
 }`;
 
@@ -37,7 +72,7 @@ export function createLandmarkOverlay(gl: GL): LandmarkOverlay {
   const prog: Program = createProgram(gl, OVERLAY_VS, OVERLAY_FS, 'overlay');
   const vao = gl.createVertexArray();
   const buf = gl.createBuffer();
-  const pts = new Float32Array(222 + 16);
+  const pts = new Float32Array(Math.max(222 + 16, EYE_POINTS * 2));
   gl.bindVertexArray(vao);
   gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(gl.ARRAY_BUFFER, pts.byteLength, gl.DYNAMIC_DRAW);
@@ -48,12 +83,13 @@ export function createLandmarkOverlay(gl: GL): LandmarkOverlay {
   gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
   return {
-    draw(face, mirrorX) {
+    draw(face, mirrorX, aspect = 1, oToV = IDENTITY_MAT3) {
       const n111 = Math.min(111, face.pts111.length >> 1);
       const nExt = Math.min(8, face.ext.length >> 1);
       pts.set(face.pts111.subarray(0, n111 * 2), 0);
       pts.set(face.ext.subarray(0, nExt * 2), n111 * 2);
       prog.use();
+      gl.uniformMatrix3fv(prog.u('uOToV'), false, oToV);
       gl.uniform1f(prog.u('uMirror'), mirrorX ? 1 : 0);
       gl.uniform1f(prog.u('uSize'), POINT_SIZE);
       gl.bindVertexArray(vao);
@@ -65,6 +101,12 @@ export function createLandmarkOverlay(gl: GL): LandmarkOverlay {
       gl.drawArrays(gl.POINTS, 0, n111);
       gl.uniform3f(prog.u('uColor'), 1, 0.2, 0.85);
       gl.drawArrays(gl.POINTS, n111, nExt);
+      const eyes = eyeDebugPoints(face, aspect);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, eyes);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+      gl.uniform3f(prog.u('uColor'), 0.2, 0.9, 1);
+      gl.drawArrays(gl.POINTS, 0, eyes.length / 2);
       gl.bindVertexArray(null);
     },
     dispose() {

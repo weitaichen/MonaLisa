@@ -1,5 +1,6 @@
 // Pixel helpers for capture: the viewfinder crops the canvas with object-fit: cover, so the saved
 // image is centre-cropped to the same ratio here (on the ImageData, before encoding).
+import type { FaceSeed, Rect as UvRect } from '../types';
 
 export interface Rect {
   x: number;
@@ -20,6 +21,13 @@ export function centerCropRect(w: number, h: number, ratio: number): Rect {
   cw = Math.min(w, Math.max(1, cw));
   ch = Math.min(h, Math.max(1, ch));
   return { x: Math.floor((w - cw) / 2), y: Math.floor((h - ch) / 2), width: cw, height: ch };
+}
+
+/** centerCropRect as normalized source UV (the camera's picture frame, step-2 spec §4.5); the whole frame when empty. */
+export function normalizedCropRect(w: number, h: number, ratio: number): UvRect {
+  if (!(w > 0 && h > 0)) return { x: 0, y: 0, w: 1, h: 1 };
+  const r = centerCropRect(w, h, ratio);
+  return { x: r.x / w, y: r.y / h, w: r.width / w, h: r.height / h };
 }
 
 /** Copy `rect` out of `src` (rows are top-first, as returned by the engine). */
@@ -62,4 +70,16 @@ export async function grabOriginalFrame(video: HTMLVideoElement, ratio: number, 
   const bmp = await createImageBitmap(canvas);
   canvas.width = canvas.height = 0; // release backing store promptly (iOS memory)
   return bmp;
+}
+
+/**
+ * The camera's seed in the saved photo (S §3.4 C2): video UV → the centre crop, then mirrored when the shot is saved
+ * mirrored. Not clamped: a seed outside the crop must not match an edge face.
+ */
+export function shotSeed(seed: { x: number; y: number } | 'all' | null, vw: number, vh: number, ratio: number, mirrored: boolean): FaceSeed {
+  if (seed === null || seed === 'all') return seed;
+  const r = centerCropRect(vw, vh, ratio);
+  const x = (seed.x * vw - r.x) / r.width;
+  const y = (seed.y * vh - r.y) / r.height;
+  return { x: mirrored ? 1 - x : x, y };
 }

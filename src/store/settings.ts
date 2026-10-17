@@ -5,7 +5,9 @@
 // corrupt or from another version. Loads therefore always return a complete, valid object and
 // saves never throw.
 import { sanitizeParams } from '../engine/params';
-import type { BeautyParams, Prefs } from '../types';
+import { splitLegacy } from '../edit/legacy';
+import { naturalPerson, sanitizePerson, sanitizePhoto } from '../edit/state';
+import type { BeautyParams, CameraLook, ExportFormat, ExportSize, Prefs } from '../types';
 
 export const PARAMS_KEY = 'meiyan.params.v1';
 export const PREFS_KEY = 'meiyan.prefs.v1';
@@ -17,10 +19,14 @@ export const DEFAULT_PREFS: Prefs = {
   showLandmarks: false,
   delegate: 'auto',
   installHintDismissed: false,
+  exportFormat: 'jpeg',
+  exportSize: 'full',
 };
 
 const TIERS: readonly Prefs['tier'][] = ['auto', 'H', 'M', 'L'];
 const DELEGATES: readonly Prefs['delegate'][] = ['auto', 'CPU'];
+const FORMATS: readonly ExportFormat[] = ['jpeg', 'png'];
+const SIZES: readonly ExportSize[] = ['full', 'standard'];
 
 export function loadParams(): BeautyParams {
   return sanitizeParams(readJson(PARAMS_KEY));
@@ -38,6 +44,32 @@ export function savePrefs(p: Prefs): void {
   writeJson(PREFS_KEY, sanitizePrefs(p));
 }
 
+export const LOOK_KEY = 'meiyan.look.v1';
+
+/** Untrusted camera look → valid (RM §3.7): every field defaulted; no geometry / spots / strokes in the camera. */
+export function sanitizeLook(raw: unknown): CameraLook {
+  const r = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  return { photo: sanitizePhoto(r.photo), person: sanitizePerson(r.person, naturalPerson()) };
+}
+
+/**
+ * The live-camera look. The first load without meiyan.look.v1 migrates meiyan.params.v1 (0.3) through splitLegacy and
+ * stores the result; meiyan.params.v1 is neither written nor deleted (RM §3.7). A fresh install (neither key) gets
+ * the 自然 look and writes nothing, so hasSavedSettings still tells it from a returning user (announceUpdate).
+ */
+export function loadLook(): CameraLook {
+  const raw = readJson(LOOK_KEY);
+  if (raw !== undefined) return sanitizeLook(raw);
+  const legacy = readJson(PARAMS_KEY);
+  const look = splitLegacy(sanitizeParams(legacy));
+  if (legacy !== undefined) writeJson(LOOK_KEY, look);
+  return look;
+}
+
+export function saveLook(l: CameraLook): void {
+  writeJson(LOOK_KEY, sanitizeLook(l));
+}
+
 /** Untrusted value → complete Prefs: each field kept only if it has the right type/value, else default. */
 export function sanitizePrefs(raw: unknown): Prefs {
   const out: Prefs = { ...DEFAULT_PREFS };
@@ -53,6 +85,8 @@ export function sanitizePrefs(raw: unknown): Prefs {
   bool('installHintDismissed');
   if (TIERS.includes(r.tier as Prefs['tier'])) out.tier = r.tier as Prefs['tier'];
   if (DELEGATES.includes(r.delegate as Prefs['delegate'])) out.delegate = r.delegate as Prefs['delegate'];
+  if (FORMATS.includes(r.exportFormat as ExportFormat)) out.exportFormat = r.exportFormat as ExportFormat;
+  if (SIZES.includes(r.exportSize as ExportSize)) out.exportSize = r.exportSize as ExportSize;
   return out;
 }
 
@@ -106,8 +140,118 @@ export function saveSeenVersion(v: string): boolean {
 export function hasSavedSettings(): boolean {
   try {
     const s = storage();
-    return !!s && (s.getItem(PARAMS_KEY) !== null || s.getItem(PREFS_KEY) !== null);
+    return !!s && (s.getItem(PARAMS_KEY) !== null || s.getItem(PREFS_KEY) !== null || s.getItem(LOOK_KEY) !== null);
   } catch {
     return false;
   }
+}
+
+// ───────────── the 美妝 part list was opened on this device (face-detail spec §2.3) ─────────────
+
+export const SEEN_MAKEUP_PARTS_KEY = 'meiyan.seen.makeupParts.v1';
+
+/** false until the part list has been opened once (the leading tile shows an accent dot meanwhile) */
+export function loadMakeupPartsSeen(): boolean {
+  return readJson(SEEN_MAKEUP_PARTS_KEY) === true;
+}
+
+export function saveMakeupPartsSeen(): void {
+  writeJson(SEEN_MAKEUP_PARTS_KEY, true);
+}
+
+// ───────────── one-time hints ─────────────
+
+export const PERSONS_HINT_KEY = 'meiyan.hint.persons.v1';
+
+/** The first group photo ever shows 「點選臉部或下方人物，可個別調整」 once (S §1.1 item 11): true once, then false. */
+export function takePersonsHint(): boolean {
+  if (readJson(PERSONS_HINT_KEY) !== undefined) return false;
+  writeJson(PERSONS_HINT_KEY, 1);
+  // storage that silently drops writes (private mode) would repeat the hint on every photo: show it only if it stuck
+  return readJson(PERSONS_HINT_KEY) !== undefined;
+}
+
+// ───────────── full-resolution export: crash breadcrumb, cap and test knob (step-3 spec §3.7) ─────────────
+
+export const EXPORT_GUARD_KEY = 'meiyan.exportGuard.v1';
+export const EXPORT_CAP_KEY = 'meiyan.exportCap.v1';
+export const EXPORT_DEBUG_KEY = 'meiyan.debug.export.v1';
+/** the long edge exports fall back to after a full export died */
+export const EXPORT_CAP_EDGE = 2048;
+
+export interface ExportGuard {
+  at: number;
+  w: number;
+  h: number;
+  format: ExportFormat;
+}
+
+function removeKey(key: string): void {
+  try {
+    storage()?.removeItem(key);
+  } catch {
+    // disabled storage: nothing to remove
+  }
+}
+
+function hasKey(key: string): boolean {
+  try {
+    return storage()?.getItem(key) != null;
+  } catch {
+    return false;
+  }
+}
+
+/** written synchronously right before a tiled export; a launch that finds it knows the page died while saving */
+export function writeExportGuard(g: ExportGuard): void {
+  writeJson(EXPORT_GUARD_KEY, g);
+}
+
+export function clearExportGuard(): void {
+  removeKey(EXPORT_GUARD_KEY);
+}
+
+export function readExportGuard(): ExportGuard | null {
+  const r = readJson(EXPORT_GUARD_KEY);
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return null;
+  const { at, w, h, format } = r as Record<string, unknown>;
+  const n = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
+  if (!n(at) || !n(w) || !n(h) || (format !== 'jpeg' && format !== 'png')) return null;
+  return { at: at as number, w: w as number, h: h as number, format };
+}
+
+/** At launch: a breadcrumb found → remove it, cap exports at 2048 and tell the caller to toast once (S §3.7). */
+export function consumeExportGuardAtLaunch(): boolean {
+  const g = readExportGuard();
+  if (hasKey(EXPORT_GUARD_KEY)) removeKey(EXPORT_GUARD_KEY);
+  if (!g) return false;
+  writeJson(EXPORT_CAP_KEY, EXPORT_CAP_EDGE);
+  return true;
+}
+
+export function exportCapped(): boolean {
+  return readJson(EXPORT_CAP_KEY) === EXPORT_CAP_EDGE;
+}
+
+/** choosing 原始解析度 in 設定 lifts the cap (S D8) */
+export function clearExportCap(): void {
+  removeKey(EXPORT_CAP_KEY);
+}
+
+export interface ExportDebugKnob {
+  tile?: 256 | 512 | 1024 | 2048;
+  slowMs?: number;
+  failAt?: 'decode' | 'tile' | 'encode';
+}
+
+/** e2e knob (works in the production build): read once per export; it never changes the output */
+export function readExportDebug(): ExportDebugKnob {
+  const r = readJson(EXPORT_DEBUG_KEY);
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return {};
+  const { tile, slowMs, failAt } = r as Record<string, unknown>;
+  const out: ExportDebugKnob = {};
+  if (tile === 256 || tile === 512 || tile === 1024 || tile === 2048) out.tile = tile;
+  if (typeof slowMs === 'number' && Number.isFinite(slowMs) && slowMs > 0) out.slowMs = slowMs;
+  if (failAt === 'decode' || failAt === 'tile' || failAt === 'encode') out.failAt = failAt;
+  return out;
 }

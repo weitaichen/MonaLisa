@@ -1,4 +1,4 @@
-/* MonaLisa 美顏 — Darkroom Pro (spec §7.1). Dark-only, opaque black chrome, lime accent. */
+/* Mona Misa 美顏 — Darkroom Pro (spec §7.1). Dark-only, opaque black chrome, lime accent. */
 
 :root {
   color-scheme: dark;
@@ -285,7 +285,6 @@ button:focus-visible {
   background: var(--bg);
   position: relative;
   z-index: 2;
-  overflow: hidden;
   display: grid;
   grid-template-rows: 1fr;
   /* without minmax(0,…) the column grows to the strip's max-content width */
@@ -295,9 +294,11 @@ button:focus-visible {
 .panel.collapsed {
   grid-template-rows: 0fr;
 }
+/* the collapse clips here, not on .panel: the 美膚 .skin-note (positioned against .panel) rises above the panel's top */
 .panel-inner {
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .strip {
@@ -420,7 +421,7 @@ button:focus-visible {
 .tabs {
   display: flex;
   justify-content: space-between;
-  /* six two-character tabs: ≥ 60 px each at 375 pt */
+  /* up to 8 tabs (v0.4 roadmap §2.1): (375 − 12)/8 = 45.4 pt each, still ≥ 44 pt — never a 9th */
   padding: 0 6px;
   height: 46px;
 }
@@ -435,6 +436,26 @@ button:focus-visible {
   letter-spacing: 0.03em;
   white-space: nowrap;
   transition: color 160ms;
+}
+/* below 364 pt the editor's 8 tabs would fall under 44 pt ((363 − 12)/8 < 44; 38.5 pt at 320): they keep 44 pt and the
+   bar scrolls, its right edge faded over a 20 px end padding, so the last tab scrolls clear of the fade (BeautyPanel
+   keeps the active one there). The camera's 7 tabs still fit at 320 pt ((320 − 12)/7 = 44) and are left alone */
+@media (max-width: 363px) {
+  .tabs:has(> .tab:nth-child(8)) {
+    justify-content: flex-start;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0 20px 0 6px;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+    mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  }
+  .tabs:has(> .tab:nth-child(8))::-webkit-scrollbar {
+    display: none;
+  }
+  .tabs:has(> .tab:nth-child(8)) > .tab {
+    flex: 1 0 44px;
+  }
 }
 .tab.active {
   color: var(--text);
@@ -483,6 +504,20 @@ button:focus-visible {
   color: var(--text-2);
   white-space: normal;
 }
+/* 調節: 「質感：膠片」 leads the strip while a look is set (tap → 一鍵 › 質感) */
+.lead-chip {
+  flex: none;
+  align-self: center;
+  height: 32px;
+  margin: 0 4px 0 0;
+  padding: 0 12px;
+  border-radius: 16px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
 .strip.face-off .item {
   opacity: 0.4;
 }
@@ -528,6 +563,38 @@ button:focus-visible {
 .item.switchable.on .item-switch::after {
   background: var(--accent-ink);
   transform: translateX(6px);
+}
+/* 美妝 (face-detail spec §2.3): the leading part tile (‹, first-run dot) and the level-1 shade swatch */
+.item.part.lead .item-tile {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.part-back {
+  position: absolute;
+  left: 4px;
+  top: 2px;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 12px;
+  color: var(--accent);
+}
+.seen-dot {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+.mini-swatch {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 5px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
 }
 .body-note {
   width: 126px;
@@ -581,6 +648,23 @@ button:focus-visible {
 }
 .body-note-action:active {
   background: var(--panel);
+}
+/* 美膚: a tone item's note (skin-cleanup spec §2.2), above the strip and outside the scroller, in the 24 px band between
+   the docked slider's thumb and the tiles: neither the canvas nor the strip moves when it shows */
+.skin-note {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: -8px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 13px;
+  color: var(--text-2);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
 }
 
 /* ───────────── 增高 band (HeightBandOverlay) ───────────── */
@@ -717,6 +801,47 @@ button:focus-visible {
   text-align: right;
   color: var(--text);
 }
+/* 左右分開 (face-detail spec §2.2): the side chips replace the slider label; the other side's value under the track */
+.side-chips {
+  position: relative;
+  flex: none;
+  display: flex;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.side-chip {
+  appearance: none;
+  border: 0;
+  width: 44px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  color: #d1d1d6;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+}
+.side-chip.on {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+/* 「各人不同」 beside the chips (under 全部): a flex item of its own, kept on one line */
+.side-chips + .slider-mixed {
+  position: relative;
+  flex: none;
+  margin-left: -4px;
+  white-space: nowrap;
+}
+.side-caption {
+  position: absolute;
+  left: 0;
+  bottom: 1px;
+  font-size: 10px;
+  line-height: 12px;
+  color: var(--text-2);
+  pointer-events: none;
+}
 .slider {
   position: relative;
   flex: 1;
@@ -733,6 +858,26 @@ button:focus-visible {
   margin-top: -1.5px;
   border-radius: 1.5px;
   background: rgba(255, 255, 255, 0.22);
+}
+/* 色溫 / 色調 (調節): the track shows which way the colour moves; the accent fill still marks the value */
+.slider-track.track-temperature {
+  background: linear-gradient(90deg, #4f8dff, rgba(255, 255, 255, 0.22) 50%, #ffae42);
+}
+.slider-track.track-tint {
+  background: linear-gradient(90deg, #3ecf6e, rgba(255, 255, 255, 0.22) 50%, #e04fd8);
+}
+/* 膚色: the end captions 冷 / 暖 under the two ends of the track (skin-cleanup spec §2.2) */
+.slider-ends {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(50% + 9px);
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-2);
+  pointer-events: none;
 }
 .slider-fill {
   position: absolute;
@@ -1616,6 +1761,199 @@ button:focus-visible {
   transform-origin: 50% 50%;
   will-change: transform;
 }
+/* 祛痘 (skin-cleanup spec §2.3): the tap ring in .zoom-layer, the hint caption, the size control and the 清除 button */
+.spot-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.spot-ring {
+  position: absolute;
+  aspect-ratio: 1;
+  border: calc(1.5px / var(--zs, 1)) solid var(--accent);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  animation: spot-ring 350ms ease-out forwards;
+}
+@keyframes spot-ring {
+  from {
+    transform: translate(-50%, -50%) scale(1.15);
+    opacity: 1;
+  }
+  to {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spot-ring {
+    animation: none;
+  }
+}
+.corner-label.spot-hint {
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.spot-controls .segmented button {
+  min-width: 44px;
+}
+/* a 44 pt target on one line, never squeezed by the row (「全部清除（100）」 is the longest label) */
+.spot-clear {
+  flex: none;
+  margin-left: auto;
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 22px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+.spot-clear.confirm {
+  background: var(--danger);
+  color: #fff;
+}
+.spot-clear:disabled {
+  opacity: 0.4;
+}
+/* below 360 pt the row's 16 px margins, 10 px gaps and 40 px label leave 92 px for 清除: 8 px margins, 6 px gaps, the
+   label at its width and a 12 px label with 8 px padding make room for 「全部清除（100）」 at 320 pt */
+@media (max-width: 359px) {
+  .slider-row.spot-controls {
+    padding: 0 8px;
+    gap: 6px;
+  }
+  .spot-controls .slider-label {
+    min-width: 0;
+  }
+  .spot-clear {
+    padding: 0 8px;
+    font-size: 12px;
+  }
+}
+/* 裁切 mode (S §2.1): the frame fills the stage, so a 拉直 corner stays visible under the scrim */
+.editor-stage .frame.crop-mode {
+  width: 100cqw;
+  height: 100cqh;
+  transition: none;
+}
+.crop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  touch-action: none;
+}
+.crop-box {
+  position: absolute;
+  outline: 1px solid #fff;
+  box-shadow: 0 0 0 200vmax rgba(0, 0, 0, 0.55);
+}
+.crop-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(to right, transparent calc(33.333% - 0.25px), rgba(255, 255, 255, 0.5) calc(33.333% - 0.25px), rgba(255, 255, 255, 0.5) calc(33.333% + 0.25px), transparent calc(33.333% + 0.25px), transparent calc(66.667% - 0.25px), rgba(255, 255, 255, 0.5) calc(66.667% - 0.25px), rgba(255, 255, 255, 0.5) calc(66.667% + 0.25px), transparent calc(66.667% + 0.25px)),
+    linear-gradient(to bottom, transparent calc(33.333% - 0.25px), rgba(255, 255, 255, 0.5) calc(33.333% - 0.25px), rgba(255, 255, 255, 0.5) calc(33.333% + 0.25px), transparent calc(33.333% + 0.25px), transparent calc(66.667% - 0.25px), rgba(255, 255, 255, 0.5) calc(66.667% - 0.25px), rgba(255, 255, 255, 0.5) calc(66.667% + 0.25px), transparent calc(66.667% + 0.25px));
+}
+.crop-handle {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  padding: 0;
+  background: transparent;
+}
+.crop-handle.corner.tl,
+.crop-handle.edge.left,
+.crop-handle.corner.bl {
+  left: 0;
+}
+.crop-handle.corner.tr,
+.crop-handle.edge.right,
+.crop-handle.corner.br {
+  left: 100%;
+}
+.crop-handle.corner.tl,
+.crop-handle.edge.top,
+.crop-handle.corner.tr {
+  top: 0;
+}
+.crop-handle.corner.bl,
+.crop-handle.edge.bottom,
+.crop-handle.corner.br {
+  top: 100%;
+}
+.crop-handle.edge.top,
+.crop-handle.edge.bottom {
+  left: 50%;
+}
+.crop-handle.edge.left,
+.crop-handle.edge.right {
+  top: 50%;
+}
+.crop-handle::before {
+  content: '';
+  position: absolute;
+  left: 22px;
+  top: 22px;
+  border: 0 solid #fff;
+}
+.crop-handle.corner::before {
+  width: 20px;
+  height: 20px;
+}
+.crop-handle.corner.tl::before {
+  margin: -3px 0 0 -3px;
+  border-width: 3px 0 0 3px;
+}
+.crop-handle.corner.tr::before {
+  margin: -3px 0 0 -17px;
+  border-width: 3px 3px 0 0;
+}
+.crop-handle.corner.bl::before {
+  margin: -17px 0 0 -3px;
+  border-width: 0 0 3px 3px;
+}
+.crop-handle.corner.br::before {
+  margin: -17px 0 0 -17px;
+  border-width: 0 3px 3px 0;
+}
+.crop-handle.edge.top::before,
+.crop-handle.edge.bottom::before {
+  width: 24px;
+  height: 3px;
+  margin: -1.5px 0 0 -12px;
+  background: #fff;
+}
+.crop-handle.edge.left::before,
+.crop-handle.edge.right::before {
+  width: 3px;
+  height: 24px;
+  margin: -12px 0 0 -1.5px;
+  background: #fff;
+}
+/* 增高 lines are E rows: in a straightened or cropped view they live in the E box (BandPlane) */
+.hband-clip {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.hband-clip.clipped {
+  overflow: hidden;
+}
+.hband-plane {
+  position: absolute;
+  transform-origin: 50% 50%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .editor-stage .canvas-host {
+    transition: none !important;
+  }
+}
 .editor-stage .display-canvas {
   object-fit: contain;
 }
@@ -1681,6 +2019,136 @@ button:focus-visible {
   height: var(--sab);
   flex: none;
 }
+
+/* ───────────── 推臉筆 (push-brush spec §2.2, §2.3) ───────────── */
+
+/* the bar takes the slider row's place: 50 px tall (.editor-panel .slider-row), every target ≥ 44 pt */
+.editor-panel .brush-bar {
+  justify-content: space-between;
+  gap: 0;
+}
+.brush-bar .segmented {
+  flex: none;
+}
+.brush-bar .segmented:nth-of-type(1) button {
+  min-width: 48px;
+}
+.brush-bar .segmented:nth-of-type(2) button {
+  min-width: 44px;
+}
+.brush-clear {
+  width: 88px;
+  min-height: 44px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.35);
+  transition: background-color 140ms;
+}
+.brush-clear.confirm {
+  background: var(--danger);
+  color: #fff;
+}
+.brush-clear:disabled {
+  opacity: 0.38;
+}
+/* below 360 pt the bar's 356 px would scroll: 44 px 推／恢復, a 64 px 全部清除 at 12 px, 8 px margins and 6 px gaps
+   (292 + 12 + 16 = 320); every target stays 44 pt tall and at least 44 pt wide */
+@media (max-width: 359px) {
+  .editor-panel .brush-bar {
+    padding: 0 8px;
+    gap: 6px;
+  }
+  .brush-bar .segmented:nth-of-type(1) button {
+    min-width: 44px;
+  }
+  .brush-clear {
+    width: 64px;
+    font-size: 12px;
+  }
+}
+.brush-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 2;
+}
+.brush-ring {
+  fill: none;
+  stroke-width: 1.5px;
+}
+.brush-ring.push {
+  stroke: var(--accent);
+}
+.brush-ring.restore {
+  stroke: #fff;
+  stroke-dasharray: 4 4;
+}
+.brush-ring.dim {
+  stroke: var(--dim);
+}
+.brush-ring.hidden {
+  display: none;
+}
+.brush-hint {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  padding: 6px 12px;
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: brush-hint 2800ms forwards;
+}
+@keyframes brush-hint {
+  0%,
+  89% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+/* 正在套用推臉筆… (push-brush spec §3.5): the hint pill's place and shape, so the previous frame stays visible */
+.liquify-busy {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: screen-in 200ms;
+}
+.liquify-busy .spinner {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
+/* 推臉筆 is never gated: it stays bright while the face note dims the rest of 美型 (push-brush spec §2.1) */
+.strip.face-off .item.brush-item {
+  opacity: 1;
+}
+
 .title-center {
   position: absolute;
   left: 50%;
@@ -1990,6 +2458,8 @@ button.row:active {
   font-size: 14px;
   font-weight: 600;
   text-align: center;
+  /* a tile's first-touch line and its own notice (panelModel tapToast) */
+  white-space: pre-line;
   pointer-events: none;
   animation: toast-in 260ms var(--ease-out);
 }
@@ -2086,5 +2556,194 @@ button.row:active {
   *::after {
     animation-duration: 1ms !important;
     transition-duration: 1ms !important;
+  }
+}
+
+/* v0.4 persons (S §2.1, §2.4) */
+/* 「整張」 on photo-level tiles with ≥ 2 persons: inside the corner, the tile clips (overflow: hidden) */
+.item-badge {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  padding: 0 3px;
+  border-radius: 4px;
+  font-size: 9px;
+  line-height: 13px;
+  background: var(--elevated);
+  color: var(--text-2);
+}
+/* 背景保護 keeps its on/off switch in the bottom corner: its badge goes to the top */
+.item.switchable .item-badge {
+  top: 2px;
+  bottom: auto;
+}
+.slider-mixed {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+/* the empty row is invisible; with a text (程度 under 全部 with different presets: 各人不同) it shows it */
+.slider-row.empty.has-text {
+  opacity: 1;
+}
+.slider-row.empty .slider-empty {
+  margin: auto;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* ───────────── persons (S §2.1): the strip and the face boxes ───────────── */
+.person-strip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 52px;
+  padding: 0 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
+}
+.person-strip.dim .person-chip {
+  /* (--dim is a colour token: dimming is an opacity, as for the other dimmed controls) */
+  opacity: 0.4;
+}
+.strip-scope {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.person-chip {
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 0;
+  background: var(--elevated);
+  color: var(--text);
+  font-size: 13px;
+}
+.person-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.person-chip[aria-checked='true'] {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.person-chip.changed,
+.face-box.changed {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.chip-num {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  font-size: 11px;
+  text-shadow: 0 0 2px #000;
+}
+.chip-ruler {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 10px;
+  height: 3px;
+  background: var(--accent);
+}
+.face-boxes {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transition: opacity 200ms;
+}
+.face-boxes.idle .face-box:not(.changed) {
+  opacity: 0.3;
+}
+.face-boxes.dim {
+  opacity: 0.4;
+}
+.face-box {
+  position: absolute;
+  --c: rgb(255 255 255 / 0.6);
+  /* the 1.5 s idle fade to 30 % (S §2.1 Fading): the opacity is the box's own, so the box carries the transition */
+  transition: opacity 200ms;
+}
+.face-box.selected {
+  --c: var(--accent);
+}
+.face-box .br {
+  position: absolute;
+  width: 22%;
+  height: 22%;
+  border: 0 solid var(--c);
+  filter: drop-shadow(0 0 1px rgb(0 0 0 / 0.5));
+}
+.face-box .tl { left: 0; top: 0; border-left-width: calc(2px / var(--zs, 1)); border-top-width: calc(2px / var(--zs, 1)); }
+.face-box .tr { right: 0; top: 0; border-right-width: calc(2px / var(--zs, 1)); border-top-width: calc(2px / var(--zs, 1)); }
+.face-box .bl { left: 0; bottom: 0; border-left-width: calc(2px / var(--zs, 1)); border-bottom-width: calc(2px / var(--zs, 1)); }
+.face-box .br-r { right: 0; bottom: 0; border-right-width: calc(2px / var(--zs, 1)); border-bottom-width: calc(2px / var(--zs, 1)); }
+.face-box.dashed .br {
+  border-style: dashed;
+}
+.face-num {
+  position: absolute;
+  left: 0;
+  top: -20px;
+  font-size: 13px;
+  color: var(--c);
+  transform: scale(calc(1 / var(--zs, 1)));
+  transform-origin: top left;
+  /* hidden on a box narrower than 24 pt on screen (S §2.1): --bw is its width at zoom 1 (FaceBoxes), --zs the zoom */
+  opacity: clamp(0, calc((var(--bw, 24) * var(--zs, 1) - 24) * 1000 + 1), 1);
+}
+
+/* ───────────── Camera: 全部套用 and the face marker (S §2.5) ───────────── */
+
+.all-chip {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  height: 32px;
+  z-index: 3;
+}
+/* the pill is the float button's span (.float-btn > span); on = accent fill, as .float-btn.held > span */
+.all-chip.on > span {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.cam-marker {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.cam-ring {
+  position: absolute;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  animation: cam-ring 800ms ease-out forwards;
+}
+.cam-dot {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+@keyframes cam-ring {
+  from {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+  to {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cam-ring {
+    animation: none;
   }
 }

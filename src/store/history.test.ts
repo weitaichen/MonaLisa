@@ -1,8 +1,15 @@
 import 'fake-indexeddb/auto';
 import { IDBDatabase as FDBDatabase, IDBFactory, IDBObjectStore as FDBObjectStore, forceCloseDatabase } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { applyPreset, defaultParams, setParam } from '../engine/params';
-import type { BodyDetection, HistoryEntry } from '../types';
+import { withBodies } from '../detect/cache';
+import { cacheBody, makeCache } from '../detect/testCaches';
+import { editFromLegacy, legacyProjection } from '../edit/legacy';
+import { rMin } from '../edit/liquify';
+import { openState } from '../edit/migrate';
+import { assignPersons, defaultPhoto, naturalPerson, neutralPerson, renamePersons } from '../edit/state';
+import { applyPreset, defaultParams, PARAM_DEFS, sanitizeParams, setParam } from '../engine/params';
+import { cropConstrain } from '../geometry/view';
+import type { BeautyParams, BodyDetection, DetectionCache, EditState, HistoryEntry, Stroke } from '../types';
 import {
   addEntry,
   closeHistory,
@@ -12,14 +19,18 @@ import {
   deleteEntry,
   getEntry,
   HISTORY_LIMIT,
+  isQuotaError,
   listEntries,
   normalizeBody,
   normalizeEntry,
   OPEN_TIMEOUT_MS,
+  sourceKey,
   STORE_NAME,
+  UPDATED_INDEX,
   updateEntry,
   type NewHistoryEntry,
 } from './history';
+import { stableKey } from './undo';
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -696,5 +707,460 @@ describe('createId', () => {
     const ids = Array.from({ length: 200 }, createId);
     for (const id of ids) expect(id).toMatch(UUID_V4);
     expect(new Set(ids).size).toBe(200);
+  });
+});
+
+describe('HistoryEntry v2 (RM §5.1, S §5.2)', () => {
+  const v2 = () => {
+    const edit = editFromLegacy(applyPreset('refined', 1));
+    return { schema: 2 as const, edit, paramsKey: 'k', detect: makeCache() };
+  };
+  it('round-trips schema, edit, paramsKey and the detection cache with its typed arrays', async () => {
+    const id = await addEntry({ ...entry('v2'), ...v2() });
+    const got = await getEntry(id);
+    expect(got?.schema).toBe(2);
+    expect(got?.edit).toEqual(v2().edit);
+    expect(got?.paramsKey).toBe('k');
+    expect(got?.detect?.faces[0].lm).toBeInstanceOf(Float32Array);
+    expect(got?.detect).toEqual(makeCache());
+  });
+  it('an edit bumps updatedAt like params; touch: false never does, even with an edit and a thumbnail', async () => {
+    const id = await addEntry(entry('t'));
+    const t0 = (await getEntry(id))!.updatedAt;
+    await updateEntry(id, { detect: makeCache(), edit: v2().edit, thumb: new Blob(['t']) }, { touch: false });
+    expect((await getEntry(id))!.updatedAt).toBe(t0);
+    expect((await getEntry(id))!.detect).toEqual(makeCache());
+    await updateEntry(id, { edit: v2().edit });
+    expect((await getEntry(id))!.updatedAt).toBeGreaterThan(t0);
+  });
+  it('a corrupt edit is dropped (the entry opens as v1), a dropped cache leaves its stale boxes', async () => {
+    const e = normalizeEntry({ ...validRecord('x', 1), schema: 2, edit: { v: 9 }, detect: { ...makeCache(), v: 3 } });
+    expect(e?.edit).toBeUndefined();
+    expect(e?.detect).toBeUndefined();
+    expect(Object.keys(e?.staleBoxes ?? {})).toEqual(['f0', 'f1']);
+  });
+});
+
+describe('detection-driven writes keep 最近編輯 (S §5.2, A17)', () => {
+  it('reopening a v1 entry, assigning its persons and adding bodies changes neither the order nor updatedAt', async () => {
+    const older = await addEntry(entry('older'));
+    await addEntry(entry('newer'));
+    const before = (await listEntries()).map((e) => [e.id, e.updatedAt]);
+    const opened = openState((await getEntry(older))!, { width: 1536, height: 2048 });
+    /** the patch rebaseOnDetect writes */
+    const write = async (edit: EditState, detect: DetectionCache) => {
+      const params = sanitizeParams(legacyProjection(edit, detect.primary));
+      await updateEntry(older, { schema: 2, edit, params, paramsKey: stableKey(params), detect }, { touch: false });
+    };
+    const cache = makeCache({ width: 1536, height: 2048 });
+    const assigned = assignPersons(opened.edit, cache.persons.map((p) => p.id), cache.primary);
+    await write(assigned, cache);
+    const r = withBodies(cache, [{ pose: cacheBody('x', 0.95).pose, mask: null, score: 0.1 }], () => null);
+    await write(assignPersons(renamePersons(assigned, r.renamed), r.cache.persons.map((p) => p.id), r.cache.primary), r.cache);
+    expect((await listEntries()).map((e) => [e.id, e.updatedAt])).toEqual(before);
+    expect((await getEntry(older))!.detect?.bodies).toHaveLength(1);
+  });
+});
+
+describe('v2 entries with 調節 and 質感 (step-2 spec §5)', () => {
+  it('round-trip the 12 values and the look', async () => {
+    const photo = { ...defaultPhoto(), look: { id: 'cinema' as const, amount: 0.7 } };
+    photo.values = { ...photo.values, 'adjust.exposure': 0.65, 'adjust.grain': 0.35, 'adjust.vignette': 1 };
+    const e: EditState = { v: 2, photo, persons: { p0: naturalPerson() }, template: neutralPerson(), primaryInit: null };
+    const id = await addEntry({ ...entry('adj'), schema: 2, edit: e });
+    const back = (await getEntry(id))!.edit!;
+    expect(back.photo.look).toEqual({ id: 'cinema', amount: 0.7 });
+    expect(back.photo.values['adjust.exposure']).toBe(0.65);
+    expect(back.photo.values['adjust.grain']).toBe(0.35);
+    expect(back.photo.values['adjust.vignette']).toBe(1);
+  });
+});
+
+describe('v2 entries with geometry (step-3 spec §5)', () => {
+  it('getEntry and listEntries keep a saved crop and rotation: the stored edit is validated against the entry size', async () => {
+    const geometry = cropConstrain({ flipH: false, quarter: 1, straighten: 5, crop: { x: 0.1, y: 0.1, w: 0.7, h: 0.7 } }, { width: 1536, height: 2048 });
+    const e: EditState = { v: 2, photo: { ...defaultPhoto(), geometry }, persons: { p0: naturalPerson() }, template: neutralPerson(), primaryInit: null };
+    const id = await addEntry({ ...entry('geo'), schema: 2, edit: e });
+    expect((await getEntry(id))!.edit!.photo.geometry).toEqual(geometry);
+    expect((await listEntries()).find((x) => x.id === id)!.edit!.photo.geometry).toEqual(geometry);
+  });
+});
+
+describe('source file (HistoryEntry.source, step 3)', () => {
+  const source = new Blob([new Uint8Array(64)], { type: 'image/jpeg' });
+
+  it('round-trips the source and its oriented size; updateEntry never touches them', async () => {
+    const id = await addEntry({ ...entry('s'), source, sourceWidth: 4032, sourceHeight: 3024 });
+    const got = await getEntry(id);
+    expect(got?.source).toBeInstanceOf(Blob);
+    expect(got?.source?.size).toBe(64);
+    expect([got?.sourceWidth, got?.sourceHeight]).toEqual([4032, 3024]);
+    await updateEntry(id, { thumb: jpeg('t2') });
+    expect((await getEntry(id))?.source?.size).toBe(64);
+  });
+
+  it('sizes are recorded without a kept file (the "only 2048 kept" note)', async () => {
+    const id = await addEntry({ ...entry('n'), sourceWidth: 8064, sourceHeight: 6048 });
+    const got = await getEntry(id);
+    expect(got?.source).toBeUndefined();
+    expect(got?.sourceWidth).toBe(8064);
+  });
+
+  it('invalid fields are dropped and the entry kept', () => {
+    const raw = {
+      id: 'x',
+      createdAt: 1,
+      updatedAt: 1,
+      original: jpeg('o'),
+      thumb: jpeg('t'),
+      params: defaultParams(),
+      width: 10,
+      height: 10,
+      source: new Blob([]),
+      sourceWidth: 4032.5,
+      sourceHeight: -1,
+    };
+    const e = normalizeEntry(raw);
+    expect(e).not.toBeNull();
+    expect(e?.source).toBeUndefined();
+    expect(e?.sourceWidth).toBeUndefined();
+    expect(e?.sourceHeight).toBeUndefined();
+  });
+
+  it('a QuotaExceededError add is put once more without the source, with the same id', async () => {
+    // A quota failure is reported when the transaction commits, as engines do: the source record's put succeeds, then
+    // the whole transaction aborts with QuotaExceededError, rolling back the entry put queued before it. (A synchronous
+    // throw from put would let the transaction commit the entry anyway, so the outcome could not tell the fallback put
+    // from no fallback at all.)
+    const put = FDBObjectStore.prototype.put;
+    const calls: { id: string; source?: Blob }[] = [];
+    vi.spyOn(FDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      calls.push(value as { id: string; source?: Blob });
+      const r = put.call(this, value, key);
+      if ((value as { source?: Blob }).source) {
+        const tx = this.transaction;
+        r.onsuccess = () => {
+          Object.defineProperty(tx, 'error', { value: new DOMException('quota', 'QuotaExceededError'), configurable: true });
+          tx.abort();
+        };
+      }
+      return r;
+    });
+    const id = await addEntry({ ...entry('q'), source, sourceWidth: 4032, sourceHeight: 3024 });
+    // the outcome: the entry survives without its file, keeping its id and the oriented size
+    const got = await getEntry(id);
+    expect(got).toBeDefined();
+    expect(got?.source).toBeUndefined();
+    expect([got?.sourceWidth, got?.sourceHeight]).toEqual([4032, 3024]);
+    expect((await listEntries()).map((x) => x.id)).toEqual([id]);
+    // how: the entry and its source record (aborted at commit, no reconnect retry with the file), then the entry once
+    // more without a source record
+    expect(calls.map((c) => c.id)).toEqual([id, sourceKey(id), id]);
+    expect(calls.filter((c) => c.source)).toHaveLength(1);
+  });
+
+  it("other errors keep today's reconnect retry (the file is not dropped)", async () => {
+    const put = FDBObjectStore.prototype.put;
+    let failed = false;
+    vi.spyOn(FDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      if (!failed) {
+        failed = true;
+        throw new DOMException('lost', 'UnknownError');
+      }
+      return put.call(this, value, key);
+    });
+    const id = await addEntry({ ...entry('r'), source, sourceWidth: 4032, sourceHeight: 3024 });
+    expect((await getEntry(id))?.source?.size).toBe(64);
+  });
+
+  it.each(['UnknownError', 'NotReadableError'])(
+    'a %s that aborts both commits with the source still stores the entry, without the source, with the same id',
+    async (name) => {
+      // WebKit fails a blob it cannot write (UnknownError) or a picked file gone from disk (NotReadableError) when the
+      // transaction commits: the source record's request succeeds, then the whole transaction aborts with that error,
+      // so the entry put queued before it in the same transaction is rolled back with it
+      const put = FDBObjectStore.prototype.put;
+      const calls: { id: string; source?: Blob }[] = [];
+      vi.spyOn(FDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+        calls.push(value as { id: string; source?: Blob });
+        const r = put.call(this, value, key);
+        if ((value as { source?: Blob }).source) {
+          const tx = this.transaction;
+          r.onsuccess = () => {
+            Object.defineProperty(tx, 'error', { value: new DOMException('blob', name), configurable: true });
+            tx.abort();
+          };
+        }
+        return r;
+      });
+      const id = await addEntry({ ...entry('u'), source, sourceWidth: 4032, sourceHeight: 3024 });
+      // the outcome: the entry survives without its file, keeping its id and the oriented size
+      const got = await getEntry(id);
+      expect(got).toBeDefined();
+      expect(got?.source).toBeUndefined();
+      expect([got?.sourceWidth, got?.sourceHeight]).toEqual([4032, 3024]);
+      expect((await listEntries()).map((x) => x.id)).toEqual([id]);
+      // how: two attempts with the source (the reconnect retry), then the entry once more without it
+      expect(calls.map((c) => c.id)).toEqual([id, sourceKey(id), id, sourceKey(id), id]);
+    },
+  );
+
+  it('an abort at commit of only the first attempt keeps the retry: the entry and its source are stored, no third put', async () => {
+    const put = FDBObjectStore.prototype.put;
+    const calls: string[] = [];
+    let aborted = false;
+    vi.spyOn(FDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      calls.push((value as { id: string }).id);
+      const r = put.call(this, value, key);
+      if ((value as { source?: Blob }).source && !aborted) {
+        aborted = true;
+        const tx = this.transaction;
+        r.onsuccess = () => tx.abort();
+      }
+      return r;
+    });
+    const id = await addEntry({ ...entry('v'), source, sourceWidth: 4032, sourceHeight: 3024 });
+    expect((await getEntry(id))?.source?.size).toBe(64);
+    expect(calls).toEqual([id, sourceKey(id), id, sourceKey(id)]);
+  });
+
+  it('a failing add without a source is not put a third time', async () => {
+    const put = FDBObjectStore.prototype.put;
+    let n = 0;
+    vi.spyOn(FDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      n++;
+      if (n <= 2) throw new DOMException('lost', 'UnknownError');
+      return put.call(this, value, key);
+    });
+    const id = await addEntry({ ...entry('w'), sourceWidth: 4032, sourceHeight: 3024 });
+    expect(n).toBe(2);
+    expect(await getEntry(id)).toBeUndefined();
+  });
+
+  it('isQuotaError recognises only a QuotaExceededError', () => {
+    expect(isQuotaError(new DOMException('full', 'QuotaExceededError'))).toBe(true);
+    expect(isQuotaError({ name: 'QuotaExceededError' })).toBe(true);
+    for (const other of [new DOMException('lost', 'UnknownError'), new Error('QuotaExceededError'), null, undefined, 'QuotaExceededError', 22]) {
+      expect(isQuotaError(other)).toBe(false);
+    }
+  });
+});
+
+describe('the source file in a record of its own (no schema bump; v0.3 never sees it)', () => {
+  const source = new Blob([new Uint8Array(64)], { type: 'image/jpeg' });
+
+  /** every value put in the store while `run` runs (its key, and whether it carries a Blob under `source`) */
+  async function puts(run: () => Promise<unknown>): Promise<{ id: unknown; blob: boolean }[]> {
+    const put = FDBObjectStore.prototype.put;
+    const seen: { id: unknown; blob: boolean }[] = [];
+    const spy = vi.spyOn(FDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      const v = value as { id?: unknown; source?: unknown };
+      seen.push({ id: v.id, blob: v.source instanceof Blob });
+      return put.call(this, value, key);
+    });
+    await run();
+    spy.mockRestore();
+    return seen;
+  }
+  async function rawGet(key: string): Promise<Record<string, unknown> | undefined> {
+    const db = await rawDb();
+    const r = await req(db.transaction(STORE_NAME).objectStore(STORE_NAME).get(key));
+    db.close();
+    return r as Record<string, unknown> | undefined;
+  }
+  async function rawKeys(): Promise<string[]> {
+    const db = await rawDb();
+    const r = await req(db.transaction(STORE_NAME).objectStore(STORE_NAME).getAllKeys());
+    db.close();
+    return r as string[];
+  }
+
+  it('a params, thumb, edit or cache patch never puts the source blob again', async () => {
+    const id = await addEntry({ ...entry('p'), source, sourceWidth: 4032, sourceHeight: 3024 });
+    const seen = await puts(async () => {
+      await updateEntry(id, { params: setParam(defaultParams(), 'skin.smooth', 0.3) });
+      await updateEntry(id, { thumb: jpeg('t2') }, { touch: false });
+      await updateEntry(id, { schema: 2, edit: editFromLegacy(defaultParams()), paramsKey: 'k' });
+      await updateEntry(id, { body: null });
+    });
+    expect(seen.map((s) => s.id)).toEqual([id, id, id, id]);
+    expect(seen.some((s) => s.blob)).toBe(false);
+    expect((await getEntry(id))?.source?.size).toBe(64);
+  });
+
+  it('the entry record holds no source; the source record has no updatedAt, so no index sees it', async () => {
+    const id = await addEntry({ ...entry('r'), source, sourceWidth: 4032, sourceHeight: 3024 });
+    expect((await rawGet(id))?.source).toBeUndefined();
+    const s = await rawGet(sourceKey(id));
+    expect(s?.source).toBeInstanceOf(Blob);
+    expect(s?.updatedAt).toBeUndefined();
+    const db = await rawDb();
+    expect(await req(db.transaction(STORE_NAME).objectStore(STORE_NAME).index(UPDATED_INDEX).count())).toBe(1);
+    db.close();
+    expect(await listEntries()).toHaveLength(1);
+  });
+
+  it('a v0.4-dev record with the source inline: read as before, moved to its own record by the next patch, once', async () => {
+    await rawPut([validRecord('dev', 5, { source, sourceWidth: 4032, sourceHeight: 3024 })]);
+    expect((await getEntry('dev'))?.source?.size).toBe(64);
+    const first = await puts(() => updateEntry('dev', { thumb: jpeg('t') }));
+    expect(first).toEqual([
+      { id: sourceKey('dev'), blob: true },
+      { id: 'dev', blob: false },
+    ]);
+    expect((await rawGet('dev'))?.source).toBeUndefined();
+    const later = await puts(() => updateEntry('dev', { params: defaultParams() }));
+    expect(later).toEqual([{ id: 'dev', blob: false }]);
+    const got = await getEntry('dev');
+    expect(got?.source?.size).toBe(64);
+    expect(got?.sourceWidth).toBe(4032);
+  });
+
+  it('a v0.3 entry (no source anywhere) patches and reads as before', async () => {
+    await rawPut([validRecord('v03', 5)]);
+    const seen = await puts(() => updateEntry('v03', { params: defaultParams() }));
+    expect(seen).toEqual([{ id: 'v03', blob: false }]);
+    expect((await getEntry('v03'))?.source).toBeUndefined();
+    expect(await rawKeys()).toEqual(['v03']);
+  });
+
+  it('a quota error while moving an inline source keeps the patch: it is written once more with the source inline', async () => {
+    await rawPut([validRecord('dev', 5, { source })]);
+    const put = FDBObjectStore.prototype.put;
+    vi.spyOn(FDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      if ((value as { id?: unknown }).id === sourceKey('dev')) throw new DOMException('quota', 'QuotaExceededError');
+      return put.call(this, value, key);
+    });
+    await updateEntry('dev', { thumb: jpeg('patched') });
+    vi.restoreAllMocks();
+    const got = await getEntry('dev');
+    expect(await got?.thumb.text()).toBe('patched');
+    expect(got?.source?.size).toBe(64);
+  });
+
+  it('deleteEntry and the eviction take the source record with the entry', async () => {
+    const a = await addEntry({ ...entry('a'), source });
+    const b = await addEntry({ ...entry('b'), source });
+    await deleteEntry(b);
+    expect(await rawKeys()).toEqual([a, sourceKey(a)].sort());
+    await addMany(HISTORY_LIMIT, 'n');
+    const keys = await rawKeys();
+    expect(keys).not.toContain(a);
+    expect(keys.filter((k) => k.startsWith('source:'))).toEqual([]);
+    expect(keys).toHaveLength(HISTORY_LIMIT);
+  });
+
+  it('a source record left without its entry (deleted or evicted by 0.3 after a rollback) is swept by the next add', async () => {
+    await rawPut([{ id: sourceKey('gone'), source }, validRecord('kept', 5), { id: sourceKey('kept'), source }]);
+    const id = await addEntry(entry('next'));
+    expect(await rawKeys()).toEqual(['kept', id, sourceKey('kept')].sort());
+    expect((await getEntry('kept'))?.source?.size).toBe(64);
+  });
+});
+
+describe('step 4: a v2 entry keeps spots and tone values (§5)', () => {
+  it('round-trips edit.photo.spots and person tone values', async () => {
+    const p = neutralPerson();
+    const edit = {
+      v: 2 as const,
+      photo: { ...defaultPhoto(), spots: [{ x: 0.25, y: 0.5, r: 0.02, dx: 0.06, dy: 0, owner: 'f0' }] },
+      persons: { f0: { ...p, values: { ...p.values, 'tone.even': 0.5, 'tone.warmth': 0.3 } } },
+      template: neutralPerson(),
+      primaryInit: null,
+    };
+    const id = await addEntry({ ...entry('tone'), schema: 2, edit });
+    const back = await getEntry(id);
+    expect(back?.edit?.photo.spots).toEqual(edit.photo.spots);
+    expect(back?.edit?.persons.f0.values['tone.warmth']).toBe(0.3);
+  });
+
+  it('loading sanitizes stored spots: a corrupt one goes, a valid one stays with its owner (kept for the rematch)', async () => {
+    const good = { x: 0.4, y: 0.4, r: 0.02, dx: 0, dy: 0, owner: 'f3' };
+    await rawPut([
+      {
+        ...validRecord('spots', 5),
+        schema: 2,
+        edit: {
+          v: 2,
+          photo: { ...defaultPhoto(), spots: [good, { x: Infinity, y: 0, r: 0.02, dx: 0, dy: 0, owner: null }] },
+          persons: { f3: neutralPerson() },
+          template: neutralPerson(),
+          primaryInit: null,
+        },
+      },
+    ]);
+    expect((await getEntry('spots'))?.edit?.photo.spots).toEqual([good]);
+  });
+});
+
+describe('the rollback check reads the stored params, never the sanitized ones (S §5.3)', () => {
+  const edit = () => editFromLegacy(applyPreset('glow', 1));
+  const now = () => sanitizeParams(legacyProjection(edit(), 'p0'));
+  /** what a build without the six 膚質 params (steps 2–3) wrote: its sanitizeParams kept only its own ids */
+  const older = (): BeautyParams => {
+    const p = now();
+    return { ...p, values: Object.fromEntries(Object.entries(p.values).filter(([id]) => !id.startsWith('tone.'))) as BeautyParams['values'] };
+  };
+  const rawGet = async (id: string): Promise<Record<string, unknown>> => {
+    const db = await rawDb();
+    const r = (await req(db.transaction(STORE_NAME).objectStore(STORE_NAME).get(id))) as Record<string, unknown>;
+    db.close();
+    return r;
+  };
+
+  it('an entry saved by a build with 6 params fewer reads back as 0.4 wrote it; a 0.3 rewrite of its params is flagged', async () => {
+    const p = older();
+    const id = await addEntry({ ...entry('older'), schema: 2, edit: edit(), params: p, paramsKey: stableKey(p) });
+    const got = (await getEntry(id))!;
+    // sanitizeParams filled in the six ids, which is why the key is never checked against got.params
+    expect(Object.keys(got.params.values)).toHaveLength(PARAM_DEFS.length);
+    expect(stableKey(got.params)).not.toBe(got.paramsKey);
+    expect(got.legacyEdited).toBeUndefined();
+    expect((await listEntries())[0].legacyEdited).toBeUndefined();
+    // 0.3's updateEntry: its own params, the key left behind (0.4's updateEntry spreads the record the same way)
+    const by03 = { ...p, values: { ...p.values, 'skin.whiten': 0.9 } };
+    await updateEntry(id, { params: by03 });
+    expect((await getEntry(id))!.legacyEdited).toEqual(Object.keys(p.values).filter((k) => PARAM_DEFS.some((d) => d.id === k)));
+  });
+  it('legacyEdited is read side only: the ids with a usable stored value, never written back', async () => {
+    const values = { ...now().values, 'skin.whiten': Number.NaN, 'some.future': 0.4 };
+    const e = normalizeEntry({ ...validRecord('r', 1), schema: 2, edit: edit(), params: { ...now(), values }, paramsKey: 'k' })!;
+    expect(e.legacyEdited).toEqual(PARAM_DEFS.map((d) => d.id).filter((id) => id !== 'skin.whiten'));
+    const id = await addEntry(e);
+    await updateEntry(id, { thumb: jpeg('t2') });
+    expect(await rawGet(id)).not.toHaveProperty('legacyEdited');
+    // without a key (v1, or a v2 written before paramsKey) nothing is checked
+    expect(normalizeEntry({ ...validRecord('v1', 1), params: setParam(defaultParams(), 'skin.whiten', 0.9) })!.legacyEdited).toBeUndefined();
+  });
+});
+
+describe('v2 entries with strokes (push-brush spec §5.1, §5.2)', () => {
+  const edit = (strokes: Stroke[]): EditState => ({
+    v: 2,
+    photo: { ...defaultPhoto(), strokes },
+    persons: { p0: naturalPerson() },
+    template: neutralPerson(),
+    primaryInit: null,
+  });
+
+  it('round-trips the stroke records with their Float32Array points', async () => {
+    const points = Float32Array.of(0.3, 0.3, 0.3125, 0.3, 0.325, 0.31);
+    const id = await addEntry({ ...entry('s'), schema: 2, edit: edit([{ id: 'k1', kind: 'push', radius: 0.05, strength: 0.75, points }]) });
+    const got = await getEntry(id);
+    const s = got!.edit!.photo.strokes[0];
+    expect(s.points).toBeInstanceOf(Float32Array);
+    expect(Array.from(s.points)).toEqual(Array.from(points));
+    expect(s.id).toBe('k1');
+  });
+
+  it("drops a corrupt record on read and sanitizes on the entry's own width × height", async () => {
+    const ok = (id: string, radius = 0.05): Stroke => ({ id, kind: 'push', radius, strength: 0.75, points: Float32Array.of(0.3, 0.3, 0.3125, 0.3) });
+    const bad = { ...ok('x'), points: Float32Array.of(0.3, NaN, 0.31, 0.3) };
+    // entry('s') is 1536 × 2048: a radius of 0 clamps to rMin of exactly that frame (4 texels of its 384-wide grid)
+    const id = await addEntry({ ...entry('s'), schema: 2, edit: edit([ok('a'), bad, ok('b', 0)]) });
+    const got = (await getEntry(id))!.edit!.photo.strokes;
+    expect(got.map((s) => s.id)).toEqual(['a', 'b']);
+    expect(got[1].radius).toBe(rMin({ width: 1536, height: 2048 }));
+    expect((await listEntries())[0].edit!.photo.strokes).toHaveLength(2);
   });
 });

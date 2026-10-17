@@ -1,0 +1,5 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`single face is byte-equal to v0.3 (S §4.7 item 4) > portrait with mask / without mask 1`] = `"48d06473"`;
+
+exports[`single face is byte-equal to v0.3 (S §4.7 item 4) > portrait with mask / without mask 2`] = `"7cb28aa1"`;

@@ -2,10 +2,15 @@
 // BeautyPanel + floating slider, timer, flip, hold-to-compare, shutter → Review.
 // 美體 is photo-only for now (body research report P1): the tab is shown with every item off and a note.
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { cameraTapAction, ChipGate, coverTapUv, type TrackId } from '../../app/faceTracks';
 import type { LiveLoop, LiveStats } from '../../app/live';
-import type { CameraController, CameraSnapshot } from '../../types';
+import type { CameraController, CameraSnapshot, EditState } from '../../types';
+import { lensFor, LIVE_PERSONS, type PersonInfo } from '../../edit/lens';
+import { cameraScreenSwap } from '../../edit/sides';
+import { cameraEdit, LIVE, lookOf } from '../../edit/state';
 import { cameraErrorCopy } from '../cameraErrors';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
+import { CameraFaceMarker } from '../components/CameraFaceMarker';
 import { CanvasHost } from '../components/CanvasHost';
 import { IconButton } from '../components/Controls';
 import { EngineStatus } from '../components/EngineStatus';
@@ -15,28 +20,30 @@ import { reportError } from '../debug';
 import { deps } from '../deps';
 import { openInEditor, pickPhoto } from '../flows';
 import { Icon } from '../icons';
-import { cropImageData, grabOriginalFrame } from '../imaging';
-import { CAMERA_BODY, INITIAL_SELECTION, sliderFor, type BodyContext, type PanelSelection } from '../panelModel';
+import { cropImageData, grabOriginalFrame, normalizedCropRect, shotSeed } from '../imaging';
+import { CAMERA_BODY, INITIAL_SELECTION, makeupNote, sliderFor, type BodyContext, type PanelSelection } from '../panelModel';
 import { haptic, isStandalone } from '../platform';
 import { ensureEngine, getCamera, stopCamera, svc } from '../services';
-import { app, go, RATIO_VALUE, RATIOS, setParams, TIMERS, toast } from '../state';
+import { app, go, RATIO_VALUE, RATIOS, setLook, TIMERS, toast } from '../state';
 import { useStore } from '../store';
-import { useFilterLoader, useHold } from './hooks';
+import { requestLut, useAdjustFailureNotice, useHold, useLutLoader } from './hooks';
 
 let lastSel: PanelSelection = INITIAL_SELECTION;
 /** 美體 is photo-only: its note offers the import right where the user looked for it */
 const cameraBody: BodyContext = {
   ...CAMERA_BODY,
-  action: { label: '匯入照片', run: () => pickPhoto((f) => void openInEditor(f, { returnTo: 'camera' })) },
+  action: { label: '匯入照片', run: () => pickPhoto((f) => void openInEditor(f, { returnTo: 'camera', picked: true })) },
 };
 /** basic-mode notes are announced once per engine bundle, not on every visit */
 let notedBundle: unknown = null;
 
 export function Camera() {
-  const params = useStore(app, (s) => s.params);
+  const look = useStore(app, (s) => s.look);
   const prefs = useStore(app, (s) => s.prefs);
   const ratio = useStore(app, (s) => s.ratio);
   const timer = useStore(app, (s) => s.timer);
+  /** 全部套用 (S §2.5): in memory, kept across Review and retakes */
+  const cameraAll = useStore(app, (s) => s.cameraAll);
   const engine = useStore(svc, (s) => s.engine);
   const bundle = engine.state === 'ready' ? engine.bundle : null;
   const lost = useStore(svc, (s) => s.lost);
@@ -53,9 +60,24 @@ export function Camera() {
   const [flash, setFlash] = useState(0);
   const [noFace, setNoFace] = useState(false);
   const [loop, setLoop] = useState<LiveLoop | null>(null);
+  /** the 全部套用 chip shows (ChipGate's 300 / 1200 ms debounce of the shown tracks) */
+  const [chip, setChip] = useState(false);
+  const chipGate = useRef(new ChipGate());
+  /** the accent ring of the last tap selection (800 ms, CameraFaceMarker) */
+  const [ring, setRing] = useState<{ id: TrackId; at: number } | null>(null);
+  /** shown tracks, from LiveStats: redraws the marker when the count changes */
+  const [shownFaces, setShownFaces] = useState(0);
+  /** LiveStats.gpLeftOnLeft: the tracked face's halves on the unmirrored frame (the 左／右 chips, S5 §3.4) */
+  const [gpLeft, setGpLeft] = useState<boolean | null>(null);
 
-  const paramsRef = useRef(params);
-  paramsRef.current = params;
+  const lookRef = useRef(look);
+  lookRef.current = look;
+  /** the camera is one person, 'live' (RM §3.7): the panel uses the editor's lens and code */
+  // 左／右 follow the tracked face through the preview mirror (S5 §3.4): a front ↔ back flip, or the face turned upside
+  // down, re-maps the side chips on the next render (S5 §7)
+  const livePersons: PersonInfo[] = [{ ...LIVE_PERSONS[0], screenSwap: cameraScreenSwap(snap?.facing ?? 'user', gpLeft) }];
+  const lensOf = (l: typeof look) => lensFor(cameraEdit(l), { kind: 'person', id: LIVE }, livePersons, LIVE);
+  const setEdit = (e: EditState) => setLook(lookOf(e));
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
   const countTimer = useRef(0);
@@ -87,7 +109,8 @@ export function Camera() {
     if (svc.get().engine.state !== 'unsupported') ensureEngine().catch(() => undefined);
   }, []);
 
-  useFilterLoader(bundle?.engine ?? null, params.filterId);
+  useLutLoader(bundle?.engine ?? null, look.photo);
+  useAdjustFailureNotice(bundle?.engine ?? null, look.photo);
 
   useEffect(() => {
     if (engine.state !== 'ready' || !engine.note || notedBundle === engine.bundle) return;
@@ -103,6 +126,9 @@ export function Camera() {
     let lastFace: boolean | null = null;
     let faceTimer = 0;
     const onStats = (s: LiveStats) => {
+      setShownFaces(s.faces);
+      setGpLeft(s.gpLeftOnLeft);
+      setChip(chipGate.current.update(s.faces, app.get().cameraAll, performance.now()));
       if (s.face === lastFace) return;
       lastFace = s.face;
       clearTimeout(faceTimer);
@@ -115,8 +141,11 @@ export function Camera() {
         camera: ctrl,
         engine: bundle.engine,
         tracker: bundle.tracker,
-        getParams: () => paramsRef.current,
+        getLook: () => lookRef.current,
+        getAll: () => app.get().cameraAll,
         getPrefs: () => prefsRef.current,
+        // the picture the shutter keeps (captureFrom crops to the same ratio): vignette and grain follow it
+        getFrame: () => normalizedCropRect(ctrl.video.videoWidth, ctrl.video.videoHeight, RATIO_VALUE[app.get().ratio]),
         onStats,
       });
     } catch (e) {
@@ -181,31 +210,34 @@ export function Camera() {
 
   const captureFrom = async (l: LiveLoop, cam: CameraController) => {
     hold.release();
-    let img: ImageData | null;
+    let shotOut: ReturnType<LiveLoop['capture']>;
     try {
-      img = l.capture();
+      shotOut = l.capture();
     } catch (e) {
       toast(`拍攝失敗：${reportError(e, 'capture')}`, 4000);
       return;
     }
-    if (!img) {
+    if (!shotOut) {
       toast('還沒有取得畫面，請稍候');
       return;
     }
+    const img = shotOut.image;
     setFlash((f) => f + 1);
-    const r = RATIO_VALUE[app.get().ratio];
-    const image = cropImageData(img, r);
+    const ratioValue = RATIO_VALUE[app.get().ratio];
+    const image = cropImageData(img, ratioValue);
     let file: Promise<File>;
     try {
-      file = deps.encodeJpeg(image, 0.92);
+      file = deps.encodeOutput(image, prefsRef.current.exportFormat, 0.92);
     } catch (e) {
       file = Promise.reject(e);
     }
     file.catch((e: unknown) => reportError(e, 'encodeJpeg'));
     const mirror = prefsRef.current.mirrorOnSave && cam.snapshot.facing === 'user';
+    // the hand-over (C2): the seed in the saved crop, mirrored as the shot
+    const faceSeed = shotSeed(shotOut.seed, cam.video.videoWidth, cam.video.videoHeight, ratioValue, mirror);
     let original: ImageBitmap | null = null;
     try {
-      original = await grabOriginalFrame(cam.video, r, mirror);
+      original = await grabOriginalFrame(cam.video, ratioValue, mirror);
     } catch (e) {
       reportError(e, 'grabOriginalFrame');
     }
@@ -215,7 +247,7 @@ export function Camera() {
       original?.close();
       return;
     }
-    go({ name: 'review', shot: { image, file, original, params: paramsRef.current } });
+    go({ name: 'review', shot: { image, file, original, look: lookRef.current, faceSeed, mirrored: mirror } });
   };
 
   const shutter = () => {
@@ -257,18 +289,37 @@ export function Camera() {
     ctrl.flip().catch((e: unknown) => setStartErr(reportError(e, 'camera.flip')));
   };
 
+  /** S §2.5: with ≥ 2 shown tracks a tap on a face selects it (ring, haptic); otherwise the panel collapse toggles */
   const onStageClick = (e: MouseEvent) => {
     if ((e.target as Element).closest('.slider-row, .status, button')) return;
     if (!live) return;
-    setCollapsed((c) => !c);
+    const l = loopRef.current;
+    const canvas = bundle?.engine.canvas;
+    const shown = l?.tracks().length ?? 0;
+    let hit: TrackId | null = null;
+    if (l && canvas && ctrl && shown >= 2) {
+      const m = coverTapUv(e.clientX, e.clientY, canvas.getBoundingClientRect(), ctrl.video.videoWidth, ctrl.video.videoHeight, snap?.facing === 'user');
+      hit = l.hitTest(m.u, m.v, m.minW, m.minH);
+    }
+    const a = cameraTapAction(hit, shown, l?.selection() ?? 'auto', app.get().cameraAll);
+    if (a.kind === 'collapse') {
+      setCollapsed((c) => !c);
+      return;
+    }
+    haptic();
+    if (a.allOff) app.set({ cameraAll: false });
+    l!.select(a.id);
+    setRing({ id: a.id, at: performance.now() });
   };
 
-  const binding = sliderFor(params, sel, cameraBody);
+  const binding = sliderFor(lensOf(look), sel, cameraBody);
   const state = snap?.state ?? 'idle';
   const ready = !!loop && live && !lost;
   // basic mode only: the live no-face state comes and goes (the badge covers it), the panel must not flicker
   const faceNote = ready && bundle?.basic ? '基本模式不支援臉型與美妝' : null;
   const faceOff = !!faceNote && FACE_TABS.includes(sel.tab);
+  // the 美妝 note (S5 §2.5): no closed-eye or small-face note in the camera, they change every frame
+  const mkNote = makeupNote(sel, { lensClosed: false, lashesClosed: false, lashesSmall: false, procFailed: !!bundle?.engine.procMakeupFailed });
 
   useEffect(() => {
     if (ready) return;
@@ -341,6 +392,31 @@ export function Camera() {
       <div class="stage cam-stage" onClick={onStageClick}>
         <div class="frame" style={{ '--r': String(RATIO_VALUE[ratio]) }}>
           <CanvasHost fit="cover" />
+          {ready && loop && bundle && ctrl && !hold.held && (
+            <CameraFaceMarker
+              loop={loop}
+              canvas={bundle.engine.canvas}
+              video={ctrl.video}
+              mirrored={snap?.facing === 'user'}
+              ring={ring}
+              all={cameraAll}
+              count={shownFaces}
+            />
+          )}
+          {ready && (chip || cameraAll) && !hold.held && (
+            <button
+              type="button"
+              class={`float-btn all-chip${cameraAll ? ' on' : ''}`}
+              aria-pressed={cameraAll}
+              onClick={(e) => {
+                e.stopPropagation();
+                haptic();
+                app.set({ cameraAll: !cameraAll });
+              }}
+            >
+              <span>全部套用</span>
+            </button>
+          )}
           {hold.held && <span class="corner-label">原圖</span>}
           {ready && bundle?.basic && !hold.held && <span class="badge">基本模式</span>}
           {ready && !bundle?.basic && trackerHealth !== 'ok' && !hold.held && (
@@ -365,8 +441,9 @@ export function Camera() {
           <SliderRow
             float
             binding={faceOff ? null : binding}
-            onChange={(v) => binding && setParams(binding.apply(paramsRef.current, v))}
-            onCommit={(v) => binding && setParams(binding.apply(paramsRef.current, v))}
+            onChange={(v) => binding && setEdit(binding.apply(lensOf(lookRef.current), v))}
+            onCommit={(v) => binding && setEdit(binding.apply(lensOf(lookRef.current), v))}
+            onSel={setSel}
           />
         )}
         {live && collapsed && !overlay && (
@@ -390,13 +467,16 @@ export function Camera() {
 
       <BeautyPanel
         id="beauty-panel"
-        params={params}
+        lens={lensOf(look)}
         sel={sel}
         onSel={setSel}
-        onParams={setParams}
+        onEdit={setEdit}
         collapsed={collapsed}
         faceNote={faceNote}
         body={cameraBody}
+        lookFailed={(id) => bundle?.engine.lutState('look', id) === 'failed'}
+        onRetryLook={(id) => bundle && requestLut(bundle.engine, 'look', id)}
+        makeupNote={mkNote}
       />
 
       <div class="cam-controls">
@@ -405,7 +485,7 @@ export function Camera() {
           class="side-btn"
           onClick={() => {
             haptic();
-            pickPhoto((f) => void openInEditor(f, { returnTo: 'camera' }));
+            pickPhoto((f) => void openInEditor(f, { returnTo: 'camera', picked: true }));
           }}
         >
           <span class="side-icon">
@@ -440,7 +520,7 @@ function ImportButton() {
       class="btn"
       onClick={() => {
         haptic();
-        pickPhoto((f) => void openInEditor(f, { returnTo: 'camera' }));
+        pickPhoto((f) => void openInEditor(f, { returnTo: 'camera', picked: true }));
       }}
     >
       <Icon name="image" size={20} />

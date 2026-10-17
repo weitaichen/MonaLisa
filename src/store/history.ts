@@ -5,8 +5,11 @@
 // backgrounded pages ("Connection to Indexed Database server lost"). So: the open is raced
 // against a timeout, a failed transaction is retried once on a fresh connection, and in the end
 // every op resolves to a harmless fallback (no-op / empty list / undefined) instead of rejecting.
-import { sanitizeParams } from '../engine/params';
-import type { BodyDetection, HistoryEntry, PersonMask } from '../types';
+import { normalizeDetect, normalizeMask } from '../detect/cache';
+import { isEditStateRecord, sanitizeEditState } from '../edit/state';
+import { PARAM_DEFS, sanitizeParams } from '../engine/params';
+import type { BodyDetection, HistoryEntry, ParamId, PersonMask } from '../types';
+import { stableKey } from './undo';
 
 export const HISTORY_LIMIT = 12;
 
@@ -17,6 +20,16 @@ export const DB_VERSION = 1;
 export const STORE_NAME = 'edits';
 export const UPDATED_INDEX = 'updatedAt';
 export const OPEN_TIMEOUT_MS = 3000;
+/**
+ * The picked file (HistoryEntry.source) lives in a record of its own in the same store, keyed SOURCE_PREFIX + entry id:
+ * `{ id, source }`. It has no updatedAt, so the updatedAt index (listEntries, the eviction count, and 0.3's code after a
+ * rollback) never sees it, and no schema bump is needed (RM §5.2: DB_VERSION 1, store `edits`). An entry's patches
+ * (autosave, thumbnails, caches) then never put the up to 30 MB Blob again: Chromium writes a new blob file for every
+ * put of a value holding a Blob. A v0.4-dev record that still holds its source inline is read as is and moved out by
+ * its next patch.
+ */
+export const SOURCE_PREFIX = 'source:';
+export const sourceKey = (id: string): string => SOURCE_PREFIX + id;
 
 let dbPromise: Promise<IDBDatabase | null> | null = null;
 let conn: IDBDatabase | null = null;
@@ -26,7 +39,7 @@ let warned = false;
 /** Stores the entry and evicts the oldest (by updatedAt) beyond HISTORY_LIMIT. Resolves with the id even if not stored. */
 export async function addEntry(e: NewHistoryEntry): Promise<string> {
   const id = createId();
-  await withStore('readwrite', undefined, (store) => {
+  const put = (withSource: boolean) => (store: IDBObjectStore) => {
     const now = stamp();
     const entry: HistoryEntry = {
       id,
@@ -42,7 +55,18 @@ export async function addEntry(e: NewHistoryEntry): Promise<string> {
     if (e.body !== undefined) entry.body = e.body;
     if (e.faceProtect === true) entry.faceProtect = true;
     if (e.faceMask) entry.faceMask = e.faceMask;
+    // step 1's HistoryEntry v2 fields (unchanged)
+    if (e.schema === 2) entry.schema = 2;
+    if (e.edit) entry.edit = e.edit;
+    if (e.paramsKey !== undefined) entry.paramsKey = e.paramsKey;
+    if (e.detect) entry.detect = e.detect;
+    if (e.sourceWidth !== undefined && e.sourceHeight !== undefined) {
+      entry.sourceWidth = e.sourceWidth;
+      entry.sourceHeight = e.sourceHeight;
+    }
     store.put(entry);
+    if (withSource && e.source) store.put({ id: sourceKey(id), source: e.source });
+    sweepSources(store);
     // Requests in one transaction run in order, so the count already includes the new entry.
     const index = store.index(UPDATED_INDEX);
     const count = index.count();
@@ -56,44 +80,103 @@ export async function addEntry(e: NewHistoryEntry): Promise<string> {
         // never evict what we just added, even if the clock went backwards
         if (c.primaryKey !== id) {
           c.delete();
+          store.delete(sourceKey(String(c.primaryKey)));
           excess--;
         }
         if (excess > 0) c.continue();
       };
     };
     return () => undefined;
-  });
+  };
+  // The entry must never be lost because of the file (S §5). A quota failure skips the reconnect retry; any other
+  // failure (a dropped connection, or WebKit's UnknownError / NotReadableError for a blob it cannot write) keeps it.
+  // Whatever way the attempts that carried the file end without a commit, the entry is put once more without it.
+  let failed = false;
+  let stored = false;
+  const withSource = put(true);
+  await withStore(
+    'readwrite',
+    undefined,
+    (store) => {
+      withSource(store);
+      return () => {
+        stored = true;
+      };
+    },
+    (err) => {
+      failed = true;
+      return e.source && isQuotaError(err) ? 'stop' : 'retry';
+    },
+  );
+  if (e.source && failed && !stored) await withStore('readwrite', undefined, put(false));
   return id;
 }
 
+export function isQuotaError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'QuotaExceededError';
+}
+
 /**
- * Patches params / thumb and bumps updatedAt (moves the entry to the front). A body-only patch (caching the
- * 美體 detection) is not an edit: it keeps updatedAt, so merely looking at an entry does not reorder 最近編輯.
- * Missing id → no-op. faceProtect / faceMask ride along with an edit (faceProtect false removes the flag); on their
- * own they do not reorder either.
+ * Patches an entry. Without `touch` an edit (params, edit or thumb) bumps updatedAt, moving the entry to the front; a
+ * cache-only patch (body, detect, faceProtect / faceMask alone) keeps it. `touch: false` never bumps (A17): a
+ * detection-driven rebase writes edit + params + thumb, and merely viewing an entry must not reorder 最近編輯.
+ * Missing id → no-op. faceProtect false removes the flag. The source record (SOURCE_PREFIX) is never touched; an inline
+ * source (a v0.4-dev record) is moved to it by this patch, once. A quota failure of that move writes the patch once
+ * more with the source left inline, so a patch is never lost to the file.
  */
-export function updateEntry(
+export async function updateEntry(
   id: string,
-  patch: Partial<Pick<HistoryEntry, 'params' | 'thumb' | 'body' | 'faceProtect' | 'faceMask'>>,
+  patch: EntryPatch,
+  opts: { touch?: boolean } = {},
 ): Promise<void> {
-  return withStore('readwrite', undefined, (store) => {
+  let quota = false;
+  await withStore('readwrite', undefined, patchTx(id, patch, opts, true), (err) => {
+    if (isQuotaError(err)) {
+      quota = true;
+      return 'stop';
+    }
+    return 'retry';
+  });
+  if (quota) await withStore('readwrite', undefined, patchTx(id, patch, opts, false));
+}
+
+type EntryPatch = Partial<Pick<HistoryEntry, 'params' | 'thumb' | 'body' | 'faceProtect' | 'faceMask' | 'schema' | 'edit' | 'paramsKey' | 'detect'>>;
+
+/** updateEntry's transaction; `moveSource`: an inline source goes to its own record */
+function patchTx(id: string, patch: EntryPatch, opts: { touch?: boolean }, moveSource: boolean): (store: IDBObjectStore) => () => undefined {
+  return (store) => {
     const req = store.get(id);
     req.onsuccess = () => {
       const cur: unknown = req.result;
       if (!cur || typeof cur !== 'object') return;
-      const edit = patch.params !== undefined || patch.thumb !== undefined;
+      const edit = patch.params !== undefined || patch.thumb !== undefined || patch.edit !== undefined;
       const next = { ...(cur as HistoryEntry) };
-      if (edit) next.updatedAt = stamp();
+      if (edit && opts.touch !== false) next.updatedAt = stamp();
       if (patch.params !== undefined) next.params = patch.params;
       if (patch.thumb !== undefined) next.thumb = patch.thumb;
       if (patch.body !== undefined) next.body = patch.body;
       if (patch.faceProtect === true) next.faceProtect = true;
       else if (patch.faceProtect === false) delete next.faceProtect;
       if (patch.faceMask) next.faceMask = patch.faceMask;
+      if (patch.schema === 2) next.schema = 2;
+      if (patch.edit !== undefined) next.edit = patch.edit;
+      if (patch.paramsKey !== undefined) next.paramsKey = patch.paramsKey;
+      if (patch.detect !== undefined) next.detect = patch.detect;
+      if (moveSource && isBlob(next.source)) {
+        // a put refused at once (DataCloneError, QuotaExceededError) leaves the source inline, as before
+        let moved = false;
+        try {
+          store.put({ id: sourceKey(id), source: next.source });
+          moved = true;
+        } catch {
+          moved = false;
+        }
+        if (moved) delete next.source;
+      }
       store.put(next);
     };
     return () => undefined;
-  });
+  };
 }
 
 /** Newest (updatedAt) first, at most HISTORY_LIMIT; corrupt records are skipped. */
@@ -112,18 +195,39 @@ export function listEntries(): Promise<HistoryEntry[]> {
   });
 }
 
+/** The entry with its source file (from its own record, or inline in a v0.4-dev record). listEntries carries no source. */
 export function getEntry(id: string): Promise<HistoryEntry | undefined> {
   return withStore('readonly', undefined, (store) => {
     const req = store.get(id);
-    return () => normalizeEntry(req.result) ?? undefined;
+    const src = store.get(sourceKey(id));
+    return () => {
+      const entry = normalizeEntry(req.result);
+      if (!entry) return undefined;
+      const s: unknown = (src.result as { source?: unknown } | undefined)?.source;
+      if (!entry.source && isBlob(s) && s.size > 0) entry.source = s;
+      return entry;
+    };
   });
 }
 
 export function deleteEntry(id: string): Promise<void> {
   return withStore('readwrite', undefined, (store) => {
     store.delete(id);
+    store.delete(sourceKey(id));
     return () => undefined;
   });
+}
+
+/**
+ * Delete the source records whose entry is gone (0.3, after a rollback, deletes and evicts entries without knowing
+ * about them). Every add runs it in its transaction after its puts; an entry the add evicts takes its source along.
+ */
+function sweepSources(store: IDBObjectStore): void {
+  const keys = store.getAllKeys();
+  keys.onsuccess = () => {
+    const all = new Set(keys.result.map(String));
+    for (const k of all) if (k.startsWith(SOURCE_PREFIX) && !all.has(k.slice(SOURCE_PREFIX.length))) store.delete(k);
+  };
 }
 
 /** Drop the cached connection (next op reopens). Used by tests; harmless to call any time. */
@@ -176,7 +280,41 @@ export function normalizeEntry(raw: unknown): HistoryEntry | null {
   if (r.faceProtect === true) entry.faceProtect = true;
   const faceMask = normalizeMask(r.faceMask);
   if (faceMask) entry.faceMask = faceMask;
+  if (r.schema === 2) entry.schema = 2;
+  // persons unfiltered here: openState filters them against the cache (or keeps them all for a rematch); the geometry is
+  // validated against the entry's own size (step-3 spec D13), or every read would reset a saved crop to identity
+  if (isEditStateRecord(r.edit)) entry.edit = sanitizeEditState(r.edit, null, { width, height });
+  if (typeof r.paramsKey === 'string') {
+    entry.paramsKey = r.paramsKey;
+    const ids = legacyEditOf(r.params, r.paramsKey);
+    if (ids) entry.legacyEdited = ids;
+  }
+  const d = normalizeDetect(r.detect);
+  if (d.cache) entry.detect = d.cache;
+  if (d.stale) entry.staleBoxes = d.stale;
+  if (d.lost) entry.detectLost = true;
+  // a missing or unreadable source only costs this entry's 原始解析度 export
+  if (isBlob(r.source) && r.source.size > 0) entry.source = r.source;
+  if (isPositiveInt(r.sourceWidth) && isPositiveInt(r.sourceHeight)) {
+    entry.sourceWidth = r.sourceWidth;
+    entry.sourceHeight = r.sourceHeight;
+  }
   return entry;
+}
+
+/**
+ * The rollback check (S §5.3): 0.4 writes `paramsKey = stableKey(params)` with every params write and 0.3 does not, so
+ * stored params that no longer give that key were rewritten by 0.3. The key is checked against the params as stored,
+ * never against sanitizeParams' output: that fills in every param added since the write (steps 2 and 4 added 18, step 5
+ * adds more) and re-derives the preset id, so an entry saved by any earlier build would read as a 0.3 edit and lose its
+ * v2 edit. A non-object is no 0.3 write (0.3 always writes a whole params object). Returns the param ids the stored
+ * values hold (what 0.3 can have changed), or undefined when 0.3 did not edit the entry.
+ */
+function legacyEditOf(raw: unknown, key: string): ParamId[] | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || stableKey(raw) === key) return undefined;
+  const values = (raw as { values?: unknown }).values;
+  const v = values && typeof values === 'object' ? (values as Record<string, unknown>) : {};
+  return PARAM_DEFS.filter((d) => isFiniteNumber(v[d.id])).map((d) => d.id);
 }
 
 /** Untrusted stored 美體 detection → a valid one, or null when anything is off. */
@@ -197,16 +335,6 @@ export function normalizeBody(raw: unknown): BodyDetection | null {
   return { pose: { points }, mask: m, people: Math.floor(people), width, height };
 }
 
-function normalizeMask(raw: unknown): PersonMask | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const { width, height, data } = raw as Record<string, unknown>;
-  if (!Number.isInteger(width) || !Number.isInteger(height)) return null;
-  const w = width as number;
-  const h = height as number;
-  if (w <= 0 || h <= 0 || !(data instanceof Uint8Array) || data.length !== w * h) return null;
-  return { width: w, height: h, data };
-}
-
 // ───────────────────────── internals ─────────────────────────
 
 /** Strictly increasing within a session so same-millisecond writes still have a total order. */
@@ -217,6 +345,10 @@ function stamp(): number {
 
 function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v);
+}
+
+function isPositiveInt(v: unknown): v is number {
+  return Number.isInteger(v) && (v as number) > 0;
 }
 
 function isBlob(v: unknown): v is Blob {
@@ -232,11 +364,13 @@ function warnOnce(err: unknown): void {
 /**
  * Run `body` in one transaction; resolve with its result getter once the transaction commits.
  * `body` must issue all requests synchronously or from request callbacks (IDB auto-commits).
+ * `onError` decides what a failed attempt does: 'retry' (the default: reconnect and run once more) or 'stop'.
  */
 async function withStore<T>(
   mode: IDBTransactionMode,
   fallback: T,
   body: (store: IDBObjectStore) => () => T,
+  onError?: (err: unknown) => 'retry' | 'stop',
 ): Promise<T> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const db = await getDb();
@@ -245,6 +379,7 @@ async function withStore<T>(
       return await runTx(db, mode, body);
     } catch (err) {
       warnOnce(err);
+      if (onError?.(err) === 'stop') return fallback;
       dropConnection(db);
     }
   }

@@ -136,14 +136,38 @@ export function uploadSource(gl: GL, tex: Texture, source: TexImageSource, width
   tex.height = height;
 }
 
-/** Fetch a PNG and upload it as an RGBA8 LINEAR/CLAMP texture with no colour management. */
-export async function loadImageTexture(gl: GL, url: string): Promise<Texture> {
+/** Free a texture's storage without deleting it (the next uploadSource reallocates). */
+export function shrinkTexture(gl: GL, tex: Texture): void {
+  gl.bindTexture(gl.TEXTURE_2D, tex.tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  tex.width = 1;
+  tex.height = 1;
+}
+
+/**
+ * Fetch a PNG and upload it with no colour management: RGBA8 LINEAR / CLAMP by default; `r8` uploads the red channel
+ * only (R8, from RED); `mipmap` builds the mip chain and samples it LINEAR_MIPMAP_LINEAR (the lashes texture, S5 §4.10).
+ */
+export async function loadImageTexture(gl: GL, url: string, opts: { mipmap?: boolean; r8?: boolean } = {}): Promise<Texture> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`GET ${url} -> ${res.status}`);
   const blob = await res.blob();
   const bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
   const t = createTexture(gl, 0, 0);
-  uploadSource(gl, t, bmp, bmp.width, bmp.height);
+  if (opts.r8) {
+    gl.bindTexture(gl.TEXTURE_2D, t.tex);
+    setUnpackState(gl);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, gl.RED, gl.UNSIGNED_BYTE, bmp);
+    t.width = bmp.width;
+    t.height = bmp.height;
+  } else {
+    uploadSource(gl, t, bmp, bmp.width, bmp.height);
+  }
+  if (opts.mipmap) {
+    gl.bindTexture(gl.TEXTURE_2D, t.tex);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  }
   bmp.close();
   return t;
 }
@@ -239,4 +263,22 @@ export function fitShortEdge(w: number, h: number, shortEdge: number): { width: 
 export function hexToRgb(hex: string): [number, number, number] {
   const n = parseInt(hex.replace('#', ''), 16);
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+
+/** A TEXTURE_2D_ARRAY (LINEAR, clamp) with storage for `layers` layers; uploads go through texSubImage3D. */
+export function createTextureArray(gl: GL, w: number, h: number, layers: number, internalFormat: number): Texture & { layers: number } {
+  const tex = gl.createTexture();
+  if (!tex) throw new Error('createTexture failed');
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
+  for (const p of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D_ARRAY, p, gl.LINEAR);
+  for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D_ARRAY, p, gl.CLAMP_TO_EDGE);
+  gl.texImage3D(gl.TEXTURE_2D_ARRAY, 0, internalFormat, w, h, layers, 0, gl.RED, gl.FLOAT, null);
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+  return { tex, width: w, height: h, layers };
+}
+
+/** bindTexture binds TEXTURE_2D only (above); arrays need their own target */
+export function bindTextureArray(gl: GL, unit: number, tex: WebGLTexture | null): void {
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
 }

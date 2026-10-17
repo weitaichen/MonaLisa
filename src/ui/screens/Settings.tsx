@@ -1,9 +1,12 @@
 // Settings 設定 bottom sheet (spec §7.2.5) with the 關於與授權 credits page (spec §11).
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { EXPORT_COPY, exportSizeView, fullExportBlock, standardLabel } from '../../media/exportPlan';
 import type { Prefs } from '../../types';
 import { IconButton, Segmented, ToggleRow } from '../components/Controls';
 import { UpdateBanner } from '../components/UpdateBanner';
 import { reportError } from '../debug';
+import { deps } from '../deps';
+import { maxImportEdge } from '../flows';
 import { Icon } from '../icons';
 import { restartTracker } from '../services';
 import { app, setPrefs } from '../state';
@@ -21,6 +24,18 @@ const DELEGATE_OPTIONS = [
   { value: 'auto', label: '自動（GPU）' },
   { value: 'CPU', label: 'CPU' },
 ] as const;
+
+const FORMAT_OPTIONS = [
+  { value: 'jpeg', label: 'JPEG（較小）' },
+  { value: 'png', label: 'PNG（無損）' },
+] as const;
+
+/** 標準 names the working long edge the tier decodes at: 2048, or 1440 on tier L (C D6) */
+const sizeOptions = (standardEdge: number) =>
+  [
+    { value: 'full', label: '原始解析度' },
+    { value: 'standard', label: standardLabel(standardEdge) },
+  ] as const;
 
 export const PRIVACY_TEXT = '所有影像處理都在你的裝置上完成，照片不會上傳。';
 
@@ -99,6 +114,8 @@ function SettingsBody({ prefs }: { prefs: Prefs }) {
         />
       </div>
 
+      <ExportGroup prefs={prefs} />
+
       <div class="group-label">效能</div>
       <div class="group">
         <div class="row stack">
@@ -158,7 +175,50 @@ function SettingsBody({ prefs }: { prefs: Prefs }) {
           </span>
         </div>
       </div>
-      <div class="sheet-foot">MonaLisa 美顏 · {displayVersion(APP_VERSION)}</div>
+      <div class="sheet-foot">Mona Misa 美顏 · {displayVersion(APP_VERSION)}</div>
+    </>
+  );
+}
+
+/** 輸出 (S §2.4): 輸出解析度 shows the effective setting; under the breadcrumb cap a tap on 原始解析度 retries */
+function ExportGroup({ prefs }: { prefs: Prefs }) {
+  const [, bump] = useState(0);
+  const block = fullExportBlock({
+    prefTier: prefs.tier,
+    autoTier: deps.autoTierSession(),
+    screen: { width: window.screen.width, height: window.screen.height },
+    capped: deps.exportCapped(),
+  });
+  const view = exportSizeView(prefs.exportSize, block);
+  return (
+    <>
+      <div class="group-label">輸出</div>
+      <div class="group">
+        <div class="row stack">
+          <div class="row-text">
+            <div class="row-title">輸出格式</div>
+            <div class="row-sub">{prefs.exportFormat === 'png' ? EXPORT_COPY.pngSub : EXPORT_COPY.jpegSub}</div>
+          </div>
+          <Segmented label="輸出格式" value={prefs.exportFormat} options={FORMAT_OPTIONS} onChange={(exportFormat) => setPrefs({ exportFormat })} />
+        </div>
+        <div class="row stack">
+          <div class="row-text">
+            <div class="row-title">輸出解析度</div>
+            <div class="row-sub">{view.sub}</div>
+          </div>
+          <Segmented
+            label="輸出解析度"
+            value={view.value}
+            options={sizeOptions(maxImportEdge())}
+            disabled={view.fullDisabled ? ['full'] : undefined}
+            onChange={(exportSize) => {
+              if (exportSize === 'full') deps.clearExportCap();
+              setPrefs({ exportSize });
+              bump((n) => n + 1);
+            }}
+          />
+        </div>
+      </div>
     </>
   );
 }
@@ -249,7 +309,7 @@ function Credits() {
         ))}
       </div>
       <p class="credits-note">
-        參數設計參考公開的 SDK 文件（PixelFree、FaceUnity FULiveDemo、阿里雲 Queen SDK），未使用其任何程式碼或素材。濾鏡
+        參數設計參考公開的 SDK 文件（PixelFree、FaceUnity FULiveDemo、阿里雲 Queen SDK），未使用其任何程式碼或素材。濾鏡與質感
         LUT、色號與圖示為本專案原創；口紅與腮紅的單色遮罩（lip_mask、blush_mask）由 GPUPixel 的 mouth、blusher
         圖檔經程式轉換而成，屬修改後的衍生素材。各元件的完整授權條款可於上方展開檢視。
       </p>

@@ -1,6 +1,7 @@
 // T1 engine-core harness page (served by vite on :5181, driven by run.mjs via Playwright).
 // Exposes window.runT1(), which exercises the engine and returns numbers + PNG data URLs; the
 // pixel comparisons against the decoded fixture happen in Node (run.mjs).
+import { legacyFrame } from '../../../src/edit/frame';
 import { createEngine, isWebGL2Supported } from '../../../src/engine/index';
 import { applyPreset, setFilter, setParam } from '../../../src/engine/params';
 import { adapt } from '../../../src/tracking/adapter111';
@@ -113,7 +114,7 @@ async function run(): Promise<T1Result> {
   const bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
   const W = bmp.width;
   const H = bmp.height;
-  const input = (params: BeautyParams): RenderInput => ({ source: bmp, width: W, height: H, face: null, faceWeight: 0, params });
+  const input = (params: BeautyParams): RenderInput => ({ source: bmp, width: W, height: H, ...legacyFrame(params, null, 0) });
 
   const capture = (name: string, params: BeautyParams, mirror = false) => {
     console.log(`capture ${name}`);
@@ -170,7 +171,7 @@ async function run(): Promise<T1Result> {
     const video = gradientSource(1920, 1080);
     for (const t of ['H', 'M', 'L'] as Tier[]) {
       engine.setTier(t);
-      const s1 = engine.render({ source: video, width: 1920, height: 1080, face: null, faceWeight: 0, params: applyPreset('natural') });
+      const s1 = engine.render({ source: video, width: 1920, height: 1080, ...legacyFrame(applyPreset('natural'), null, 0) });
       res.sizes[`video_${t}`] = { canvas: [canvas.width, canvas.height], stats: [s1.width, s1.height], passes: s1.passes };
       const s2 = engine.render(input(applyPreset('natural')));
       res.sizes[`face_${t}`] = { canvas: [canvas.width, canvas.height], stats: [s2.width, s2.height], passes: s2.passes };
@@ -191,7 +192,7 @@ async function run(): Promise<T1Result> {
     try {
       const lm = (await (await fetch('/tests/fixtures/landmarks_sample_face.json')).json()) as { points: number[] };
       const face: Face = adapt({ points: Float32Array.from(lm.points) }, W, H);
-      const faceInput = (params: BeautyParams): RenderInput => ({ source: bmp, width: W, height: H, face, faceWeight: 1, params });
+      const faceInput = (params: BeautyParams): RenderInput => ({ source: bmp, width: W, height: H, ...legacyFrame(params, face, 1) });
       engine.setTier('H');
       const glow = applyPreset('glow');
       await engine.loadFilter(glow.filterId);
@@ -215,7 +216,7 @@ async function run(): Promise<T1Result> {
       faceCap('face_natural', applyPreset('natural'));
       faceCap('face_glow', glow);
       faceCap('face_refined', applyPreset('refined'));
-      faceCap('face_weight0_natural', applyPreset('natural'), { ...faceInput(applyPreset('natural')), faceWeight: 0 });
+      faceCap('face_weight0_natural', applyPreset('natural'), { source: bmp, width: W, height: H, ...legacyFrame(applyPreset('natural'), face, 0) });
       const smoothOnly = setParam(applyPreset('original'), 'skin.smooth', 1);
       faceCap('face_smooth_only', smoothOnly);
       engine.setOptions({ matchGpupixel: true });
@@ -241,12 +242,12 @@ async function run(): Promise<T1Result> {
     const vparams = applyPreset('natural');
     const N = 30;
     let t0 = performance.now();
-    for (let i = 0; i < N; i++) engine.render({ source: video, width: 1920, height: 1080, face: null, faceWeight: 0, params: vparams });
+    for (let i = 0; i < N; i++) engine.render({ source: video, width: 1920, height: 1080, ...legacyFrame(vparams, null, 0) });
     gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
     res.timings.liveM_avg_ms = (performance.now() - t0) / N;
     engine.setTier('L');
     t0 = performance.now();
-    for (let i = 0; i < N; i++) engine.render({ source: video, width: 1920, height: 1080, face: null, faceWeight: 0, params: vparams });
+    for (let i = 0; i < N; i++) engine.render({ source: video, width: 1920, height: 1080, ...legacyFrame(vparams, null, 0) });
     gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
     res.timings.liveL_avg_ms = (performance.now() - t0) / N;
     glErr('timing');

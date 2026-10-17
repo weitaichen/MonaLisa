@@ -106,8 +106,10 @@ const steps = {
   },
   async people2() {
     const { page, close } = await open('people2');
-    const note = await page.locator('.body-note-text').textContent();
-    check('≥ 2 people hint', note.includes('僅調整畫面中央的主要人物'), note);
+    // the 2+ people hint is gone (S §8.5); the lens holds one person (P0), so no person / bands note shows either
+    const items = await page.locator('.strip .item').count();
+    const notes = await page.locator('.body-note').count();
+    check('≥ 2 people: no multi-person hint', items > 0 && notes === 0, `items ${items}, notes ${notes}`);
     await shot(page, 'b09-people2');
     await close();
   },

@@ -165,3 +165,42 @@ test('engine: 原圖 ≈ identity, 自然 smooths the skin only, big-eye warps o
   expect(r.passes.filterMono).not.toContain('reshape');
   expect(r.passes.filterMono).not.toContain('meanH');
 });
+
+test('two faces: per-face skin strengths and makeup; the neutral face is untouched (S §4.2, §4.3)', async ({ page }) => {
+  await page.goto(`${DEV_URL}/tests/e2e/pages/engine.html`);
+  await page.waitForFunction(() => typeof window.runEngineMulti === 'function');
+  const r = await page.evaluate(() => window.runEngineMulti!());
+  console.log(JSON.stringify(r));
+  expect(r.maskB).toBeLessThan(0.5);
+  expect(r.maskBBorder).toBeLessThan(0.5);
+  expect(r.lipA).toBeGreaterThan(3);
+  expect(Math.abs(r.lipA - r.lipASolo)).toBeLessThan(0.5);
+  // overlapping meshes: a later mesh without lip makeup keeps the earlier face's lip (the MESH_FS discard, §4.3)
+  expect(r.lipOverlapSolo).toBeGreaterThan(3);
+  expect(Math.abs(r.lipOverlap - r.lipOverlapSolo)).toBeLessThan(0.5);
+});
+
+test('顯示臉部特徵點 stays on the face after a crop, a quarter turn and a flip: the points go through the view', async ({ page }) => {
+  await page.goto(`${DEV_URL}/tests/e2e/pages/engine.html`);
+  await page.waitForFunction(() => typeof window.runEngineOverlay === 'function');
+  const r = await page.evaluate(() => window.runEngineOverlay!());
+  console.log(JSON.stringify(r));
+  expect(Object.keys(r)).toEqual(['identity', 'crop', 'quarter 1 + flip + crop']);
+  for (const [name, c] of Object.entries(r)) {
+    expect(c.err, name).toBe(0);
+    // the face is in the crop: most of the 111 points are on the canvas, and nearly every one is drawn where V has it
+    expect(c.inside, name).toBeGreaterThan(60);
+    expect(c.hit / c.inside, name).toBeGreaterThan(0.85);
+  }
+});
+
+test('releaseFields: the 美體 and 推臉筆 textures go with the still session; the next frame uploads them again', async ({ page }) => {
+  await page.goto(`${DEV_URL}/tests/e2e/pages/engine.html`);
+  await page.waitForFunction(() => typeof window.runEngineReleaseFields === 'function');
+  const r = await page.evaluate(() => window.runEngineReleaseFields!());
+  console.log(`RG16F uploads ${r.uploadsBefore} for two frames, ${r.freed} textures freed, ${r.uploadsAfter} uploads after`);
+  expect(r.uploadsBefore, 'one upload per field, the second frame reuses them').toBe(2);
+  expect(r.freed).toBe(2);
+  expect(r.uploadsAfter).toBe(2);
+  expect(r.err).toBe(0);
+});

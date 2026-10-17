@@ -4,12 +4,17 @@ import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import { describe, expect, it } from 'vitest';
 import { FILTERS } from '../../../src/engine/params.ts';
+import { LOOKS as LOOK_DEFS } from '../../../src/engine/looks.ts';
+import { adjustRgb, adjustUniforms, frameFor } from '../../../src/engine/adjustMath.ts';
 import { ICONS } from '../../../scripts/gen-icons.mjs';
 import {
   FILTER_IDS,
   LOOKS,
+  LOOK_GRADES,
+  LOOK_IDS,
   LUT_DIM,
   THUMB,
+  buildLookThumb,
   buildLut,
   drawSwatch,
   encodePng,
@@ -17,7 +22,7 @@ import {
   lookup64,
   srgbToLab,
 } from '../../../scripts/gen-luts.mjs';
-import { MASKS, blur, maskFromRgba } from '../../../scripts/gen-makeup.mjs';
+import { LASHES_H, LASHES_W, MASKS, blur, lashColumn, lashRoots, lashes, lashesPng, maskFromRgba } from '../../../scripts/gen-makeup.mjs';
 import { FRAMES, H, W, composeFrame, rgbToI420 } from '../../../scripts/gen-y4m.mjs';
 import { lutStats } from './lut-stats.mjs';
 
@@ -168,6 +173,97 @@ describe('shipped filter LUTs', () => {
   });
 });
 
+describe('shipped 質感 look LUTs (step-2 spec §8.2)', () => {
+  it('every LookDef has a LUT recipe here, and vice versa', () => {
+    expect(LOOK_DEFS.map((l) => l.id)).toEqual(LOOK_IDS);
+  });
+
+  for (const id of LOOK_IDS) {
+    describe(id, () => {
+      const raw = readFileSync(pub('luts', 'looks', `look_${id}.png`));
+      const png = PNG.sync.read(raw);
+
+      it('is a 512×512 opaque RGB PNG with no colour-management chunks', () => {
+        expect([png.width, png.height]).toEqual([512, 512]);
+        expect(raw[25]).toBe(2);
+        expect(chunks(raw).filter((c) => c !== 'IDAT')).toEqual(['IHDR', 'IEND']);
+      });
+
+      it('matches the generator output (assets are up to date)', () => {
+        expect(Buffer.compare(png.data, buildLut(LOOK_GRADES[id]))).toBe(0);
+      });
+
+      it('is smooth (no jumps between neighbouring grid entries) with a monotone grey axis', () => {
+        const s = lutStats(png.data);
+        expect(s.greyMonotone).toBe(true);
+        expect(s.maxStep).toBeLessThanOrEqual(36);
+      });
+
+      it('its thumbnail matches the generator and differs from the ungraded swatch', () => {
+        const thumb = readPng(pub('luts', 'looks', `look_${id}_thumb.png`));
+        expect([thumb.width, thumb.height]).toEqual([THUMB, THUMB]);
+        expect(Buffer.compare(thumb.data, buildLookThumb(id, png.data))).toBe(0);
+        expect(meanAbsDiff(thumb.data, readPng(pub('luts', 'filters', 'none_thumb.png')).data)).toBeGreaterThan(4);
+      });
+    });
+  }
+
+  it('look thumbnails are mutually distinct (mean ≥ 5)', () => {
+    const thumbs = LOOK_IDS.map((id) => readPng(pub('luts', 'looks', `look_${id}_thumb.png`)).data);
+    for (let i = 0; i < thumbs.length; i++)
+      for (let j = i + 1; j < thumbs.length; j++) {
+        const d = meanAbsDiff(thumbs[i], thumbs[j]);
+        if (d < 5) throw new Error(`${LOOK_IDS[i]} vs ${LOOK_IDS[j]}: mean diff ${d.toFixed(2)}`);
+      }
+  });
+
+  it('every look thumbnail differs from every filter thumbnail (mean ≥ 5), 膠片 vs 膠片 included', () => {
+    for (const id of LOOK_IDS) {
+      const look = readPng(pub('luts', 'looks', `look_${id}_thumb.png`)).data;
+      for (const f of FILTER_IDS) {
+        const d = meanAbsDiff(look, readPng(pub('luts', 'filters', `${f}_thumb.png`)).data);
+        if (d < 5) throw new Error(`look ${id} vs filter ${f}: mean diff ${d.toFixed(2)}`);
+      }
+    }
+  });
+
+  it('keeps skin skin-like under the full look at its default 程度 (LUT mix + offsets through adjustRgb)', () => {
+    const skins = [
+      [241, 194, 167],
+      [232, 190, 172],
+      [224, 172, 150],
+      [200, 150, 130],
+      [198, 134, 110],
+      [171, 140, 114],
+      [141, 85, 60],
+    ];
+    const lch = (lab) => [lab[0], Math.hypot(lab[1], lab[2]), (Math.atan2(lab[2], lab[1]) * 180) / Math.PI];
+    for (const def of LOOK_DEFS) {
+      const lut = buildLut(LOOK_GRADES[def.id]);
+      const u = adjustUniforms({}, { def, amount: def.defaultAmount }, true, frameFor({ width: 1080, height: 1080 }));
+      for (const s of skins) {
+        const c = s.map((v) => v / 255);
+        const t = lookup64(lut, c[0], c[1], c[2]);
+        const mixed = c.map((v, k) => v + (t[k] - v) * def.defaultAmount);
+        const inp = lch(srgbToLab(c));
+        const out = lch(srgbToLab(adjustRgb(mixed, u, [0.5, 0.5])));
+        const msg = `${def.id} ${s}: L ${out[0].toFixed(3)} C ${out[1].toFixed(3)} h ${out[2].toFixed(1)}`;
+        expect(out[2], msg).toBeGreaterThan(20);
+        expect(out[2], msg).toBeLessThan(75);
+        expect(out[1], msg).toBeGreaterThan(0.02);
+        expect(out[1], msg).toBeLessThan(0.12);
+        expect(out[0], msg).toBeGreaterThan(inp[0] - 0.06);
+      }
+    }
+  });
+
+  it('NOTICE names the look LUTs as original work and credits hash-prospector', () => {
+    const notice = readFileSync(join(root, 'LICENSES', 'NOTICE.txt'), 'utf8');
+    expect(notice).toContain('the 質感 look LUTs and thumbnails');
+    expect(notice).toContain('hash-prospector');
+  });
+});
+
 describe('GPUPixel LUTs and makeup textures', () => {
   // RB §2.1: no colour chunks, so no browser can colour-manage LUT / makeup data
   // (Safari's colorSpaceConversion:'none' handling is unverified; gAMA alone is a 2.2 power curve).
@@ -261,5 +357,44 @@ describe('fake-camera y4m', () => {
     expect(Buffer.compare(buf.subarray(f0, f0 + Y.length), Buffer.from(Y))).toBe(0);
     expect(Buffer.compare(buf.subarray(f0 + Y.length, f0 + Y.length + U.length), Buffer.from(U))).toBe(0);
     expect(Buffer.compare(buf.subarray(f0 + Y.length + U.length, f0 + frameBytes - 6), Buffer.from(V))).toBe(0);
+  });
+});
+
+describe('lashes texture (face-detail spec §4.10)', () => {
+  it('the committed PNG is the generator output pixel for pixel: 512 × 128, 8-bit single channel', () => {
+    const buf = readFileSync(pub('makeup', 'own', 'lashes.png'));
+    expect(buf.readUInt8(24)).toBe(8); // IHDR bit depth
+    expect(buf.readUInt8(25)).toBe(0); // IHDR colour type 0 = greyscale
+    expect(chunks(buf).filter((c) => c !== 'IDAT')).toEqual(['IHDR', 'IEND']); // no colour management (RB §2.1)
+    const png = readPng(pub('makeup', 'own', 'lashes.png'));
+    expect([png.width, png.height]).toEqual([LASHES_W, LASHES_H]);
+    const fresh = PNG.sync.read(lashesPng());
+    expect(Buffer.compare(Buffer.from(png.data), Buffer.from(fresh.data))).toBe(0);
+  });
+
+  it('is deterministic, empty in the outermost 4 columns, and its root row covers only the root span', () => {
+    const a = lashes();
+    expect(Array.from(a)).toEqual(Array.from(lashes()));
+    const at = (x, y) => a[y * LASHES_W + x];
+    for (let y = 0; y < LASHES_H; y++) for (const x of [0, 1, 2, 3, LASHES_W - 4, LASHES_W - 3, LASHES_W - 2, LASHES_W - 1]) expect(at(x, y)).toBe(0);
+    const roots = lashRoots();
+    expect(roots).toHaveLength(42);
+    const lo = Math.min(...roots.map(lashColumn)) - 3;
+    const hi = Math.max(...roots.map(lashColumn)) + 3;
+    let covered = 0;
+    for (let x = 0; x < LASHES_W; x++) {
+      if (at(x, LASHES_H - 1) <= 0) continue;
+      covered++;
+      expect(x).toBeGreaterThanOrEqual(lo);
+      expect(x).toBeLessThanOrEqual(hi);
+    }
+    expect(covered).toBeGreaterThan(42);
+  });
+
+  it('NOTICE names the procedural makeup and lashes.png as original work (S5 §5 item 4)', () => {
+    const notice = readFileSync(join(root, 'LICENSES', 'NOTICE.txt'), 'utf8');
+    const line = notice.split(/\r?\n/).find((l) => l.startsWith('Original to this project:'));
+    expect(line).toContain('the procedural makeup (src/engine/passes/makeupProc.ts)');
+    expect(line).toContain('public/makeup/own/lashes.png (generated by scripts/gen-makeup.mjs)');
   });
 });

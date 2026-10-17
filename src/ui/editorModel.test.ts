@@ -1,36 +1,68 @@
 // editorModel.ts: when the editor trusts a "no face", how often it re-detects, and 儲存 surviving a session swap.
 import { describe, expect, it, vi } from 'vitest';
+import type { BodyFieldInput } from '../body/field';
 import type { BodyMeasure } from '../body/measure';
-import { fakeBodyTracker, makeBodyDetection, makeBodyField } from '../app/testFakes';
-import { applyPreset, setBodyProtect, setFilter, setHeightBand, setParam } from '../engine/params';
-import type { BeautyParams, BodyField, Face, ParamId, RegionStatus, TrackerState } from '../types';
+import { fakeBodyTracker, makeBodyDetection, makeBodyDetections, makeBodyField, makeFace } from '../app/testFakes';
+import { personInfos } from '../detect/cache';
+import { cacheBody, makeCache } from '../detect/testCaches';
+import { applyPreset, setHeightBand, setParam } from '../engine/params';
+import type { BeautyParams, BodyField, EditState, Face, ParamId, PersonId, RegionStatus, Selection, TrackerState } from '../types';
+import { lensFor, P0_INFO } from '../edit/lens';
+import { flipView, IDENTITY_GEOMETRY, rotateLeft, upQuarter, vToO } from '../geometry/view';
+import { editFromLegacy } from '../edit/legacy';
+import { bodyAnswer, preAnswerCache } from '../edit/migrate';
+import { assignPersons, withPersons } from '../edit/state';
 import {
+  addBodyScan,
+  bodyScansAfter,
+  addFaceScan,
+  answerNotices,
   ANY_FIELD,
   BODY_DRAFT_LONG_EDGE,
   BODY_NONE_REASON,
   BODY_UNMEASURED_REASON,
   BodyFieldMemo,
+  bodyInputKey,
   bodyPanelContext,
-  bodyParamsKey,
-  bodyToPersist,
-  cachedBodyFits,
+  changedPersons,
   detectBody,
   detectSession,
   exportOnLatest,
   FieldDraftGate,
+  fieldInputOf,
+  frameFacesOf,
+  hitCtxOf,
   MAX_REDETECTS,
-  measureSafe,
+  measuredAvailable,
+  measurePersons,
   needsBodyMeasure,
+  needsBodyScan,
+  needsFaceScan,
+  outputImage,
+  outputSettled,
+  outputWaits,
+  personBodyGate,
+  protectRequests,
+  rebaseStamp,
   RedetectBudget,
+  RESTORE_POLL_MS,
+  sessionPlan,
+  settleBodyAnswer,
   shouldDetectBody,
   stampIs,
   suggestedBand,
+  thumbRect,
+  undoToast,
+  whenRestored,
   type BodyDet,
 } from './editorModel';
-import { BODY_ERROR_NOTE, bodyNote, INITIAL_SELECTION, itemsFor } from './panelModel';
+import { BODY_ERROR_NOTE, bodyNote, INITIAL_SELECTION, itemsFor, sliderFor } from './panelModel';
+
+const lensOfEdit = (e: EditState) => lensFor(e, { kind: 'person', id: 'p0' }, P0_INFO, 'p0');
+const lensOf = (p: BeautyParams) => lensOfEdit(editFromLegacy(p));
 
 const FACE = {} as Face;
-const session = (face: Face | null, faceKnown = true) => ({ face, faceKnown });
+const session = (face: Face | null, faceKnown = true) => ({ faces: face ? [face] : [], faceKnown });
 
 describe('detectSession', () => {
   it('a healthy tracker that found nothing is a definite "no face"', () => {
@@ -61,6 +93,22 @@ describe('detectSession', () => {
 
   it('基本模式 (no tracker) is never unsure', () => {
     expect(detectSession(false, () => false, () => session(null, false)).unsure).toBe(false);
+  });
+
+  it('a cached answer is never unsure: "no face" reopened while the tracker is lost / failed is still "no face" (S §3.3 item 3)', () => {
+    const noFace = makeCache({ faces: [], persons: [] });
+    const plan = sessionPlan(noFace, true);
+    expect(plan).toEqual({ useCache: true, asks: false });
+    // the tracker is down before and after: the cached faces (none) are the answer, so no 「臉部偵測重新啟動中…」 note
+    expect(detectSession(plan.asks, () => false, () => session(null)).unsure).toBe(false);
+    // no upright scan cached (only a rotated one): the tracker is asked, and an unhealthy one cannot answer
+    const rotated = sessionPlan(makeCache({ faces: [], persons: [], faceScans: [{ quarter: 1, flipH: false }] }), true);
+    expect(rotated).toEqual({ useCache: false, asks: true });
+    expect(detectSession(rotated.asks, () => false, () => session(null)).unsure).toBe(true);
+    // no cache: the tracker is asked; 基本模式 uses any cache it has and asks nobody
+    expect(sessionPlan(null, true)).toEqual({ useCache: false, asks: true });
+    expect(sessionPlan(makeCache({ faceScans: [] }), false)).toEqual({ useCache: true, asks: false });
+    expect(sessionPlan(null, false)).toEqual({ useCache: false, asks: false });
   });
 });
 
@@ -145,6 +193,82 @@ describe('exportOnLatest', () => {
   });
 });
 
+describe('whenRestored (C §7: the 標準 fallback after a loss during the tiles waits for the restore)', () => {
+  const fakeEngine = (lost: boolean) => {
+    const canvas = new EventTarget();
+    const engine = { lost, canvas };
+    // the engine's own listener, registered first (createEngine): it rebuilds, then clears `lost`
+    canvas.addEventListener('webglcontextrestored', () => (engine.lost = false));
+    return engine;
+  };
+
+  it('a live engine resolves true at once', async () => {
+    await expect(whenRestored(fakeEngine(false), 1000)).resolves.toBe(true);
+  });
+
+  it('resolves true on the restore, after the engine’s own listener rebuilt it', async () => {
+    const e = fakeEngine(true);
+    const p = whenRestored(e, 60_000);
+    e.canvas.dispatchEvent(new Event('webglcontextrestored'));
+    await expect(p).resolves.toBe(true);
+  });
+
+  it('resolves false when no restore comes in time, or the rebuild failed (still lost)', async () => {
+    vi.useFakeTimers();
+    try {
+      const p = whenRestored(fakeEngine(true), 5000);
+      vi.advanceTimersByTime(5000);
+      await expect(p).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+    const broken = { lost: true, canvas: new EventTarget() };
+    const q = whenRestored(broken, 60_000);
+    broken.canvas.dispatchEvent(new Event('webglcontextrestored'));
+    await expect(q).resolves.toBe(false);
+  });
+
+  it('ends as soon as the wait is superseded (重新載入引擎: a session on a new engine took over), not at the timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      let replaced = false;
+      const settled: boolean[] = [];
+      // the old engine is disposed by recoverEngine: its canvas never fires webglcontextrestored again
+      void whenRestored(fakeEngine(true), 60_000, () => replaced).then((v) => settled.push(v));
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(settled).toEqual([]);
+      replaced = true;
+      await vi.advanceTimersByTimeAsync(RESTORE_POLL_MS);
+      // false (the old context is not back): encode throws ExportError('lost'), and exportOnLatest runs on the replacement
+      expect(settled).toEqual([false]);
+      expect(vi.getTimerCount()).toBe(0); // the timeout and the poll are gone
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a superseded check that is already true ends the wait at the first poll; a restore or the timeout clears the poll', async () => {
+    vi.useFakeTimers();
+    try {
+      const at: number[] = [];
+      const t0 = Date.now();
+      void whenRestored(fakeEngine(true), 60_000, () => true).then(() => at.push(Date.now() - t0));
+      await vi.advanceTimersByTimeAsync(RESTORE_POLL_MS);
+      expect(at).toEqual([RESTORE_POLL_MS]);
+      const e = fakeEngine(true);
+      const p = whenRestored(e, 60_000, () => false);
+      e.canvas.dispatchEvent(new Event('webglcontextrestored'));
+      await expect(p).resolves.toBe(true);
+      const q = whenRestored(fakeEngine(true), 5000, () => false);
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(q).resolves.toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 // ───────────────────────── 美體 ─────────────────────────
 
 describe('美體 decisions', () => {
@@ -165,16 +289,6 @@ describe('美體 decisions', () => {
   const avail = (m: BodyMeasure | null, id: ParamId): RegionStatus =>
     m ? (id === 'body.legs' ? m.regions.legs : m.regions.torso) : { ok: false, reason: 'no measure' };
 
-  it('bodyParamsKey follows sliders, band and 背景保護, not skin / filter / presets', () => {
-    const k = bodyParamsKey(base);
-    expect(bodyParamsKey(setParam(base, 'skin.smooth', 0.9))).toBe(k);
-    expect(bodyParamsKey(setFilter(base, 'mono'))).toBe(k);
-    expect(bodyParamsKey(applyPreset('glow', 0.3, base))).toBe(k);
-    expect(bodyParamsKey(setParam(base, 'body.waist', 0.4))).not.toBe(k);
-    expect(bodyParamsKey(setBodyProtect(base, false))).not.toBe(k);
-    expect(bodyParamsKey(setHeightBand(base, { top: 0.5, bottom: 0.8, amount: 0.5 }))).not.toBe(k);
-  });
-
   it('needsBodyMeasure: any slider off neutral (美臀 is centre-zero); the band alone needs no detection', () => {
     expect(needsBodyMeasure(base)).toBe(false);
     expect(needsBodyMeasure(setParam(base, 'body.hip', 0.5))).toBe(false);
@@ -189,7 +303,6 @@ describe('美體 decisions', () => {
     expect(shouldDetectBody(idle, { tabOpen: true, entered: true, params: base })).toBe(true);
     const edited = setParam(base, 'body.slim', 0.5);
     expect(shouldDetectBody(idle, { tabOpen: false, entered: false, params: edited })).toBe(true);
-    expect(shouldDetectBody({ phase: 'cache' }, { tabOpen: true, entered: true, params: edited })).toBe(false);
     expect(shouldDetectBody({ phase: 'working' }, { tabOpen: true, entered: true, params: base })).toBe(false);
     // a finished detection (cached or not, person or not) is never repeated
     for (const d of [det, null]) {
@@ -204,14 +317,15 @@ describe('美體 decisions', () => {
   });
 
   it('detectBody runs the tracker on the photo after the pause; failures propagate', async () => {
-    const t = fakeBodyTracker(det);
+    const dets = makeBodyDetections(1);
+    const t = fakeBodyTracker(dets);
     const img = {} as ImageBitmap;
     const order: string[] = [];
     const pause = async () => {
       order.push('pause');
       expect(t.detect).not.toHaveBeenCalled();
     };
-    expect(await detectBody(async () => t, img, { pause })).toBe(det);
+    expect(await detectBody(async () => t, img, { pause })).toBe(dets);
     expect(order).toEqual(['pause']);
     expect(t.detect).toHaveBeenCalledWith(img);
     t.result = null;
@@ -224,7 +338,8 @@ describe('美體 decisions', () => {
   });
 
   it('detectBody waits out a recovering tracker (BodyTrackerRecovering) instead of failing', async () => {
-    const t = fakeBodyTracker(det);
+    const dets = makeBodyDetections(1);
+    const t = fakeBodyTracker(dets);
     const recovering = () => Object.assign(new Error('rebuilding'), { name: 'BodyTrackerRecovering' });
     t.detect
       .mockImplementationOnce(() => {
@@ -237,7 +352,7 @@ describe('美體 decisions', () => {
     const recoverWait = async () => {
       waits++;
     };
-    expect(await detectBody(async () => t, {} as ImageBitmap, { recoverWait })).toBe(det);
+    expect(await detectBody(async () => t, {} as ImageBitmap, { recoverWait })).toBe(dets);
     expect(waits).toBe(2);
     // still recovering after every try → the error surfaces (重試)
     t.detect.mockImplementation(() => {
@@ -258,31 +373,9 @@ describe('美體 decisions', () => {
   });
 
   it('detectBody: closed meanwhile → undefined, the (closed) photo is never touched', async () => {
-    const t = fakeBodyTracker(det);
+    const t = fakeBodyTracker(makeBodyDetections(1));
     expect(await detectBody(async () => t, {} as ImageBitmap, { cancelled: () => true })).toBeUndefined();
     expect(t.detect).not.toHaveBeenCalled();
-  });
-
-  it('cachedBodyFits: same aspect only ("no person" always fits)', () => {
-    expect(cachedBodyFits(makeBodyDetection(1, 1536, 2048), 768, 1024)).toBe(true);
-    expect(cachedBodyFits(makeBodyDetection(1, 1536, 2048), 1024, 768)).toBe(false);
-    expect(cachedBodyFits(makeBodyDetection(1, 1536, 2048), 0, 0)).toBe(false);
-    expect(cachedBodyFits(null, 1024, 768)).toBe(true);
-  });
-
-  it('measureSafe: only a person gets a measure; a throwing measure is reported, not fatal', () => {
-    const m = measure();
-    const fn = vi.fn(() => m);
-    const onError = vi.fn();
-    expect(measureSafe({ phase: 'done', det }, null, fn, onError)).toBe(m);
-    expect(fn).toHaveBeenCalledWith(det, null);
-    expect(measureSafe({ phase: 'done', det: null }, null, fn, onError)).toBeNull();
-    expect(measureSafe({ phase: 'working' }, null, fn, onError)).toBeNull();
-    const boom = () => {
-      throw new Error('bad mask');
-    };
-    expect(measureSafe({ phase: 'done', det }, null, boom, onError)).toBeNull();
-    expect(onError).toHaveBeenCalledTimes(1);
   });
 
   it('bodyPanelContext: loading with the model download progress', () => {
@@ -294,7 +387,6 @@ describe('美體 decisions', () => {
     expect(creating.progress).toBeUndefined();
     const started = bodyPanelContext({ phase: 'working' }, { state: 'loading', step: 'model', progress: null }, null, avail);
     expect(started.progress).toBe(0);
-    expect(bodyPanelContext({ phase: 'cache' }, { state: 'idle' }, null, avail).status).toBe('loading');
     expect(bodyPanelContext({ phase: 'idle' }, { state: 'idle' }, null, avail).status).toBe('idle');
   });
 
@@ -331,7 +423,7 @@ describe('美體 decisions', () => {
     expect(note.text).toContain(hint);
     expect(note.text).toContain('仍可使用手動增高');
     expect(note.action?.label).toBe('重試');
-    const slim = itemsFor(setParam(applyPreset('natural', 1), 'body.slim', 0), { ...INITIAL_SELECTION, tab: 'body' }, c).find(
+    const slim = itemsFor(lensOf(setParam(applyPreset('natural', 1), 'body.slim', 0)), { ...INITIAL_SELECTION, tab: 'body' }, c).find(
       (i) => i.key === 'body.slim',
     )!;
     expect(slim).toMatchObject({ disabled: true, reason: BODY_ERROR_NOTE });
@@ -342,7 +434,7 @@ describe('美體 decisions', () => {
   it('bodyPanelContext → panel: 背景保護 is off when the measure has no person mask (CPU fallback)', () => {
     const p = applyPreset('natural', 1);
     const s = { ...INITIAL_SELECTION, tab: 'body' as const };
-    const protect = (c: ReturnType<typeof bodyPanelContext>) => itemsFor(p, s, c).find((i) => i.key === 'protect')!;
+    const protect = (c: ReturnType<typeof bodyPanelContext>) => itemsFor(lensOf(p), s, c).find((i) => i.key === 'protect')!;
     const masked = { ...measure(), mask: { width: 4, height: 4, data: new Uint8Array(16) } } as BodyMeasure;
     const withMask = bodyPanelContext({ phase: 'done', det }, { state: 'ready' }, masked, avail);
     expect(withMask.hasMask).toBe(true);
@@ -371,63 +463,6 @@ describe('美體 decisions', () => {
     expect(suggestedBand(d)).toBeUndefined();
     expect('suggestedBand' in bodyPanelContext({ phase: 'done', det: d }, { state: 'ready' }, measure(), avail)).toBe(false);
     expect(suggestedBand(null)).toBeUndefined();
-  });
-
-  it('BodyFieldMemo rebuilds only for body params / measure changes, passing the previous field', () => {
-    let v = 0;
-    const build = vi.fn((_m: BodyMeasure | null, p: BeautyParams, _a: number, prev?: BodyField | null) => {
-      if (!needsBodyMeasure(p) && !p.heightBand) return null;
-      const f = prev ?? makeBodyField(0, 0);
-      f.version = ++v; // refills the same buffer
-      return f;
-    });
-    const memo = new BodyFieldMemo(build);
-    const m = measure();
-    expect(memo.update(m, base, 0.75)).toEqual({ field: null, changed: false });
-    expect(build).toHaveBeenCalledTimes(1);
-    expect(memo.update(m, setParam(base, 'skin.whiten', 0.9), 0.75).changed).toBe(false);
-    expect(build).toHaveBeenCalledTimes(1);
-
-    const slim = setParam(base, 'body.slim', 0.6);
-    const a = memo.update(m, slim, 0.75);
-    expect(a.changed).toBe(true);
-    expect(a.field?.version).toBe(1);
-    const b = memo.update(m, setParam(slim, 'body.slim', 0.7), 0.75);
-    expect(b.changed).toBe(true); // same object, new version
-    expect(b.field).toBe(a.field);
-    expect(build.mock.calls[2][3]).toBe(a.field);
-    expect(memo.update(m, setFilter(setParam(slim, 'body.slim', 0.7), 'warm'), 0.75).changed).toBe(false);
-
-    // a new measure (e.g. the face was found on a re-detect: head anchors) rebuilds
-    expect(memo.update(measure(), setParam(slim, 'body.slim', 0.7), 0.75).changed).toBe(true);
-    // back to neutral → no field
-    expect(memo.update(m, base, 0.75)).toEqual({ field: null, changed: true });
-  });
-
-  it('BodyFieldMemo: a drag step builds a draft; the commit with the same params rebuilds it at full resolution', () => {
-    const build = vi.fn((_m: BodyMeasure | null, _p: BeautyParams, _a: number, _prev?: BodyField | null, edge?: number) => {
-      const f = makeBodyField(0.01);
-      f.width = edge ?? 256;
-      return f;
-    });
-    const memo = new BodyFieldMemo(build);
-    const m = measure();
-    const slim = setParam(base, 'body.slim', 0.6);
-    const draft = memo.update(m, slim, 0.75, true);
-    expect(draft.changed).toBe(true);
-    expect(build.mock.calls[0][4]).toBe(BODY_DRAFT_LONG_EDGE);
-    // the next drag step at the same value: nothing to do
-    expect(memo.update(m, slim, 0.75, true).changed).toBe(false);
-    // the commit (or an export) at the same value: full resolution
-    const full = memo.update(m, slim, 0.75);
-    expect(full.changed).toBe(true);
-    expect(build).toHaveBeenCalledTimes(2);
-    expect(build.mock.calls[1][4]).toBeUndefined();
-    expect(full.field?.width).toBe(256);
-    // a full field answers a later draft request (a pending drag frame after the commit) and a repeated commit
-    expect(memo.update(m, slim, 0.75, true).changed).toBe(false);
-    expect(memo.update(m, slim, 0.75).changed).toBe(false);
-    expect(build).toHaveBeenCalledTimes(2);
   });
 
   it('FieldDraftGate: only the params change of a drag step takes the draft path', () => {
@@ -490,11 +525,376 @@ describe('美體 decisions', () => {
     expect(stampIs(reopened, 'edited', 7)).toBe(false);
   });
 
-  it('bodyToPersist: a fresh detection (person or nobody) once; nothing while unknown or already stored', () => {
-    expect(bodyToPersist({ phase: 'done', det }, false)).toBe(det);
-    expect(bodyToPersist({ phase: 'done', det: null }, false)).toBeNull();
-    expect(bodyToPersist({ phase: 'done', det }, true)).toBeUndefined();
-    expect(bodyToPersist({ phase: 'working' }, false)).toBeUndefined();
-    expect(bodyToPersist({ phase: 'error', message: 'x' }, false)).toBeUndefined();
+});
+
+describe('BodyFieldMemo (multi-person)', () => {
+  it('rebuilds only when the input key changes; a full build answers a later draft', () => {
+    const build = vi.fn((_i: BodyFieldInput, _p?: BodyField | null, _e?: number) => makeBodyField());
+    const memo = new BodyFieldMemo(build);
+    const m = {} as BodyMeasure;
+    const input = (waist: number): BodyFieldInput => ({ edited: [{ id: 'f0', measure: m, values: { 'body.waist': waist } as never }], masks: [], heightBand: null, legs: { value: 0, measure: null }, bodyProtect: true, aspect: 0.75 });
+    expect(memo.update(input(0.5)).changed).toBe(true);
+    expect(memo.update(input(0.5), true).changed).toBe(false);
+    expect(memo.update(input(0.6), true).changed).toBe(true);
+    expect(build.mock.calls.at(-1)![2]).toBe(BODY_DRAFT_LONG_EDGE);
+  });
+  it('a drag step builds a draft; the commit with the same input rebuilds it at full resolution; then neither rebuilds', () => {
+    const build = vi.fn((_i: BodyFieldInput, _p?: BodyField | null, edge?: number) => {
+      const f = makeBodyField(0.01);
+      f.width = edge ?? 256;
+      return f;
+    });
+    const memo = new BodyFieldMemo(build);
+    const input: BodyFieldInput = { edited: [{ id: 'f0', measure: {} as BodyMeasure, values: { 'body.slim': 0.6 } as never }], masks: [], heightBand: null, legs: { value: 0, measure: null }, bodyProtect: true, aspect: 0.75 };
+    expect(memo.update(input, true).changed).toBe(true);
+    expect(build.mock.calls[0][2]).toBe(BODY_DRAFT_LONG_EDGE);
+    // the next drag step at the same value: nothing to do
+    expect(memo.update(input, true).changed).toBe(false);
+    // the commit (or an export) at the same value: full resolution
+    const full = memo.update(input);
+    expect(full.changed).toBe(true);
+    expect(build).toHaveBeenCalledTimes(2);
+    expect(build.mock.calls[1][2]).toBeUndefined();
+    expect(full.field?.width).toBe(256);
+    // a full field answers a later draft request (a pending drag frame after the commit) and a repeated commit
+    expect(memo.update(input, true).changed).toBe(false);
+    expect(memo.update({ ...input }).changed).toBe(false);
+    expect(build).toHaveBeenCalledTimes(2);
+  });
+  it('the previous field is passed to the build: the same object refilled (a new version) is a change; null → null is not', () => {
+    let v = 0;
+    const build = vi.fn((i: BodyFieldInput, prev?: BodyField | null) => {
+      if (!i.edited.length) return null;
+      const f = prev ?? makeBodyField(0, 0);
+      f.version = ++v; // refills the same buffer
+      return f;
+    });
+    const memo = new BodyFieldMemo(build);
+    const none: BodyFieldInput = { edited: [], masks: [], heightBand: null, legs: { value: 0, measure: null }, bodyProtect: true, aspect: 0.75 };
+    const slim = (x: number): BodyFieldInput => ({ ...none, edited: [{ id: 'f0', measure: {} as BodyMeasure, values: { 'body.slim': x } as never }] });
+    expect(memo.update(none)).toEqual({ field: null, changed: false });
+    const a = memo.update(slim(0.6));
+    expect(a.changed).toBe(true);
+    expect(a.field?.version).toBe(1);
+    const b = memo.update(slim(0.7));
+    expect(b).toMatchObject({ changed: true, field: a.field }); // same object, new version
+    expect(build.mock.calls[2][1]).toBe(a.field);
+    // back to neutral → no field
+    expect(memo.update(none)).toEqual({ field: null, changed: true });
+  });
+  it('bodyInputKey: equal inputs share a key; a measure, a mask, the band, 長腿 or its anchor, 背景保護 or the aspect change it', () => {
+    const m = {} as BodyMeasure;
+    const mask = { width: 1, height: 1, data: new Uint8Array(1) };
+    const base: BodyFieldInput = { edited: [{ id: 'f0', measure: m, values: { 'body.waist': 0.5 } as never }], masks: [{ id: 'f0', mask }], heightBand: null, legs: { value: 0, measure: null }, bodyProtect: true, aspect: 0.75 };
+    const k = bodyInputKey(base);
+    expect(bodyInputKey({ ...base, edited: [{ ...base.edited[0], values: { 'body.waist': 0.5 } as never }] })).toBe(k);
+    const variants: BodyFieldInput[] = [
+      { ...base, edited: [{ ...base.edited[0], measure: {} as BodyMeasure }] },
+      { ...base, masks: [{ id: 'f0', mask: { ...mask } }] },
+      { ...base, heightBand: { top: 0.3, bottom: 0.6, amount: 0.5 } },
+      { ...base, legs: { value: 0.4, measure: null } },
+      { ...base, legs: { value: 0, measure: m } },
+      { ...base, bodyProtect: false },
+      { ...base, aspect: 0.5 },
+    ];
+    for (const v of variants) expect(bodyInputKey(v)).not.toBe(k);
+  });
+  it('BodyFieldMemo rebuilds on a 旋轉 (new up-frame) and not on a 翻轉', () => {
+    const build = vi.fn((_i: BodyFieldInput, _p?: BodyField | null, _e?: number) => makeBodyField());
+    const memo = new BodyFieldMemo(build);
+    // the input shape of this file's existing BodyFieldMemo tests; draft = false, then `up`
+    const input: BodyFieldInput = { edited: [{ id: 'f0', measure: {} as BodyMeasure, values: { 'body.slim': 0.6 } as never }], masks: [], heightBand: null, legs: { value: 0, measure: null }, bodyProtect: true, aspect: 0.75 };
+    memo.update(input, false, 0);
+    memo.update(input, false, upQuarter(flipView(IDENTITY_GEOMETRY)));
+    expect(build).toHaveBeenCalledTimes(1);
+    memo.update(input, false, upQuarter(rotateLeft(IDENTITY_GEOMETRY)));
+    expect(build).toHaveBeenCalledTimes(2);
+  });
+  it('BodyFieldMemo hands the previous field to the build only in the upright frame (an odd U grid has swapped sides)', () => {
+    const build = vi.fn((_i: BodyFieldInput, _p?: BodyField | null, _e?: number) => makeBodyField());
+    const memo = new BodyFieldMemo(build);
+    const slim = (x: number): BodyFieldInput => ({ edited: [{ id: 'f0', measure: {} as BodyMeasure, values: { 'body.slim': x } as never }], masks: [], heightBand: null, legs: { value: 0, measure: null }, bodyProtect: true, aspect: 0.75 });
+    const a = memo.update(slim(0.6), false, 1);
+    memo.update(slim(0.7), false, 1);
+    expect(build.mock.calls[1][1]).toBeNull();
+    memo.update(slim(0.7), false, 0);
+    memo.update(slim(0.8), false, 0);
+    expect(build.mock.calls[3][1]).toBe(build.mock.results[2].value);
+    expect(a.field).not.toBeNull();
+  });
+});
+
+describe('scans in the up frame (S §3.6, D5, D12)', () => {
+  const turned = rotateLeft(IDENTITY_GEOMETRY); // upQuarter 3
+  const empty = { faces: [], faceScans: [{ quarter: 0 as const, flipH: false }] }; // DetectionCache['faceScans'] quarters
+  it('a face scan only in normal mode, with a tracker, an empty face cache and an unscanned up-frame', () => {
+    expect(needsFaceScan({ cache: empty, geometry: turned, mode: 'normal', hasTracker: true })).toBe(true);
+    expect(needsFaceScan({ cache: empty, geometry: turned, mode: 'crop', hasTracker: true })).toBe(false);
+    expect(needsFaceScan({ cache: empty, geometry: turned, mode: 'normal', hasTracker: false })).toBe(false);
+    expect(needsFaceScan({ cache: empty, geometry: IDENTITY_GEOMETRY, mode: 'normal', hasTracker: true })).toBe(false);
+    expect(needsFaceScan({ cache: { ...empty, faces: [{}] }, geometry: turned, mode: 'normal', hasTracker: true })).toBe(false);
+    expect(needsFaceScan({ cache: null, geometry: turned, mode: 'normal', hasTracker: true })).toBe(false);
+    // no upright answer yet (a 基本模式 cache, or one 美體 wrote while the tracker could not answer): the session asks
+    // upright first, so no up-frame is forced, upright or turned
+    const unscanned = { faces: [], faceScans: [] };
+    expect(needsFaceScan({ cache: unscanned, geometry: turned, mode: 'normal', hasTracker: true })).toBe(false);
+    expect(needsFaceScan({ cache: unscanned, geometry: IDENTITY_GEOMETRY, mode: 'normal', hasTracker: true })).toBe(false);
+  });
+
+  it('a scan counts for both flip states', () => {
+    const scanned = { faces: [], faceScans: addFaceScan(empty.faceScans, 3) };
+    expect(needsFaceScan({ cache: scanned, geometry: turned, mode: 'normal', hasTracker: true })).toBe(false);
+    expect(needsFaceScan({ cache: scanned, geometry: flipView(turned), mode: 'normal', hasTracker: true })).toBe(false);
+    expect(addFaceScan(scanned.faceScans, 3)).toEqual(scanned.faceScans);
+  });
+
+  it('a body re-scan only when nobody was found and the up-frame is new; absent bodyScans = [0]', () => {
+    expect(needsBodyScan({ bodies: [] }, turned)).toBe(true);
+    expect(needsBodyScan({ bodies: [] }, IDENTITY_GEOMETRY)).toBe(false);
+    expect(needsBodyScan({ bodies: [{}] }, turned)).toBe(false);
+    expect(needsBodyScan({ bodies: null }, turned)).toBe(false);
+    expect(needsBodyScan({ bodies: [], bodyScans: addBodyScan(undefined, 3) }, turned)).toBe(false);
+    expect(addBodyScan(undefined, 3)).toEqual([0, 3]);
+  });
+});
+
+describe('persons in the editor model (S §3.3)', () => {
+  const cache = makeCache({ bodies: [cacheBody('b0', 0.3), cacheBody('b1', 0.7)], persons: [{ id: 'f0', face: 'f0', body: 'b0' }, { id: 'f1', face: 'f1', body: null }, { id: 'b1', face: null, body: 'b1' }] });
+  it('each body person is measured with its paired face, or none', () => {
+    const seen: [number, boolean][] = [];
+    const ms = measurePersons(cache, () => FACE, (d, f) => (seen.push([d.pose.points[0], f !== null]), {} as BodyMeasure), () => undefined);
+    expect([...ms.keys()]).toEqual(['f0', 'b1']);
+    expect(seen.map(([, f]) => f)).toEqual([true, false]);
+  });
+  it('bodies found before the first face answer (S §7) are the cache: every body person measured, p0’s 美體 values on the primary body drive the field', () => {
+    const size = { width: 1600, height: 1200 };
+    const found = [cacheBody('x', 0.6), cacheBody('x', 0.2)].map((b) => ({ pose: b.pose, mask: b.mask, score: b.score }));
+    const a = bodyAnswer(preAnswerCache(size, null), found, size);
+    expect(a.detect.faces).toEqual([]);
+    expect(a.detect.persons.map((p) => p.id)).toEqual(['b0', 'b1']);
+    const seen: number[] = [];
+    const ms = measurePersons(a.detect, () => FACE, (d) => (seen.push(d.pose.points[0]), {} as BodyMeasure), () => undefined);
+    expect([...ms.keys()]).toEqual(['b0', 'b1']);
+    const edit = a.rebase(withPersons(editFromLegacy(applyPreset('natural', 1)), ['p0'], (p) => ({ ...p, values: { ...p.values, 'body.waist': 0.7 } })));
+    const input = fieldInputOf(edit, a.detect, ms, 4 / 3);
+    const primary = a.detect.primary;
+    expect(input.edited.map((p) => [p.id, p.values['body.waist']])).toEqual([[primary, 0.7]]);
+    expect(input.legs.measure).toBe(ms.get(primary));
+  });
+  it('nobody found before the first face answer: the cache says so in its up-frame, and a turned photo asks again (S §3.6, D5)', () => {
+    const size = { width: 1600, height: 1200 };
+    const empty = preAnswerCache(size, null);
+    // what the editor writes: the up-frames tried start empty (no detection ran on this cache before)
+    const a = bodyAnswer(empty, [], size);
+    const cache = { ...a.detect, bodyScans: bodyScansAfter(empty, 0) };
+    expect(cache).toMatchObject({ bodies: [], persons: [{ id: 'p0', face: null, body: null }], bodyScans: [0] });
+    expect(needsBodyScan(cache, IDENTITY_GEOMETRY)).toBe(false);
+    expect(needsBodyScan(cache, rotateLeft(IDENTITY_GEOMETRY))).toBe(true);
+    expect(bodyScansAfter(cache, 3)).toEqual([0, 3]);
+    // first tried turned: upright was not tried yet (a cache written before 美體 ran, faces or not, alike)
+    const turned = { ...a.detect, bodyScans: bodyScansAfter(empty, 3) };
+    expect(turned.bodyScans).toEqual([3]);
+    expect(needsBodyScan(turned, IDENTITY_GEOMETRY)).toBe(true);
+    expect(bodyScansAfter(makeCache(), 3)).toEqual([3]);
+    // no face scan in a new up-frame before the upright face answer: the session asks upright first
+    expect(needsFaceScan({ cache, geometry: rotateLeft(IDENTITY_GEOMETRY), mode: 'normal', hasTracker: true })).toBe(false);
+  });
+  it('a body person without a measure (measureBody threw) can use no local 美體 item: no dead slider (Review Focus #2)', () => {
+    // the waist is measurable on any measure; nothing without one
+    const torso = (m: BodyMeasure | null, id: ParamId): RegionStatus => (m && id === 'body.waist' ? { ok: true, reason: null } : { ok: false, reason: 'x' });
+    const lens = (s: Selection, ms: ReadonlyMap<PersonId, BodyMeasure>) =>
+      lensFor(assignPersons(editFromLegacy(applyPreset('natural', 1)), ['f0', 'f1', 'b1'], 'f0'), s, personInfos(cache), 'f0', {
+        available: (p, id) => measuredAvailable(ms, p, id, torso),
+      });
+    const s = { ...INITIAL_SELECTION, tab: 'body' as const, body: 'body.waist' as const };
+    const waist = (l: ReturnType<typeof lens>, c: ReturnType<typeof bodyPanelContext>) => itemsFor(l, s, c).find((i) => i.key === 'body.waist')!;
+    // every measure threw: the context reads BODY_UNMEASURED_REASON, and so does the item, for 全部 and each body person
+    const boom = (): BodyMeasure => {
+      throw new Error('bad mask');
+    };
+    const onError = vi.fn();
+    const none = measurePersons(cache, () => FACE, boom, onError);
+    expect(none.size).toBe(0);
+    expect(onError).toHaveBeenCalledTimes(2); // reported once per body person, never thrown
+    const unmeasured = bodyPanelContext({ phase: 'done', det: makeBodyDetection(2) }, { state: 'ready' }, null, torso);
+    for (const sel of [{ kind: 'all' }, { kind: 'person', id: 'f0' }, { kind: 'person', id: 'b1' }] as Selection[]) {
+      expect(waist(lens(sel, none), unmeasured), JSON.stringify(sel)).toMatchObject({ disabled: true, reason: BODY_UNMEASURED_REASON });
+      expect(sliderFor(lens(sel, none), s, unmeasured), JSON.stringify(sel)).toBeNull();
+    }
+    // only b1 measured: 全部 writes b1 alone; f0 (a body, no measure) has no slider
+    const m = {} as BodyMeasure;
+    const some = new Map([['b1', m]]);
+    const measured = bodyPanelContext({ phase: 'done', det: makeBodyDetection(2) }, { state: 'ready' }, m, torso);
+    expect(lens({ kind: 'all' }, some).targets('body.waist')).toEqual(['b1']);
+    expect(waist(lens({ kind: 'all' }, some), measured).disabled).toBe(false);
+    expect(waist(lens({ kind: 'person', id: 'f0' }, some), measured).disabled).toBe(true);
+    expect(sliderFor(lens({ kind: 'person', id: 'f0' }, some), s, measured)).toBeNull();
+    // … and says why: f0 itself has no measure (v0.3's BODY_UNMEASURED_REASON), not the generic 此照片無法使用這個效果
+    const gated = { ...measured, personGate: personBodyGate(some, torso) };
+    expect(waist(lens({ kind: 'person', id: 'f0' }, some), gated)).toMatchObject({ disabled: true, reason: BODY_UNMEASURED_REASON });
+    expect(waist(lens({ kind: 'person', id: 'b1' }, some), gated).disabled).toBe(false);
+    expect(waist(lens({ kind: 'all' }, some), gated).disabled).toBe(false);
+    // a measured person its own measure refuses reads that measure's reason
+    const legsOff = (m: BodyMeasure | null, id: ParamId): RegionStatus => (m ? (id === 'body.legSlim' ? { ok: false, reason: 'legs' } : { ok: true, reason: null }) : { ok: false, reason: 'x' });
+    const legsLens = lensFor(assignPersons(editFromLegacy(applyPreset('natural', 1)), ['f0', 'f1', 'b1'], 'f0'), { kind: 'person', id: 'b1' }, personInfos(cache), 'f0', {
+      available: (p, id) => measuredAvailable(some, p, id, legsOff),
+    });
+    const legsCtx = { ...bodyPanelContext({ phase: 'done', det: makeBodyDetection(2) }, { state: 'ready' }, m, torso), personGate: personBodyGate(some, legsOff) };
+    expect(itemsFor(legsLens, s, legsCtx).find((i) => i.key === 'body.legSlim')).toMatchObject({ disabled: true, reason: 'legs' });
+  });
+  it('personBodyGate: that person’s own measure decides; none → BODY_UNMEASURED_REASON', () => {
+    const m = {} as BodyMeasure;
+    const avail = (x: BodyMeasure | null, id: ParamId): RegionStatus => (x === m && id === 'body.waist' ? { ok: true, reason: null } : { ok: false, reason: 'no' });
+    const gate = personBodyGate(new Map([['b1', m]]), avail);
+    expect(gate('b1', 'body.waist')).toEqual({ ok: true, reason: null });
+    expect(gate('b1', 'body.hip')).toEqual({ ok: false, reason: 'no' });
+    expect(gate('f0', 'body.waist')).toEqual({ ok: false, reason: BODY_UNMEASURED_REASON });
+  });
+  it('outputWaits: the encode / autosave waits for each hold on its own; the timer reads the live stroke (step-6 review)', () => {
+    const clear = { noSession: false, lost: false, exportBusy: false, stroke: false, rebuild: false, geoDrag: false };
+    expect(outputWaits(clear)).toBe(false);
+    for (const k of Object.keys(clear) as (keyof typeof clear)[]) expect(outputWaits({ ...clear, [k]: true }), k).toBe(true);
+    // the ~1 ms window: the timer fires after a finger went down (live stroke set, stamps applied in that frame) but
+    // before the `drawing` flip's cleanup cancelled it; the effect saw drawing = false when it armed the timer
+    const armedWith = { ...clear, stroke: false };
+    const firesWith = { ...clear, stroke: true };
+    expect(outputWaits(armedWith)).toBe(false);
+    expect(outputWaits(firesWith)).toBe(true);
+  });
+  it('outputSettled / outputImage: an owed thumbnail is drawn whatever the plan, also when the share file is made already (crop spec §7)', () => {
+    // a working-size JPEG: 儲存 inside the debounce made the share file, then a flush with the context lost kept the
+    // params without a thumbnail (saved, thumbOwed): the restore's re-run must still draw it, as a render of its own
+    const fresh = { preEncodes: true, shareReady: true, thumbOwed: true, saved: true };
+    expect(outputSettled(fresh)).toBe(false);
+    expect(outputImage({ ...fresh, entry: true })).toBe('thumb');
+    // nothing owed: settled, nothing rendered
+    expect(outputSettled({ ...fresh, thumbOwed: false })).toBe(true);
+    expect(outputImage({ ...fresh, thumbOwed: false, entry: true })).toBe(null);
+    // a tiled or PNG plan has no share file to make: the owed thumbnail alone, as before
+    const png = { preEncodes: false, shareReady: false, thumbOwed: true, saved: true };
+    expect(outputSettled(png)).toBe(false);
+    expect(outputImage({ ...png, entry: true })).toBe('thumb');
+    expect(outputSettled({ ...png, thumbOwed: false })).toBe(true);
+    // a share file to make: its encode serves the thumbnail and the autosave
+    const stale = { preEncodes: true, shareReady: false, thumbOwed: true, saved: true };
+    expect(outputSettled(stale)).toBe(false);
+    expect(outputImage({ ...stale, entry: true })).toBe('encode');
+    expect(outputImage({ ...stale, thumbOwed: false, saved: false, entry: true })).toBe('encode');
+    // not saved: the autosave renders its own image (and its write carries the thumbnail); no entry yet (its addEntry
+    // still pending): no thumbnail of its own to rewrite
+    expect(outputSettled({ ...fresh, thumbOwed: false, saved: false })).toBe(false);
+    expect(outputImage({ ...fresh, saved: false, entry: true })).toBe(null);
+    expect(outputImage({ ...fresh, entry: false })).toBe(null);
+  });
+  it('settleBodyAnswer: a merge failure is the detection error; a notice failure after a merge is not (step-1 review)', () => {
+    const report = vi.fn((_e: unknown, where: string) => `reported ${where}`);
+    const order: string[] = [];
+    // the merge worked, the notices threw: done, the failure reported on its own
+    expect(
+      settleBodyAnswer(
+        () => order.push('merge'),
+        () => {
+          order.push('notify');
+          throw new Error('toast');
+        },
+        report,
+      ),
+    ).toEqual({ ok: true });
+    expect(order).toEqual(['merge', 'notify']);
+    expect(report).toHaveBeenLastCalledWith(expect.any(Error), 'body notices');
+    // the merge threw: an error with its message, and no notices for a merge that did not happen
+    const notify = vi.fn();
+    expect(
+      settleBodyAnswer(
+        () => {
+          throw new Error('bad cache');
+        },
+        notify,
+        report,
+      ),
+    ).toEqual({ ok: false, message: 'reported body answer' });
+    expect(notify).not.toHaveBeenCalled();
+  });
+  it('fieldInputOf lists only persons with a body and a non-neutral local item; 長腿 anchors on the primary with a body', () => {
+    const m0 = {} as BodyMeasure;
+    const m1 = {} as BodyMeasure;
+    const e = lensFor(assignPersons(editFromLegacy(applyPreset('natural', 1)), ['f0', 'f1', 'b1'], 'f0'), { kind: 'person', id: 'b1' }, personInfos(cache), 'f0').set('body.waist', 0.5);
+    const i = fieldInputOf(e, cache, new Map([['f0', m0], ['b1', m1]]), 0.75);
+    expect(i.edited.map((p) => p.id)).toEqual(['b1']);
+    expect(i.legs.measure).toBe(m0);
+    // 長腿 on: every body person rides along (hands-rigid term), as one person did in v0.3
+    const legs = { ...e, photo: { ...e.photo, values: { ...e.photo.values, 'body.legs': 0.3 } } };
+    expect(fieldInputOf(legs, cache, new Map([['f0', m0], ['b1', m1]]), 0.75).edited.map((p) => p.id)).toEqual(['f0', 'b1']);
+  });
+  it('frameFacesOf links faces to persons; protectRequests: windows with ≥ 2 faces and the others’ ovals', () => {
+    const faces = [{ id: 'f0', face: makeFace(0, 0.3), box: cache.faces[0].box, lm: cache.faces[0].lm }, { id: 'f1', face: makeFace(1, 0.7), box: cache.faces[1].box, lm: cache.faces[1].lm }];
+    expect(frameFacesOf(cache, faces).map((f) => f.person)).toEqual(['f0', 'f1']);
+    const r = protectRequests(cache, faces, assignPersons(editFromLegacy(applyPreset('natural', 1)), ['f0', 'f1', 'b1'], 'f0'), { width: 1600, height: 1200 });
+    expect(r[0].others.otherOvals).toHaveLength(1);
+    expect(r[0].others.window).not.toBeNull();
+    expect(r[0].contour).toBe(true);
+  });
+  it('rebaseStamp: a saved output stays saved across a detection-driven rebase; an unsaved one stays unsaved (U2, S §8.1)', () => {
+    const saved = { key: 'a', field: ANY_FIELD };
+    expect(rebaseStamp(saved, 'a', 'b', 3)).toEqual({ key: 'b', field: ANY_FIELD });
+    expect(stampIs(rebaseStamp(saved, 'a', 'b', 3), 'b', 7)).toBe(true);
+    expect(rebaseStamp({ key: 'x', field: 2 }, 'a', 'b', 2)).toEqual({ key: 'x', field: 2 });
+    expect(rebaseStamp(null, 'a', 'b', 0)).toBeNull();
+  });
+});
+
+describe('editor persons UI helpers (S §1.1 item 8, §2.6)', () => {
+  const base = assignPersons(editFromLegacy(applyPreset('natural', 1)), ['f0', 'f1', 'b1'], 'f0');
+  const bump = (e: EditState, id: string) => withPersons(e, [id], (p) => ({ ...p, values: { ...p.values, 'shape.eyeEnlarge': 0.9 } }));
+  it('changedPersons compares each person by key', () => {
+    expect(changedPersons(base, bump(base, 'f1'))).toEqual(['f1']);
+    expect(changedPersons(base, bump(bump(base, 'f1'), 'f0')).sort()).toEqual(['f0', 'f1']);
+    expect(changedPersons(base, base)).toEqual([]);
+  });
+  it('undo / redo toast only when the step touched persons other than the selected one', () => {
+    const n = (id: string) => ({ f0: 1, f1: 2, b1: 3 })[id] ?? 0;
+    expect(undoToast('undo', ['f1'], { kind: 'person', id: 'f0' }, n)).toBe('已復原人物 2 的變更');
+    expect(undoToast('redo', ['f1', 'b1'], { kind: 'person', id: 'f0' }, n)).toBe('已重做人物 2、3 的變更');
+    expect(undoToast('undo', ['f0', 'f1'], { kind: 'person', id: 'f0' }, n)).toBeNull();
+    expect(undoToast('undo', ['f1'], { kind: 'all' }, n)).toBeNull();
+    expect(undoToast('undo', [], { kind: 'person', id: 'f0' }, n)).toBeNull();
+  });
+  it('answer notices: over cap wins over too small, both only with the strip; the first group photo ever adds the hint', () => {
+    const c = makeCache({ dropped: { tooSmall: 1, overCap: 2 } });
+    expect(answerNotices(c, 3, true)).toEqual(['偵測到超過 6 張臉，只會美化最大的 6 張', '點選臉部或下方人物，可個別調整']);
+    expect(answerNotices({ ...c, dropped: { tooSmall: 1, overCap: 0 } }, 3, false)).toEqual(['有些臉太小，不會套用臉部效果']);
+    expect(answerNotices(c, 1, true)).toEqual([]);
+  });
+  it('thumbRect: the face box padded 30 %, square in pixels; a body-only person uses its head points', () => {
+    const c = makeCache({ bodies: [cacheBody('b0', 0.8)], persons: [{ id: 'f0', face: 'f0', body: null }, { id: 'f1', face: 'f1', body: null }, { id: 'b0', face: null, body: 'b0' }] });
+    const r = thumbRect(c, c.persons[0]);
+    expect(r.w * c.width).toBeCloseTo(r.h * c.height, 6);
+    expect(r.x + r.w / 2).toBeCloseTo(0.3, 6);
+    const b = thumbRect(c, c.persons[2]);
+    expect(b.x + b.w / 2).toBeCloseTo(0.8, 1);
+    expect(b.y).toBeLessThan(0.4);
+  });
+  it('hitCtxOf: faces with their persons; bodies only on 美體; 44 pt in UV of the layer', () => {
+    const c = makeCache();
+    const toO = vToO(IDENTITY_GEOMETRY, { width: 1600, height: 1200 });
+    const ctx = hitCtxOf(c, false, null, { width: 440, height: 330 }, toO);
+    expect(ctx.faces.map((f) => f.person)).toEqual(['f0', 'f1']);
+    expect(ctx.bodies).toBeUndefined();
+    expect([ctx.minW, ctx.minH]).toEqual([0.1, 44 / 330]);
+    const withBody = makeCache({ bodies: [cacheBody('b0', 0.8)], persons: [{ id: 'f0', face: 'f0', body: null }, { id: 'f1', face: 'f1', body: null }, { id: 'b0', face: null, body: 'b0' }] });
+    expect(hitCtxOf(withBody, true, null, { width: 440, height: 330 }, toO).bodies?.map((b) => b.person)).toEqual(['b0']);
+  });
+  it('hitCtxOf: the 44 pt minimum is a 44 pt square at the tap taken V → O through the view (a crop, a quarter turn)', () => {
+    const c = makeCache();
+    const size = { width: 1600, height: 1200 };
+    // a quarter-width crop shown on a 440 pt layer: 44 pt is 0.1 of V, 0.025 of O
+    const crop = { ...IDENTITY_GEOMETRY, crop: { x: 0.5, y: 0, w: 0.25, h: 1 } };
+    const cropped = hitCtxOf(c, false, null, { width: 440, height: 330 }, vToO(crop, size));
+    expect(cropped.minW).toBeCloseTo(0.25 * 0.1, 12);
+    expect(cropped.minH).toBeCloseTo(44 / 330, 12);
+    // one 旋轉: the layer's width shows the O height, so O x takes its 44 pt from the layer height and O y from the width
+    const turned = hitCtxOf(c, false, null, { width: 330, height: 440 }, vToO(rotateLeft(IDENTITY_GEOMETRY), size));
+    expect(turned.minW).toBeCloseTo(44 / 440, 12);
+    expect(turned.minH).toBeCloseTo(44 / 330, 12);
   });
 });

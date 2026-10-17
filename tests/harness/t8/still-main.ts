@@ -1,6 +1,7 @@
 // T8 harness: createStillSession against the real engine + tracker on tests/fixtures/sample_face.png.
 // Exposes the result on window.__t8 for tests/harness/t8/run-still.mjs.
 import { createStillSession } from '../../../src/app/still';
+import { legacyFrame } from '../../../src/edit/frame';
 import { ENGINE_PATHS, loadEngineAssets } from '../../../src/engine/assets';
 import { createEngine } from '../../../src/engine/index';
 import { applyPreset } from '../../../src/engine/params';
@@ -51,10 +52,10 @@ async function main(): Promise<void> {
   const session = createStillSession(engine, tracker, bitmap);
   out.createMs = performance.now() - t0;
   out.size = [session.width, session.height];
-  out.face = session.face !== null;
-  out.yaw = session.face?.yaw ?? null;
+  out.face = session.faces.length > 0;
+  out.yaw = session.faces[0]?.face.yaw ?? null;
 
-  const glow = applyPreset('glow');
+  const glow = legacyFrame(applyPreset('glow'), session.faces[0]?.face ?? null, 1);
   session.render(glow);
   session.render(glow); // coalesced
   await engine.loadFilter('warm');
@@ -63,7 +64,7 @@ async function main(): Promise<void> {
   const t1 = performance.now();
   const edited = session.exportImageData(glow);
   out.exportMs = performance.now() - t1;
-  const neutral = session.exportImageData(applyPreset('original'));
+  const neutral = session.exportImageData(legacyFrame(applyPreset('original'), session.faces[0]?.face ?? null, 1));
   out.exportSize = [edited.width, edited.height];
   out.diffNeutral = meanAbsDiff(neutral, src);
   out.diffGlow = meanAbsDiff(edited, src);

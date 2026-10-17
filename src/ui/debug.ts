@@ -10,9 +10,18 @@ function state(): DebugState {
       tier: 'H',
       delegate: null,
       face: false,
+      faces: 0,
+      persons: 0,
+      selected: null,
+      detectCalls: 0,
+      boxes: [],
       screen: 'home',
       cameraState: 'idle',
       lastError: null,
+      spots: 0,
+      lastSpot: null,
+      toneBuilds: 0,
+      passes: [],
     };
   }
   return window.__meiyan;

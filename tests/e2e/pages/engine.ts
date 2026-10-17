@@ -8,8 +8,9 @@ import { splitLegacy } from '../../../src/edit/legacy';
 import { defaultPhoto, neutralPerson } from '../../../src/edit/state';
 import { createEngine } from '../../../src/engine/index';
 import { applyPreset, setFilter, setParam, setShade } from '../../../src/engine/params';
+import { apply, flipView, IDENTITY_GEOMETRY, oToV, rotateLeft } from '../../../src/geometry/view';
 import { adapt } from '../../../src/tracking/adapter111';
-import type { BeautyParams, RenderFace, RenderInput } from '../../../src/types';
+import type { BeautyParams, Geometry, RenderFace, RenderInput } from '../../../src/types';
 
 export interface EngineCheck {
   width: number;
@@ -28,6 +29,7 @@ declare global {
   interface Window {
     runEngineCheck?: () => Promise<EngineCheck>;
     runEngineReleaseFields?: () => Promise<{ uploadsBefore: number; freed: number; uploadsAfter: number; err: number }>;
+    runEngineOverlay?: () => Promise<Record<string, { inside: number; hit: number; err: number }>>;
     runEngineMulti?: () => Promise<{
       maskA: number;
       maskB: number;
@@ -87,6 +89,56 @@ window.runEngineReleaseFields = async () => {
   engine.dispose();
   source.close();
   return { uploadsBefore, freed, uploadsAfter, err };
+};
+
+/**
+ * 顯示臉部特徵點 on a still with a view geometry: the canvas shows V, so each of the 111 lime points (#B8F02A) must be
+ * drawn where the view puts its O position (view.ts oToV). Per case: the points inside the canvas, and how many of them
+ * have a lime pixel within 3 px (the eye-frame points, drawn after in cyan, may cover a few).
+ */
+window.runEngineOverlay = async () => {
+  const blob = await (await fetch('/tests/fixtures/sample_face.png')).blob();
+  const bitmap = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+  const { width, height } = bitmap;
+  const canvas = document.getElementById('gl') as HTMLCanvasElement;
+  const engine = createEngine(canvas, { mirror: false, showLandmarks: true });
+  await engine.ready;
+  const gl = canvas.getContext('webgl2') as WebGL2RenderingContext;
+  const face = adapt({ points: new Float32Array(landmarks.points) }, width, height);
+  const crop = { x: 0.15, y: 0.1, w: 0.6, h: 0.55 };
+  const cases: Record<string, Geometry> = {
+    identity: IDENTITY_GEOMETRY,
+    crop: { ...IDENTITY_GEOMETRY, crop },
+    'quarter 1 + flip + crop': { ...flipView(rotateLeft(IDENTITY_GEOMETRY)), crop },
+  };
+  const lime = (d: Uint8ClampedArray, i: number) => Math.abs(d[i] - 184) <= 40 && d[i + 1] >= 200 && d[i + 2] <= 90;
+  const out: Record<string, { inside: number; hit: number; err: number }> = {};
+  for (const [name, g] of Object.entries(cases)) {
+    const faces: RenderFace[] = [{ face, weight: 1, person: neutralPerson(), protect: null }];
+    engine.render({ source: bitmap, width, height, faces, globalSkin: null, photo: { ...defaultPhoto(), geometry: g }, geometry: g }, { still: true });
+    // copied in the same task as the render (no preserveDrawingBuffer)
+    const copy = new OffscreenCanvas(canvas.width, canvas.height);
+    const ctx = copy.getContext('2d')!;
+    ctx.drawImage(canvas, 0, 0);
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const m = oToV(g, { width: width / height, height: 1 });
+    let inside = 0;
+    let hit = 0;
+    for (let k = 0; k < 111; k++) {
+      const [vx, vy] = apply(m, [face.pts111[2 * k], face.pts111[2 * k + 1]]);
+      const px = Math.floor(vx * img.width);
+      const py = Math.floor(vy * img.height);
+      if (px < 4 || py < 4 || px >= img.width - 4 || py >= img.height - 4) continue;
+      inside++;
+      let found = false;
+      for (let dy = -3; dy <= 3 && !found; dy++) for (let dx = -3; dx <= 3 && !found; dx++) found = lime(img.data, ((py + dy) * img.width + px + dx) * 4);
+      if (found) hit++;
+    }
+    out[name] = { inside, hit, err: gl.getError() };
+  }
+  engine.dispose();
+  bitmap.close();
+  return out;
 };
 
 window.runEngineCheck = async () => {

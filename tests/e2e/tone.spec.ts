@@ -338,10 +338,20 @@ test('祛痘 refuses an eye, and stops at 100 spots', async ({ page }) => {
   const q = await pagePoint(page, dot[0], dot[1], fx.width, fx.height);
   await page.mouse.click(q.x, q.y);
   await expect.poll(async () => (await debugState(page)).spots).toBe(1);
+  await reopenWithSpots(page, 100);
+  await pick(page, '美膚', '祛痘');
+  const r = await pagePoint(page, 300, 1200, fx.width, fx.height);
+  await page.mouse.click(r.x, r.y);
+  await expect(page.getByText('祛痘點已達上限')).toBeVisible();
+  expect((await debugState(page)).spots).toBe(100);
+});
+
+/** close the editor, top its saved entry up to `n` spots straight in IndexedDB, reload and reopen it */
+async function reopenWithSpots(page: Page, n: number): Promise<void> {
   await page.getByRole('button', { name: '關閉' }).click();
   await expect(page.getByRole('button', { name: '開啟編輯' })).toHaveCount(1, { timeout: 15_000 });
   await page.evaluate(
-    () =>
+    (n) =>
       new Promise<void>((resolve, reject) => {
         const open = indexedDB.open('meiyan');
         open.onerror = () => reject(open.error);
@@ -352,7 +362,7 @@ test('祛痘 refuses an eye, and stops at 100 spots', async ({ page }) => {
           all.onsuccess = () => {
             // the entry (a kept source file is a record of its own, without updatedAt)
             const e = (all.result as { updatedAt?: number; edit: { photo: { spots: unknown[] } } }[]).find((r) => typeof r.updatedAt === 'number')!;
-            for (let i = e.edit.photo.spots.length; i < 100; i++) e.edit.photo.spots.push({ x: 0.03 + (i % 10) * 0.012, y: 0.03 + Math.floor(i / 10) * 0.012, r: 0.005, dx: 0, dy: 0, owner: null });
+            for (let i = e.edit.photo.spots.length; i < n; i++) e.edit.photo.spots.push({ x: 0.03 + (i % 10) * 0.012, y: 0.03 + Math.floor(i / 10) * 0.012, r: 0.005, dx: 0, dy: 0, owner: null });
             store.put(e).onsuccess = () => {
               db.close();
               resolve();
@@ -360,16 +370,69 @@ test('祛痘 refuses an eye, and stops at 100 spots', async ({ page }) => {
           };
         };
       }),
+    n,
   );
   await page.reload();
   await page.getByRole('button', { name: '開啟編輯' }).click();
   await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 90_000 });
-  await expect.poll(async () => (await debugState(page)).spots).toBe(100);
+  await expect.poll(async () => (await debugState(page)).spots).toBe(n);
+}
+
+test('at 320 pt the 祛痘 row fits: 清除 stays on one line inside its button, every target ≥ 44 pt, also at 100 spots', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 });
+  const fx = fixture();
+  await importPhoto(page, TONE_PNG);
   await pick(page, '美膚', '祛痘');
-  const r = await pagePoint(page, 300, 1200, fx.width, fx.height);
-  await page.mouse.click(r.x, r.y);
-  await expect(page.getByText('祛痘點已達上限')).toBeVisible();
-  expect((await debugState(page)).spots).toBe(100);
+  const dot = defect(fx, 'dot1').center;
+  const q = await pagePoint(page, dot[0], dot[1], fx.width, fx.height);
+  await page.mouse.click(q.x, q.y);
+  await expect.poll(async () => (await debugState(page)).spots).toBe(1);
+  const measure = () =>
+    page.evaluate(() => {
+      const row = document.querySelector<HTMLElement>('.spot-controls')!;
+      const lines = (el: Element) => {
+        const r = document.createRange();
+        r.selectNodeContents(el);
+        return new Set([...r.getClientRects()].map((c) => Math.round(c.top))).size;
+      };
+      const kids = [...row.querySelectorAll<HTMLElement>('button')].map((b) => ({
+        r: b.getBoundingClientRect(),
+        over: b.scrollWidth > b.clientWidth || b.scrollHeight > b.clientHeight,
+        lines: lines(b),
+      }));
+      const clear = row.querySelector<HTMLElement>('.spot-clear')!;
+      return {
+        vw: window.innerWidth,
+        doc: document.documentElement.scrollWidth,
+        row: { scroll: row.scrollWidth, client: row.clientWidth },
+        label: clear.textContent,
+        right: Math.max(...kids.map((k) => k.r.right)),
+        minW: Math.min(...kids.map((k) => k.r.width)),
+        minH: Math.min(...kids.map((k) => k.r.height)),
+        clipped: kids.filter((k) => k.over).length,
+        wrapped: kids.filter((k) => k.lines > 1).length,
+      };
+    });
+  const check = async (label: string) => {
+    await expect(page.locator('.spot-clear')).toHaveText(label);
+    const m = await measure();
+    console.log(`祛痘 row at 320 (${label}): ${JSON.stringify(m)}`);
+    expect(m.vw).toBe(320);
+    expect(m.row.scroll).toBeLessThanOrEqual(m.row.client);
+    expect(m.right).toBeLessThanOrEqual(320);
+    expect(m.doc).toBeLessThanOrEqual(320);
+    expect(m.minW).toBeGreaterThanOrEqual(44);
+    expect(m.minH).toBeGreaterThanOrEqual(44);
+    expect(m.clipped).toBe(0);
+    expect(m.wrapped).toBe(0);
+  };
+  await check('全部清除（1）');
+  await page.locator('.spot-clear').click();
+  await check('確定清除？');
+  // the longest label: SPOT_CAP spots
+  await reopenWithSpots(page, 100);
+  await pick(page, '美膚', '祛痘');
+  await check('全部清除（100）');
 });
 
 test('spots and tone values survive a reopen without a detector call', async ({ page }) => {

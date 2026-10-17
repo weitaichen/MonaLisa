@@ -7,7 +7,7 @@ import { bodyBox, scanned0 } from '../detect/cache';
 import type { HitCtx } from '../detect/persons';
 import type { FrameFaceIn } from '../edit/frame';
 import { personOf } from '../edit/state';
-import { upQuarter, type Quarter } from '../geometry/view';
+import { upQuarter, type Affine, type Quarter } from '../geometry/view';
 import { hasValue, paramsInGroup } from '../engine/params';
 import { stableKey } from '../store/undo';
 import { protectWindow } from '../tracking/faceProtect';
@@ -67,7 +67,11 @@ export { addFaceScan } from '../detect/cache';
 
 type FaceScan = { quarter: number; flipH: boolean };
 
-/** one face scan in the current up-frame (S §3.6, D12): normal mode, a tracker, no face known, the up-frame unscanned */
+/**
+ * one face scan in the current up-frame (S §3.6, D12): normal mode, a tracker, no face known, the up-frame unscanned.
+ * Only after the upright answer: a cache without it (a 基本模式 cache, or one 美體 wrote while the tracker could not
+ * answer, S §7) waits for the session's own detection, which asks upright first (sessionPlan; RedetectBudget retries it)
+ */
 export function needsFaceScan(s: {
   cache: { faces: readonly unknown[]; faceScans: readonly FaceScan[] } | null;
   geometry: Geometry;
@@ -75,6 +79,7 @@ export function needsFaceScan(s: {
   hasTracker: boolean;
 }): boolean {
   if (s.mode !== 'normal' || !s.hasTracker || !s.cache || s.cache.faces.length > 0) return false;
+  if (!s.cache.faceScans.some((x) => x.quarter === 0)) return false;
   const q = upQuarter(s.geometry);
   return !s.cache.faceScans.some((x) => x.quarter === q);
 }
@@ -88,6 +93,11 @@ export function needsBodyScan(cache: { bodies: readonly unknown[] | null; bodySc
 export function addBodyScan(scans: readonly Quarter[] | undefined, q: Quarter): Quarter[] {
   const s = scans ? [...scans] : [0 as Quarter];
   return s.includes(q) ? s : [...s, q];
+}
+
+/** a cache's 美體 up-frames once a detection ran in `q`: added to the earlier ones, none before its first (bodies null) */
+export function bodyScansAfter(cache: { bodies: readonly unknown[] | null; bodyScans?: readonly Quarter[] }, q: Quarter): Quarter[] {
+  return addBodyScan(cache.bodies === null ? [] : cache.bodyScans, q);
 }
 
 /** non-answers in a row before the editor stops re-detecting; = tracker ESCALATE_AFTER, so repeated throws reach its instance replacement */
@@ -134,6 +144,39 @@ export async function exportOnLatest<S, T>(
       s = next;
     }
   }
+}
+
+/** how often whenRestored asks whether its wait was superseded */
+export const RESTORE_POLL_MS = 100;
+
+/**
+ * C §7: wait for a lost engine's context to come back. true once it is restored (at once for a live engine), false
+ * after `timeoutMs`, when the rebuild failed, or as soon as `superseded()` says the wait is moot (polled every
+ * RESTORE_POLL_MS): 重新載入引擎 (recoverEngine) disposes this engine, so its canvas never fires the restore, and a
+ * session on the new engine takes over; the caller then fails at once and exportOnLatest runs on that session. The
+ * listener is added after the engine's and the still session's own (both registered at creation), so on true the engine
+ * is rebuilt and the session has re-armed its texture waits: prepareExport then waits for the reloaded textures. A loss
+ * during the tiles hands its 標準 fallback here.
+ */
+export function whenRestored(
+  engine: { readonly lost: boolean; readonly canvas: EventTarget },
+  timeoutMs: number,
+  superseded: () => boolean = () => false,
+): Promise<boolean> {
+  if (!engine.lost) return Promise.resolve(true);
+  return new Promise<boolean>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      clearInterval(poll);
+      engine.canvas.removeEventListener('webglcontextrestored', done);
+      resolve(!engine.lost);
+    };
+    const timer = setTimeout(done, timeoutMs);
+    const poll = setInterval(() => {
+      if (superseded()) done();
+    }, RESTORE_POLL_MS);
+    engine.canvas.addEventListener('webglcontextrestored', done);
+  });
 }
 
 // ───────────────────────── 美體 ─────────────────────────
@@ -316,6 +359,38 @@ export interface OutputWait {
  */
 export function outputWaits(w: OutputWait): boolean {
   return w.noSession || w.lost || w.exportBusy || w.stroke || w.rebuild || w.geoDrag;
+}
+
+/** What the debounced encode / autosave still owes the state on screen (the Editor's encode effect and its timer). */
+export interface OutputOwed {
+  /** the plan keeps a pre-encoded share file (preEncodes: a working-size JPEG) */
+  preEncodes: boolean;
+  /** the share file for these params, this 美體 field and these output settings is made already (shareReady) */
+  shareReady: boolean;
+  /** the stored thumbnail no longer shows what the editor draws (an answer's first faces, a flush that had no GL) */
+  thumbOwed: boolean;
+  /** these params and this field are what was last queued to history (stampIs(saved, …)) */
+  saved: boolean;
+}
+
+/**
+ * Nothing left to do: no share file to make, no thumbnail owed, the autosave queued. An owed thumbnail counts whatever
+ * the plan, also when the share file is made already (a 儲存 tap inside the debounce, then a flush that found the
+ * context lost: it kept the params without a thumbnail, crop spec §7), so the restore's re-run draws it.
+ */
+export function outputSettled(o: OutputOwed): boolean {
+  return (!o.preEncodes || o.shareReady) && !o.thumbOwed && o.saved;
+}
+
+/**
+ * The working-size image the timer renders before the autosave decides: 'encode' makes the share file (its image also
+ * serves an owed thumbnail and the history write); 'thumb' renders it for an owed thumbnail of a saved entry when there
+ * is no share file to make (a tiled or PNG plan, or the one for these params is made already); null: none (the
+ * autosave renders its own when it writes).
+ */
+export function outputImage(o: OutputOwed & { entry: boolean }): 'encode' | 'thumb' | null {
+  if (o.preEncodes && !o.shareReady) return 'encode';
+  return o.thumbOwed && o.entry && o.saved ? 'thumb' : null;
 }
 
 /** long edge of a draft 美體 field (a drag step's preview): about a quarter of the full field's build cost */
@@ -627,8 +702,12 @@ export function thumbRect(cache: DetectionCache, person: PersonInfoCached): Rect
 /** the tabs whose items are person-level (boxes, taps, strip selection apply) */
 export const PERSON_TABS: ReadonlySet<TabId> = new Set<TabId>(['preset', 'skin', 'shape', 'body', 'makeup']);
 
-/** hitPerson's context (S §2.3): face boxes per person, bodies on 美體, the body field, 44 pt in UV of the layer rect */
-export function hitCtxOf(cache: DetectionCache, bodies: boolean, field: BodyField | null, layer: { width: number; height: number }): HitCtx {
+/**
+ * hitPerson's context (S §2.3): face boxes per person, bodies on 美體, the body field, and the 44 pt minimum. The layer rect
+ * shows V at the current zoom while the boxes are O-normalized: a 44 × 44 pt square at the tap is taken through the linear
+ * part of `vToO` (the view: crop, 拉直, quarter turns, 翻轉) and its O extents are the minimum.
+ */
+export function hitCtxOf(cache: DetectionCache, bodies: boolean, field: BodyField | null, layer: { width: number; height: number }, vToO: Affine): HitCtx {
   const faces = cache.persons.flatMap((p) => {
     const f = p.face ? cache.faces.find((x) => x.id === p.face) : undefined;
     return f ? [{ person: p.id, box: f.box }] : [];
@@ -639,5 +718,7 @@ export function hitCtxOf(cache: DetectionCache, bodies: boolean, field: BodyFiel
         return b ? [{ person: p.id, mask: b.mask, box: bodyBox(b) }] : [];
       })
     : undefined;
-  return { faces, ...(bodyList ? { bodies: bodyList } : {}), field, minW: 44 / Math.max(1, layer.width), minH: 44 / Math.max(1, layer.height) };
+  const w = 44 / Math.max(1, layer.width);
+  const h = 44 / Math.max(1, layer.height);
+  return { faces, ...(bodyList ? { bodies: bodyList } : {}), field, minW: Math.abs(vToO.a) * w + Math.abs(vToO.c) * h, minH: Math.abs(vToO.b) * w + Math.abs(vToO.d) * h };
 }

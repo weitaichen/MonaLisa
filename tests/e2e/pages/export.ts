@@ -6,7 +6,7 @@ import { defaultPhoto, emptyShades, neutralPerson } from '../../../src/edit/stat
 import { createEngine } from '../../../src/engine/index';
 import { MAKEUP_PARAM } from '../../../src/engine/params';
 import { IDENTITY_GEOMETRY, rotateLeft, setStraighten, snapCrop, viewSize } from '../../../src/geometry/view';
-import { faceBoundsFor, planTiles, spotBounds, type TileGrid } from '../../../src/media/exportPlan';
+import { apronFor, faceBoundsFor, planTiles, spotBounds, type TileGrid } from '../../../src/media/exportPlan';
 import { adapt } from '../../../src/tracking/adapter111';
 import type { BodyField, Geometry, ParamId, PersonParams, PhotoParamId, PhotoParams, Rect, RenderFace, RenderInput, Spot } from '../../../src/types';
 import { buildStrokeCase } from './strokeCases';
@@ -19,6 +19,36 @@ export interface TileCheck {
   /** max |tiled − untiled| over every channel, 0..255 */
   maxDiff: number;
   glError: number;
+}
+
+/** a pixel where some channel of the tiled render differs from the untiled one by more than 1/255 */
+export interface Over1Pixel {
+  /** V px */
+  x: number;
+  y: number;
+  /** the largest channel difference, /255 */
+  d: number;
+  /** the distance to the nearest tile line of the TILE = 256 render, whole V px */
+  line: number;
+}
+
+/** how many Over1Pixel entries a case returns: enough to read a failure, bounded whatever a regression does */
+const OVER1_NEAREST = 8;
+
+/**
+ * A runExportTiles case: also where tiled and untiled differ by more than the contract's 1/255 (the 1-LSB fp32
+ * coordinate rounding it allows). Only a summary crosses page.evaluate: a regression that moves the whole frame would
+ * otherwise send one entry per pixel (millions over nine cases, an out-of-memory worker instead of a failed assertion).
+ */
+export interface TileCaseCheck extends TileCheck {
+  /** the kernel apron of this case (apronFor(fullShortEdge)), V px */
+  apron: number;
+  /** how many pixels differ by more than 1/255 */
+  over1Count: number;
+  /** the smallest Over1Pixel.line of them all, or null when there are none */
+  over1MinLine: number | null;
+  /** the OVER1_NEAREST of them nearest a tile line, nearest first (ties in scan order) */
+  over1Nearest: Over1Pixel[];
 }
 
 /** the full-resolution case: tile equivalence plus what the 2× decode does to the heal and the lip guard */
@@ -39,7 +69,7 @@ export interface FullResCheck extends TileCheck {
 
 declare global {
   interface Window {
-    runExportTiles?: () => Promise<TileCheck[]>;
+    runExportTiles?: () => Promise<TileCaseCheck[]>;
     runExportFullRes?: () => Promise<FullResCheck>;
   }
 }
@@ -97,7 +127,7 @@ window.runExportTiles = async () => {
     ...neutralPerson(),
     values: { ...neutralPerson().values, 'shape.eyeEnlarge': 1, 'shape.faceSlim': 1, 'skin.smooth': 0.8, 'makeup.lip': 0.8 },
   };
-  const out: TileCheck[] = [];
+  const out: TileCaseCheck[] = [];
   const cases: {
     name: string;
     w: number;
@@ -223,8 +253,44 @@ window.runExportTiles = async () => {
     const whole = await render(8192);
     const tiled = await render(256);
     let maxDiff = 0;
-    for (let i = 0; i < whole.data.length; i++) if ((i & 3) !== 3) maxDiff = Math.max(maxDiff, Math.abs(whole.data[i] - tiled.data[i]));
-    out.push({ name: c.name, w: V.width, h: V.height, tiles: tiled.tiles, maxDiff, glError: gl.getError() });
+    let over1Count = 0;
+    let over1MinLine: number | null = null;
+    const over1Nearest: Over1Pixel[] = [];
+    // the tile lines of the TILE = 256 render: the interior out-rect edges, x = 256 k and y = 256 k
+    const lineDist = (x: number, y: number) => {
+      let m = Infinity;
+      for (let t = 256; t < V.width; t += 256) m = Math.min(m, Math.abs(x + 0.5 - t));
+      for (let t = 256; t < V.height; t += 256) m = Math.min(m, Math.abs(y + 0.5 - t));
+      return m;
+    };
+    for (let i = 0; i < whole.data.length; i += 4) {
+      const d = Math.max(Math.abs(whole.data[i] - tiled.data[i]), Math.abs(whole.data[i + 1] - tiled.data[i + 1]), Math.abs(whole.data[i + 2] - tiled.data[i + 2]));
+      maxDiff = Math.max(maxDiff, d);
+      if (d <= 1) continue;
+      const x = (i >> 2) % V.width;
+      const y = Math.floor((i >> 2) / V.width);
+      const line = Math.floor(lineDist(x, y));
+      over1Count++;
+      over1MinLine = over1MinLine === null ? line : Math.min(over1MinLine, line);
+      // keep the OVER1_NEAREST nearest a line, sorted: insert after every entry at least as near
+      if (over1Nearest.length === OVER1_NEAREST && line >= over1Nearest[OVER1_NEAREST - 1].line) continue;
+      let k = over1Nearest.length;
+      while (k > 0 && over1Nearest[k - 1].line > line) k--;
+      over1Nearest.splice(k, 0, { x, y, d, line });
+      if (over1Nearest.length > OVER1_NEAREST) over1Nearest.pop();
+    }
+    out.push({
+      name: c.name,
+      w: V.width,
+      h: V.height,
+      tiles: tiled.tiles,
+      maxDiff,
+      glError: gl.getError(),
+      apron: apronFor(fullShortEdge),
+      over1Count,
+      over1MinLine,
+      over1Nearest,
+    });
     bitmap.close();
   }
   sample.close();

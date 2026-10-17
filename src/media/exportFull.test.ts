@@ -126,6 +126,21 @@ describe('runTiledExport (S §4.4)', () => {
     expect(f.deps.clearGuard).toHaveBeenCalled();
   });
 
+  it('a context loss reported only after the last tile (renderer.lost) fails before encode: no file, memory and guard released', async () => {
+    const f = fakes();
+    const renderer = { ...f.renderer, lost: false };
+    // the webglcontextlost event lands in the rAF gap after the last tile
+    f.deps.nextFrame = vi.fn(async () => {
+      if (renderer.renderTile.mock.calls.length === plan.tiles.length) renderer.lost = true;
+    });
+    const run = runTiledExport(renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working }, f.deps);
+    await expect(run).rejects.toMatchObject({ name: 'ExportError', kind: 'lost' });
+    expect(f.canvas.encode).not.toHaveBeenCalled();
+    expect(f.canvas.release).toHaveBeenCalled();
+    expect(f.full.close).toHaveBeenCalled();
+    expect(f.deps.clearGuard).toHaveBeenCalled();
+  });
+
   it('the slow knob waits after the decode', async () => {
     const f = fakes();
     await runTiledExport(f.renderer, new Blob(['s']), plan, input, { signal: new AbortController().signal, working, knob: { slowMs: 4500 } }, f.deps);

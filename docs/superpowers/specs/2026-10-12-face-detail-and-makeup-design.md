@@ -319,7 +319,7 @@ export interface Shot { /* … */ mirrored: boolean } // Camera.tsx:205 already 
   - missing new ids → neutral; missing new shade keys → null; a missing `right` → null (entries from step-1 to step-4 builds have none);
   - a shade id not in `SHADES[part]` → null;
   - `right`: keep only `SplitParamId` keys with finite numbers, clamped to 0..1; an empty object → null.
-- **`legacyProjection`** writes `values` (the GPUPixel-left side) for split items. A 0.3 build reading a 0.4 entry ignores the unknown ids, because `sanitizeParams` iterates only its own `PARAM_DEFS` (`params.ts:285-288`).
+- **`legacyProjection`** writes `values` (the GPUPixel-left side) for split items. A 0.3 build reading a 0.4 entry ignores the unknown ids, because `sanitizeParams` iterates only its own `PARAM_DEFS` (`params.ts:285-288`). 0.3 draws 大眼, 瘦臉, V臉 and 窄臉 with one value on the whole face, so when 0.3 changed one of them after a rollback, `mergeLegacy` gives that value to both halves (`right` too); a split item 0.3 left at the projected value keeps its `right`, and `right` becomes null when no item's halves differ any more (step-1 spec §5.3).
 
 ### 3.6 Files to add and change (anchors at `892ea61`; step-1 modules by name)
 
@@ -784,7 +784,7 @@ No CPU rasterizer is ported. Geometry is checked in Node through `buildMakeupGeo
    - 卸妝 clears all;
    - camera (`camera.spec.ts` style): 美妝 → part list → 美瞳 → 冰藍 → the preview changes in the iris region; 美型 → 左右分開 → the 左｜右 chips appear in the floating slider and do not collapse the panel.
 8. **Parity:** `parity.spec.ts` (RM §8.4) passes unchanged, because the new items are neutral.
-9. **Tiles:** in step 3's export harness, every makeup part at 100 and every new warp at max on the composited face, with the geometry cases of crop spec §8.2: a forced `TILE = 256` render equals the untiled render within 1/255 (the 睫毛 mip level included).
+9. **Tiles:** in step 3's export harness, every makeup part at 100 and every new warp at max on the composited face, with the geometry cases of crop spec §8.2: a forced `TILE = 256` render equals the untiled render within 1/255 (the 睫毛 mip level included), up to crop spec §8.2's accepted exception: at most 3 isolated pixels at 2/255 (the 膠片 lift of a 1-LSB resample flip), each at least one apron from every tile line. Of this step's cases, only quarter 1 + flip is granted it: it has one such pixel, 44 px from the nearest line on SwiftShader. Identity and θ 12° + crop keep 1/255.
 
 ### 8.4 Fixtures
 

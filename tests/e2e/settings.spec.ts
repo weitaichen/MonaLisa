@@ -99,6 +99,14 @@ test('設定 › 輸出: JPEG and 原始解析度 by default; PNG persists acros
   await expect(format.getByRole('radio', { name: 'JPEG（較小）' })).toHaveAttribute('aria-checked', 'true');
   await expect(size.getByRole('radio', { name: '原始解析度' })).toHaveAttribute('aria-checked', 'true');
   await expect(sheet.getByText('原始解析度：最長邊最多 4096 像素')).toBeVisible();
+  // 標準 names the working long edge: 2048, and 1440 once 畫質 is 低 (C D6), which also blocks 原始解析度
+  await expect(size.getByRole('radio', { name: '標準（2048）' })).toHaveAttribute('aria-checked', 'false');
+  const tier = sheet.getByRole('radiogroup', { name: '畫質' });
+  await tier.getByRole('radio', { name: '低' }).click();
+  await expect(size.getByRole('radio', { name: '標準（1440）' })).toHaveAttribute('aria-checked', 'true');
+  await expect(size.getByRole('radio', { name: '原始解析度' })).toBeDisabled();
+  await tier.getByRole('radio', { name: '自動' }).click();
+  await expect(size.getByRole('radio', { name: '標準（2048）' })).toHaveAttribute('aria-checked', 'false');
   await format.getByRole('radio', { name: 'PNG（無損）' }).click();
   await expect(sheet.getByText('PNG 檔案較大，約為 JPEG 的 3–5 倍')).toBeVisible();
   await page.reload();

@@ -24,7 +24,23 @@ import { adapt } from '../../../src/tracking/adapter111';
 import { BodyFieldMemo, fieldInputOf, frameFacesOf, measurePersons } from '../../../src/ui/editorModel';
 import type { BeautyParams, BodyDetection, Face, HistoryEntry, ParamId, RenderInput } from '../../../src/types';
 
-export type ParityCase = 'natural' | 'refined-shape-max' | 'makeup-shades' | 'fullbody-body' | 'face-body';
+// 'natural-noface', 'natural-mirror', 'shape-max-weight04' and 'shape-max-yaw025' (2026-10-17: the paths B2 check 1 no
+// longer compares, the no-face global skin, the mirrored export, the weight < 1 fade and the yaw attenuation) were
+// recorded on f877881 the same way, the four older goldens re-recording byte-identical, by adding to that page:
+//   png['natural-noface'] = toPng(engine.renderToImageData({ source: face, width: face.width, height: face.height, face: null, faceWeight: 0, params: applyPreset('natural', 1) }, { mirror: false }));
+//   png['natural-mirror'] = toPng(engine.renderToImageData(onFace(applyPreset('natural', 1)), { mirror: true }));
+//   png['shape-max-weight04'] = toPng(engine.renderToImageData({ ...onFace(shapeMax), faceWeight: 0.4 }, { mirror: false }));
+//   png['shape-max-yaw025'] = toPng(engine.renderToImageData({ ...onFace(shapeMax), face: { ...f, yaw: 0.25 } }, { mirror: false }));
+export type ParityCase =
+  | 'natural'
+  | 'refined-shape-max'
+  | 'makeup-shades'
+  | 'fullbody-body'
+  | 'face-body'
+  | 'natural-noface'
+  | 'natural-mirror'
+  | 'shape-max-weight04'
+  | 'shape-max-yaw025';
 
 declare global {
   interface Window {
@@ -126,6 +142,11 @@ window.runParity = async () => {
   png['fullbody-body'] = toPng(
     engine.renderToImageData({ source: body, width: body.width, height: body.height, ...legacyFrame(bodyParams, null, 0), body: field }, { mirror: false }),
   );
+  const at = (params: BeautyParams, fc: Face | null, weight: number): RenderInput => ({ source: face, width: face.width, height: face.height, ...legacyFrame(params, fc, weight) });
+  png['natural-noface'] = toPng(engine.renderToImageData(at(applyPreset('natural', 1), null, 0), { mirror: false }));
+  png['natural-mirror'] = toPng(engine.renderToImageData(onFace(applyPreset('natural', 1)), { mirror: true }));
+  png['shape-max-weight04'] = toPng(engine.renderToImageData(at(shapeMax, f, 0.4), { mirror: false }));
+  png['shape-max-yaw025'] = toPng(engine.renderToImageData(at(shapeMax, { ...f, yaw: 0.25 }, 1), { mirror: false }));
   engine.dispose();
   face.close();
   body.close();

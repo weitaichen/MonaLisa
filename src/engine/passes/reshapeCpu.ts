@@ -303,21 +303,32 @@ export function withView(map: UvMap, view: ReshapeView): UvMap {
   };
 }
 
-/** smallest forward-difference Jacobian determinant of `map` on an n × n grid over `box` (UV); −∞ on a non-finite value */
+/**
+ * smallest forward-difference Jacobian determinant of `map` on an n × n grid over `box` (UV); −∞ on a non-finite value.
+ * Each grid point is mapped once (n² calls, not 3 per cell): a row of the grid is kept for the next row's cells.
+ */
 export function mapMinDet(map: UvMap, box: readonly [number, number, number, number], n = 65): number {
   let min = Infinity;
   const hx = (box[2] - box[0]) / (n - 1);
   const hy = (box[3] - box[1]) / (n - 1);
-  for (let j = 0; j + 1 < n; j++) {
-    for (let i = 0; i + 1 < n; i++) {
-      const x = box[0] + i * hx;
-      const y = box[1] + j * hy;
-      const a = map(x, y);
-      const bx = map(x + hx, y);
-      const by = map(x, y + hy);
-      if (![...a, ...bx, ...by].every(Number.isFinite)) return -Infinity;
-      min = Math.min(min, ((bx[0] - a[0]) / hx) * ((by[1] - a[1]) / hy) - ((bx[1] - a[1]) / hx) * ((by[0] - a[0]) / hy));
+  let prev = new Float64Array(2 * n);
+  let row = new Float64Array(2 * n);
+  for (let j = 0; j < n; j++) {
+    const y = box[1] + j * hy;
+    for (let i = 0; i < n; i++) {
+      const s = map(box[0] + i * hx, y);
+      if (!Number.isFinite(s[0]) || !Number.isFinite(s[1])) return -Infinity;
+      row[2 * i] = s[0];
+      row[2 * i + 1] = s[1];
     }
+    if (j > 0)
+      for (let i = 0; i + 1 < n; i++) {
+        // the cell at (i, j − 1): a = prev[i], +x = prev[i + 1], +y = row[i]
+        const ax = prev[2 * i];
+        const ay = prev[2 * i + 1];
+        min = Math.min(min, ((prev[2 * i + 2] - ax) / hx) * ((row[2 * i + 1] - ay) / hy) - ((prev[2 * i + 3] - ay) / hx) * ((row[2 * i] - ax) / hy));
+      }
+    [prev, row] = [row, prev];
   }
   return min;
 }

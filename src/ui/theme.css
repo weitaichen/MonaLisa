@@ -437,6 +437,26 @@ button:focus-visible {
   white-space: nowrap;
   transition: color 160ms;
 }
+/* below 364 pt the editor's 8 tabs would fall under 44 pt ((363 − 12)/8 < 44; 38.5 pt at 320): they keep 44 pt and the
+   bar scrolls, its right edge faded over a 20 px end padding, so the last tab scrolls clear of the fade (BeautyPanel
+   keeps the active one there). The camera's 7 tabs still fit at 320 pt ((320 − 12)/7 = 44) and are left alone */
+@media (max-width: 363px) {
+  .tabs:has(> .tab:nth-child(8)) {
+    justify-content: flex-start;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0 20px 0 6px;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+    mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  }
+  .tabs:has(> .tab:nth-child(8))::-webkit-scrollbar {
+    display: none;
+  }
+  .tabs:has(> .tab:nth-child(8)) > .tab {
+    flex: 1 0 44px;
+  }
+}
 .tab.active {
   color: var(--text);
   font-weight: 650;
@@ -1778,13 +1798,16 @@ button:focus-visible {
 .spot-controls .segmented button {
   min-width: 44px;
 }
+/* a 44 pt target on one line, never squeezed by the row (「全部清除（100）」 is the longest label) */
 .spot-clear {
+  flex: none;
   margin-left: auto;
-  height: 32px;
+  height: 44px;
   padding: 0 12px;
-  border-radius: 16px;
+  border-radius: 22px;
   font-size: 13px;
   font-weight: 600;
+  white-space: nowrap;
   background: rgba(255, 255, 255, 0.1);
   color: var(--text);
 }
@@ -1794,6 +1817,21 @@ button:focus-visible {
 }
 .spot-clear:disabled {
   opacity: 0.4;
+}
+/* below 360 pt the row's 16 px margins, 10 px gaps and 40 px label leave 92 px for 清除: 8 px margins, 6 px gaps, the
+   label at its width and a 12 px label with 8 px padding make room for 「全部清除（100）」 at 320 pt */
+@media (max-width: 359px) {
+  .slider-row.spot-controls {
+    padding: 0 8px;
+    gap: 6px;
+  }
+  .spot-controls .slider-label {
+    min-width: 0;
+  }
+  .spot-clear {
+    padding: 0 8px;
+    font-size: 12px;
+  }
 }
 /* 裁切 mode (S §2.1): the frame fills the stage, so a 拉直 corner stays visible under the scrim */
 .editor-stage .frame.crop-mode {
@@ -2658,6 +2696,8 @@ button.row:active {
   color: var(--c);
   transform: scale(calc(1 / var(--zs, 1)));
   transform-origin: top left;
+  /* hidden on a box narrower than 24 pt on screen (S §2.1): --bw is its width at zoom 1 (FaceBoxes), --zs the zoom */
+  opacity: clamp(0, calc((var(--bw, 24) * var(--zs, 1) - 24) * 1000 + 1), 1);
 }
 
 /* ───────────── Camera: 全部套用 and the face marker (S §2.5) ───────────── */

@@ -29,8 +29,9 @@ export const EXPORT_COPY = {
   shareReady: '已準備好，點一下分享',
   fallback: '已改用標準解析度輸出',
   breadcrumb: '上次以原始解析度輸出時程式中止，已改用標準解析度',
-  noSource: '此照片只保留了 2048 解析度',
   interrupted: '輸出已中斷，請再按一次「儲存」',
+  /** the context was lost and did not come back in time (C §7): no file, the pill is 儲存 again */
+  lostRetry: '畫面恢復後請再按一次「儲存」',
   sizeNote: '原始解析度：最長邊最多 4096 像素',
   device: '此裝置記憶體不足，改用標準解析度',
   tierLow: '畫質設為「低」時使用標準解析度',
@@ -39,9 +40,20 @@ export const EXPORT_COPY = {
   pngSub: 'PNG 檔案較大，約為 JPEG 的 3–5 倍',
 } as const;
 
-/** iPhone SE class (375 × 667 pt) in either orientation: always 標準 (C §6.2) */
+/** 設定 › 輸出解析度's 標準 option: the working long edge, 2048 or 1440 on tier L (C D6) */
+export const standardLabel = (edge: number): string => `標準（${edge}）`;
+
+/** the no-source note (C §2.3): the copy kept is the working copy, whose long edge is `edge` (2048, or 1440 on tier L) */
+export const noSourceCopy = (edge: number): string => `此照片只保留了 ${edge} 解析度`;
+
+/**
+ * iPhone SE class in either orientation: always 標準 (C §6.2). 375 × 667 pt, or 320 × 568 pt, which the same phones
+ * report with Display Zoom set to Larger Text (no iOS 18 phone has that size natively)
+ */
 export function isSeClassScreen(s: { width: number; height: number }): boolean {
-  return Math.min(s.width, s.height) === 375 && Math.max(s.width, s.height) === 667;
+  const lo = Math.min(s.width, s.height);
+  const hi = Math.max(s.width, s.height);
+  return (lo === 375 && hi === 667) || (lo === 320 && hi === 568);
 }
 
 export function fullExportBlock(env: ExportEnv): FullBlock {
@@ -404,7 +416,7 @@ export async function shouldKeepSource(
   }
 }
 
-/** HistoryEntry.sourceWidth/Height: recorded whenever the original exceeded the working edge (the "only 2048 kept" note) */
+/** HistoryEntry.sourceWidth/Height: recorded whenever the original exceeded the working edge (the "only the working copy kept" note) */
 export function sourceSizeRecord(probed: Size | null, workingLong: number): { sourceWidth: number; sourceHeight: number } | null {
   if (!probed || Math.max(probed.width, probed.height) <= workingLong) return null;
   return { sourceWidth: probed.width, sourceHeight: probed.height };

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { applyPreset, BLUSH_SHADES, defaultParams, FILTERS, LIP_SHADES, neutralValue, PARAM_DEFS, paramsInGroup, PRESETS, sanitizeParams } from '../engine/params';
-import type { BeautyParams } from '../types';
+import { applyPreset, BLUSH_SHADES, defaultParams, FILTERS, LIP_SHADES, neutralValue, PARAM_DEFS, paramsInGroup, PRESETS, sanitizeParams, setParam } from '../engine/params';
+import type { BeautyParams, EditState } from '../types';
 import { editFromLegacy, legacyProjection, mergeLegacy, splitLegacy } from './legacy';
-import { defaultPhoto, editRotateLeft, emptyShades, neutralPerson } from './state';
+import { readSide, splitOn } from './sides';
+import { defaultPhoto, editFlipView, editRotateLeft, emptyShades, neutralPerson } from './state';
 
 /** presetAmount is dead data while custom (setPresetAmount ignores it, a preset tap overwrites it) */
 const canon = (p: BeautyParams): BeautyParams => (p.presetId === 'custom' ? { ...p, presetAmount: 1 } : p);
@@ -32,7 +33,8 @@ describe('splitLegacy / legacyProjection (RM §3.2)', () => {
     const pick = <T>(xs: readonly T[]) => xs[Math.floor(r() * xs.length)];
     for (let i = 0; i < 500; i++) {
       const raw = {
-        values: Object.fromEntries(PARAM_DEFS.map((d) => [d.id, d.group === 'tone' ? neutralValue(d) : r()])),
+        // a v1 record (0.3) holds no 調節 or 膚質: sanitizeParams fills them neutral
+        values: Object.fromEntries(PARAM_DEFS.map((d) => [d.id, d.group === 'tone' || d.group === 'adjust' ? neutralValue(d) : r()])),
         filterId: pick(FILTERS).id,
         lipShade: pick([null, ...LIP_SHADES.map((s) => s.id)]),
         blushShade: pick([null, ...BLUSH_SHADES.map((s) => s.id)]),
@@ -84,6 +86,24 @@ describe('step 4: the legacy projection drops tone values and spots (§5 rollbac
   });
 });
 
+describe('the projection writes 調節 neutral (0.3 has no 調節)', () => {
+  it('a 0.4 preset with a 調節 edit keeps its presetId through sanitizeParams, and a 0.3 美體 edit keeps preset and link', () => {
+    const e0 = editFromLegacy(applyPreset('natural', 1));
+    const e: EditState = { ...e0, photo: { ...e0.photo, values: { ...e0.photo.values, 'adjust.brightness': 0.7, 'adjust.vignette': 0.3 } } };
+    const p = legacyProjection(e, 'p0');
+    for (const d of paramsInGroup('adjust')) expect(p.values[d.id], d.id).toBe(neutralValue(d));
+    const stored = sanitizeParams(p);
+    expect([stored.presetId, stored.presetAmount]).toEqual(['natural', 1]);
+    // after a rollback 0.3 moves a 美體 slider, which keeps the preset in both versions
+    const ids03 = PARAM_DEFS.map((d) => d.id).filter((id) => !id.startsWith('adjust.') && !id.startsWith('tone.'));
+    const m = mergeLegacy(e, setParam(stored, 'body.slim', 0.4), 'p0', ids03);
+    expect(m.persons.p0.preset).toEqual({ id: 'natural', amount: 1 });
+    expect(m.photo.presetLink).toEqual({ id: 'natural', amount: 1 });
+    expect(m.photo.values['adjust.brightness']).toBe(0.7);
+    expect(m.persons.p0.values['body.slim']).toBe(0.4);
+  });
+});
+
 describe('mergeLegacy: 0.3 edited a v2 entry after a rollback (S §5.3)', () => {
   it('takes only what the stored record holds; a link or preset the merged values no longer match is dropped', () => {
     const e0 = editFromLegacy(applyPreset('glow', 1));
@@ -117,11 +137,46 @@ describe('mergeLegacy: 0.3 edited a v2 entry after a rollback (S §5.3)', () => 
     expect(mergeLegacy(turned, by03(moved), 'p0', all).photo.heightBand).toBeNull();
     expect(mergeLegacy(turned, by03(moved), 'p0', all).photo.geometry).toEqual(turned.photo.geometry);
   });
-  it('step 5: keeps right and the four new shades, which 0.3 can neither show nor write', () => {
-    const e0 = editFromLegacy(applyPreset('glow', 1));
-    const p0 = { ...e0.persons.p0, right: { 'shape.faceSlim': 0.9 }, shades: { ...e0.persons.p0.shades, brow: 'mocha', lens: 'blue' } };
-    const m = mergeLegacy({ ...e0, persons: { p0 } }, applyPreset('refined', 1), 'p0', PARAM_DEFS.map((d) => d.id));
-    expect(m.persons.p0.right).toEqual({ 'shape.faceSlim': 0.9 });
-    expect(m.persons.p0.shades).toEqual({ ...emptyShades(), brow: 'mocha', lens: 'blue' });
+  it('under a quarter turn the projection carries no band (0.3 opens the photo unturned); the merge compares with that', () => {
+    const all = PARAM_DEFS.map((d) => d.id);
+    const band = { top: 0.5, bottom: 0.8, amount: 0.4 };
+    const moved = { top: 0.2, bottom: 0.4, amount: 0.4 };
+    const e = editFromLegacy({ ...defaultParams(), heightBand: band });
+    expect(legacyProjection(e, 'p0').heightBand).toEqual(band);
+    expect(legacyProjection(editFlipView(e), 'p0').heightBand).toEqual(band); // 翻轉 keeps the rows
+    const r = editRotateLeft(e);
+    const turned = { ...r, photo: { ...r.photo, heightBand: band } };
+    expect(legacyProjection(turned, 'p0').heightBand).toBeNull();
+    const by03 = (b: typeof band | null) => ({ ...legacyProjection(turned, 'p0'), heightBand: b });
+    // 0.3 left the projected "none": the 0.4 band stays; a band 0.3 drew (O rows) is dropped
+    expect(mergeLegacy(turned, by03(null), 'p0', all).photo.heightBand).toEqual(band);
+    expect(mergeLegacy(turned, by03(moved), 'p0', all).photo.heightBand).toBeNull();
+    // a projection an earlier build wrote with the band, which 0.3 left as it was: still kept
+    expect(mergeLegacy(turned, by03(band), 'p0', all).photo.heightBand).toEqual(band);
+  });
+  it('step 5: a split item 0.3 changed (it draws one value on the whole face) takes both halves; the others keep right', () => {
+    const all = PARAM_DEFS.map((d) => d.id);
+    const e0 = editFromLegacy(applyPreset('natural', 1));
+    const split = splitOn(e0.persons.p0);
+    const p0 = { ...split, right: { ...split.right, 'shape.eyeEnlarge': 0.9 }, shades: { ...split.shades, brow: 'mocha', lens: 'blue' } };
+    const e: EditState = { ...e0, persons: { p0 } };
+    const proj = legacyProjection(e, 'p0');
+    // after a rollback 0.3 raises 瘦臉 (0.15 → 0.8) and leaves 大眼 at the projected left value
+    const m = mergeLegacy(e, { ...proj, values: { ...proj.values, 'shape.faceSlim': 0.8 } }, 'p0', all);
+    expect(readSide(m.persons.p0, 'shape.faceSlim', 'values')).toBe(0.8);
+    expect(readSide(m.persons.p0, 'shape.faceSlim', 'right')).toBe(0.8);
+    expect(readSide(m.persons.p0, 'shape.eyeEnlarge', 'values')).toBe(e.persons.p0.values['shape.eyeEnlarge']);
+    expect(readSide(m.persons.p0, 'shape.eyeEnlarge', 'right')).toBe(0.9);
+    // the four new shades stay: 0.3 can neither show nor write them
+    expect(m.persons.p0.shades).toEqual({ ...e.persons.p0.shades, brow: 'mocha', lens: 'blue' });
+    // nothing left that differs between the halves: right is gone, so the person is unsplit as 0.3 drew it
+    const even: EditState = { ...e, persons: { p0: split } };
+    const pe = legacyProjection(even, 'p0');
+    const n = mergeLegacy(even, { ...pe, values: { ...pe.values, 'shape.faceSlim': 0.8 } }, 'p0', all);
+    expect(n.persons.p0.right).toBeNull();
+    expect(n.persons.p0.values['shape.faceSlim']).toBe(0.8);
+    // a 0.3 edit that leaves every split item as projected keeps right as it is
+    const k = mergeLegacy(e, { ...proj, values: { ...proj.values, 'skin.smooth': 0.9 } }, 'p0', all);
+    expect(k.persons.p0.right).toEqual(p0.right);
   });
 });

@@ -828,21 +828,35 @@ describe('source file (HistoryEntry.source, step 3)', () => {
   });
 
   it('a QuotaExceededError add is put once more without the source, with the same id', async () => {
+    // A quota failure is reported when the transaction commits, as engines do: the source record's put succeeds, then
+    // the whole transaction aborts with QuotaExceededError, rolling back the entry put queued before it. (A synchronous
+    // throw from put would let the transaction commit the entry anyway, so the outcome could not tell the fallback put
+    // from no fallback at all.)
     const put = FDBObjectStore.prototype.put;
     const calls: { id: string; source?: Blob }[] = [];
     vi.spyOn(FDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
       calls.push(value as { id: string; source?: Blob });
-      if ((value as { source?: Blob }).source) throw new DOMException('quota', 'QuotaExceededError');
-      return put.call(this, value, key);
+      const r = put.call(this, value, key);
+      if ((value as { source?: Blob }).source) {
+        const tx = this.transaction;
+        r.onsuccess = () => {
+          Object.defineProperty(tx, 'error', { value: new DOMException('quota', 'QuotaExceededError'), configurable: true });
+          tx.abort();
+        };
+      }
+      return r;
     });
     const id = await addEntry({ ...entry('q'), source, sourceWidth: 4032, sourceHeight: 3024 });
-    // the entry, its source record (refused), then the entry once more without a source record
-    expect(calls.map((c) => c.id)).toEqual([id, sourceKey(id), id]);
-    expect(calls.filter((c) => c.source)).toHaveLength(1);
+    // the outcome: the entry survives without its file, keeping its id and the oriented size
     const got = await getEntry(id);
     expect(got).toBeDefined();
     expect(got?.source).toBeUndefined();
-    expect(got?.sourceWidth).toBe(4032);
+    expect([got?.sourceWidth, got?.sourceHeight]).toEqual([4032, 3024]);
+    expect((await listEntries()).map((x) => x.id)).toEqual([id]);
+    // how: the entry and its source record (aborted at commit, no reconnect retry with the file), then the entry once
+    // more without a source record
+    expect(calls.map((c) => c.id)).toEqual([id, sourceKey(id), id]);
+    expect(calls.filter((c) => c.source)).toHaveLength(1);
   });
 
   it("other errors keep today's reconnect retry (the file is not dropped)", async () => {
@@ -857,6 +871,70 @@ describe('source file (HistoryEntry.source, step 3)', () => {
     });
     const id = await addEntry({ ...entry('r'), source, sourceWidth: 4032, sourceHeight: 3024 });
     expect((await getEntry(id))?.source?.size).toBe(64);
+  });
+
+  it.each(['UnknownError', 'NotReadableError'])(
+    'a %s that aborts both commits with the source still stores the entry, without the source, with the same id',
+    async (name) => {
+      // WebKit fails a blob it cannot write (UnknownError) or a picked file gone from disk (NotReadableError) when the
+      // transaction commits: the source record's request succeeds, then the whole transaction aborts with that error,
+      // so the entry put queued before it in the same transaction is rolled back with it
+      const put = FDBObjectStore.prototype.put;
+      const calls: { id: string; source?: Blob }[] = [];
+      vi.spyOn(FDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+        calls.push(value as { id: string; source?: Blob });
+        const r = put.call(this, value, key);
+        if ((value as { source?: Blob }).source) {
+          const tx = this.transaction;
+          r.onsuccess = () => {
+            Object.defineProperty(tx, 'error', { value: new DOMException('blob', name), configurable: true });
+            tx.abort();
+          };
+        }
+        return r;
+      });
+      const id = await addEntry({ ...entry('u'), source, sourceWidth: 4032, sourceHeight: 3024 });
+      // the outcome: the entry survives without its file, keeping its id and the oriented size
+      const got = await getEntry(id);
+      expect(got).toBeDefined();
+      expect(got?.source).toBeUndefined();
+      expect([got?.sourceWidth, got?.sourceHeight]).toEqual([4032, 3024]);
+      expect((await listEntries()).map((x) => x.id)).toEqual([id]);
+      // how: two attempts with the source (the reconnect retry), then the entry once more without it
+      expect(calls.map((c) => c.id)).toEqual([id, sourceKey(id), id, sourceKey(id), id]);
+    },
+  );
+
+  it('an abort at commit of only the first attempt keeps the retry: the entry and its source are stored, no third put', async () => {
+    const put = FDBObjectStore.prototype.put;
+    const calls: string[] = [];
+    let aborted = false;
+    vi.spyOn(FDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      calls.push((value as { id: string }).id);
+      const r = put.call(this, value, key);
+      if ((value as { source?: Blob }).source && !aborted) {
+        aborted = true;
+        const tx = this.transaction;
+        r.onsuccess = () => tx.abort();
+      }
+      return r;
+    });
+    const id = await addEntry({ ...entry('v'), source, sourceWidth: 4032, sourceHeight: 3024 });
+    expect((await getEntry(id))?.source?.size).toBe(64);
+    expect(calls).toEqual([id, sourceKey(id), id, sourceKey(id)]);
+  });
+
+  it('a failing add without a source is not put a third time', async () => {
+    const put = FDBObjectStore.prototype.put;
+    let n = 0;
+    vi.spyOn(FDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      n++;
+      if (n <= 2) throw new DOMException('lost', 'UnknownError');
+      return put.call(this, value, key);
+    });
+    const id = await addEntry({ ...entry('w'), sourceWidth: 4032, sourceHeight: 3024 });
+    expect(n).toBe(2);
+    expect(await getEntry(id)).toBeUndefined();
   });
 
   it('isQuotaError recognises only a QuotaExceededError', () => {

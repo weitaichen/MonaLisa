@@ -8,11 +8,13 @@ import { cacheBody, makeCache } from '../detect/testCaches';
 import { applyPreset, setHeightBand, setParam } from '../engine/params';
 import type { BeautyParams, BodyField, EditState, Face, ParamId, PersonId, RegionStatus, Selection, TrackerState } from '../types';
 import { lensFor, P0_INFO } from '../edit/lens';
-import { flipView, IDENTITY_GEOMETRY, rotateLeft, upQuarter } from '../geometry/view';
+import { flipView, IDENTITY_GEOMETRY, rotateLeft, upQuarter, vToO } from '../geometry/view';
 import { editFromLegacy } from '../edit/legacy';
+import { bodyAnswer, preAnswerCache } from '../edit/migrate';
 import { assignPersons, withPersons } from '../edit/state';
 import {
   addBodyScan,
+  bodyScansAfter,
   addFaceScan,
   answerNotices,
   ANY_FIELD,
@@ -36,11 +38,14 @@ import {
   needsBodyMeasure,
   needsBodyScan,
   needsFaceScan,
+  outputImage,
+  outputSettled,
   outputWaits,
   personBodyGate,
   protectRequests,
   rebaseStamp,
   RedetectBudget,
+  RESTORE_POLL_MS,
   sessionPlan,
   settleBodyAnswer,
   shouldDetectBody,
@@ -48,6 +53,7 @@ import {
   suggestedBand,
   thumbRect,
   undoToast,
+  whenRestored,
   type BodyDet,
 } from './editorModel';
 import { BODY_ERROR_NOTE, bodyNote, INITIAL_SELECTION, itemsFor, sliderFor } from './panelModel';
@@ -184,6 +190,82 @@ describe('exportOnLatest', () => {
     });
     await expect(exportOnLatest(make('0'), failing, () => make(String(++n)), 2)).rejects.toThrow('disposed');
     expect(failing).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('whenRestored (C §7: the 標準 fallback after a loss during the tiles waits for the restore)', () => {
+  const fakeEngine = (lost: boolean) => {
+    const canvas = new EventTarget();
+    const engine = { lost, canvas };
+    // the engine's own listener, registered first (createEngine): it rebuilds, then clears `lost`
+    canvas.addEventListener('webglcontextrestored', () => (engine.lost = false));
+    return engine;
+  };
+
+  it('a live engine resolves true at once', async () => {
+    await expect(whenRestored(fakeEngine(false), 1000)).resolves.toBe(true);
+  });
+
+  it('resolves true on the restore, after the engine’s own listener rebuilt it', async () => {
+    const e = fakeEngine(true);
+    const p = whenRestored(e, 60_000);
+    e.canvas.dispatchEvent(new Event('webglcontextrestored'));
+    await expect(p).resolves.toBe(true);
+  });
+
+  it('resolves false when no restore comes in time, or the rebuild failed (still lost)', async () => {
+    vi.useFakeTimers();
+    try {
+      const p = whenRestored(fakeEngine(true), 5000);
+      vi.advanceTimersByTime(5000);
+      await expect(p).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+    const broken = { lost: true, canvas: new EventTarget() };
+    const q = whenRestored(broken, 60_000);
+    broken.canvas.dispatchEvent(new Event('webglcontextrestored'));
+    await expect(q).resolves.toBe(false);
+  });
+
+  it('ends as soon as the wait is superseded (重新載入引擎: a session on a new engine took over), not at the timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      let replaced = false;
+      const settled: boolean[] = [];
+      // the old engine is disposed by recoverEngine: its canvas never fires webglcontextrestored again
+      void whenRestored(fakeEngine(true), 60_000, () => replaced).then((v) => settled.push(v));
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(settled).toEqual([]);
+      replaced = true;
+      await vi.advanceTimersByTimeAsync(RESTORE_POLL_MS);
+      // false (the old context is not back): encode throws ExportError('lost'), and exportOnLatest runs on the replacement
+      expect(settled).toEqual([false]);
+      expect(vi.getTimerCount()).toBe(0); // the timeout and the poll are gone
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a superseded check that is already true ends the wait at the first poll; a restore or the timeout clears the poll', async () => {
+    vi.useFakeTimers();
+    try {
+      const at: number[] = [];
+      const t0 = Date.now();
+      void whenRestored(fakeEngine(true), 60_000, () => true).then(() => at.push(Date.now() - t0));
+      await vi.advanceTimersByTimeAsync(RESTORE_POLL_MS);
+      expect(at).toEqual([RESTORE_POLL_MS]);
+      const e = fakeEngine(true);
+      const p = whenRestored(e, 60_000, () => false);
+      e.canvas.dispatchEvent(new Event('webglcontextrestored'));
+      await expect(p).resolves.toBe(true);
+      const q = whenRestored(fakeEngine(true), 5000, () => false);
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(q).resolves.toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -552,6 +634,11 @@ describe('scans in the up frame (S §3.6, D5, D12)', () => {
     expect(needsFaceScan({ cache: empty, geometry: IDENTITY_GEOMETRY, mode: 'normal', hasTracker: true })).toBe(false);
     expect(needsFaceScan({ cache: { ...empty, faces: [{}] }, geometry: turned, mode: 'normal', hasTracker: true })).toBe(false);
     expect(needsFaceScan({ cache: null, geometry: turned, mode: 'normal', hasTracker: true })).toBe(false);
+    // no upright answer yet (a 基本模式 cache, or one 美體 wrote while the tracker could not answer): the session asks
+    // upright first, so no up-frame is forced, upright or turned
+    const unscanned = { faces: [], faceScans: [] };
+    expect(needsFaceScan({ cache: unscanned, geometry: turned, mode: 'normal', hasTracker: true })).toBe(false);
+    expect(needsFaceScan({ cache: unscanned, geometry: IDENTITY_GEOMETRY, mode: 'normal', hasTracker: true })).toBe(false);
   });
 
   it('a scan counts for both flip states', () => {
@@ -578,6 +665,39 @@ describe('persons in the editor model (S §3.3)', () => {
     const ms = measurePersons(cache, () => FACE, (d, f) => (seen.push([d.pose.points[0], f !== null]), {} as BodyMeasure), () => undefined);
     expect([...ms.keys()]).toEqual(['f0', 'b1']);
     expect(seen.map(([, f]) => f)).toEqual([true, false]);
+  });
+  it('bodies found before the first face answer (S §7) are the cache: every body person measured, p0’s 美體 values on the primary body drive the field', () => {
+    const size = { width: 1600, height: 1200 };
+    const found = [cacheBody('x', 0.6), cacheBody('x', 0.2)].map((b) => ({ pose: b.pose, mask: b.mask, score: b.score }));
+    const a = bodyAnswer(preAnswerCache(size, null), found, size);
+    expect(a.detect.faces).toEqual([]);
+    expect(a.detect.persons.map((p) => p.id)).toEqual(['b0', 'b1']);
+    const seen: number[] = [];
+    const ms = measurePersons(a.detect, () => FACE, (d) => (seen.push(d.pose.points[0]), {} as BodyMeasure), () => undefined);
+    expect([...ms.keys()]).toEqual(['b0', 'b1']);
+    const edit = a.rebase(withPersons(editFromLegacy(applyPreset('natural', 1)), ['p0'], (p) => ({ ...p, values: { ...p.values, 'body.waist': 0.7 } })));
+    const input = fieldInputOf(edit, a.detect, ms, 4 / 3);
+    const primary = a.detect.primary;
+    expect(input.edited.map((p) => [p.id, p.values['body.waist']])).toEqual([[primary, 0.7]]);
+    expect(input.legs.measure).toBe(ms.get(primary));
+  });
+  it('nobody found before the first face answer: the cache says so in its up-frame, and a turned photo asks again (S §3.6, D5)', () => {
+    const size = { width: 1600, height: 1200 };
+    const empty = preAnswerCache(size, null);
+    // what the editor writes: the up-frames tried start empty (no detection ran on this cache before)
+    const a = bodyAnswer(empty, [], size);
+    const cache = { ...a.detect, bodyScans: bodyScansAfter(empty, 0) };
+    expect(cache).toMatchObject({ bodies: [], persons: [{ id: 'p0', face: null, body: null }], bodyScans: [0] });
+    expect(needsBodyScan(cache, IDENTITY_GEOMETRY)).toBe(false);
+    expect(needsBodyScan(cache, rotateLeft(IDENTITY_GEOMETRY))).toBe(true);
+    expect(bodyScansAfter(cache, 3)).toEqual([0, 3]);
+    // first tried turned: upright was not tried yet (a cache written before 美體 ran, faces or not, alike)
+    const turned = { ...a.detect, bodyScans: bodyScansAfter(empty, 3) };
+    expect(turned.bodyScans).toEqual([3]);
+    expect(needsBodyScan(turned, IDENTITY_GEOMETRY)).toBe(true);
+    expect(bodyScansAfter(makeCache(), 3)).toEqual([3]);
+    // no face scan in a new up-frame before the upright face answer: the session asks upright first
+    expect(needsFaceScan({ cache, geometry: rotateLeft(IDENTITY_GEOMETRY), mode: 'normal', hasTracker: true })).toBe(false);
   });
   it('a body person without a measure (measureBody threw) can use no local 美體 item: no dead slider (Review Focus #2)', () => {
     // the waist is measurable on any measure; nothing without one
@@ -640,6 +760,31 @@ describe('persons in the editor model (S §3.3)', () => {
     const firesWith = { ...clear, stroke: true };
     expect(outputWaits(armedWith)).toBe(false);
     expect(outputWaits(firesWith)).toBe(true);
+  });
+  it('outputSettled / outputImage: an owed thumbnail is drawn whatever the plan, also when the share file is made already (crop spec §7)', () => {
+    // a working-size JPEG: 儲存 inside the debounce made the share file, then a flush with the context lost kept the
+    // params without a thumbnail (saved, thumbOwed): the restore's re-run must still draw it, as a render of its own
+    const fresh = { preEncodes: true, shareReady: true, thumbOwed: true, saved: true };
+    expect(outputSettled(fresh)).toBe(false);
+    expect(outputImage({ ...fresh, entry: true })).toBe('thumb');
+    // nothing owed: settled, nothing rendered
+    expect(outputSettled({ ...fresh, thumbOwed: false })).toBe(true);
+    expect(outputImage({ ...fresh, thumbOwed: false, entry: true })).toBe(null);
+    // a tiled or PNG plan has no share file to make: the owed thumbnail alone, as before
+    const png = { preEncodes: false, shareReady: false, thumbOwed: true, saved: true };
+    expect(outputSettled(png)).toBe(false);
+    expect(outputImage({ ...png, entry: true })).toBe('thumb');
+    expect(outputSettled({ ...png, thumbOwed: false })).toBe(true);
+    // a share file to make: its encode serves the thumbnail and the autosave
+    const stale = { preEncodes: true, shareReady: false, thumbOwed: true, saved: true };
+    expect(outputSettled(stale)).toBe(false);
+    expect(outputImage({ ...stale, entry: true })).toBe('encode');
+    expect(outputImage({ ...stale, thumbOwed: false, saved: false, entry: true })).toBe('encode');
+    // not saved: the autosave renders its own image (and its write carries the thumbnail); no entry yet (its addEntry
+    // still pending): no thumbnail of its own to rewrite
+    expect(outputSettled({ ...fresh, thumbOwed: false, saved: false })).toBe(false);
+    expect(outputImage({ ...fresh, saved: false, entry: true })).toBe(null);
+    expect(outputImage({ ...fresh, entry: false })).toBe(null);
   });
   it('settleBodyAnswer: a merge failure is the detection error; a notice failure after a merge is not (step-1 review)', () => {
     const report = vi.fn((_e: unknown, where: string) => `reported ${where}`);
@@ -731,11 +876,25 @@ describe('editor persons UI helpers (S §1.1 item 8, §2.6)', () => {
   });
   it('hitCtxOf: faces with their persons; bodies only on 美體; 44 pt in UV of the layer', () => {
     const c = makeCache();
-    const ctx = hitCtxOf(c, false, null, { width: 440, height: 330 });
+    const toO = vToO(IDENTITY_GEOMETRY, { width: 1600, height: 1200 });
+    const ctx = hitCtxOf(c, false, null, { width: 440, height: 330 }, toO);
     expect(ctx.faces.map((f) => f.person)).toEqual(['f0', 'f1']);
     expect(ctx.bodies).toBeUndefined();
     expect([ctx.minW, ctx.minH]).toEqual([0.1, 44 / 330]);
     const withBody = makeCache({ bodies: [cacheBody('b0', 0.8)], persons: [{ id: 'f0', face: 'f0', body: null }, { id: 'f1', face: 'f1', body: null }, { id: 'b0', face: null, body: 'b0' }] });
-    expect(hitCtxOf(withBody, true, null, { width: 440, height: 330 }).bodies?.map((b) => b.person)).toEqual(['b0']);
+    expect(hitCtxOf(withBody, true, null, { width: 440, height: 330 }, toO).bodies?.map((b) => b.person)).toEqual(['b0']);
+  });
+  it('hitCtxOf: the 44 pt minimum is a 44 pt square at the tap taken V → O through the view (a crop, a quarter turn)', () => {
+    const c = makeCache();
+    const size = { width: 1600, height: 1200 };
+    // a quarter-width crop shown on a 440 pt layer: 44 pt is 0.1 of V, 0.025 of O
+    const crop = { ...IDENTITY_GEOMETRY, crop: { x: 0.5, y: 0, w: 0.25, h: 1 } };
+    const cropped = hitCtxOf(c, false, null, { width: 440, height: 330 }, vToO(crop, size));
+    expect(cropped.minW).toBeCloseTo(0.25 * 0.1, 12);
+    expect(cropped.minH).toBeCloseTo(44 / 330, 12);
+    // one 旋轉: the layer's width shows the O height, so O x takes its 44 pt from the layer height and O y from the width
+    const turned = hitCtxOf(c, false, null, { width: 330, height: 440 }, vToO(rotateLeft(IDENTITY_GEOMETRY), size));
+    expect(turned.minW).toBeCloseTo(44 / 440, 12);
+    expect(turned.minH).toBeCloseTo(44 / 330, 12);
   });
 });

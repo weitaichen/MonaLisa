@@ -15,9 +15,11 @@ import type { BodyField, Face, Geometry, ParamId, Prefs, Rect, Spot } from '../t
 import {
   apronFor,
   chooseTile,
+  EXPORT_COPY,
   exportSizeView,
   fullExportBlock,
   isSeClassScreen,
+  noSourceCopy,
   planExport,
   planHead,
   planTiles,
@@ -25,6 +27,7 @@ import {
   sourceSizeRecord,
   spotBounds,
   spotWindowGrowth,
+  standardLabel,
   TILE_SIZES,
   tileBytes,
   type ExportEnv,
@@ -51,9 +54,16 @@ describe('fullExportBlock (S §3.7)', () => {
     expect(fullExportBlock(env({ capped: true }))).toBe('guard');
   });
 
-  it('SE class is 375 × 667 in either orientation only', () => {
+  it('SE class is 375 × 667, or 320 × 568 (the same phones with Display Zoom), in either orientation only', () => {
     expect(isSeClassScreen({ width: 375, height: 667 })).toBe(true);
+    expect(isSeClassScreen({ width: 667, height: 375 })).toBe(true);
+    // iPhone SE 2/3 with Display Zoom set to Larger Text report 320 × 568 pt
+    expect(isSeClassScreen({ width: 320, height: 568 })).toBe(true);
+    expect(isSeClassScreen({ width: 568, height: 320 })).toBe(true);
+    expect(fullExportBlock(env({ screen: { width: 320, height: 568 } }))).toBe('device');
     expect(isSeClassScreen({ width: 375, height: 812 })).toBe(false);
+    // the 12/13 mini zoomed (320 × 693) has the memory of a full-size phone
+    expect(isSeClassScreen({ width: 320, height: 693 })).toBe(false);
   });
 });
 
@@ -63,7 +73,15 @@ describe('exportSizeView (設定 › 輸出解析度, S §2.4)', () => {
     expect(exportSizeView('standard', null).value).toBe('standard');
   });
 
-  it('shows 標準（2048） under every block; disabled for the device and 畫質 低, enabled (retry) under the cap', () => {
+  it('標準 and the no-source note name the working long edge: 2048, or 1440 on tier L (C D6)', () => {
+    expect(standardLabel(2048)).toBe('標準（2048）');
+    expect(standardLabel(1440)).toBe('標準（1440）');
+    expect(noSourceCopy(2048)).toBe('此照片只保留了 2048 解析度');
+    expect(noSourceCopy(1440)).toBe('此照片只保留了 1440 解析度');
+    expect(Object.values(EXPORT_COPY).some((s) => s.includes('2048'))).toBe(false);
+  });
+
+  it('shows 標準 under every block; disabled for the device and 畫質 低, enabled (retry) under the cap', () => {
     expect(exportSizeView('full', 'tierL')).toEqual({ value: 'standard', fullDisabled: true, sub: '此裝置記憶體不足，改用標準解析度' });
     expect(exportSizeView('full', 'device')).toEqual({ value: 'standard', fullDisabled: true, sub: '此裝置記憶體不足，改用標準解析度' });
     expect(exportSizeView('full', 'tierLow')).toEqual({ value: 'standard', fullDisabled: true, sub: '畫質設為「低」時使用標準解析度' });

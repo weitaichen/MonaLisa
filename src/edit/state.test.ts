@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyPreset, neutralValue, PARAM_DEFS, paramDef, SHADE_PARTS, SHADES, SPLIT_IDS } from '../engine/params';
-import { cropConstrain, cropValid, IDENTITY_GEOMETRY, rotateLeft } from '../geometry/view';
+import { cropConstrain, cropValid, flipView, IDENTITY_GEOMETRY, rotateLeft } from '../geometry/view';
 import type { EditState, Geometry, ParamId, PersonParams, Stroke } from '../types';
 import { legacyProjection } from './legacy';
 import { lensFor, P0_INFO } from './lens';
@@ -252,7 +252,13 @@ describe('geometry in the edit state (step 3)', () => {
     expect(editKey(flipped)).not.toBe(editKey(banded));
     const reset = editResetGeometry(flipped);
     expect(reset.photo.geometry).toEqual(IDENTITY_GEOMETRY);
+    expect(reset.photo.heightBand).toEqual(banded.photo.heightBand);
     expect(editResetGeometry(reset)).toBe(reset);
+    // 還原 of a turned up-frame (a quarter turn, or a turn with a flip) clears the band like 旋轉 does
+    for (const turned of [rotateLeft(IDENTITY_GEOMETRY), flipView(rotateLeft(IDENTITY_GEOMETRY)), rotateLeft(rotateLeft(IDENTITY_GEOMETRY))]) {
+      const b = editSetGeometry(banded, turned);
+      expect(editResetGeometry(b).photo.heightBand).toBeNull();
+    }
     const g: Geometry = rotateLeft(IDENTITY_GEOMETRY);
     const e = editSetGeometry(base(), g);
     expect(editSetGeometry(e, g)).toBe(e);

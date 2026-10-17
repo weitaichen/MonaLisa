@@ -148,7 +148,7 @@ test('no face in the photo: 美型 / 美妝 are dimmed with a note and no slider
   await expect.poll(async () => (await debugState(page)).screen).toBe('editor');
   expect((await debugState(page)).face).toBe(false);
   // a healthy tracker that found nothing: the definite "no face" answer (toast + panel note)
-  await expect(page.getByText('未偵測到臉部，僅套用美膚與濾鏡')).toBeVisible();
+  await expect(page.getByText('未偵測到臉部，臉型、美妝與膚質工具不會套用')).toBeVisible();
 
   const note = page.getByRole('note');
   const tab = (name: string) => page.getByRole('tab', { name, exact: true });
@@ -246,4 +246,348 @@ bare.describe('a 質感 whose LUT failed', () => {
     expect(saved, '儲存 re-encoded with the look instead of handing over the look-less file').toBeGreaterThan(1);
     expect(pageErrors).toEqual([]);
   });
+});
+
+/** the one 最近編輯 entry, straight from IndexedDB: its stored 美白 and 濾鏡 and a hash of its thumbnail bytes (null: no entry yet) */
+async function storedEntry(page: Page): Promise<{ whiten: number; filter: string; thumb: string } | null> {
+  return page.evaluate(async () => {
+    if (!(await indexedDB.databases()).some((d) => d.name === 'meiyan')) return null;
+    const rows = await new Promise<{ updatedAt?: number; edit?: { photo: { values: Record<string, number>; filterId: string } }; thumb?: Blob }[]>((resolve, reject) => {
+      const open = indexedDB.open('meiyan');
+      open.onerror = () => reject(open.error);
+      open.onsuccess = () => {
+        const db = open.result;
+        if (!db.objectStoreNames.contains('edits')) {
+          db.close();
+          return resolve([]);
+        }
+        const all = db.transaction('edits', 'readonly').objectStore('edits').getAll();
+        all.onerror = () => reject(all.error);
+        all.onsuccess = () => {
+          db.close();
+          resolve(all.result);
+        };
+      };
+    });
+    const e = rows.find((r) => typeof r.updatedAt === 'number');
+    if (!e?.edit || !e.thumb) return null;
+    const bytes = new Uint8Array(await e.thumb.arrayBuffer());
+    let h = 2166136261;
+    for (const b of bytes) h = Math.imul(h ^ b, 16777619) >>> 0;
+    return { whiten: e.edit.photo.values['skin.whiten'], filter: e.edit.photo.filterId, thumb: `${bytes.length}:${h.toString(16)}` };
+  });
+}
+
+/** a no-face photo imported through the home screen, its editor ready */
+async function importNoFace(page: Page): Promise<void> {
+  await page.goto('/');
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: /匯入照片/ }).click();
+  await (await chooser).setFiles({ name: 'no_face.png', mimeType: 'image/png', buffer: noFacePng() });
+  await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 90_000 });
+}
+
+interface Hold {
+  armed: boolean;
+  held: boolean;
+  release: (() => void) | null;
+}
+/** window.__holds (installHolds) */
+interface Holds {
+  thumb: Hold;
+  lut: Hold;
+  /** the 400 ms autosave debounce (ENCODE_DEBOUNCE_MS) waits 20 s instead, so a test acts inside it at its own pace */
+  debounce: boolean;
+  /** the display context's WEBGL_lose_context, for the `lut` hold */
+  lose: WEBGL_lose_context | null;
+}
+
+/**
+ * Test-only holds, installed before the app loads; each waits for its `release()` once armed, then disarms:
+ * - `thumb`: the next JPEG encode with a long edge ≤ 360 px (THUMB_EDGE: a history thumbnail), so the first autosave's
+ *   addEntry stays pending (`armThumb`: armed from the start);
+ * - `lut`: the next decoded 512×512 image (a 濾鏡 LUT) before its upload; once released the LUT is uploaded and the
+ *   display context is lost right after (in the bitmap's close()), so the LUT load settles 'ready' and whatever it lets
+ *   run reads back with webglcontextlost still queued.
+ */
+async function installHolds(page: Page, armThumb = false): Promise<void> {
+  await page.addInitScript((thumbArmed: boolean) => {
+    const hold = (armed: boolean): Hold => ({ armed, held: false, release: null });
+    const h: Holds = { thumb: hold(thumbArmed), lut: hold(false), debounce: false, lose: null };
+    (window as unknown as { __holds: Holds }).__holds = h;
+    const wait = (x: Hold) => {
+      x.armed = false;
+      x.held = true;
+      return new Promise<void>((r) => (x.release = r));
+    };
+    const convert = OffscreenCanvas.prototype.convertToBlob;
+    OffscreenCanvas.prototype.convertToBlob = function (this: OffscreenCanvas, opts?: ImageEncodeOptions) {
+      const blob = convert.call(this, opts);
+      if (!h.thumb.armed || Math.max(this.width, this.height) > 360) return blob;
+      return wait(h.thumb).then(() => blob);
+    };
+    const decode = window.createImageBitmap.bind(window) as (...a: unknown[]) => Promise<ImageBitmap>;
+    window.createImageBitmap = (async (...a: unknown[]) => {
+      const bmp = await decode(...a);
+      if (!h.lut.armed || !(a[0] instanceof Blob) || bmp.width !== 512 || bmp.height !== 512) return bmp;
+      await wait(h.lut);
+      const close = bmp.close.bind(bmp);
+      bmp.close = () => {
+        close();
+        h.lose?.loseContext();
+      };
+      return bmp;
+    }) as typeof createImageBitmap;
+    const timeout = window.setTimeout.bind(window) as (fn: TimerHandler, ms?: number, ...a: unknown[]) => number;
+    window.setTimeout = ((fn: TimerHandler, ms?: number, ...a: unknown[]) => timeout(fn, h.debounce && ms === 400 ? 20_000 : ms, ...a)) as typeof setTimeout;
+  }, armThumb);
+}
+
+/** a hold's state, or its release */
+const held = (page: Page, k: 'thumb' | 'lut') => page.evaluate((key) => (window as unknown as { __holds: Holds }).__holds[key].held, k);
+const release = (page: Page, k: 'thumb' | 'lut') => page.evaluate((key) => (window as unknown as { __holds: Holds }).__holds[key].release!(), k);
+
+/** the display context back (the extension kept by the loss) and the app visible again, the debounce as usual */
+async function restoreVisible(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const h = (window as unknown as { __holds?: Holds }).__holds;
+    if (h) h.debounce = false;
+    (window as unknown as { __lose: WEBGL_lose_context }).__lose.restoreContext();
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+}
+
+/**
+ * A no-face photo with its entry, a 美白 drag that ends inside the 400 ms autosave debounce, then, in one task, the display
+ * context is lost and the editor flushes (`via`: the app going to the background, or ✕, whose unmount runs in a
+ * microtask of the click). WebGL calls then do nothing and readPixels leaves zeros while webglcontextlost is only
+ * queued, so the engine does not know yet and the flush's own read-back finds the loss (checkReadBack throws). Returns
+ * the entry before the drag and the debug lastError before the flush. `inside`: a step between the drag and the loss,
+ * with the debounce stretched (installHolds first).
+ */
+async function loseInsideFlush(page: Page, via: 'hidden' | 'close', inside?: () => Promise<void>): Promise<{ before: { whiten: number; thumb: string }; errorBefore: unknown }> {
+  await importNoFace(page);
+  // the import autosave created the entry (a flush while lost can only keep the params of an existing one)
+  await expect.poll(() => storedEntry(page), { timeout: 30_000 }).not.toBeNull();
+  await page.getByRole('tab', { name: '美膚', exact: true }).click();
+  await page.getByRole('option', { name: '美白', exact: true }).click();
+  await page.waitForTimeout(1000);
+  const before = (await storedEntry(page))!;
+  if (inside) await page.evaluate(() => ((window as unknown as { __holds: Holds }).__holds.debounce = true));
+  await dragSlider(page, 120);
+  if (inside) await inside();
+  const r = await page.evaluate((how) => {
+    const c = document.querySelector('.editor-stage canvas') as HTMLCanvasElement;
+    const gl = c.getContext('webgl2') as WebGL2RenderingContext;
+    // kept: a lost context's getExtension returns null, and a restore needs it
+    const ext = ((window as unknown as { __lose?: WEBGL_lose_context }).__lose = gl.getExtension('WEBGL_lose_context')!);
+    ext.loseContext();
+    const known = (window as unknown as { __meiyan?: { lastError?: unknown } }).__meiyan?.lastError ?? null;
+    if (how === 'hidden') {
+      Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    } else (document.querySelector('.topbar button[aria-label="關閉"]') as HTMLButtonElement).click();
+    return { lost: gl.isContextLost(), errorBefore: known };
+  }, via);
+  expect(r.lost).toBe(true);
+  return { before, errorBefore: r.errorBefore };
+}
+
+test('a ✕ flush whose read-back finds the context lost (its event still queued) keeps the params', async ({ page }) => {
+  const { before, errorBefore } = await loseInsideFlush(page, 'close');
+  await expect.poll(async () => (await debugState(page)).screen).toBe('home');
+  await expect.poll(async () => (await storedEntry(page))!.whiten, { timeout: 10_000 }).toBeGreaterThan(before.whiten);
+  expect((await storedEntry(page))!.thumb, 'no thumbnail of a lost context (zeros) was written').toBe(before.thumb);
+  expect((await debugState(page)).lastError).toEqual(errorBefore); // a context loss is no bug report
+});
+
+test('a background flush whose read-back finds the context lost (its event still queued) keeps the params; the thumbnail follows once restored', async ({ page }) => {
+  const { before, errorBefore } = await loseInsideFlush(page, 'hidden');
+  // the params reach the entry while the context is still lost (no autosave can run meanwhile: it waits for the restore)
+  await expect.poll(async () => (await storedEntry(page))!.whiten, { timeout: 10_000 }).toBeGreaterThan(before.whiten);
+  const flushed = (await storedEntry(page))!;
+  expect(flushed.thumb, 'no thumbnail of a lost context (zeros) was written').toBe(before.thumb);
+  expect((await debugState(page)).lastError).toEqual(errorBefore); // a context loss is no bug report
+  // back: once the context is restored the owed thumbnail is drawn and written
+  await page.evaluate(() => {
+    (window as unknown as { __lose: WEBGL_lose_context }).__lose.restoreContext();
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect.poll(async () => (await storedEntry(page))!.thumb, { timeout: 30_000 }).not.toBe(before.thumb);
+  expect((await storedEntry(page))!.whiten).toBe(flushed.whiten);
+});
+
+test('a ✕ flush that finds the context lost while the first autosave is still creating the entry keeps the last edit', async ({ page }) => {
+  await installHolds(page, true);
+  await importNoFace(page);
+  // the first autosave's thumbnail encode waits, so its addEntry has not run: no entry yet
+  await expect.poll(() => held(page, 'thumb'), { timeout: 30_000 }).toBe(true);
+  expect(await storedEntry(page)).toBeNull();
+  await page.getByRole('tab', { name: '美膚', exact: true }).click();
+  await page.getByRole('option', { name: '美白', exact: true }).click();
+  await page.waitForTimeout(1000);
+  const start = await page.getByRole('slider').getAttribute('aria-valuenow');
+  await page.evaluate(() => ((window as unknown as { __holds: Holds }).__holds.debounce = true));
+  await dragSlider(page, 120);
+  const r = await page.evaluate(() => {
+    const value = document.querySelector('[role="slider"]')!.getAttribute('aria-valuenow');
+    const c = document.querySelector('.editor-stage canvas') as HTMLCanvasElement;
+    const gl = c.getContext('webgl2') as WebGL2RenderingContext;
+    gl.getExtension('WEBGL_lose_context')!.loseContext();
+    const known = (window as unknown as { __meiyan?: { lastError?: unknown } }).__meiyan?.lastError ?? null;
+    (document.querySelector('.topbar button[aria-label="關閉"]') as HTMLButtonElement).click();
+    return { lost: gl.isContextLost(), value, errorBefore: known };
+  });
+  expect(r.lost).toBe(true);
+  expect(r.value, 'the drag changed 美白').not.toBe(start);
+  await expect.poll(async () => (await debugState(page)).screen).toBe('home');
+  // the first addEntry runs only now, after the flush: the flush's params write follows it on the history queue
+  await release(page, 'thumb');
+  await expect.poll(() => storedEntry(page), { timeout: 30_000 }).not.toBeNull();
+  await expect.poll(async () => Math.round((await storedEntry(page))!.whiten * 100), { timeout: 10_000 }).toBe(Number(r.value));
+  expect((await debugState(page)).lastError).toEqual(r.errorBefore); // a context loss is no bug report
+});
+
+test('a 儲存 inside the debounce, then a background flush that finds the context lost: the owed thumbnail follows once restored, though the share file is fresh', async ({ page }) => {
+  await installHolds(page);
+  const { before, errorBefore } = await loseInsideFlush(page, 'hidden', async () => {
+    // (the debounce is stretched: 儲存 makes the share file for these params before any autosave of them)
+    await page.getByRole('button', { name: '儲存' }).click();
+    const fallback = page.getByRole('dialog', { name: '儲存照片' });
+    await expect(fallback).toBeVisible({ timeout: 30_000 });
+    await fallback.getByRole('button', { name: '關閉' }).click();
+    await expect(fallback).toHaveCount(0);
+  });
+  await expect.poll(async () => (await storedEntry(page))!.whiten, { timeout: 10_000 }).toBeGreaterThan(before.whiten);
+  const flushed = (await storedEntry(page))!;
+  expect(flushed.thumb, 'no thumbnail of a lost context (zeros) was written').toBe(before.thumb);
+  expect((await debugState(page)).lastError).toEqual(errorBefore);
+  await restoreVisible(page);
+  await expect.poll(async () => (await storedEntry(page))!.thumb, { timeout: 30_000 }).not.toBe(before.thumb);
+  expect((await storedEntry(page))!.whiten).toBe(flushed.whiten);
+});
+
+/** the next 濾鏡 LUT decode held (installHolds), with the display context's extension kept for the loss and the restore */
+async function holdNextLut(page: Page, stretch: boolean): Promise<void> {
+  await page.evaluate((longDebounce) => {
+    const h = (window as unknown as { __holds: Holds }).__holds;
+    const c = document.querySelector('.editor-stage canvas') as HTMLCanvasElement;
+    h.lose = (c.getContext('webgl2') as WebGL2RenderingContext).getExtension('WEBGL_lose_context');
+    (window as unknown as { __lose: WEBGL_lose_context }).__lose = h.lose!;
+    h.debounce = longDebounce;
+    h.lut.armed = true;
+  }, stretch);
+  await page.getByRole('tab', { name: '濾鏡', exact: true }).click();
+  await page.getByRole('option', { name: '暖調', exact: true }).click();
+  // its LUT is decoded and waits before the upload: not resident
+  await expect.poll(() => held(page, 'lut'), { timeout: 10_000 }).toBe(true);
+}
+
+test('a background flush whose corrected thumbnail (the 濾鏡 LUT was loading) finds the context lost is no bug report; the thumbnail follows once restored', async ({ page }) => {
+  await installHolds(page);
+  await importNoFace(page);
+  await expect.poll(() => storedEntry(page), { timeout: 30_000 }).not.toBeNull();
+  const before = (await storedEntry(page))!;
+  // (the debounce stretched: no autosave of the 濾鏡 runs before the flush)
+  await holdNextLut(page, true);
+  const errorBefore = (await debugState(page)).lastError ?? null;
+  // the app goes to the background: the flush writes the 濾鏡 with a thumbnail without its LUT (the same pixels as
+  // before) and queues the corrected one, which waits for the LUT (FLUSH_LUT_WAIT_MS = 3 s)
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect.poll(async () => (await storedEntry(page))!.filter, { intervals: [50], timeout: 2_500 }).not.toBe(before.filter);
+  const flushed = (await storedEntry(page))!;
+  // the LUT lands and the context is lost right after its upload: the corrected thumbnail's read-back finds the loss
+  // with webglcontextlost still queued
+  await release(page, 'lut');
+  await expect(page.getByRole('button', { name: '儲存' })).toBeDisabled(); // the engine knows it is lost
+  await page.waitForTimeout(500);
+  expect((await debugState(page)).lastError, 'a context loss is no bug report').toEqual(errorBefore);
+  expect((await storedEntry(page))!.thumb, 'no corrected thumbnail of a lost context').toBe(flushed.thumb);
+  // back: the stored thumbnail still lacks the LUT, so it is owed; once restored it is drawn with the LUT and written
+  await restoreVisible(page);
+  await expect.poll(async () => (await storedEntry(page))!.thumb, { timeout: 30_000 }).not.toBe(flushed.thumb);
+});
+
+test('an autosave whose read-back (PNG output, the 濾鏡 LUT loading) finds the context lost is no bug report; it is written once restored', async ({ page }) => {
+  await installHolds(page);
+  await page.goto('/');
+  // PNG output: no share file, so the autosave renders its own image (step-3 spec §2.3)
+  await page.evaluate(() =>
+    localStorage.setItem(
+      'meiyan.prefs.v1',
+      JSON.stringify({ mirrorOnSave: true, tier: 'auto', matchGpupixel: false, showLandmarks: false, delegate: 'auto', installHintDismissed: true, exportFormat: 'png', exportSize: 'full' }),
+    ),
+  );
+  await importNoFace(page);
+  await expect.poll(() => storedEntry(page), { timeout: 30_000 }).not.toBeNull();
+  const before = (await storedEntry(page))!;
+  await holdNextLut(page, false);
+  const errorBefore = (await debugState(page)).lastError ?? null;
+  // the debounce (400 ms) has run out: the autosave waits in prepareExport for the LUT
+  await page.waitForTimeout(1_500);
+  await release(page, 'lut');
+  await expect(page.getByRole('button', { name: '儲存' })).toBeDisabled();
+  await page.waitForTimeout(500);
+  expect((await debugState(page)).lastError, 'a context loss is no bug report').toEqual(errorBefore);
+  expect((await storedEntry(page))!.thumb, 'nothing written from a lost context').toBe(before.thumb);
+  // restored: the autosave re-arms and writes the 濾鏡 edit
+  await restoreVisible(page);
+  await expect.poll(async () => (await storedEntry(page))!.thumb, { timeout: 30_000 }).not.toBe(before.thumb);
+});
+
+test('at 320 pt the 8 editor tabs keep 44 pt targets: the tab bar scrolls, the page does not; the camera tabs still fit', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.goto('/');
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: /匯入照片/ }).click();
+  await (await chooser).setFiles(SAMPLE_FACE);
+  await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 90_000 });
+  const measure = () =>
+    page.evaluate(() => {
+      const bar = document.querySelector<HTMLElement>('.tabs')!;
+      const b = bar.getBoundingClientRect();
+      const tabs = [...bar.querySelectorAll<HTMLElement>('.tab')].map((t) => t.getBoundingClientRect());
+      return {
+        vw: window.innerWidth,
+        doc: document.documentElement.scrollWidth,
+        n: tabs.length,
+        minW: Math.min(...tabs.map((r) => r.width)),
+        minH: Math.min(...tabs.map((r) => r.height)),
+        scroll: bar.scrollWidth,
+        client: bar.clientWidth,
+        bar: { left: b.left, right: b.right },
+        last: { left: tabs[tabs.length - 1].left, right: tabs[tabs.length - 1].right },
+      };
+    });
+  const m = await measure();
+  console.log(`editor tabs at 320: ${JSON.stringify(m)}`);
+  expect(m.vw).toBe(320);
+  expect(m.n).toBe(8);
+  expect(m.minW).toBeGreaterThanOrEqual(44);
+  expect(m.minH).toBeGreaterThanOrEqual(44);
+  expect(m.scroll, 'the 8 tabs do not fit: the bar scrolls').toBeGreaterThan(m.client);
+  expect(m.doc).toBeLessThanOrEqual(320);
+  // the last tab is reached by scrolling the bar; once selected it sits clear of the bar's fading right edge
+  const crop = page.getByRole('tab', { name: '裁切' });
+  await crop.click();
+  await expect(crop).toHaveAttribute('aria-selected', 'true');
+  await expect.poll(async () => (await measure()).last.right).toBeLessThanOrEqual(m.bar.right - 16);
+  expect((await measure()).doc).toBeLessThanOrEqual(320);
+  // the camera's 7 tabs are exactly 44 pt at 320 pt ((320 − 12) / 7) and need no scroll
+  await page.getByRole('button', { name: '關閉' }).click();
+  await page.getByRole('button', { name: /拍攝/ }).click();
+  await page.getByRole('button', { name: '點擊開啟相機' }).click();
+  await expect(page.getByRole('tab', { name: '美膚' })).toBeVisible({ timeout: 90_000 });
+  const c = await measure();
+  console.log(`camera tabs at 320: ${JSON.stringify(c)}`);
+  expect(c.n).toBe(7);
+  expect(c.minW).toBeGreaterThanOrEqual(44);
+  expect(c.minH).toBeGreaterThanOrEqual(44);
+  expect(c.scroll).toBeLessThanOrEqual(c.client);
+  expect(c.doc).toBeLessThanOrEqual(320);
 });

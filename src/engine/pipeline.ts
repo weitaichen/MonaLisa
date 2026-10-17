@@ -258,8 +258,11 @@ export interface Pipeline {
    * IDENTITY_MAT3). Canvas must already be sized.
    */
   drawSource(src: Texture, mirror: boolean, geo?: Float32Array): void;
-  /** Debug overlay on the canvas (after present); `aspect` = the image's W/H, for the eye frames (step 5) */
-  drawOverlay(face: Face, mirror: boolean, aspect: number): void;
+  /**
+   * Debug overlay on the canvas (after present); `aspect` = the image's W/H, for the eye frames (step 5); `oToV` = the
+   * view's O → V map (glMat3), as the canvas shows V (step 3); the identity when omitted
+   */
+  drawOverlay(face: Face, mirror: boolean, aspect: number, oToV?: Float32Array): void;
   /**
    * Create the makeup pass now and settle when its textures (GPUPixel and lashes.png) are uploaded (never rejects: a
    * failed load is logged and only its own parts stay disabled). Lets still renders wait for makeup instead of
@@ -757,10 +760,10 @@ export function createPipeline(gl: GL): Pipeline {
       resetState();
     },
 
-    drawOverlay(face, mirror, aspect) {
+    drawOverlay(face, mirror, aspect, oToV) {
       overlay ??= createLandmarkOverlay(gl);
       bindTarget(gl, null);
-      overlay.draw(face, mirror, aspect);
+      overlay.draw(face, mirror, aspect, oToV);
     },
 
     dispose(lost = false) {

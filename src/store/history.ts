@@ -88,16 +88,27 @@ export async function addEntry(e: NewHistoryEntry): Promise<string> {
     };
     return () => undefined;
   };
-  // the entry must never be lost because of the file: a quota failure is put once more without it (S §5)
-  let quota = false;
-  await withStore('readwrite', undefined, put(true), (err) => {
-    if (e.source && isQuotaError(err)) {
-      quota = true;
-      return 'stop';
-    }
-    return 'retry';
-  });
-  if (quota) await withStore('readwrite', undefined, put(false));
+  // The entry must never be lost because of the file (S §5). A quota failure skips the reconnect retry; any other
+  // failure (a dropped connection, or WebKit's UnknownError / NotReadableError for a blob it cannot write) keeps it.
+  // Whatever way the attempts that carried the file end without a commit, the entry is put once more without it.
+  let failed = false;
+  let stored = false;
+  const withSource = put(true);
+  await withStore(
+    'readwrite',
+    undefined,
+    (store) => {
+      withSource(store);
+      return () => {
+        stored = true;
+      };
+    },
+    (err) => {
+      failed = true;
+      return e.source && isQuotaError(err) ? 'stop' : 'retry';
+    },
+  );
+  if (e.source && failed && !stored) await withStore('readwrite', undefined, put(false));
   return id;
 }
 

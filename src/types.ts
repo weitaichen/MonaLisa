@@ -331,6 +331,13 @@ export interface DetectionCache {
   bodiesComplete: boolean;
   /** quarters the 美體 detection ran in (step-3 spec §3.6, D5); absent = [0] */
   bodyScans?: (0 | 1 | 2 | 3)[];
+  /**
+   * the face boxes of a dropped cache's persons (S §5.3) still to be rematched, kept in a cache that a 美體 detection
+   * wrote before the photo's first face answer (S §7): that answer rematches them, also after a reopen. Their params
+   * stay in the edit under the old ids meanwhile, and no new body takes one of those ids (S §5.3 R1). {} (no box was
+   * readable) still means a cache was dropped: that answer shows the reset toast (R3).
+   */
+  rematch?: Record<PersonId, Rect>;
   /** display order: left to right when first built, later persons appended */
   persons: PersonInfoCached[];
   primary: PersonId;

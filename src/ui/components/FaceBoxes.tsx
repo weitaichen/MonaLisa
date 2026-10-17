@@ -11,8 +11,11 @@ export interface FaceBoxItem {
   changed: boolean;
   /** a body-only person in 美體: dashed brackets around its pose box */
   dashed: boolean;
-  /** narrower than 24 pt on screen: no number badge */
-  narrow: boolean;
+  /**
+   * the box's width on screen at zoom 1, pt. The badge hides below 24 pt on screen (S §2.1): theme.css decides it from this
+   * and the zoom (--zs, written by zoomPan without a render), so a pinch shows or hides it at once
+   */
+  width: number;
 }
 
 const PAD = 0.15;
@@ -40,7 +43,9 @@ export function FaceBoxes({ items, dim, idle, mapY }: { items: FaceBoxItem[]; di
             <i class="br tr" />
             <i class="br bl" />
             <i class="br br-r" />
-            {!it.narrow && <span class="face-num num">{it.n}</span>}
+            <span class="face-num num" style={{ '--bw': String(it.width) }}>
+              {it.n}
+            </span>
           </div>
         );
       })}

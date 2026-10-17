@@ -8,7 +8,7 @@ import { editFromLegacy } from '../../src/edit/legacy';
 import { assignPersons } from '../../src/edit/state';
 import { applyPreset, sanitizeParams } from '../../src/engine/params';
 import { stableKey } from '../../src/store/undo';
-import { boxCentre, debugState, expect, grab, GROUP_FACES, historyStamps, importFixture, pinch, regionDiff, seedHistory, selectPerson, test } from './fixtures';
+import { boxCentre, debugState, emptyPng, expect, grab, GROUP_FACES, historyStamps, importFixture, pinch, regionDiff, seedHistory, selectPerson, test } from './fixtures';
 
 test('a group photo: three selectable faces (D ignored), A is the primary, the cache is written', async ({ page }) => {
   await importFixture(page, GROUP_FACES);
@@ -144,14 +144,38 @@ test.describe('group photo editing (S §8.4)', () => {
     await expect(page.getByRole('slider')).toHaveAttribute('aria-valuenow', '80');
     await tab(page, '美型');
     await option(page, '大眼');
+    // every arrow press is its own undo step: ↶ takes back the last one (90 → 89 from below)
+    const slider = page.getByRole('slider');
+    const start = Number(await slider.getAttribute('aria-valuenow'));
+    expect(start).not.toBe(90);
+    const prev = String(start < 90 ? 89 : 91);
     await sliderTo(page, 90);
     await page.getByRole('button', { name: '復原' }).click();
+    await expect(slider).toHaveAttribute('aria-valuenow', prev);
     await expect(page.getByRole('radio', { name: '人物 2' })).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByRole('radio', { name: '人物 2' })).toHaveClass(/changed/);
     await page.getByRole('button', { name: '重做' }).click();
+    await expect(slider).toHaveAttribute('aria-valuenow', '90');
     await selectPerson(page, 1);
+    const a = await slider.getAttribute('aria-valuenow');
+    // an undo of B's step from person 1: B's value goes back, the selection stays on person 1 (S §2.2)
     await page.getByRole('button', { name: '復原' }).click();
     await expect(page.getByText('已復原人物 2 的變更')).toBeVisible();
+    await expect(page.getByRole('radio', { name: '人物 1' })).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByRole('radio', { name: '人物 2' })).toHaveAttribute('aria-checked', 'false');
+    expect((await debugState(page)).selected).toBe('f0');
+    await expect(slider).toHaveAttribute('aria-valuenow', a!);
+    await selectPerson(page, 2);
+    await expect(slider).toHaveAttribute('aria-valuenow', prev);
+  });
+
+  test('the first 全部 write is 左右分開: its notice and 「已套用到全部人物」 share the one toast (S §2.4, S5 §2.2)', async ({ page }) => {
+    await selectPerson(page, 0);
+    await tab(page, '美型');
+    await option(page, '左右分開');
+    const t = page.locator('.toast');
+    await expect(t).toContainText('已開啟左右分開：左、右以螢幕上看到的方向為準');
+    await expect(t).toContainText('已套用到全部人物');
   });
 
   test('close and reopen: the same pixels, no detector; a view without an edit keeps 最近編輯 and updatedAt', async ({ page }) => {
@@ -269,4 +293,180 @@ test('a body-only person: the no-face note on 美型, 磨皮 / 紅潤 disabled p
   await page.getByRole('tab', { name: '美膚' }).click();
   await expect(page.getByRole('option', { name: '磨皮', exact: true })).toHaveAttribute('aria-disabled', 'true');
   await expect(page.getByRole('option', { name: '美白', exact: true })).not.toHaveAttribute('aria-disabled', 'true');
+});
+
+/** the group fixture's recorded faces as cache faces (ids by x), each shrunk by `scale` about its box centre */
+function groupFaces(scale = 1): { width: number; height: number; faces: { id: string; lm: number[]; box: { x: number; y: number; w: number; h: number } }[] } {
+  const j = JSON.parse(readFileSync(resolve(import.meta.dirname, '../fixtures/group_faces.landmarks.json'), 'utf8')) as { width: number; height: number; faces: number[][] };
+  const bbox = (lm: number[]) => {
+    const xs = lm.filter((_, i) => i % 3 === 0);
+    const ys = lm.filter((_, i) => i % 3 === 1);
+    const x = Math.min(...xs);
+    const y = Math.min(...ys);
+    return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+  };
+  const faces = j.faces
+    .map((raw) => {
+      const b = bbox(raw);
+      const cx = b.x + b.w / 2;
+      const cy = b.y + b.h / 2;
+      const lm = raw.map((v, i) => (i % 3 === 0 ? cx + (v - cx) * scale : i % 3 === 1 ? cy + (v - cy) * scale : v * scale));
+      return { lm, box: bbox(lm) };
+    })
+    .sort((a, b) => a.box.x - b.box.x)
+    .map((f, i) => ({ id: `f${i}`, lm: f.lm, box: f.box }));
+  return { width: j.width, height: j.height, faces };
+}
+
+/** every toast text shown from now on (as crop.spec.ts watchToasts) */
+const watchToasts = (page: Page) =>
+  page.evaluate(() => {
+    const w = window as unknown as { __toasts: string[] };
+    w.__toasts = [];
+    const scan = () => {
+      for (const el of document.querySelectorAll('.toast')) {
+        const t = (el.textContent ?? '').trim();
+        if (t && w.__toasts.at(-1) !== t) w.__toasts.push(t);
+      }
+    };
+    new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+const toastsSeen = (page: Page): Promise<string[]> => page.evaluate(() => (window as unknown as { __toasts: string[] }).__toasts);
+
+/** the byte size of a history entry's stored thumbnail */
+const thumbSize = (page: Page, id: string): Promise<number> =>
+  page.evaluate(
+    (key) =>
+      new Promise<number>((res, rej) => {
+        const q = indexedDB.open('meiyan', 1);
+        q.onerror = () => rej(q.error);
+        q.onsuccess = () => {
+          const g = q.result.transaction('edits').objectStore('edits').get(key);
+          g.onsuccess = () => {
+            res((g.result as { thumb?: Blob } | undefined)?.thumb?.size ?? -1);
+            q.result.close();
+          };
+          g.onerror = () => rej(g.error);
+        };
+      }),
+    id,
+  );
+
+test('a re-scan of a turned photo that finds no face keeps the person the user selected (S §2.2)', async ({ page }) => {
+  await page.goto('/');
+  // two body-only persons on a face-free photo (seeded cache, scanned upright): the strip shows 全部｜1｜2
+  const W = 600;
+  const H = 900;
+  const file = test.info().outputPath('empty.png');
+  writeFileSync(file, emptyPng(W, H));
+  const pose = (x: number) => Array.from({ length: 132 }, (_, k) => [x + (Math.floor(k / 4) % 2 ? 0.02 : -0.02), 0.1 + (0.8 * Math.floor(k / 4)) / 32, 0, 0.99][k % 4]);
+  const ids = ['b0', 'b1'];
+  const params = sanitizeParams(applyPreset('natural', 1));
+  const edit = assignPersons(editFromLegacy(params, { primaryInit: true }), ids, 'b0');
+  const detect = {
+    v: 1,
+    width: W,
+    height: H,
+    faceScans: [{ quarter: 0, flipH: false }],
+    faces: [],
+    obstacles: [],
+    bodies: [
+      { id: 'b0', pose: { points: pose(0.25) }, mask: null, score: 0.2 },
+      { id: 'b1', pose: { points: pose(0.75) }, mask: null, score: 0.1 },
+    ],
+    bodiesComplete: true,
+    persons: ids.map((id) => ({ id, face: null, body: id })),
+    primary: 'b0',
+    dropped: { tooSmall: 0, overCap: 0 },
+  };
+  const typed: Record<string, 'f32'> = { 'detect.bodies.0.pose.points': 'f32', 'detect.bodies.1.pose.points': 'f32' };
+  await seedHistory(page, { id: 'v2-twobodies', createdAt: 1, updatedAt: 1, width: W, height: H, params, schema: 2, edit, paramsKey: stableKey(params), detect }, { original: file }, typed);
+  await page.getByRole('button', { name: '開啟編輯' }).click();
+  await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 60_000 });
+  // (美體 › 瘦身 is per person; with no face 美膚's 磨皮 is photo-level and dims the chips)
+  await tab(page, '美體');
+  await option(page, '瘦身');
+  await selectPerson(page, 2);
+  await expect(page.getByRole('radio', { name: /^人物 2/ })).toHaveAttribute('aria-checked', 'true');
+  const calls = (await debugState(page)).detectCalls;
+  // 旋轉 in 裁切, then leave it: the new up-frame is scanned once (D12), and it finds nobody
+  await tab(page, '裁切');
+  await page.getByRole('option', { name: '旋轉', exact: true }).click();
+  await tab(page, '美體');
+  await expect.poll(async () => (await debugState(page)).detectCalls, { timeout: 60_000 }).toBe(calls + 1);
+  await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 60_000 });
+  expect((await debugState(page)).faces).toBe(0);
+  await expect(page.getByRole('radio', { name: /^人物 2/ })).toHaveAttribute('aria-checked', 'true');
+  expect((await debugState(page)).selected).toBe('b1');
+});
+
+test('a 基本模式 entry reopened with a tracker gains its faces (A15): a new thumbnail and the group-photo notices', async ({ page }) => {
+  await page.goto('/');
+  const params = sanitizeParams(applyPreset('natural', 1));
+  const edit = assignPersons(editFromLegacy(params, { primaryInit: true }), ['p0'], 'p0');
+  // written in 基本模式: no face answer (faceScans []), nobody known
+  const detect = {
+    v: 1,
+    width: 1800,
+    height: 1200,
+    faceScans: [],
+    faces: [],
+    obstacles: [],
+    bodies: null,
+    bodiesComplete: true,
+    persons: [{ id: 'p0', face: null, body: null }],
+    primary: 'p0',
+    dropped: { tooSmall: 0, overCap: 0 },
+  };
+  const thumb = test.info().outputPath('thumb.png');
+  writeFileSync(thumb, emptyPng(60, 40));
+  await seedHistory(page, { id: 'v2-basic', createdAt: 1, updatedAt: 1, width: 1800, height: 1200, params, schema: 2, edit, paramsKey: stableKey(params), detect }, { original: GROUP_FACES, thumb });
+  const seeded = await thumbSize(page, 'v2-basic');
+  expect(seeded).toBeGreaterThan(0);
+  await watchToasts(page);
+  await page.getByRole('button', { name: '開啟編輯' }).click();
+  await expect.poll(async () => (await debugState(page)).faces, { timeout: 90_000 }).toBe(3);
+  // the faces now draw 美型 / 美妝 / per-face 磨皮: the 基本模式 thumbnail is rewritten (S §5.2: the 基本模式 merge)
+  await expect.poll(() => thumbSize(page, 'v2-basic'), { timeout: 30_000 }).not.toBe(seeded);
+  // the group photo found this way says what a first answer says: the first-group hint (S §1.1 item 11)
+  await expect.poll(() => toastsSeen(page), { timeout: 15_000 }).toContain('點選臉部或下方人物，可個別調整');
+  await expect(page.getByRole('radiogroup', { name: '選擇人物' }).getByRole('radio')).toHaveCount(4);
+});
+
+test('the number badges follow a pinch-zoom: hidden on boxes under 24 pt on screen, shown once zoomed past it (S §2.1)', async ({ page }) => {
+  await page.goto('/');
+  // the group's faces shrunk to 0.3 (seeded cache): their boxes are about 14–17 pt wide at zoom 1, 42–51 pt at zoom 3
+  const g = groupFaces(0.3);
+  const ids = g.faces.map((f) => f.id);
+  const params = sanitizeParams(applyPreset('natural', 1));
+  const edit = assignPersons(editFromLegacy(params, { primaryInit: true }), ids, 'f0');
+  const detect = {
+    v: 1,
+    width: g.width,
+    height: g.height,
+    faceScans: [{ quarter: 0, flipH: false }],
+    faces: g.faces,
+    obstacles: [],
+    bodies: null,
+    bodiesComplete: true,
+    persons: ids.map((id) => ({ id, face: id, body: null })),
+    primary: 'f0',
+    dropped: { tooSmall: 0, overCap: 0 },
+  };
+  const typed: Record<string, 'f32'> = {};
+  g.faces.forEach((_, i) => (typed[`detect.faces.${i}.lm`] = 'f32'));
+  await seedHistory(page, { id: 'v2-small', createdAt: 1, updatedAt: 1, width: g.width, height: g.height, params, schema: 2, edit, paramsKey: stableKey(params), detect }, { original: GROUP_FACES }, typed);
+  await page.getByRole('button', { name: '開啟編輯' }).click();
+  await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 60_000 });
+  await tab(page, '美型');
+  await expect(page.locator('.face-box')).toHaveCount(3);
+  // past the boxes' 1.5 s fade: the editor has rendered for the last time before the pinch
+  await page.waitForTimeout(2500);
+  /** the badges a viewer can see (opacity: the CSS decides it from the zoom) */
+  const shown = () => page.locator('.face-num').evaluateAll((els) => els.filter((e) => Number(getComputedStyle(e).opacity) > 0.5).length);
+  expect(await shown()).toBe(0);
+  const a = await boxCentre(page, 'f1');
+  await pinch(page, a, 60, 180);
+  await expect(page.locator('.editor-stage .zoom-layer')).toHaveAttribute('style', /scale\(/);
+  await expect.poll(shown, { timeout: 5000 }).toBeGreaterThan(0);
 });

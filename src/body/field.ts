@@ -174,9 +174,11 @@ export function buildBodyField(input: BodyFieldInput, prev?: BodyField | null, l
       const own = input.masks.find((m) => m.id === p.id);
       const others = input.masks.filter((m) => m.id !== p.id && m.mask !== p.measure.mask);
       const key = `${JSON.stringify(p.values)}|${w}x${h}|${own ? maskId(own.mask) : 0}|${others.map((o) => maskId(o.mask)).join(',')}|${input.bodyProtect}|${bandsKey}|${guardEach}`;
-      let byKey = personCache.get(p.measure);
-      if (!byKey) personCache.set(p.measure, (byKey = new Map()));
-      let L = byKey.get(key);
+      let slots = personCache.get(p.measure);
+      if (!slots) personCache.set(p.measure, (slots = new Map()));
+      const slot = edge < BODY_FIELD_LONG_EDGE ? 'draft' : 'full';
+      const kept = slots.get(slot);
+      let L = kept && kept.key === key ? kept.L : undefined;
       if (!L) {
         bodyFieldCacheStats.personBuilds++;
         const t = personTerms(p.measure, p.values, input.bodyProtect, w, h, bands);
@@ -200,8 +202,7 @@ export function buildBodyField(input: BodyFieldInput, prev?: BodyField | null, l
         const lambda = guardEach ? personGuard(t.gx, t.gy, bands, w, h, A, edge < BODY_FIELD_LONG_EDGE ? GUARD_STEPS_DRAFT : GUARD_STEPS_FULL) : 1;
         if (lambda < 1) for (let i = 0; i < N; i++) (t.gx[i] *= lambda), (t.gy[i] *= lambda);
         L = t;
-        if (byKey.size >= PERSON_FIELDS_PER_MEASURE) byKey.delete(byKey.keys().next().value!);
-        byKey.set(key, L);
+        slots.set(slot, { key, L });
       }
       for (let i = 0; i < N; i++) {
         gx[i] += L.gx[i];
@@ -312,10 +313,13 @@ const maskId = (m: PersonMask) => {
   if (v === undefined) maskIds.set(m, (v = ++maskSeq));
   return v;
 };
-/** budgeted, guarded L_p per (person measure, values, others, grid, protect, bands) — a draft reuses the others' */
-const personCache = new WeakMap<BodyMeasure, Map<string, { gx: Float32Array; gy: Float32Array }>>();
-/** L_p kept per measure: a few recent values at the draft and the full size */
-const PERSON_FIELDS_PER_MEASURE = 8;
+/**
+ * budgeted, guarded L_p per person measure, keyed on (values, others, grid, protect, bands): a draft reuses the
+ * others'. Only the latest full and the latest draft are kept per measure (≈ 0.5 MB per person: a 256 × 192 full
+ * grid is 393 KB of gx + gy, a 128 × 96 draft 98 KB), since a drag gives the dragged person a new key at every step
+ * and only the unchanged persons' L_p is hit again.
+ */
+const personCache = new WeakMap<BodyMeasure, Map<'full' | 'draft', { key: string; L: { gx: Float32Array; gy: Float32Array } }>>();
 
 /** the v0.3 input: one person (id 'p0') with `params`' local values; its mask is the only mask */
 export function fieldInputV1(measure: BodyMeasure | null, params: BeautyParams, aspect: number): BodyFieldInput {

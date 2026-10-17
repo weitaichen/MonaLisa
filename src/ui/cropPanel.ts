@@ -65,8 +65,13 @@ export function cropActivate(edit: EditState, a: CropAction, lock: CropLock, oSi
       return { edit: editRotateLeft(edit), lock: transposeLock(lock), changed: true, toast: edit.photo.heightBand ? ROTATE_BAND_TOAST : null };
     case 'flip':
       return { edit: editFlipView(edit), lock, changed: true, toast: null };
-    case 'geoReset':
-      return isIdentity(g) ? { edit, lock, changed: false, toast: null } : { edit: editResetGeometry(edit), lock: 'free', changed: true, toast: null };
+    case 'geoReset': {
+      if (isIdentity(g)) return { edit, lock, changed: false, toast: null };
+      // turning a 旋轉 back removes the 增高 band like 旋轉 itself (editResetGeometry), with its toast
+      const next = editResetGeometry(edit);
+      const removed = edit.photo.heightBand !== null && next.photo.heightBand === null;
+      return { edit: next, lock: 'free', changed: true, toast: removed ? ROTATE_BAND_TOAST : null };
+    }
   }
 }
 

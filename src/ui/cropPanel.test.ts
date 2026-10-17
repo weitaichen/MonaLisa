@@ -59,6 +59,23 @@ describe('cropActivate', () => {
     expect([back.changed, back.lock, back.edit.photo.geometry]).toEqual([true, 'free', IDENTITY_GEOMETRY]);
     expect(cropActivate(edit(), { type: 'geoReset' }, 'free', O).changed).toBe(false);
   });
+
+  it('還原 of a turned photo removes the 增高 band (its rows are in the turned up-frame) with the 旋轉 toast', () => {
+    // 旋轉, then 增高 drawn on the turned photo, then 還原
+    const turned = cropActivate(edit(), { type: 'rotate' }, 'free', O).edit;
+    const banded: EditState = { ...turned, photo: { ...turned.photo, heightBand: { top: 0.5, bottom: 0.9, amount: 0.5 } } };
+    const back = cropActivate(banded, { type: 'geoReset' }, 'free', O);
+    expect([back.changed, back.lock, back.edit.photo.geometry]).toEqual([true, 'free', IDENTITY_GEOMETRY]);
+    expect(back.edit.photo.heightBand).toBeNull();
+    expect(back.toast).toBe(ROTATE_BAND_TOAST);
+    // no band: no toast
+    expect(cropActivate(turned, { type: 'geoReset' }, 'free', O).toast).toBeNull();
+    // a crop alone (up-frame unchanged) keeps the band, without a toast
+    const cropped = cropActivate(edit(IDENTITY_GEOMETRY, true), { type: 'ratio', lock: '1:1' }, 'free', O).edit;
+    const kept = cropActivate(cropped, { type: 'geoReset' }, '1:1', O);
+    expect(kept.edit.photo.heightBand).toEqual(cropped.photo.heightBand);
+    expect(kept.toast).toBeNull();
+  });
 });
 
 describe('拉直', () => {

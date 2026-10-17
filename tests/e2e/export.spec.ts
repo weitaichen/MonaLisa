@@ -3,6 +3,17 @@
 import { expect, test } from './fixtures';
 
 const DEV_URL = 'http://127.0.0.1:5190';
+/**
+ * The tile cases granted crop spec §8.2's one accepted exception, by name: the 膠片 lift of a 1-LSB resample flip
+ * under off-centre bilinear taps, measured at one pixel each on SwiftShader. Every other case holds the 1/255 contract
+ * with no pixel above it, including the ones that have off-centre taps but no lifted pixel (quarter 1 + flip, step 5
+ * θ 12° + crop, strokes + 90° turn; push-brush spec §8.3 test 9 promises 1/255 for the last).
+ */
+const LIFTED_CASES = ['θ 12° + crop', 'step 5 quarter 1 + flip', 'everything'];
+/** the frame not divisible by 4: its ¼-res grids may reach 2/255 anywhere (S §4.4 grid note), with the same count bound */
+const GRID_CASES = ['601×799 identity'];
+/** the accepted 2/255 pixels of a LIFTED_CASES or GRID_CASES case: a handful, never a seam */
+const MAX_LIFTED = 3;
 
 test('a TILE = 256 export equals the untiled render (warps, 磨皮, lip, body field, 顆粒, 暗角, 膠片) at three geometries', async ({ page }) => {
   await page.goto(`${DEV_URL}/tests/e2e/pages/export.html`);
@@ -19,20 +30,32 @@ test('a TILE = 256 export equals the untiled render (warps, 磨皮, lip, body fi
     'strokes + 90° turn',
     'everything',
   ]);
+  // the harness returns a summary of the pixels above 1/255 (count, nearest distance to a tile line, the few nearest),
+  // so a regression that moves the whole frame fails these assertions instead of exhausting the worker's memory
+  const over1Text = (r: (typeof res)[number]) =>
+    `${r.over1Count}${r.over1MinLine === null ? '' : `, nearest a tile line ${r.over1MinLine} px`} [${r.over1Nearest.map((p) => `(${p.x}, ${p.y}) ${p.d}/255 ${p.line} px`).join(', ')}${r.over1Count > r.over1Nearest.length ? ', …' : ''}]`;
   for (const r of res) {
-    console.log(`${r.name}: ${r.w}×${r.h}, ${r.tiles} tiles, max channel diff ${r.maxDiff}/255, glError ${r.glError}`);
+    console.log(`${r.name}: ${r.w}×${r.h}, ${r.tiles} tiles, max channel diff ${r.maxDiff}/255, glError ${r.glError}, apron ${r.apron} px; > 1/255: ${over1Text(r)}`);
+  }
+  for (const r of res) {
     expect(r.glError, r.name).toBe(0);
     expect(r.tiles, r.name).toBeGreaterThan(1);
-    // 1/255 is the fp32 coordinate rounding of a pixel copy (S §1.3). 601 × 799: the ¼-res grids (S §4.4 grid note).
-    // θ 12°: every V pixel is an off-centre bilinear tap, so that rounding flips B by 1 LSB all over and the 膠片 curve
-    // with 顆粒's mid-tone weight lifts a rare one to 2/255 (one channel of one interior pixel on SwiftShader), not a seam.
-    // step 5 quarter 1 + flip (every makeup part and new warp on): the same 膠片 lift, at one interior pixel (B, 44 px
-    // from the nearest tile edge on SwiftShader); ≤ 1/255 with the look off, and with only the makeup or only the warps.
-    // everything (the 0.4.0 release gate, θ 12° after a 旋轉): the same lift, one channel of one interior pixel (B, 73 px
-    // from the nearest tile edge on SwiftShader); θ 12° after a 旋轉 with 膠片 alone shows it too, and the case is
-    // ≤ 1/255 without the 調節 curve or without face B (every feature still moves thousands of pixels).
-    const lifted = ['601', 'θ', 'step 5 quarter', 'everything'].some((p) => r.name.startsWith(p));
-    expect(r.maxDiff, r.name).toBeLessThanOrEqual(lifted ? 2 : 1);
+    // The contract (roadmap §8.4, crop spec §8.2, face-detail spec §8.3 #9, push-brush spec §8.3 test 9) is 1/255, the
+    // fp32 coordinate rounding of a pixel copy (S §1.3).
+    const lifted = LIFTED_CASES.includes(r.name);
+    if (!lifted && !GRID_CASES.includes(r.name)) {
+      expect(r.maxDiff, `${r.name}: max channel diff; > 1/255: ${over1Text(r)}`).toBeLessThanOrEqual(1);
+      continue;
+    }
+    // Crop spec §8.2's one accepted exception (LIFTED_CASES): under off-centre bilinear taps (θ 12°, a warped quarter
+    // turn) that rounding flips B by 1 LSB all over, and the 膠片 curve with 顆粒's mid-tone weight lifts a rare one to
+    // 2/255 (on SwiftShader: one channel of one interior pixel in θ 12° + crop, 30 px from the nearest tile line; step 5
+    // quarter 1 + flip, 44 px; everything, the 0.4.0 release gate, 72 px; each ≤ 1/255 with the look off). A seam puts
+    // its pixels on the tile lines; these are isolated and interior, so a case may have at most MAX_LIFTED of them, each
+    // at least one apron from every tile line. GRID_CASES may reach 2/255 anywhere, with the same count bound.
+    expect(r.maxDiff, `${r.name}: max channel diff; > 1/255: ${over1Text(r)}`).toBeLessThanOrEqual(2);
+    expect(r.over1Count, `${r.name}: pixels above 1/255: ${over1Text(r)}`).toBeLessThanOrEqual(MAX_LIFTED);
+    if (lifted && r.over1MinLine !== null) expect(r.over1MinLine, `${r.name}: a pixel above 1/255 within an apron of a tile line: ${over1Text(r)}`).toBeGreaterThanOrEqual(r.apron);
   }
 });
 

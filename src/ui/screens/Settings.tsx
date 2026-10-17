@@ -1,11 +1,12 @@
 // Settings 設定 bottom sheet (spec §7.2.5) with the 關於與授權 credits page (spec §11).
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { EXPORT_COPY, exportSizeView, fullExportBlock } from '../../media/exportPlan';
+import { EXPORT_COPY, exportSizeView, fullExportBlock, standardLabel } from '../../media/exportPlan';
 import type { Prefs } from '../../types';
 import { IconButton, Segmented, ToggleRow } from '../components/Controls';
 import { UpdateBanner } from '../components/UpdateBanner';
 import { reportError } from '../debug';
 import { deps } from '../deps';
+import { maxImportEdge } from '../flows';
 import { Icon } from '../icons';
 import { restartTracker } from '../services';
 import { app, setPrefs } from '../state';
@@ -29,10 +30,12 @@ const FORMAT_OPTIONS = [
   { value: 'png', label: 'PNG（無損）' },
 ] as const;
 
-const SIZE_OPTIONS = [
-  { value: 'full', label: '原始解析度' },
-  { value: 'standard', label: '標準（2048）' },
-] as const;
+/** 標準 names the working long edge the tier decodes at: 2048, or 1440 on tier L (C D6) */
+const sizeOptions = (standardEdge: number) =>
+  [
+    { value: 'full', label: '原始解析度' },
+    { value: 'standard', label: standardLabel(standardEdge) },
+  ] as const;
 
 export const PRIVACY_TEXT = '所有影像處理都在你的裝置上完成，照片不會上傳。';
 
@@ -206,7 +209,7 @@ function ExportGroup({ prefs }: { prefs: Prefs }) {
           <Segmented
             label="輸出解析度"
             value={view.value}
-            options={SIZE_OPTIONS}
+            options={sizeOptions(maxImportEdge())}
             disabled={view.fullDisabled ? ['full'] : undefined}
             onChange={(exportSize) => {
               if (exportSize === 'full') deps.clearExportCap();

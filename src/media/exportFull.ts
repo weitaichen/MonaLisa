@@ -15,6 +15,8 @@ export type TileInputBase = Omit<RenderInput, 'source' | 'width' | 'height' | 's
 export interface TileRenderer {
   renderTile(input: RenderInput, read: PxRect): ImageData;
   releaseBuffers(): void;
+  /** the WebGL context is lost (the engine's flag): checked once the tiles are drawn, before the encode */
+  readonly lost?: boolean;
 }
 
 export interface OutputCanvas {
@@ -81,7 +83,7 @@ export const browserRunnerDeps: RunnerDeps = {
 
 export class ExportError extends Error {
   constructor(
-    readonly kind: 'aspect' | 'size' | 'knob' | 'draw',
+    readonly kind: 'aspect' | 'size' | 'knob' | 'draw' | 'lost',
     message: string,
   ) {
     super(message);
@@ -234,6 +236,9 @@ export async function runTiledExport(
       await deps.nextFrame();
     }
     check();
+    // C §7: renderTile throws for a loss it reads back into; one the lost event reports only now, in the last tile's frame
+    // gap, cannot be placed before or after that read, so the file is not trusted and falls back like a loss in the tiles
+    if (renderer.lost) throw new ExportError('lost', 'the WebGL context was lost during the tiles');
     // only the canvas and the encoder's copy stay alive while encoding (S §4.4 step 6)
     bmp.close();
     full = null;

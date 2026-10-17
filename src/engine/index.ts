@@ -2,7 +2,7 @@
 // tiers, and the render / capture / compare entry points. Pass logic lives in pipeline.ts.
 import { debugState } from '../app/debug';
 import { MAX_RENDER_FACES } from '../config/limits';
-import { glMat3, IDENTITY_GEOMETRY, IDENTITY_MAT3, isIdentity, viewSize, vToO } from '../geometry/view';
+import { glMat3, IDENTITY_GEOMETRY, IDENTITY_MAT3, isIdentity, oToV, viewSize, vToO } from '../geometry/view';
 import type { Engine, EngineOptions, Geometry, LookDef, LutKind, LutState, Rect, RenderFace, RenderInput, RenderStats, Tier } from '../types';
 import {
   ADJUST_IDS,
@@ -432,6 +432,17 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
 
   const emptyStats = (t0: number): RenderStats => ({ cpuMs: performance.now() - t0, width: 0, height: 0, passes: [] });
 
+  /**
+   * After a read-back (C §7): on a lost context every WebGL call does nothing and readPixels leaves the buffer zeroed,
+   * while webglcontextlost is only queued, so `lost` is still false. A loss during the export's last tile would reach
+   * the file as a black rectangle: throw instead (the runner falls back), and mark the engine lost at once.
+   */
+  function checkReadBack(where: string): void {
+    if (!gl.isContextLost()) return;
+    lost = true;
+    throw new Error(`${where}: WebGL context lost`);
+  }
+
   return {
     canvas,
     get ready() {
@@ -474,7 +485,10 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       sizeCanvas(size);
       const res = pipeline.run(job(input, srcTex, size, !still && tier === 'L', 'canvas', options.mirror));
       if (options.showLandmarks && input.faces.length) {
-        for (const f of input.faces) pipeline.drawOverlay(f.face, options.mirror, input.width / input.height);
+        // the points are O-space and the canvas shows V: through the view geometry (identity in 裁切 mode, in the camera)
+        const g = input.geometry;
+        const overlayOToV = g && !isIdentity(g) ? glMat3(oToV(g, { width: oAspectOf(input), height: 1 })) : IDENTITY_MAT3;
+        for (const f of input.faces) pipeline.drawOverlay(f.face, options.mirror, input.width / input.height, overlayOToV);
         res.passes.push('overlay');
       }
       return { cpuMs: performance.now() - t0, width: size.width, height: size.height, passes: res.passes, toneBuilt: res.toneBuilt };
@@ -494,6 +508,7 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       // Restore the display target so the next present / overlay draws to the canvas.
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+      checkReadBack('renderToImageData');
       return new ImageData(new Uint8ClampedArray(pixels.buffer), size.width, size.height);
     },
 
@@ -537,6 +552,7 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       gl.readPixels(read.x, read.y, read.w, read.h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+      checkReadBack('renderTile');
       return new ImageData(new Uint8ClampedArray(pixels.buffer), read.w, read.h);
     },
 

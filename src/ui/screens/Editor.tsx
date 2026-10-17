@@ -7,7 +7,8 @@
 // person strip (全部 + one chip per person) and the drawn face boxes show (S §2.1); a chip or a photo tap selects a
 // person (hitPerson, S §2.3), and every panel write goes through the lens of that selection (or 全部).
 // 美體 (body research report §落地設計): the pose model loads the first time the 美體 tab opens; every body joins the
-// persons (bodyAnswer: withBodies, paired against the cache's own faces) and is cached in the entry's detection, and
+// persons (bodyAnswer: withBodies, paired against the cache's own faces; while the tracker cannot give a face answer, into
+// the 基本模式 form of the cache, preAnswerCache, which that answer merges into later) and is cached in the entry's detection, and
 // the one multi-person displacement field is rebuilt only when the 美體 inputs change (a drag previews a draft field, at
 // most one build per frame; the commit and every export use the full one).
 // 瘦臉 background limit (faceProtectModel.ts): the face contour warps are bounded by the person mask, the cached 美體
@@ -22,7 +23,7 @@ import type { SessionFace, StillSession } from '../../app/still';
 import { forwardY, heightBandStretch } from '../../body/bands';
 import { bodyFieldCacheStats, buildBodyField, fieldBands, type BodyFieldInput } from '../../body/field';
 import { measureBody, paramAvailability } from '../../body/measure';
-import { SPOT_CAP, STAMP_COMMIT_MS } from '../../config/limits';
+import { EXPORT_RESTORE_WAIT_MS, SPOT_CAP, STAMP_COMMIT_MS } from '../../config/limits';
 import { bodyBox, personInfos } from '../../detect/cache';
 import { hitPerson } from '../../detect/persons';
 import { backMapCpu } from '../../engine/backMapCpu';
@@ -30,8 +31,8 @@ import { backMapFrameOf } from '../../engine/backMapFrame';
 import { sanitizeParams } from '../../engine/params';
 import { eyeNoteInfo } from '../../engine/passes/eyeFrame';
 import { earOf, mouthOpen } from '../../engine/passes/toneGeometry';
-import { abortable } from '../../media/exportFull';
-import { EXPORT_COPY, NO_SOURCE, planExport, planHead, sourceSizeRecord, type ExportPlan, type SourceInfo } from '../../media/exportPlan';
+import { abortable, ExportError } from '../../media/exportFull';
+import { EXPORT_COPY, NO_SOURCE, noSourceCopy, planExport, planHead, sourceSizeRecord, type ExportPlan, type SourceInfo } from '../../media/exportPlan';
 import { takePersonsHint } from '../../store/settings';
 import { stableKey } from '../../store/undo';
 import { buildFaceProtect } from '../../tracking/faceProtect';
@@ -40,7 +41,7 @@ import { buildFrame } from '../../edit/frame';
 import { lensFor, type PersonInfo } from '../../edit/lens';
 import { legacyProjection } from '../../edit/legacy';
 import { LiquifyModel, makeStrokeId, type LiveStroke } from '../../edit/liquify';
-import { bodyAnswer, firstAnswer } from '../../edit/migrate';
+import { bodyAnswer, firstAnswer, preAnswerCache } from '../../edit/migrate';
 import { patchPlan, readPatch } from '../../edit/patch';
 import { screenLeftIsGpLeft } from '../../edit/sides';
 import { addSpot, clearScope, clearSpots, ownerAt, ownerCtxOf, planSpot, regionAt, spotRadius, spotsInScope, type PlanResult } from '../../edit/spots';
@@ -49,7 +50,7 @@ import { TONE_COPY } from '../../edit/toneCopy';
 import { createWarpGuard } from '../../edit/warpGuard';
 import { bodiesUToO, faceOToU, fieldUToO, maskOToU, maskUToO, poseOToU, upCanvas, upImage, upTracker } from '../../geometry/upFrame';
 import { apply, chipTransform, cropModeLayout, cssTurn, eYAt, isIdentity, lockFor, oToV, ovalViewBox, snapCrop, upQuarter, viewSize, vToO, type Quarter } from '../../geometry/view';
-import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
+import { BeautyPanel, FACE_TABS, type ShownToast } from '../components/BeautyPanel';
 import { BrushBar } from '../components/BrushBar';
 import { BRUSH_HINT_MS, BrushHint } from '../components/BrushHint';
 import { BrushOverlay, ringLook, type RingHandle } from '../components/BrushOverlay';
@@ -70,12 +71,12 @@ import { BrushQueue } from '../brushQueue';
 import { cropActivate, StraightenGesture, straightenView, type CropAction } from '../cropPanel';
 import { deps, type UndoLike } from '../deps';
 import {
-  addBodyScan,
   answerNotices,
   ANY_FIELD,
   BodyFieldMemo,
   bodyDetectionOf,
   bodyPanelContext,
+  bodyScansAfter,
   changedPersons,
   detectBody,
   detectSession,
@@ -89,6 +90,8 @@ import {
   measurePersons,
   needsBodyScan,
   needsFaceScan,
+  outputImage,
+  outputSettled,
   outputWaits,
   PERSON_TABS,
   personBodyGate,
@@ -101,6 +104,7 @@ import {
   stampIs,
   thumbRect,
   undoToast,
+  whenRestored,
   type BodyDet,
   type OutputStamp,
 } from '../editorModel';
@@ -287,14 +291,20 @@ export function Editor({ source }: { source: EditorSource }) {
   commitRef.current = commitLive;
   const cancelRef = useRef(cancelLive);
   cancelRef.current = cancelLive;
-  /** the photo's detection cache (persons, faces, bodies); null until the first definite face answer */
+  /**
+   * the photo's detection cache (persons, faces, bodies); null until the first definite face answer, or until a 美體
+   * detection that came before it while the tracker could not answer (preAnswerCache, S §7)
+   */
   const [detect, setDetectState] = useState<DetectionCache | null>(source.detect);
   const detectRef = useRef(detect);
   const setDetect = (d: DetectionCache) => {
     detectRef.current = d;
     setDetectState(d);
   };
-  /** the photo had its first definite face answer (a stored cache counts): the source's one-shot inputs are spent */
+  /**
+   * the photo had its first definite face answer (a stored cache counts; a pending rematch rides in it): the source's
+   * one-shot inputs are spent. A 美體 cache written before that answer in this session leaves them for it
+   */
   const answered = useRef(source.detect !== null);
   const primary: PersonId = detect?.primary ?? P0;
   const infos = useMemo(() => personInfos(detect), [detect]);
@@ -369,7 +379,7 @@ export function Editor({ source }: { source: EditorSource }) {
   const exportAbort = useRef<AbortController | null>(null);
   /** the app went to the background mid-export: the return says so */
   const interrupted = useRef(false);
-  /** 「此照片只保留了 2048 解析度」 once per editor session */
+  /** 「此照片只保留了 {working long edge} 解析度」 once per editor session */
   const noSourceToastDone = useRef(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [, bump] = useState(0);
@@ -381,6 +391,11 @@ export function Editor({ source }: { source: EditorSource }) {
   /** the file a slow export delivered: the 「分享」 tap shares it (tapAction) */
   const delivered = useRef<File | null>(null);
   const historyId = useRef<string | null>(source.historyId);
+  /**
+   * the entry exists, or the write that creates it is on historyChain (the first autosave's addEntry encodes and stores
+   * for a while): a params write queued after it finds the id inside its own step
+   */
+  const entryQueued = useRef(source.historyId !== null);
   /** what was last queued to history (a reopened entry starts saved: viewing it writes nothing) */
   const saved = useRef<OutputStamp | null>(source.historyId ? { key: editKey(source.edit), field: ANY_FIELD } : null);
   const historyChain = useRef<Promise<unknown>>(Promise.resolve());
@@ -530,7 +545,7 @@ export function Editor({ source }: { source: EditorSource }) {
   protectsRef.current = protects;
   /** λ_f per face id from the last commit (S §4.4): reset by the next change, recomputed on every commit */
   const warpScales = useRef<ReadonlyMap<string, number>>(new Map());
-  /** the safety net memoized on its table: a commit that changes no face warp (a filter tile, a shade, 美體…) skips the CPU map */
+  /** the safety net memoized per face: a commit maps only the faces whose warp changed (none for a filter tile, a shade, 美體…) */
   const warpGuard = useMemo(createWarpGuard, []);
   /**
    * what session `s` renders and exports for `e`: every face with its person's params and its limit (S §4.1). Pass the
@@ -561,7 +576,7 @@ export function Editor({ source }: { source: EditorSource }) {
     delivered.current = null;
     setPill((p) => (p === 'share' ? 'save' : p));
   };
-  /** on a commit with ≥ 2 faces: the CPU port checks the summed map (once per warp); an empty map whenever the guard does not act */
+  /** on a commit with ≥ 2 faces: the CPU port checks each changed face's warp, before the commit renders; an empty map whenever the guard does not act */
   const guardScales = (e: EditState): ReadonlyMap<string, number> => {
     const s = sessionRef.current;
     const d = detectRef.current;
@@ -605,9 +620,10 @@ export function Editor({ source }: { source: EditorSource }) {
 
   /**
    * commit=true records an undo step; commit=false is a drag step (the 美體 field previews a draft). `user`: a panel
-   * write through the selection (重置 resets everyone whatever is selected: no 全部 toast)
+   * write through the selection (重置 resets everyone whatever is selected: no 全部 toast). `shown`: the toast the tap
+   * that made `e` has just shown (a tile's notice): the one slot then carries both lines, so neither replaces the other
    */
-  const update = (e: EditState, commit: boolean, user = true) => {
+  const update = (e: EditState, commit: boolean, user = true, shown?: ShownToast) => {
     // a live stroke is committed first (a no-op unless one is live; commitLive clears it before it calls update): 重置,
     // 全部清除, presets and every other edit made with a second finger while the first one draws
     commitLive();
@@ -621,7 +637,8 @@ export function Editor({ source }: { source: EditorSource }) {
     // the first 全部 write of this editor session says so (S §2.4)
     if (user && multi && selected.kind === 'all' && !allToastDone.current && changedPersons(editRef.current, e).length) {
       allToastDone.current = true;
-      toast('已套用到全部人物');
+      if (shown) toast(`${shown.text}\n已套用到全部人物`, shown.ms);
+      else toast('已套用到全部人物');
     }
     setEditState(e);
     if (commit && undo) {
@@ -663,8 +680,9 @@ export function Editor({ source }: { source: EditorSource }) {
     setPendingHistory(historyChain.current);
   };
   /**
-   * the saved thumbnail no longer shows what the editor draws (a v1 group photo: 0.3 drew faces[0], 0.4 draws the
-   * primary; faces found by a re-detect after a faceless output): rewritten once, without reordering 最近編輯
+   * the saved thumbnail no longer shows what the editor draws (an answer brought the photo's first faces: a v1 group
+   * photo, where 0.3 drew faces[0] and 0.4 draws the primary; a 基本模式 merge; a re-detect after a faceless output):
+   * rewritten once, without reordering 最近編輯
    */
   const thumbOwed = useRef(false);
   /** toasts share one slot (state.ts): the first now, each further one when the previous has had its time */
@@ -677,16 +695,25 @@ export function Editor({ source }: { source: EditorSource }) {
         }, i * 3400);
     });
   const applyAnswer = (a: ReturnType<typeof firstAnswer>, first: boolean) => {
+    // (before the rebase) this answer brings the photo's first faces: a first answer, a 基本模式 merge (A15), a re-detect
+    // or a sideways scan after a faceless output. What the editor draws changed (v1: 0.3 drew faces[0], 0.4 the primary;
+    // otherwise the faces now take 美型, 美妝 and their own 磨皮), so the saved thumbnail is owed (S §5.2)
+    const firstFaces = !detectRef.current?.faces.length && a.detect.faces.length > 0;
+    const wasPrimary = detectRef.current?.primary;
     rebaseOnDetect(a.rebase, a.detect);
-    // detection finished: the primary is selected (S §2.2)
-    setSelection({ kind: 'person', id: a.detect.primary });
-    if (!first) return;
-    // a v1 entry (primaryInit set by openState) with ≥ 2 faces: 0.3 drew faces[0], 0.4 draws the primary
-    if (source.historyId && source.edit.primaryInit && a.detect.faces.length >= 2) thumbOwed.current = true;
-    const notices = a.dropped || source.cacheDropped ? ['已重新偵測臉部，部分人物的設定已重設'] : [];
+    if (firstFaces) thumbOwed.current = true;
+    // the first answer selects the primary (S §2.2); a later one (a re-scan, a merge) keeps the user's choice while that
+    // person still exists (a vanished one falls back to the primary through `selected` anyway). A selection on the old
+    // primary follows it: a merge whose body primary found no face hands the primary to a face (A13)
+    setSelection((cur) =>
+      first || (cur.kind === 'person' && (cur.id === wasPrimary || !a.detect.persons.some((p) => p.id === cur.id))) ? { kind: 'person', id: a.detect.primary } : cur,
+    );
     const persons = a.detect.persons.length;
-    // over cap / too small only with the strip; the first group photo ever adds the hint (S §1.1 item 11, §2.6)
-    notices.push(...answerNotices(a.detect, persons, persons >= 2 && takePersonsHint()));
+    // a rematch says so whenever it runs (a first answer, or the merge into a 美體 cache that carried it, S §7)
+    const notices = a.dropped || (first && source.cacheDropped) ? ['已重新偵測臉部，部分人物的設定已重設'] : [];
+    // over cap / too small only with the strip; the first group photo ever adds the hint (S §1.1 item 11, §2.6). A later
+    // answer says what a first answer says when it brings the photo's first faces (once: the hint is taken for good)
+    if (first || firstFaces) notices.push(...answerNotices(a.detect, persons, persons >= 2 && takePersonsHint()));
     showNotices(notices);
   };
   // a fitting cache that lost persons in normalizeDetect gets no answer: its toast shows once, at mount (S §5.4)
@@ -729,7 +756,6 @@ export function Editor({ source }: { source: EditorSource }) {
     // let the "analysing" spinner paint before the synchronous face detection
     window.setTimeout(() => {
       if (unmounted.current || sessionEngine.current !== target || sessionGen.current !== gen) return;
-      const replacing = !!sessionRef.current;
       if (sessionRef.current) {
         sessionRef.current.dispose();
         sessionRef.current = null;
@@ -759,7 +785,8 @@ export function Editor({ source }: { source: EditorSource }) {
         );
         // a tracker that could not answer is not "no face": no answer until the re-detect gives a real one
         if (!useCache && (!tracker || !unsure)) {
-          // the source's one-shot inputs ride with the photo's first answer only
+          // the source's one-shot inputs ride with the photo's first answer only (also when 美體 wrote the cache first
+          // while no face answer could come, S §7: this answer merges into it, its body primary handing over as A13 says)
           const first = !answered.current;
           answered.current = true;
           applyAnswer(
@@ -775,8 +802,6 @@ export function Editor({ source }: { source: EditorSource }) {
             }),
             first,
           );
-          // found on a re-detect: the output written so far lacks the face effects
-          if (replacing && s.faces.length) thumbOwed.current = true;
           // answered: the scan is done. (A tracker that could not answer keeps it pending, so the bounded re-detect
           // retries it in U, and the scan effect does not start another one for every new session)
           forceDetect.current = false;
@@ -785,7 +810,7 @@ export function Editor({ source }: { source: EditorSource }) {
         setBound({ s, engine: target, unsure });
         setScanning(false);
         // only a fresh answer says so (a reopened no-face photo shows no toast, S §8.4)
-        if (tracker && !unsure && !useCache && !s.faces.length) toast('未偵測到臉部，僅套用美膚與濾鏡', 3200);
+        if (tracker && !unsure && !useCache && !s.faces.length) toast('未偵測到臉部，臉型、美妝與膚質工具不會套用', 3200);
       } catch (e) {
         setFatal(reportError(e, 'createStillSession'));
       }
@@ -862,6 +887,8 @@ export function Editor({ source }: { source: EditorSource }) {
     thumbOwed.current = false;
     // the limit `img` was drawn with (a limit change since the export re-arms its own write: see the encode effect)
     const limit = limitRecord();
+    // (writeHistory creates the entry when there is none yet)
+    entryQueued.current = true;
     historyChain.current = historyChain.current
       .then(() => writeHistory(e, img, s, limit))
       .catch((e: unknown) => reportError(e, 'history autosave'));
@@ -915,6 +942,16 @@ export function Editor({ source }: { source: EditorSource }) {
   };
 
   /**
+   * A failed output read-back (exportImageData for a thumbnail or a history write) is a bug report unless the context
+   * is lost: a read-back that finds a loss whose webglcontextlost is still queued throws and marks the engine lost
+   * (checkReadBack, C §7), and one after the event throws too. A loss is no bug: the caller skips its write, and the
+   * autosave effect re-arms once the context is restored
+   */
+  const reportReadBack = (err: unknown, where: string) => {
+    if (!sessionEngine.current?.lost) reportError(err, where);
+  };
+
+  /**
    * Write the current params to history now if the debounce has not (✕ / 返回 within 400 ms of an edit,
    * or the app going to the background). Synchronous readback, so it works right before dispose.
    * When the filter LUT is not resident yet, a corrected thumbnail follows on historyChain: the session must
@@ -930,17 +967,32 @@ export function Editor({ source }: { source: EditorSource }) {
     const key = editKey(e);
     const gen = settleField();
     if (stampIs(saved.current, key, gen)) return;
-    if (sessionEngine.current?.lost) {
-      // no GL to render a thumbnail: keep at least the params of an existing entry (with their limit record, like
-      // every params write: what the user saw them drawn with)
-      const id = historyId.current;
-      if (!id) return;
-      saved.current = { key, field: gen };
+    /**
+     * no GL to render a thumbnail: keep at least the params of the entry (with their limit record, like every params
+     * write: what the user saw them drawn with), an existing one or the one the first autosave is still creating: the
+     * id is read inside the step, like writeHistory, so the write lands after that addEntry. The stored thumbnail no
+     * longer shows them, so it is owed: the autosave effect draws and writes it once the context is restored, if the
+     * editor is still open
+     */
+    const keepParams = () => {
+      if (!entryQueued.current) return;
+      const stamp: OutputStamp = { key, field: gen };
+      saved.current = stamp;
+      thumbOwed.current = true;
       const limit = limitRecord();
       historyChain.current = historyChain.current
-        .then(() => writeParams(id, e, limit))
+        .then(async () => {
+          const id = historyId.current;
+          if (id) await writeParams(id, e, limit);
+          // the addEntry it followed failed: nothing holds these params, so they are not saved (an editor still open
+          // writes them, a new entry, once the autosave runs again)
+          else if (saved.current === stamp) saved.current = null;
+        })
         .catch((err: unknown) => reportError(err, 'history flush'));
       setPendingHistory(historyChain.current);
+    };
+    if (sessionEngine.current?.lost) {
+      keepParams();
       return;
     }
     const ready = s.exportReady(frameOf(e, s));
@@ -950,7 +1002,11 @@ export function Editor({ source }: { source: EditorSource }) {
     try {
       stamp = queueHistory(e, gen, s.exportImageData(frameOf(e, s), field, liq), s);
     } catch (err) {
-      reportError(err, 'history flush');
+      // the read-back found the context lost while webglcontextlost is still queued (checkReadBack marks the engine lost
+      // and throws, C §7), or the render failed: no thumbnail, but the params are never dropped (✕ and the background
+      // flush run once). Only a failure that is not a context loss is a bug report
+      reportReadBack(err, 'history flush');
+      keepParams();
       return;
     }
     if (ready) return;
@@ -960,8 +1016,23 @@ export function Editor({ source }: { source: EditorSource }) {
     historyChain.current = historyChain.current
       .then(() => Promise.race([s.prepareExport(frameOf(e, s)), new Promise((r) => window.setTimeout(r, FLUSH_LUT_WAIT_MS))]))
       .then(async () => {
-        if (saved.current !== stamp || !s.exportReady(frameOf(e, s))) return;
-        await writeHistory(e, s.exportImageData(frameOf(e, s), field, liq), s, limitRecord());
+        if (saved.current !== stamp) return;
+        // still not drawable (a loss the engine knows of, or the LUT wait ran out): the stored thumbnail lacks the LUT
+        if (!s.exportReady(frameOf(e, s))) {
+          thumbOwed.current = true;
+          return;
+        }
+        let img: ImageData;
+        try {
+          img = s.exportImageData(frameOf(e, s), field, liq);
+        } catch (err) {
+          // a context lost meanwhile is no bug report (reportReadBack); the stored thumbnail still lacks the LUT, so it is
+          // owed: drawn once the context is restored, if the editor is still open
+          reportReadBack(err, 'history flush');
+          thumbOwed.current = true;
+          return;
+        }
+        await writeHistory(e, img, s, limitRecord());
       })
       .catch((err: unknown) => reportError(err, 'history flush'));
     setPendingHistory(historyChain.current);
@@ -1033,16 +1104,18 @@ export function Editor({ source }: { source: EditorSource }) {
       .then(
         (dets) => {
           if (dets === undefined || unmounted.current) return;
-          const cache = detectRef.current;
-          if (!cache) return;
+          // no face answer yet (the tracker cannot give one, S §7): the bodies build the photo's cache in the 基本模式
+          // form, which is written like any cache; the face answer merges into it, a dropped cache's pending rematch with it
+          const cache = detectRef.current ?? preAnswerCache(photo, answered.current ? null : source.rematch);
           let merged: DetectionCache | null = null;
           const r = settleBodyAnswer(
             () => {
+              const found = dets ? bodiesUToO(dets, q).bodies : [];
               // pairing (P4) against the cache's own faces (no session needed: an engine recovery has none), the
               // body-only persons appended from the template, a vanished body's person handing over (p0 in a photo
-              // without faces)
-              const a = bodyAnswer(cache, dets ? bodiesUToO(dets, q).bodies : [], photo);
-              rebaseOnDetect(a.rebase, { ...a.detect, bodyScans: addBodyScan(cache.bodyScans, q) });
+              // without faces). The up-frames tried: this one, after the earlier ones (none before the first detection)
+              const a = bodyAnswer(cache, found, photo);
+              rebaseOnDetect(a.rebase, { ...a.detect, bodyScans: bodyScansAfter(cache, q) });
               merged = a.detect;
               setBodyDet({ phase: 'done', det: null });
             },
@@ -1072,16 +1145,23 @@ export function Editor({ source }: { source: EditorSource }) {
   };
 
   // first time the 美體 tab opens (or right away when the params already use body sliders); coming back to the
-  // tab after a failure retries. The bodies join the persons of the face answer: wait for it (detect). Nobody found, and
-  // the photo turned to an up-frame not tried yet: the next 美體 open detects once more, on that U (S §3.6, D5)
+  // tab after a failure retries. The bodies join the persons of the face answer: wait for it (detect), unless the tracker
+  // could not give one (bound.unsure: it may never come, S §7, and v0.3 never waited): the bodies then build the photo's
+  // cache (preAnswerCache; a v1 entry's own body cache is merged without a detection, as 基本模式 merges it). Nobody found,
+  // and the photo turned to an up-frame not tried yet: the next 美體 open detects once more, on that U (S §3.6, D5)
   const lastTab = useRef(sel.tab);
   useEffect(() => {
     const entered = sel.tab === 'body' && lastTab.current !== 'body';
     lastTab.current = sel.tab;
-    if (detectRef.current === null) return;
-    const rescan = entered && bodyDet.phase !== 'working' && needsBodyScan(detectRef.current, editRef.current.photo.geometry);
-    if (shouldDetectBody(bodyDet, { tabOpen: sel.tab === 'body', entered, params }) || rescan) startBodyDetection();
-  }, [sel.tab, bodyDet, params, detect]);
+    const cache = detectRef.current;
+    if (cache === null && !bound?.unsure) return;
+    const rescan = entered && bodyDet.phase !== 'working' && needsBodyScan(cache, editRef.current.photo.geometry);
+    if (!shouldDetectBody(bodyDet, { tabOpen: sel.tab === 'body', entered, params }) && !rescan) return;
+    if (cache === null && source.v1Body) {
+      const a = firstAnswer({ detect: null, prepared: null, size: photo, v1Body: source.v1Body, rematch: null, faceSeed: null });
+      rebaseOnDetect(a.rebase, a.detect);
+    } else startBodyDetection();
+  }, [sel.tab, bodyDet, params, detect, bound]);
 
   /** Bring the field up to date with the edit / measures (BodyFieldMemo: only the 美體 inputs count, S §4.6). */
   const applyField = (draft: boolean) => {
@@ -1270,11 +1350,26 @@ export function Editor({ source }: { source: EditorSource }) {
   }, [session, detect, infos, selId, edit.photo.geometry]);
 
   /**
+   * The session that took over from `failed` (a re-detect or an engine recovery replaced and disposed it), on a live
+   * engine; null while there is none, or once the editor closed. An export runs again on it (exportOnLatest).
+   */
+  const replacementOf = (failed: StillSession): StillSession | null => {
+    const cur = sessionRef.current;
+    return !unmounted.current && cur && cur !== failed && !sessionEngine.current?.lost ? cur : null;
+  };
+
+  /**
    * Export + encode with the user's state captured when it was asked for (`e`, the 美體 `field`, the 推臉筆 `liq`); waits
    * for the filter LUT so the file matches the settled preview, and draws with the 瘦臉 limits at export time (see save).
-   * The working size, encoded in the plan's format and quality.
+   * The working size, encoded in the plan's format and quality. A lost context (the tiled fallback starts right after a
+   * loss during the tiles) is waited for (C §7): once restored, prepareExport waits for the reloaded textures. The wait
+   * ends at once when a session on a new engine took over (重新載入引擎: the old canvas is never restored) or the editor
+   * closed: the ExportError('lost') then hands the export to that session (runWorking's exportOnLatest).
    */
   const encode = async (s: StillSession, e: EditState, field: BodyField | null, plan: ExportPlan, liq: LiquifyField | null) => {
+    const engine = sessionEngine.current;
+    const superseded = () => unmounted.current || replacementOf(s) !== null;
+    if (engine?.lost && !(await whenRestored(engine, EXPORT_RESTORE_WAIT_MS, superseded))) throw new ExportError('lost', 'the WebGL context was not restored');
     await s.prepareExport(frameOf(e, s));
     if (unmounted.current) throw new Error('editor closed');
     const img = s.exportImageData(frameOf(e, s), field, liq);
@@ -1298,9 +1393,15 @@ export function Editor({ source }: { source: EditorSource }) {
     const s = session;
     const key = editKey(edit);
     const now = planHeadFor(edit, sourceRef.current);
-    // (a tiled or PNG plan has no share file to make: only an owed thumbnail or the autosave is left)
-    const shareDone = preEncodes(now) ? shareReady(fresh.current, key, fieldGen.current, planSig(now)) : !thumbOwed.current;
-    if (shareDone && stampIs(saved.current, key, fieldGen.current)) return;
+    // (a tiled or PNG plan has no share file to make; an owed thumbnail is drawn whatever the plan, also when the share
+    // file for these params is made already)
+    const settled = outputSettled({
+      preEncodes: preEncodes(now),
+      shareReady: shareReady(fresh.current, key, fieldGen.current, planSig(now)),
+      thumbOwed: thumbOwed.current,
+      saved: stampIs(saved.current, key, fieldGen.current),
+    });
+    if (settled) return;
     const delay = Math.max(ENCODE_DEBOUNCE_MS, protectSrc.outputHoldMs());
     const t = window.setTimeout(async () => {
       if (unmounted.current || sessionRef.current !== s || editKey(editRef.current) !== key) return;
@@ -1318,7 +1419,14 @@ export function Editor({ source }: { source: EditorSource }) {
       const plan = planHeadFor(edit, sourceRef.current);
       const sig = planSig(plan);
       let img: ImageData | null = null;
-      if (preEncodes(plan) && !shareReady(fresh.current, key, gen, sig)) {
+      const need = outputImage({
+        preEncodes: preEncodes(plan),
+        shareReady: shareReady(fresh.current, key, gen, sig),
+        thumbOwed: thumbOwed.current,
+        saved: stampIs(saved.current, key, gen),
+        entry: historyId.current !== null,
+      });
+      if (need === 'encode') {
         try {
           const r = await encode(s, edit, field, plan, liq);
           img = r.img;
@@ -1330,14 +1438,15 @@ export function Editor({ source }: { source: EditorSource }) {
           if (!unmounted.current && sessionRef.current === s && !sessionEngine.current?.lost) reportError(e, 'encode');
           return;
         }
-      } else if (!preEncodes(plan) && thumbOwed.current && historyId.current && stampIs(saved.current, key, gen)) {
-        // no share file for a tiled or PNG plan: an owed thumbnail still gets the working-size image
+      } else if (need === 'thumb') {
+        // no share file to make (a tiled or PNG plan, or the one for these params is made already): an owed thumbnail
+        // still gets the working-size image
         try {
           await s.prepareExport(frameOf(edit, s));
           if (unmounted.current || sessionRef.current !== s) return;
           img = s.exportImageData(frameOf(edit, s), field, liq);
         } catch (e) {
-          reportError(e, 'history export');
+          reportReadBack(e, 'history export');
           return;
         }
       }
@@ -1359,7 +1468,7 @@ export function Editor({ source }: { source: EditorSource }) {
           if (unmounted.current || stampIs(saved.current, key, gen) || sessionRef.current !== s) return;
           img = s.exportImageData(frameOf(edit, s), field, liq);
         } catch (e) {
-          reportError(e, 'history export');
+          reportReadBack(e, 'history export');
           return;
         }
       }
@@ -1575,7 +1684,7 @@ export function Editor({ source }: { source: EditorSource }) {
     }
     if (noSourceNote(plan, sourceRef.current, photo) && !noSourceToastDone.current) {
       noSourceToastDone.current = true;
-      toast(EXPORT_COPY.noSource);
+      toast(noSourceCopy(workingLong));
     }
     const t0 = performance.now();
     if (plan.mode === 'tiled' && sourceRef.current.blob && sessionEngine.current) runTiled(s, e, field, plan, key, gen, t0, liq);
@@ -1602,13 +1711,11 @@ export function Editor({ source }: { source: EditorSource }) {
   const runWorking = (s: StillSession, e: EditState, field: BodyField | null, plan: ExportPlan, key: string, gen: number, t0: number, liq: LiquifyField | null) => {
     setPill('preparing');
     // a re-detect or an engine recovery may replace (and dispose) the session while this waits for the filter
-    // LUT: export from the replacement instead of failing
-    const replacement = (failed: StillSession) => {
-      const cur = sessionRef.current;
-      return !unmounted.current && cur && cur !== failed && !sessionEngine.current?.lost ? cur : null;
-    };
-    exportOnLatest(s, (x) => encode(x, e, field, plan, liq), replacement).then(
+    // LUT or for a restore: export from the replacement instead of failing
+    exportOnLatest(s, (x) => encode(x, e, field, plan, liq), replacementOf).then(
       ({ s: done, result: r }) => {
+        // ✕ during 準備中 (only a tiled export is aborted by it): no share sheet, fallback or 「分享」 toast over Home
+        if (unmounted.current) return;
         debug({ export: { mode: 'working', width: r.img.width, height: r.img.height, tiles: 0, ms: Math.round(performance.now() - t0) } });
         // cached only while it still matches what is on screen (not after a 美體 edit during 準備中); kept for 分享
         // unless an edit superseded it (a field or limit the system settled meanwhile is no edit, S §2.3)
@@ -1619,6 +1726,12 @@ export function Editor({ source }: { source: EditorSource }) {
       (err: unknown) => {
         if (unmounted.current) return;
         setPill('save');
+        // a context that stayed lost (C §7) is no bug: a plain retry note, not the raw error
+        if ((err instanceof ExportError && err.kind === 'lost') || sessionEngine.current?.lost) {
+          console.warn('[meiyan] export: WebGL context lost', err);
+          toast(EXPORT_COPY.lostRetry, 4000);
+          return;
+        }
         toast(`無法輸出照片：${reportError(err, 'encode')}`, 4000);
       },
     );
@@ -1765,7 +1878,10 @@ export function Editor({ source }: { source: EditorSource }) {
       return;
     }
     setConfirmReset(false);
-    update(lensOf(editRef.current).reset(), true, false);
+    const next = lensOf(editRef.current).reset();
+    update(next, true, false);
+    // 重置 resets the crop too: the highlighted ratio follows it (S §2.1), 自由 for the identity geometry
+    if (sel.tab === 'crop') setSel({ ...sel, crop: lockFor(next.photo.geometry, photo) });
   };
 
   /** a slider step (commit=false) or its commit: the only edit that counts as the user's own contour edit */
@@ -1927,10 +2043,11 @@ export function Editor({ source }: { source: EditorSource }) {
         wakeBoxes();
         const d = detectRef.current;
         if (!d || dragging) return;
-        // the layer shows V: the hit test runs in O (S §2.2)
-        const o = apply(vToO(g, photo), uv);
+        // the layer shows V: the hit test runs in O (S §2.2), its 44 pt minimum too
+        const toO = vToO(g, photo);
+        const o = apply(toO, uv);
         const lq = liquify.backward({ x: o[0], y: o[1] }); // 推臉筆 first (push-brush spec §4.5); hitPerson then adds the body field
-        const hit = hitPerson([lq.x, lq.y], hitCtxOf(d, sel.tab === 'body', fieldMemo.field, rect));
+        const hit = hitPerson([lq.x, lq.y], hitCtxOf(d, sel.tab === 'body', fieldMemo.field, rect, toO));
         if (hit) choose({ kind: 'person', id: hit });
       }
     : undefined;
@@ -1972,7 +2089,9 @@ export function Editor({ source }: { source: EditorSource }) {
   }));
   // 增高 / 長腿 stretch whole rows on every tab, so the boxes follow the bands wherever they show (S §2.1 Position)
   const bands = detect && multi ? fieldBands(fieldInputOf(edit, detect, measures, bodyAspect)) : [];
-  const layerW = layerRef.current?.getBoundingClientRect().width ?? 0;
+  // the layer's width at zoom 1 (zoomPan scales it with a transform, which offsetWidth leaves out): the badges' CSS
+  // multiplies the box width by the zoom itself, so a pinch needs no render (S §2.1)
+  const layerW = layerRef.current?.offsetWidth ?? 0;
   const boxItems: FaceBoxItem[] =
     detect && multi && personTab
       ? detect.persons.flatMap((p, i): FaceBoxItem[] => {
@@ -1982,7 +2101,7 @@ export function Editor({ source }: { source: EditorSource }) {
           if (!oBox) return [];
           // V-normalized (S §2.2): a face's oval, a body-only person's dashed pose box by its corners
           const box = f ? faceViewBox(f) : viewBoxOf(cornersOf(oBox), oBox);
-          return [{ person: p.id, n: i + 1, box, selected: selected.kind === 'all' || selected.id === p.id, changed: changedIds.includes(p.id), dashed: !f, narrow: box.w * layerW < 24 }];
+          return [{ person: p.id, n: i + 1, box, selected: selected.kind === 'all' || selected.id === p.id, changed: changedIds.includes(p.id), dashed: !f, width: box.w * layerW }];
         })
       : [];
   // 祛痘 and 推臉筆 hide the boxes (C §2.2): the chips stay (in 祛痘 they pick the 清除 scope)
@@ -2181,7 +2300,7 @@ export function Editor({ source }: { source: EditorSource }) {
           lens={lens}
           sel={sel}
           onSel={setSel}
-          onEdit={(e) => update(e, true)}
+          onEdit={(e, shown) => update(e, true, true, shown)}
           faceNote={faceNote}
           body={bodyCtx}
           skin={skinCtx}

@@ -42,8 +42,11 @@ interface Props {
   lens: Lens;
   sel: PanelSelection;
   onSel(sel: PanelSelection): void;
-  /** a tap-level change (always an undo step) */
-  onEdit(edit: EditState): void;
+  /**
+   * a tap-level change (always an undo step); `shown`: the toast this tap has just shown, so a toast the edit raises
+   * itself (the editor's first 全部 write) joins it in the one slot instead of replacing it
+   */
+  onEdit(edit: EditState, shown?: ShownToast): void;
   collapsed?: boolean;
   /**
    * Set when face effects cannot apply (基本模式, or a photo with no face): 美型 / 美妝 are dimmed with this
@@ -73,6 +76,12 @@ interface Props {
   id?: string;
 }
 
+/** a toast a tile tap showed: its text and how long it stays (toast's default when absent) */
+export interface ShownToast {
+  text: string;
+  ms?: number;
+}
+
 /** tabs whose effects need a detected face */
 export const FACE_TABS: readonly TabId[] = ['shape', 'makeup'];
 
@@ -99,6 +108,19 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
       strip.scrollLeft = selected.offsetLeft - strip.clientWidth / 2 + selected.offsetWidth / 2;
     }
   }, [stripKey]);
+
+  // below 364 pt the 8 editor tabs scroll (theme.css, its 20 px right fade): the active tab is kept in view, clear of it
+  const tabsRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const bar = tabsRef.current;
+    if (!bar || !(bar.scrollWidth > bar.clientWidth)) return;
+    const on = bar.querySelector<HTMLElement>('.tab.active');
+    if (!on) return;
+    const b = bar.getBoundingClientRect();
+    const r = on.getBoundingClientRect();
+    if (r.left < b.left) bar.scrollLeft -= b.left - r.left;
+    else if (r.right > b.right - 20) bar.scrollLeft += r.right - (b.right - 20);
+  }, [sel.tab]);
 
   const tabs = crop ? EDITOR_TABS : TABS;
   const items = sel.tab === 'crop' && crop ? cropItems(crop.geometry, crop.lock, crop.oSize) : itemsFor(lens, sel, body, skin);
@@ -138,7 +160,8 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
     const r = activate(item, lens, sel, { lookFailed });
     const text = tapToast(item, lens, r, photoTouched);
     // a notice keeps its longer stay; the first-touch line alone stays as long as the slider's (toast's default)
-    if (text) toast(text, r.notice ? (item.disabled ? 2600 : 3200) : undefined);
+    const shown: ShownToast | undefined = text ? { text, ms: r.notice ? (item.disabled ? 2600 : 3200) : undefined } : undefined;
+    if (shown) toast(shown.text, shown.ms);
     if (r.retryLook) onRetryLook?.(r.retryLook);
     if (!r.changed) return;
     const a = item.action.type;
@@ -156,7 +179,7 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
     )
       haptic();
     if (r.sel !== sel) onSel(r.sel);
-    if (r.edit !== lens.edit) onEdit(r.edit);
+    if (r.edit !== lens.edit) onEdit(r.edit, shown);
   };
 
   const tapTab = (tab: TabId) => {
@@ -262,7 +285,7 @@ export function BeautyPanel({ lens, sel, onSel, onEdit, collapsed, faceNote, bod
             </Fragment>
           ))}
         </div>
-        <div class="tabs" role="tablist">
+        <div class="tabs" role="tablist" ref={tabsRef}>
           {tabs.map((t) => {
             // stays tappable: a remembered selection may already be on it
             const unavailable = t.id === 'body' ? bodyOff : (!!faceNote || personNote(t.id, lens)?.dim === true) && FACE_TABS.includes(t.id);

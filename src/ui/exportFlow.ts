@@ -1,5 +1,5 @@
 // The 儲存 flow's rules (S §2.3), pure: which file a tap may share at once, when the pill asks for a second tap, what a
-// failure does, and when to say that only the 2048 copy was kept.
+// failure does, and when to say that only the working copy was kept.
 import { SHARE_WINDOW_MS } from '../config/limits';
 import { photoLuts } from '../engine/looks';
 import type { ExportPlan, SourceInfo } from '../media/exportPlan';
@@ -75,7 +75,7 @@ export function tileDrawState(engine: Pick<Engine, 'ready' | 'lutState'>, photo:
   return states.every((s) => s === 'ready' || s === 'failed') ? [engine.ready, ...states] : null;
 }
 
-/** 「此照片只保留了 2048 解析度」: a working plan for want of a source, although the original was larger than the working copy */
+/** 「此照片只保留了 {edge} 解析度」 (noSourceCopy): a working plan for want of a source, although the original was larger than the working copy */
 export function noSourceNote(plan: ExportPlan, source: SourceInfo, working: Size): boolean {
   return plan.fallback === 'noSource' && !!source.width && !!source.height && Math.max(source.width, source.height) > Math.max(working.width, working.height);
 }

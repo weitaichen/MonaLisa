@@ -132,7 +132,7 @@ Each sub-step ends green (`typecheck`, `test`, `build`, `test:e2e`) with a local
     | Fewer than 2 selectable persons, or 全部 selected | 全部清除（n） | Every spot |
     | One person selected in a group photo | 清除此人（n） | Spots whose `owner` is that person |
 
-    It is disabled at n = 0. The first tap turns the label into 「確定清除？」 for 3 s; a second tap within that time clears, as one ↶ step. This is the confirmation 推臉筆's 全部清除 and 重置 use (push-brush spec §1.2), so both clear buttons of the editor behave alike.
+    It is disabled at n = 0. The first tap turns the label into 「確定清除？」 for 3 s; a second tap within that time clears, as one ↶ step. This is the confirmation 推臉筆's 全部清除 and 重置 use (push-brush spec §1.2), so both clear buttons of the editor behave alike. The button is a 44 pt target and its label stays on one line; below 360 pt the row narrows (8 px side margins, 6 px gaps, a 12 px label), so 「全部清除（100）」 fits at 320 pt.
 - Face boxes are hidden (C §2.2). The person strip stays, and choosing a chip changes the 清除 scope.
 
 **Canvas input** (`zoomPan` gains a tap mode, next to C's `onTap`; in 祛痘 mode the Editor passes no `onTap`, so a photo tap adds a spot and never changes the selection, which only the chips change here):

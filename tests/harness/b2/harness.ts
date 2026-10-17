@@ -1,7 +1,8 @@
 // B2 engine harness (served by vite on :5402, driven by run.mjs). window.runB2() exercises the 美體
 // path of the real engine in headless Chromium and returns checks + PNGs:
-//   1. face chain bit-identical to the pre-body engine (baseline/) when no body field is given — skipped since
-//      RenderInput v0.4: the baseline engine takes v0.3's input (tests/e2e/parity.spec.ts covers single-face identity)
+//   1. face chain bit-identical to the pre-body engine (baseline/) when no body field is given — reported SKIPPED
+//      since RenderInput v0.4: the baseline engine takes v0.3's input. tests/e2e/parity.spec.ts compares v0.3 goldens
+//      of its export cases instead; the display canvas and the live tiers are no longer compared with v0.3
 //   2. zero field = bit-exact identity (the shader path runs: passes include 'body')
 //   3. a constant field shifts by exactly that many UV (square + portrait + landscape)
 //   4. body + face together = face result resampled through the body map (order + maskWarp)
@@ -20,6 +21,8 @@ interface Check {
   name: string;
   ok: boolean;
   detail: string;
+  /** not run: neither a pass nor a failure (run.mjs prints SKIP and leaves it out of the pass count) */
+  skipped?: boolean;
 }
 export interface B2Result {
   renderer: string;
@@ -40,6 +43,10 @@ const timings: Record<string, number> = {};
 const check = (name: string, ok: boolean, detail = '') => {
   checks.push({ name, ok, detail });
   console.log(`${ok ? 'PASS' : 'FAIL'} ${name} ${detail}`);
+};
+const skip = (name: string, detail: string) => {
+  checks.push({ name, ok: true, detail, skipped: true });
+  console.log(`SKIP ${name} ${detail}`);
 };
 
 // ── pixels ──
@@ -224,7 +231,10 @@ async function run(): Promise<B2Result> {
   for (const id of ['shape.chin', 'shape.forehead', 'shape.mouthSize', 'shape.eyeDistance'] as ParamId[]) allShape = setParam(allShape, id, 0.9);
 
   // ── 1. face chain bit-identical to the pre-body engine ──
-  check('1. no body field → output bit-identical to the pre-body engine', true, 'skipped: the baseline engine predates RenderInput v0.4 (tests/e2e/parity.spec.ts covers single-face identity)');
+  skip(
+    '1. no body field → output bit-identical to the pre-body engine',
+    'the baseline engine predates RenderInput v0.4. tests/e2e/parity.spec.ts compares v0.3 goldens of the export instead (自然, 精緻 + 美型 max, shades, 美體, 自然 without a face and mirrored, 美型 max at weight 0.4 and at yaw 0.25); the display canvas and the live tiers M and L are not compared with v0.3',
+  );
 
   const { engine, gl, canvas } = rig(createEngine);
   await engine.ready;

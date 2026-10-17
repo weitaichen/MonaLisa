@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { legacyFrame } from '../edit/frame';
 import { defaultPhoto, neutralPerson } from '../edit/state';
-import { glMat3, IDENTITY_GEOMETRY, IDENTITY_MAT3, rotateLeft, vToO } from '../geometry/view';
+import { flipView, glMat3, IDENTITY_GEOMETRY, IDENTITY_MAT3, oToV, rotateLeft, vToO } from '../geometry/view';
 import { adjustUniforms, seedMix } from './adjustMath';
 import { loadImageTexture } from './gl/gl';
 import { createEngine, MAX_RESIDENT_LUTS } from './index';
@@ -55,7 +55,7 @@ function fakeCanvas() {
     MAX_TEXTURE_SIZE: 1,
     MAX_RENDERBUFFER_SIZE: 2,
     MAX_VIEWPORT_DIMS: 3,
-    isContextLost: () => false,
+    isContextLost: vi.fn(() => false),
     getParameter: (p: number) => (p === 3 ? new Int32Array([4096, 4096]) : 4096),
     readPixels: vi.fn(),
     bindFramebuffer: vi.fn(),
@@ -76,7 +76,7 @@ function fakeCanvas() {
   const fire = (t: string) => {
     for (const fn of listeners.get(t) ?? []) fn({ preventDefault() {} } as Event);
   };
-  return { canvas: canvas as unknown as HTMLCanvasElement, fire };
+  return { canvas: canvas as unknown as HTMLCanvasElement, fire, gl };
 }
 
 const filterUrl = (id: string) => `/luts/filters/${id}.png`;
@@ -476,6 +476,26 @@ describe('createEngine: geometry, windows and tiles (step 3)', () => {
     vi.unstubAllGlobals();
   });
 
+  // C §7: a loss inside the tile's GL calls leaves the read-back buffer zeroed (WebGL calls on a lost context do
+  // nothing), and the lost event is only queued: the last tile would otherwise reach the file as a black rectangle
+  it.each(['renderTile', 'renderToImageData'] as const)('%s throws when the context is lost by its read-back, and marks the engine lost', async (call) => {
+    vi.stubGlobal('ImageData', class {
+      constructor(readonly data: Uint8ClampedArray, readonly width: number, readonly height: number) {}
+    });
+    const { canvas, gl } = fakeCanvas();
+    const engine = createEngine(canvas);
+    await engine.ready;
+    pipe().run.mockReturnValueOnce({ passes: [], output: { fbo: {} } });
+    gl.readPixels.mockImplementationOnce(() => gl.isContextLost.mockReturnValue(true));
+    const tile = input({ output: { tile: { x: 0, y: 0, w: 1, h: 1 }, pixelSize: { width: 64, height: 48 }, fullShortEdge: 48 } });
+    const run = () => (call === 'renderTile' ? engine.renderTile(tile, { x: 0, y: 0, w: 64, h: 48 }) : engine.renderToImageData(input(), { mirror: false }));
+    expect(run).toThrow('WebGL context lost');
+    // (before the queued webglcontextlost event): the next call and the export runner see it at once
+    expect(engine.lost).toBe(true);
+    expect(run).toThrow('WebGL context unavailable');
+    vi.unstubAllGlobals();
+  });
+
   it('releaseBuffers shrinks the pipeline buffers and the source texture', async () => {
     const { canvas } = fakeCanvas();
     const engine = createEngine(canvas);
@@ -503,6 +523,29 @@ describe('createEngine: geometry, windows and tiles (step 3)', () => {
     engine.renderOriginal({ source: {} as TexImageSource, width: 640, height: 480, geometry: g }, { still: true });
     expect(canvas.width).toBe(480);
     expect(Array.from(pipe().drawSource.mock.calls.at(-1)![2] as Float32Array)).toEqual(Array.from(glMat3(vToO(g, { width: 640, height: 480 }))));
+  });
+
+  it('the 顯示臉部特徵點 overlay maps its O points through the view (O → V); the identity at identity geometry and in the camera', async () => {
+    const lm = JSON.parse(readFileSync(new URL('../../tests/fixtures/landmarks_sample_face.json', import.meta.url), 'utf8')) as { width: number; height: number; points: number[] };
+    const face = adapt({ points: new Float32Array(lm.points) }, lm.width, lm.height);
+    const { canvas } = fakeCanvas();
+    const engine = createEngine(canvas, { showLandmarks: true });
+    await engine.ready;
+    const overlay = () => (pipe() as unknown as { drawOverlay: ReturnType<typeof vi.fn> }).drawOverlay.mock.calls.at(-1)!;
+    const faces = [{ face, weight: 1, person: neutralPerson(), protect: null }];
+    // a crop after a quarter turn and a flip: the canvas shows V, so must the points
+    const g = { ...flipView(rotateLeft(IDENTITY_GEOMETRY)), crop: { x: 0.1, y: 0.2, w: 0.5, h: 0.6 } };
+    engine.render(input({ faces, geometry: g }), { still: true });
+    expect(overlay()[0]).toBe(face);
+    expect(overlay()[2]).toBe(640 / 480);
+    expect(Array.from(overlay()[3] as Float32Array)).toEqual(Array.from(glMat3(oToV(g, { width: 640 / 480, height: 1 }))));
+    engine.render(input({ faces, geometry: IDENTITY_GEOMETRY }), { still: true });
+    expect(overlay()[3]).toBe(IDENTITY_MAT3);
+    // the camera: no geometry, mirrored by the present pass and the overlay's own uMirror
+    engine.setOptions({ mirror: true });
+    engine.render(input({ faces }));
+    expect(overlay()[1]).toBe(true);
+    expect(overlay()[3]).toBe(IDENTITY_MAT3);
   });
 });
 

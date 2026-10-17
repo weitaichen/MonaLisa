@@ -58,6 +58,34 @@ test('裁切 is the 8th tab: 1:1 crops the frame, ↶ ↷ step it, 還原 restor
   expect((await debugState(page)).lastError).toBeNull();
 });
 
+test('重置 in 裁切 resets the ratio lock with the crop: 自由 is highlighted, the edges are back, a corner drag is free', async ({ page }) => {
+  await importInto(page, SAMPLE_FACE);
+  await tab(page, '裁切').click();
+  await option(page, '1:1').click();
+  await expect(option(page, '1:1')).toHaveAttribute('aria-selected', 'true');
+  const edge = page.getByRole('button', { name: '上邊', exact: true });
+  await expect(edge).toHaveCount(0);
+  await page.getByRole('button', { name: '重置', exact: true }).click();
+  await page.getByRole('button', { name: /^確定重置/ }).click();
+  await expect(option(page, '還原')).toHaveAttribute('aria-disabled', 'true'); // the identity geometry
+  await expect(option(page, '自由')).toHaveAttribute('aria-selected', 'true');
+  await expect(option(page, '1:1')).toHaveAttribute('aria-selected', 'false');
+  await expect(edge).toBeVisible();
+  // the first corner drag moves the corner freely, never snapping the full box to a square
+  const box = page.locator('.crop-box');
+  const b0 = (await box.boundingBox())!;
+  const tl = (await page.getByRole('button', { name: '左上角', exact: true }).boundingBox())!;
+  const [x, y] = [tl.x + tl.width / 2, tl.y + tl.height / 2];
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 10, y + 30, { steps: 4 });
+  await page.mouse.move(x + 20, y + 60, { steps: 4 });
+  await page.mouse.up();
+  const b1 = (await box.boundingBox())!;
+  expect(Math.abs(b0.width - b1.width - 20)).toBeLessThan(3);
+  expect(Math.abs(b0.height - b1.height - 60)).toBeLessThan(3);
+});
+
 // S §2.1: the inset keeps a handle on the photo's edge reachable, and 重置 / 按住對比 stay in this mode, so the
 // pills must not sit over a corner's 44 × 44 hit target (portrait photos fill the stage height)
 for (const [name, file] of [
@@ -110,6 +138,27 @@ test('增高 lines stay on their rows after 翻轉 and are removed by 旋轉 wit
   await tab(page, '美體').click();
   await option(page, '增高').click();
   await expect(rowSlider(page)).toHaveAttribute('aria-valuenow', '0');
+});
+
+test('增高 drawn after 旋轉 is removed by 還原 with the 旋轉 toast (its rows were in the turned frame)', async ({ page }) => {
+  await importInto(page, 'tests/fixtures/fullbody.jpg');
+  await tab(page, '裁切').click();
+  await option(page, '旋轉').click();
+  await tab(page, '美體').click();
+  await option(page, '增高').click();
+  await expect(page.locator('.hband-line.top')).toBeVisible();
+  await rowSlider(page).focus();
+  for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowRight');
+  await expect(rowSlider(page)).toHaveAttribute('aria-valuenow', '20');
+  await tab(page, '裁切').click();
+  await option(page, '還原').click();
+  await expect(page.getByText('旋轉後已移除增高')).toBeVisible();
+  await tab(page, '美體').click();
+  await option(page, '增高').click();
+  await expect(rowSlider(page)).toHaveAttribute('aria-valuenow', '0');
+  // one undo step brings the turn and the band back together
+  await page.getByRole('button', { name: '復原' }).click();
+  await expect(rowSlider(page)).toHaveAttribute('aria-valuenow', '20');
 });
 
 test('旋轉 turns the canvas the short way over 240 ms; nothing animates under prefers-reduced-motion', async ({ page }) => {
@@ -324,6 +373,84 @@ test('going to the background mid-export aborts it, frees it and says so on retu
   expect((await debugState(page)).export).toBeNull();
   await setVisibility('visible');
   await expect(page.getByText('輸出已中斷，請再按一次「儲存」')).toBeVisible();
+});
+
+/**
+ * Import a 2400 × 3200 photo, exported at TILE 2048: the last tile (row 2, column 2) reads back 352 × 1152. Its context is
+ * lost inside that read-back, the worst case: WebGL calls then do nothing, readPixels leaves zeros, the lost event is only
+ * queued, and no later tile is left to throw. `restoreMs`: the context comes back that much later (Chrome restores only
+ * after the lost event), or never.
+ */
+async function loseInLastTile(page: Page, restoreMs: number | null) {
+  await page.goto('/');
+  await knob(page, { tile: 2048 });
+  await importInto(page, { name: 'big.jpg', mimeType: 'image/jpeg', buffer: await makeJpeg(page, 2400, 3200) });
+  await page.evaluate((ms) => {
+    const c = document.querySelector('.editor-stage canvas') as HTMLCanvasElement;
+    const gl = c.getContext('webgl2') as WebGL2RenderingContext;
+    const ext = gl.getExtension('WEBGL_lose_context')!;
+    const read = gl.readPixels.bind(gl) as (...a: unknown[]) => void;
+    (gl as unknown as { readPixels: (...a: unknown[]) => void }).readPixels = (...a: unknown[]) => {
+      if (a[2] === 352 && a[3] === 1152 && !gl.isContextLost()) {
+        ext.loseContext();
+        if (ms !== null) setTimeout(() => ext.restoreContext(), ms);
+      }
+      read(...a);
+    };
+  }, restoreMs);
+  await watchToasts(page);
+}
+
+test('a context loss inside the last tile ships no black tile: the 標準 fallback waits for the restore, with no raw error', async ({ page }) => {
+  test.setTimeout(600_000);
+  await loseInLastTile(page, 300);
+  const f = await exportFile(page);
+  // the working size after the restore, not the 2400 × 3200 file with a black corner
+  expect([f.width, f.height]).toEqual([1536, 2048]);
+  const seen = await toastsSeen(page);
+  expect(seen).toContain('已改用標準解析度輸出');
+  expect(seen.filter((t) => t.startsWith('無法輸出照片'))).toEqual([]);
+  expect(await page.evaluate(() => localStorage.getItem('meiyan.exportGuard.v1'))).toBeNull();
+  expect((await debugState(page)).export).toMatchObject({ mode: 'working', width: 1536, height: 2048 });
+});
+
+test('a context loss inside the last tile that is never restored: no file, the pill is 儲存 again, a 繁中 retry note', async ({ page }) => {
+  test.setTimeout(600_000);
+  await loseInLastTile(page, null);
+  await page.locator('.topbar .pill').click();
+  // the fallback waits EXPORT_RESTORE_WAIT_MS (10 s) for the restore, then gives up with the retry note, never the raw error
+  await expect(page.getByText('畫面恢復後請再按一次「儲存」')).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('.topbar .pill')).toHaveText('儲存');
+  const seen = await toastsSeen(page);
+  expect(seen).toContain('已改用標準解析度輸出');
+  expect(seen.filter((t) => t.startsWith('無法輸出照片'))).toEqual([]);
+  await expect(page.getByRole('dialog', { name: '儲存照片' })).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem('meiyan.exportGuard.v1'))).toBeNull();
+});
+
+test('a context loss inside the last tile, then 重新載入引擎: the 標準 fallback runs on the new engine at once, not after the restore wait', async ({ page }) => {
+  test.setTimeout(600_000);
+  await loseInLastTile(page, null);
+  const pill = page.locator('.topbar .pill');
+  await pill.click();
+  // the fallback waits for a restore that never comes (EXPORT_RESTORE_WAIT_MS = 10 s); the lost overlay offers the reload
+  const reload = page.getByRole('button', { name: '重新載入引擎' });
+  await expect(reload).toBeVisible({ timeout: 300_000 });
+  await expect(pill).toHaveAttribute('aria-busy', 'true');
+  const t0 = Date.now();
+  await reload.click();
+  // the wait ends once a session on the new engine is bound, and the export runs there: not the rest of the 10 s
+  await expect(pill).not.toHaveAttribute('aria-busy', 'true', { timeout: 60_000 });
+  const ms = Date.now() - t0;
+  console.log(`重新載入引擎 → the 標準 file in ${ms} ms`);
+  expect(ms).toBeLessThan(6000);
+  const f = await exportResult(page);
+  expect([f.width, f.height]).toEqual([1536, 2048]);
+  const seen = await toastsSeen(page);
+  expect(seen).toContain('已改用標準解析度輸出');
+  expect(seen).not.toContain('畫面恢復後請再按一次「儲存」');
+  expect(seen.filter((t) => t.startsWith('無法輸出照片'))).toEqual([]);
+  expect((await debugState(page)).export).toMatchObject({ mode: 'working', width: 1536, height: 2048 });
 });
 
 test('取消 ends the overlay and 準備中 at once, while the runner still waits; a new 儲存 then works', async ({ page }) => {
@@ -632,6 +759,39 @@ test('PNG: the editor and the camera review save image/png named .png', async ({
   expect(await img.evaluate((i: HTMLImageElement) => i.dataset.name)).toMatch(/\.png$/);
   // the blob type from exportFile's URL.createObjectURL hook (still installed: the app never reloaded), not fetch(): the CSP
   expect(await img.evaluate((i: HTMLImageElement) => (window as unknown as { __blobTypes: Record<string, string> }).__blobTypes[i.src])).toBe('image/png');
+});
+
+test('✕ while a working-size 儲存 is 準備中: the file it finishes is neither shared nor announced on Home', async ({ page }) => {
+  test.setTimeout(300_000);
+  await usePng(page); // a PNG plan never pre-encodes: 儲存 always encodes after the tap
+  // every PNG encode waits for the test (the thumbnails are JPEG and pass)
+  await page.addInitScript(() => {
+    const w = window as unknown as { __pngGate: Promise<void>; __releasePng: () => void; __pngAsked: boolean };
+    w.__pngAsked = false;
+    w.__pngGate = new Promise<void>((r) => (w.__releasePng = r));
+    const encode = OffscreenCanvas.prototype.convertToBlob;
+    OffscreenCanvas.prototype.convertToBlob = async function (this: OffscreenCanvas, o?: ImageEncodeOptions) {
+      if (o?.type === 'image/png') {
+        w.__pngAsked = true;
+        await w.__pngGate;
+      }
+      return encode.call(this, o);
+    };
+  });
+  await importInto(page, SAMPLE_FACE);
+  await watchToasts(page);
+  const pill = page.locator('.topbar .pill');
+  await pill.click();
+  await expect(pill).toHaveText('準備中');
+  // the export is in its encode (past the LUT wait and the readback)
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __pngAsked: boolean }).__pngAsked)).toBe(true);
+  await page.getByRole('button', { name: '關閉' }).click();
+  await expect.poll(async () => (await debugState(page)).screen).toBe('home');
+  await page.evaluate(() => (window as unknown as { __releasePng: () => void }).__releasePng());
+  await page.waitForTimeout(2500);
+  await expect(page.getByRole('dialog', { name: '儲存照片' })).toHaveCount(0);
+  expect(await toastsSeen(page)).not.toContain('已準備好，點一下分享');
+  expect((await debugState(page)).screen).toBe('home');
 });
 
 /** the mean absolute RGB difference (0..255) of two stashed exports in each cell of a `cell`-pixel grid, row by row */

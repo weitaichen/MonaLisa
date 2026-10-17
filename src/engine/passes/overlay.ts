@@ -1,13 +1,18 @@
 // Debug overlay: draws the 111 adapted points (lime) + ext anchors (magenta) as round GL_POINTS
-// onto the canvas, with the same flip-Y / mirror-X as the present pass; step 5: the eye frames (cyan).
+// onto the canvas, with the same flip-Y / mirror-X as the present pass; step 5: the eye frames (cyan). The points are
+// O-space UV and the canvas shows V, so they go through the view's O → V map first (step 3, C §2.2).
+import { IDENTITY_MAT3 } from '../../geometry/view';
 import type { Face } from '../../types';
 import { createProgram } from '../gl/gl';
 import type { GL, Program } from '../gl/gl';
 import { browGapEnd, eyeFrames, eyeToUv, LID_STATIONS, STATION_XS } from './eyeFrame';
 
 export interface LandmarkOverlay {
-  /** Draw onto the currently bound canvas framebuffer using the SAME flipY/mirrorX as the present pass. */
-  draw(face: Face, mirrorX: boolean, aspect?: number): void;
+  /**
+   * Draw onto the currently bound canvas framebuffer using the SAME flipY/mirrorX as the present pass. `oToV`: the
+   * view's O → V map of normalized UV (glMat3 of view.ts oToV); the identity in 裁切 mode and in the camera.
+   */
+  draw(face: Face, mirrorX: boolean, aspect?: number, oToV?: Float32Array): void;
   dispose(): void;
 }
 
@@ -41,13 +46,15 @@ export function eyeDebugPoints(face: Face, aspect: number): Float32Array {
 }
 
 const OVERLAY_VS = /* glsl */ `#version 300 es
-in vec2 aPos;          // UV, top-left origin
+in vec2 aPos;          // O-space UV, top-left origin
+uniform mat3 uOToV;    // O → V, normalized: the canvas shows V (identity at identity geometry, in 裁切 mode, in the camera)
 uniform float uMirror; // 1 = mirror X
 uniform float uSize;
 void main() {
-  float x = mix(aPos.x, 1.0 - aPos.x, uMirror);
+  vec2 v = (uOToV * vec3(aPos, 1.0)).xy;
+  float x = mix(v.x, 1.0 - v.x, uMirror);
   // Canvas: NDC +1 is the top row, so image top (v=0) maps to +1 (the present flip).
-  gl_Position = vec4(x * 2.0 - 1.0, 1.0 - aPos.y * 2.0, 0.0, 1.0);
+  gl_Position = vec4(x * 2.0 - 1.0, 1.0 - v.y * 2.0, 0.0, 1.0);
   gl_PointSize = uSize;
 }`;
 
@@ -76,12 +83,13 @@ export function createLandmarkOverlay(gl: GL): LandmarkOverlay {
   gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
   return {
-    draw(face, mirrorX, aspect = 1) {
+    draw(face, mirrorX, aspect = 1, oToV = IDENTITY_MAT3) {
       const n111 = Math.min(111, face.pts111.length >> 1);
       const nExt = Math.min(8, face.ext.length >> 1);
       pts.set(face.pts111.subarray(0, n111 * 2), 0);
       pts.set(face.ext.subarray(0, nExt * 2), n111 * 2);
       prog.use();
+      gl.uniformMatrix3fv(prog.u('uOToV'), false, oToV);
       gl.uniform1f(prog.u('uMirror'), mirrorX ? 1 : 0);
       gl.uniform1f(prog.u('uSize'), POINT_SIZE);
       gl.bindVertexArray(vao);

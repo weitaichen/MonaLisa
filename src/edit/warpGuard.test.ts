@@ -1,16 +1,29 @@
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ovalBox } from '../engine/passes/faceCap';
-import { mapMinDet } from '../engine/passes/reshapeCpu';
+import { attenuate, boxCentre, capsFor, ovalBox, WHOLE, type TableFace } from '../engine/passes/faceCap';
+import { reshapeUniforms } from '../engine/passes/reshape';
+import { mapMinDet, reshapeMapMulti } from '../engine/passes/reshapeCpu';
 import { adapt } from '../tracking/adapter111';
 import type { Face, FaceProtect, StillFrame } from '../types';
 import { defaultPhoto, personFromPreset } from './state';
 import { createWarpGuard, warpGuard } from './warpGuard';
 
-// a pass-through spy: counts the CPU map checks, so a memo hit can be told from a recomputation
+// pass-through spies: mapMinDet counts the CPU map checks, so a memo hit can be told from a recomputation; every map
+// reshapeMapMulti returns records the points it is evaluated at
+const evaluated: [number, number][] = [];
 vi.mock('../engine/passes/reshapeCpu', async (importOriginal) => {
   const m = await importOriginal<typeof import('../engine/passes/reshapeCpu')>();
-  return { ...m, mapMinDet: vi.fn(m.mapMinDet) };
+  return {
+    ...m,
+    mapMinDet: vi.fn(m.mapMinDet),
+    reshapeMapMulti: (...args: Parameters<typeof m.reshapeMapMulti>) => {
+      const map = m.reshapeMapMulti(...args);
+      return (x: number, y: number) => {
+        evaluated.push([x, y]);
+        return map(x, y);
+      };
+    },
+  };
 });
 const checks = vi.mocked(mapMinDet);
 
@@ -48,6 +61,69 @@ describe('warpGuard (S §4.4 editor safety net)', () => {
     expect(l.some((x) => x < 1)).toBe(true);
     for (const x of l) expect(x >= 0 && x <= 1).toBe(true);
     expect(warpGuard(frameOf(pair, l), aspect, { minDet: 0.97 })).toEqual([1, 1]);
+  });
+});
+
+describe('warpGuard cost (S §6.1: it runs on the commit path, before the commit renders)', () => {
+  const pair = [at(0.45, -0.2), at(0.45, 0.2)];
+  const centres = pair.map((f) => boxCentre(ovalBox(f)));
+  const caps = capsFor(centres, [], aspect);
+  const inDisc = (p: readonly [number, number], f: number) => caps[f] - Math.hypot(p[0] - centres[f][0], (p[1] - centres[f][1]) / aspect) > 0;
+  const tf = (f: number): TableFace => ({
+    face: pair[f],
+    u: attenuate(reshapeUniforms(strong.values, 1), pair[f].yaw),
+    layer: -1,
+    window: WHOLE,
+    centre: centres[f],
+    cap: caps[f],
+  });
+
+  it('inside a capped face’s disc the summed map is that face’s own map, bit for bit (what the per-face check relies on)', () => {
+    const both = reshapeMapMulti([tf(0), tf(1)], aspect);
+    const own = [reshapeMapMulti([tf(0)], aspect), reshapeMapMulti([tf(1)], aspect)];
+    let inside = 0;
+    for (let y = 0; y <= 1; y += 0.01)
+      for (let x = 0; x <= 1; x += 0.01)
+        for (const f of [0, 1])
+          if (inDisc([x, y], f)) {
+            inside++;
+            expect(both(x, y)).toEqual(own[f](x, y));
+          }
+    expect(inside).toBeGreaterThan(1000);
+  });
+
+  it('mapMinDet maps each grid point once', () => {
+    let calls = 0;
+    const affine = (x: number, y: number): [number, number] => {
+      calls++;
+      return [2 * x + 0.5 * y, 0.25 * x + 3 * y];
+    };
+    expect(mapMinDet(affine, [0.1, 0.2, 0.6, 0.9], 65)).toBeCloseTo(2 * 3 - 0.5 * 0.25, 9);
+    expect(calls).toBeLessThanOrEqual(65 * 65);
+    expect(mapMinDet((x, y) => [x / (x - 0.5), y], [0, 0, 1, 1], 65)).toBe(-Infinity);
+  });
+
+  it('one check maps each face only inside its own cap disc, at most once per grid point', () => {
+    evaluated.length = 0;
+    expect(warpGuard(frameOf(pair), aspect)).toEqual([1, 1]);
+    expect(evaluated.length).toBeGreaterThan(0);
+    expect(evaluated.length).toBeLessThanOrEqual(2 * 65 * 65);
+    expect(evaluated.filter((p) => !inDisc(p, 0) && !inDisc(p, 1))).toEqual([]);
+  });
+
+  it('a commit that changes one person’s shape values re-checks only that face', () => {
+    const guard = createWarpGuard();
+    const three = [at(0.3, -0.25), at(0.3, 0), at(0.3, 0.25)];
+    const f0 = frameOf(three);
+    expect(guard(f0, aspect)).toEqual([1, 1, 1]);
+    checks.mockClear();
+    const f1: StillFrame = { ...f0, faces: f0.faces.map((f, i) => (i === 1 ? { ...f, person: { ...f.person, values: { ...f.person.values, 'shape.faceSlim': 0.4 } } } : f)) };
+    expect(guard(f1, aspect)).toEqual([1, 1, 1]);
+    expect(checks).toHaveBeenCalledTimes(1);
+    // ↶ back to the first state: only that face again (its first entry was replaced by the second commit's)
+    checks.mockClear();
+    expect(guard(f0, aspect)).toEqual([1, 1, 1]);
+    expect(checks).toHaveBeenCalledTimes(1);
   });
 });
 

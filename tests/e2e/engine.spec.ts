@@ -180,6 +180,20 @@ test('two faces: per-face skin strengths and makeup; the neutral face is untouch
   expect(Math.abs(r.lipOverlap - r.lipOverlapSolo)).toBeLessThan(0.5);
 });
 
+test('顯示臉部特徵點 stays on the face after a crop, a quarter turn and a flip: the points go through the view', async ({ page }) => {
+  await page.goto(`${DEV_URL}/tests/e2e/pages/engine.html`);
+  await page.waitForFunction(() => typeof window.runEngineOverlay === 'function');
+  const r = await page.evaluate(() => window.runEngineOverlay!());
+  console.log(JSON.stringify(r));
+  expect(Object.keys(r)).toEqual(['identity', 'crop', 'quarter 1 + flip + crop']);
+  for (const [name, c] of Object.entries(r)) {
+    expect(c.err, name).toBe(0);
+    // the face is in the crop: most of the 111 points are on the canvas, and nearly every one is drawn where V has it
+    expect(c.inside, name).toBeGreaterThan(60);
+    expect(c.hit / c.inside, name).toBeGreaterThan(0.85);
+  }
+});
+
 test('releaseFields: the 美體 and 推臉筆 textures go with the still session; the next frame uploads them again', async ({ page }) => {
   await page.goto(`${DEV_URL}/tests/e2e/pages/engine.html`);
   await page.waitForFunction(() => typeof window.runEngineReleaseFields === 'function');

@@ -718,6 +718,22 @@ describe('multi-person field (S §4.6)', () => {
     buildBodyField(two(0.6), null, 128);
     expect(bodyFieldCacheStats.personBuilds).toBe(n + 1);
   });
+  it('keeps only the latest full and the latest draft L_p per person (about 0.5 MB, not 8 grids of each)', () => {
+    const two = (b: number) => sceneInput(side, [{ id: 'A', measure: side.A, values: waist(0.3) }, { id: 'B', measure: side.B, values: waist(b) }]);
+    const builds = (input: BodyFieldInput, edge?: number) => {
+      const n = bodyFieldCacheStats.personBuilds;
+      buildBodyField(input, null, edge);
+      return bodyFieldCacheStats.personBuilds - n;
+    };
+    builds(two(0.4));
+    builds(two(0.45), 128);
+    expect(builds(two(0.5))).toBe(1); // B's new full; A's full is reused
+    expect(builds(two(0.55), 128)).toBe(1); // B's new draft; A's draft is reused
+    expect(builds(two(0.5))).toBe(0); // the latest full of each, kept next to the latest draft
+    expect(builds(two(0.55), 128)).toBe(0);
+    expect(builds(two(0.4))).toBe(1); // an older full value was not kept
+    expect(builds(two(0.45), 128)).toBe(1); // nor an older draft
+  });
   it('fieldBands: 增高 first, then 長腿 measured on its anchor; none without either (the face boxes follow them)', () => {
     const fig = syntheticFigure();
     const m = measureBody(fig.det, fig.face);

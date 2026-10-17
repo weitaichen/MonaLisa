@@ -53,6 +53,8 @@ export const GL_TILE_BUDGET_MB = 40;
 export const SOURCE_MAX_MB = 30;
 /** an export slower than this from the tap shares on a second tap (transient activation lasts 5 s) */
 export const SHARE_WINDOW_MS = 4000;
+/** a working-size export that meets a lost context (the tiled fallback after a loss) waits this long for the restore (C §7) */
+export const EXPORT_RESTORE_WAIT_MS = 10_000;
 /** smallest crop: this fraction of each E dimension… */
 export const MIN_CROP_FRAC = 0.05;
 /** …and at least this many working-resolution pixels per axis */

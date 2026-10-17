@@ -25,6 +25,8 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const FACE_ID = /^f[0-5]$/;
 const BODY_ID = /^b[0-3]$/;
+/** every body id a cache can hold, in the order new bodies take them */
+const BODY_IDS: readonly string[] = Array.from({ length: MAX_EDIT_BODIES }, (_, j) => `b${j}`);
 const PERSON_ID = /^(f[0-5]|b[0-3]|p0)$/;
 
 /** Untrusted mask → valid PersonMask (w·h bytes), else null (was history.ts normalizeMask). */
@@ -75,7 +77,21 @@ function normBody(raw: unknown): CachedBody | null {
   return { id: raw.id, pose: { points }, mask, score: raw.score };
 }
 
-/** face boxes of the raw record's persons that are still readable (the rematch input of a dropped cache) */
+/** a stored cache's pending rematch (DetectionCache.rematch): readable boxes under person ids, p0 never */
+function rematchOf(raw: unknown): Record<PersonId, Rect> {
+  const out: Record<PersonId, Rect> = {};
+  if (!isRecord(raw)) return out;
+  for (const [id, b] of Object.entries(raw)) {
+    const box = normBox(b);
+    if (box && PERSON_ID.test(id) && id !== 'p0') out[id] = box;
+  }
+  return out;
+}
+
+/**
+ * face boxes of the raw record's persons that are still readable (the rematch input of a dropped cache), plus the
+ * rematch it still had pending (a dropped cache's persons a 美體 cache carried, S §7)
+ */
 function staleBoxesOf(r: Record<string, unknown>): Record<PersonId, Rect> | null {
   const boxes = new Map<string, Rect>();
   for (const f of arr(r.faces)) {
@@ -84,7 +100,7 @@ function staleBoxesOf(r: Record<string, unknown>): Record<PersonId, Rect> | null
       if (b) boxes.set(f.id, b);
     }
   }
-  const out: Record<PersonId, Rect> = {};
+  const out: Record<PersonId, Rect> = rematchOf(r.rematch);
   for (const p of arr(r.persons)) {
     if (!isRecord(p) || typeof p.id !== 'string' || typeof p.face !== 'string') continue;
     const b = boxes.get(p.face);
@@ -96,7 +112,9 @@ function staleBoxesOf(r: Record<string, unknown>): Record<PersonId, Rect> | null
 /**
  * Untrusted stored cache → a valid one (S §5.4). A corrupt face, obstacle or body drops only that part and its link;
  * a person left with neither face nor body is dropped and `lost` is set (the cache-dropped toast). A cache that cannot
- * be used at all returns null with `stale`: the face boxes of its persons, for rematchByIoU. Caches are never
+ * be used at all returns null with `stale`: the face boxes of its persons (and of its pending `rematch`), for
+ * rematchByIoU. A pending rematch keeps its readable boxes, except under an id the cache's own persons use (an empty one
+ * stays: a cache was dropped all the same). Caches are never
  * truncated to this device's tier caps (A16), only to the hard bounds MAX_RENDER_FACES / MAX_EDIT_BODIES / MAX_OBSTACLES.
  */
 export function normalizeDetect(raw: unknown): { cache: DetectionCache | null; stale: Record<PersonId, Rect> | null; lost: boolean } {
@@ -133,6 +151,16 @@ export function normalizeDetect(raw: unknown): { cache: DetectionCache | null; s
     Array.isArray(bs) && bs.every((x) => x === 0 || x === 1 || x === 2 || x === 3) && new Set(bs).size === bs.length ? ([...bs] as (0 | 1 | 2 | 3)[]) : undefined;
   const dropped = isRecord(raw.dropped) ? raw.dropped : {};
   const count = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 ? (v as number) : 0);
+  /**
+   * the pending rematch, without the ids this cache's own persons use (never both: withBodies reserves them). An empty
+   * one is kept: {} still says a cache was dropped, so the face answer that resolves it shows the reset toast (S §5.4)
+   */
+  const pending = (persons: readonly PersonInfoCached[]) => {
+    if (!isRecord(raw.rematch)) return {};
+    const r = rematchOf(raw.rematch);
+    for (const p of persons) delete r[p.id];
+    return { rematch: r };
+  };
   const base = {
     v: 1 as const,
     width: raw.width,
@@ -150,7 +178,7 @@ export function normalizeDetect(raw: unknown): { cache: DetectionCache | null; s
     // dropped as corrupt is not "nobody here": it is dropped, so the photo re-detects and rematches by its stale boxes.
     const storedEmpty = Array.isArray(raw.faces) && !raw.faces.length && (raw.bodies === null || (Array.isArray(raw.bodies) && !raw.bodies.length));
     if (!storedEmpty) return fail();
-    return { cache: { ...base, persons: [{ id: 'p0', face: null, body: null }], primary: 'p0' }, stale: null, lost };
+    return { cache: { ...base, persons: [{ id: 'p0', face: null, body: null }], primary: 'p0', ...pending([]) }, stale: null, lost };
   }
   const persons: PersonInfoCached[] = [];
   const usedFaces = new Set<string>();
@@ -171,7 +199,7 @@ export function normalizeDetect(raw: unknown): { cache: DetectionCache | null; s
   if (!persons.length) return fail();
   const primary = typeof raw.primary === 'string' && persons.some((p) => p.id === raw.primary) ? raw.primary : persons[0].id;
   if (primary !== raw.primary) lost = true;
-  return { cache: { ...base, persons, primary }, stale: null, lost };
+  return { cache: { ...base, persons, primary, ...pending(persons) }, stale: null, lost };
 }
 
 /** a detection taken at takenW × takenH belongs to a width × height photo: same aspect within 1 % (editorModel.ts:148-152) */
@@ -341,7 +369,10 @@ export function withBodies(
 ): { cache: DetectionCache; renamed: Record<PersonId, PersonId | null> } {
   const renamed: Record<PersonId, PersonId | null> = {};
   // ids: an old body (a v1 b0, bodiesComplete false) keeps its id when its pose matches (< 0.05); the others get the
-  // lowest b<j> no old body used, by centre x. An unmatched old id is reused only to stay within b0…b3.
+  // lowest b<j> no old body used, by centre x, then (only to stay within b0…b3) an unmatched old body's id. The ids of a
+  // pending rematch are reserved until the face answer resolves them (S §5.3 R1): its stored persons are still in the
+  // edit, so a body person under one of them would read their params. More new bodies than free ids: the extra ones
+  // with the lowest score (selectPerson's) are dropped, never given a reserved id
   const old = cache.bodies ?? [];
   const sorted = [...found].sort((a, b) => byPosition(poseBox(a.pose.points), poseBox(b.pose.points)));
   const ids = new Map<(typeof found)[number], string>();
@@ -360,19 +391,14 @@ export function withBodies(
   }
   const matched = new Set(ids.values());
   const oldIds = new Set(old.map((o) => o.id));
-  const used = new Set(matched);
-  for (const b of sorted) {
-    if (ids.has(b)) continue;
-    let j = 0;
-    while (used.has(`b${j}`) || oldIds.has(`b${j}`)) j++;
-    if (j >= MAX_EDIT_BODIES) {
-      j = 0;
-      while (used.has(`b${j}`)) j++;
-    }
-    used.add(`b${j}`);
-    ids.set(b, `b${j}`);
-  }
-  const bodies: CachedBody[] = sorted.map((b) => ({ id: ids.get(b)!, pose: b.pose, mask: b.mask, score: b.score }));
+  const reserved = new Set(Object.keys(cache.rematch ?? {}));
+  const free = BODY_IDS.filter((id) => !matched.has(id) && !reserved.has(id));
+  const pool = [...free.filter((id) => !oldIds.has(id)), ...free.filter((id) => oldIds.has(id))];
+  const added = sorted.filter((b) => !ids.has(b));
+  const kept = new Set([...added].sort((a, b) => b.score - a.score).slice(0, pool.length));
+  let next = 0;
+  for (const b of added) if (kept.has(b)) ids.set(b, pool[next++]);
+  const bodies: CachedBody[] = sorted.filter((b) => ids.has(b)).map((b) => ({ id: ids.get(b)!, pose: b.pose, mask: b.mask, score: b.score }));
   // persons: a link survives only to a matched old body (a reused id is somebody else); a face person whose body
   // vanished keeps its face, a body-only person whose body vanished hands over (renamed)
   let persons: PersonInfoCached[] = [];

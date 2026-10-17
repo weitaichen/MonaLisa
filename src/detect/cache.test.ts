@@ -121,6 +121,28 @@ describe('normalizeDetect (S §5.4)', () => {
     const none = { ...noFaceCache(1000, 800, [{ quarter: 0 as const, flipH: false }]), bodies: [], bodyScans: [0, 1] };
     expect(normalizeDetect(none).cache?.bodyScans).toEqual([0, 1]);
   });
+  it('a pending rematch (a dropped cache’s persons a 美體 cache carries, S §7) keeps its readable boxes, never under p0 or an id the persons use', () => {
+    const box = { x: 0.2, y: 0.2, w: 0.1, h: 0.1 };
+    const basic = { ...noFaceCache(1000, 800, []), bodies: [cacheBody('b1', 0.5)], persons: [{ id: 'b1', face: null, body: 'b1' }], primary: 'b1' };
+    const r = normalizeDetect({ ...basic, rematch: { f0: box, b1: box, p0: box, f9: box, f1: { x: 'a' }, b0: box } });
+    expect(r.cache?.rematch).toEqual({ f0: box, b0: box });
+    expect(r.lost).toBe(false);
+    expect(normalizeDetect({ ...basic, rematch: 'x' }).cache?.rematch).toBeUndefined();
+    expect(normalizeDetect(basic).cache).toEqual(basic);
+    // the nobody form carries it too; a cache that cannot be used hands it on with its own persons' boxes
+    expect(normalizeDetect({ ...noFaceCache(1000, 800, []), bodies: [], rematch: { f0: box } }).cache?.rematch).toEqual({ f0: box });
+    expect(normalizeDetect({ ...basic, v: 7, rematch: { f0: box } }).stale).toEqual({ f0: box });
+  });
+  it('an empty pending rematch stays (S §5.4 R3): a dropped cache without a readable face box still owes the reset toast', () => {
+    const box = { x: 0.2, y: 0.2, w: 0.1, h: 0.1 };
+    const basic = { ...noFaceCache(1000, 800, []), bodies: [cacheBody('b1', 0.5)], persons: [{ id: 'b1', face: null, body: 'b1' }], primary: 'b1' };
+    expect(normalizeDetect({ ...basic, rematch: {} })).toMatchObject({ cache: { rematch: {} }, lost: false });
+    // nothing readable left in it, or only an id the cache's own persons use: still pending
+    expect(normalizeDetect({ ...basic, rematch: { p0: box, f1: { x: 'a' }, b1: box } }).cache?.rematch).toEqual({});
+    expect(normalizeDetect({ ...noFaceCache(1000, 800, []), bodies: [], rematch: {} }).cache?.rematch).toEqual({});
+    // not a record: no rematch at all
+    expect(normalizeDetect({ ...basic, rematch: [] }).cache).not.toHaveProperty('rematch');
+  });
 });
 
 describe('cache helpers', () => {
@@ -236,6 +258,34 @@ describe('building the cache (S §3.3, §5.3)', () => {
     const r2 = withBodies(split, [onF0], faceOf);
     expect(r2.cache.persons.map((p) => p.id)).toEqual(['f0', 'f1']);
     expect(r2.renamed).toEqual({ b0: null });
+  });
+  it('withBodies gives out no id a pending rematch names, and keeps the rematch for the face answer', () => {
+    const box = { x: 0.2, y: 0.2, w: 0.1, h: 0.1 };
+    const pre = { ...noFaceCache(1000, 1000, []), rematch: { b0: box, f0: box } };
+    const r = withBodies(pre, [cacheBody('x', 0.3), cacheBody('x', 0.7)].map((b) => ({ pose: b.pose, mask: null, score: 0.2 })), () => null);
+    expect(r.cache.persons.map((p) => p.id)).toEqual(['b1', 'b2']);
+    expect(r.cache.rematch).toEqual(pre.rematch);
+  });
+  it('withBodies never gives out a reserved id, not even to stay within b0…b3: the lowest-scoring extra bodies are dropped (S §5.3 R1)', () => {
+    const box = { x: 0.2, y: 0.2, w: 0.1, h: 0.1 };
+    const pre = { ...noFaceCache(1000, 1000, []), rematch: { b0: box, b2: box, f1: box } };
+    const found = [
+      { x: 0.1, score: 0.3 },
+      { x: 0.3, score: 0.05 },
+      { x: 0.5, score: 0.2 },
+      { x: 0.7, score: 0.4 },
+    ].map(({ x, score }) => ({ pose: cacheBody('x', x).pose, mask: null, score }));
+    const r = withBodies(pre, found, () => null);
+    // two free ids (b1, b3): the two best scores keep their bodies, numbered by centre x
+    expect(r.cache.bodies!.map((b) => [b.id, b.score])).toEqual([['b1', 0.3], ['b3', 0.4]]);
+    expect(r.cache.persons.map((p) => p.id)).toEqual(['b1', 'b3']);
+    expect(r.cache.rematch).toEqual(pre.rematch);
+    expect(normalizeDetect(r.cache)).toMatchObject({ lost: false, cache: { rematch: pre.rematch } });
+    // an unmatched old body's id is reused before a body is dropped, a reserved one never
+    const old = { ...makeCache({ faces: [], bodies: [cacheBody('b3', 0.9)], bodiesComplete: false, persons: [{ id: 'b3', face: null, body: 'b3' }], primary: 'b3' }), rematch: { b0: box } };
+    const r2 = withBodies(old, found, () => null);
+    expect(r2.cache.bodies!.map((b) => b.id)).toEqual(['b1', 'b2', 'b3']);
+    expect(r2.cache.bodies!.map((b) => b.score)).toEqual([0.3, 0.2, 0.4]);
   });
   it('withBodies keeps body ids within b0…b3 when every new id would be taken by an unmatched old body', () => {
     const old = makeCache({ faces: [], bodies: [cacheBody('b0', 0.9)], bodiesComplete: false, persons: [{ id: 'b0', face: null, body: 'b0' }], primary: 'b0' });

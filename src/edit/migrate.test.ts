@@ -3,14 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { applyPreset, defaultParams, PARAM_DEFS, sanitizeParams, setParam } from '../engine/params';
 import { makeBodyDetection } from '../app/testFakes';
 import { prepareFaces } from '../detect/faces';
-import { withBodies } from '../detect/cache';
+import { normalizeDetect, withBodies } from '../detect/cache';
 import { cacheBody, makeCache } from '../detect/testCaches';
 import { cropValid, IDENTITY_GEOMETRY, maxFit } from '../geometry/view';
 import { normalizeEntry } from '../store/history';
 import { stableKey } from '../store/undo';
 import type { BeautyParams, EditState, Face, HistoryEntry, Landmarks478, ParamId, Pose33, Stroke } from '../types';
 import { editFromLegacy, legacyProjection, splitLegacy } from './legacy';
-import { bodyAnswer, cameraShotEdit, firstAnswer, importEdit, openState } from './migrate';
+import { bodyAnswer, cameraShotEdit, firstAnswer, importEdit, openState, preAnswerCache } from './migrate';
 import { assignPersons, defaultPhoto, editFlipView, naturalPerson, neutralPerson, personFromPreset, withPersons } from './state';
 import { sessionPlan } from '../ui/editorModel';
 
@@ -316,6 +316,119 @@ describe('firstAnswer (S §3.3 item 4, §5.3 answer-time rows, C2)', () => {
     const miss = firstAnswer({ ...base, prepared: two, faceSeed: { x: 0.05, y: 0.95 } });
     expect(Object.values(miss.rebase(shot).persons).every((p) => JSON.stringify(p) === JSON.stringify(neutralPerson()))).toBe(true);
   });
+  it('a camera seed when the editor finds no face (C3): p0, the all-skin person the camera drew, keeps the look; a seed outside the frame still discards it', () => {
+    const look = { photo: splitLegacy(defaultParams()).photo, person: personFromPreset('glow', 1) };
+    const none = { faces: [], obstacles: [], dropped: { tooSmall: 0, overCap: 0 } };
+    const inside = cameraShotEdit(look, { x: 0.5, y: 0.4 });
+    const a = firstAnswer({ ...base, prepared: none, faceSeed: { x: 0.5, y: 0.4 } });
+    expect(Object.keys(a.rebase(inside).persons)).toEqual(['p0']);
+    expect(a.rebase(inside).persons.p0).toEqual(look.person);
+    // a body-only person (no face anywhere) gets it too: p0 hands over to the primary body person
+    const withBody = firstAnswer({ ...base, prepared: none, v1Body: { bodies: [cacheBody('b0', 0.5)], complete: true }, faceSeed: { x: 0.5, y: 0.4 } });
+    expect(withBody.rebase(inside).persons.b0).toEqual(look.person);
+    // the beautified face was outside the saved crop: the shot drew no 磨皮 in frame
+    const outside = cameraShotEdit(look, { x: 1.3, y: 0.4 });
+    const out = firstAnswer({ ...base, prepared: none, faceSeed: { x: 1.3, y: 0.4 } });
+    expect(out.rebase(outside).persons.p0).toEqual(neutralPerson());
+  });
+  it('bodies found before the first face answer (S §7) build the 基本模式 form of the cache; the answer merges into it: a camera seed still names the primary, b0’s person keeps the local 美體 values', () => {
+    const look = { photo: splitLegacy(defaultParams()).photo, person: personFromPreset('glow', 1) };
+    const onF0 = { pose: poseOnFace(two.faces[0].face), mask: null, score: 0.9 };
+    const lone = { pose: cacheBody('x', 0.95).pose, mask: null, score: 0.1 };
+    // the 美體 detection while the face tracker could not answer: the bodies by centre x, p0 handed to the best score
+    const pre = bodyAnswer(preAnswerCache(size, null), [lone, onF0], size);
+    expect(pre.detect.persons).toEqual([
+      { id: 'b0', face: null, body: 'b0' },
+      { id: 'b1', face: null, body: 'b1' },
+    ]);
+    expect(pre.detect).toMatchObject({ primary: 'b0', faces: [], faceScans: [] });
+    const waist = (e: EditState) => withPersons(e, ['b0'], (p) => ({ ...p, values: { ...p.values, 'body.waist': 0.7 } }));
+    const shotOf = (seed: { x: number; y: number }) => waist(pre.rebase(cameraShotEdit(look, seed)));
+    const shot = shotOf({ x: 0.7, y: 0.4 });
+    expect(shot.persons.b0.values['skin.smooth']).toBe(look.person.values['skin.smooth']);
+    // the seed is on face B (f1); b0 pairs with face A and keeps its id (A15)
+    const a = firstAnswer({ ...base, detect: pre.detect, prepared: two, faceSeed: { x: 0.7, y: 0.4 } });
+    expect(a.detect.persons.find((p) => p.id === 'b0')?.face).toBe('f0');
+    expect(a.detect.primary).toBe('f1');
+    const e = a.rebase(shot);
+    expect(e.persons.f1.values['skin.smooth']).toBe(look.person.values['skin.smooth']);
+    expect(e.persons.f1.values['body.waist']).toBe(0);
+    expect(e.persons.b0.values['body.waist']).toBe(0.7);
+    expect(e.persons.b0.values['skin.smooth']).toBe(0);
+    expect(e.persons.b1).toEqual(neutralPerson());
+    expect(e.persons.p0).toBeUndefined();
+    // the seed in no face box: everyone starts from the template, but b0's person keeps the 美體 edit made on it
+    const miss = firstAnswer({ ...base, detect: pre.detect, prepared: two, faceSeed: { x: 0.05, y: 0.95 } });
+    const m = miss.rebase(shotOf({ x: 0.05, y: 0.95 }));
+    expect(m.persons.b0.values['body.waist']).toBe(0.7);
+    expect(m.persons.b0.values['skin.smooth']).toBe(0);
+    expect(m.persons.f1).toEqual(neutralPerson());
+    // without a seed b0's person is the primary (A13) and keeps everything it had
+    const plain = firstAnswer({ ...base, detect: pre.detect, prepared: two });
+    expect(plain.detect.primary).toBe('b0');
+    expect(plain.rebase(shot).persons.b0).toEqual(shot.persons.b0);
+  });
+  it('a 美體 cache is stored before the first face answer and reopened: the 美體 edit stays on the same body (D4)', () => {
+    // face A scores best as a face; B's body scores best as a body, so p0 (the 美體 edits) sits on B's body
+    const onA = { pose: poseOnFace(two.faces[0].face), mask: null, score: 0.2 };
+    const onB = { pose: poseOnFace(two.faces[1].face), mask: null, score: 0.5 };
+    const pre = bodyAnswer(preAnswerCache(size, null), [onA, onB], size);
+    const held = pre.detect.persons.find((p) => p.id === pre.detect.primary)!;
+    expect(pre.detect.bodies!.find((b) => b.id === held.body)!.pose).toBe(onB.pose);
+    const edit = withPersons(pre.rebase(importEdit({ photo: defaultPhoto(), person: naturalPerson() })), [held.id], (p) => ({ ...p, values: { ...p.values, 'body.waist': 0.7 } }));
+    // the autosave writes the cache with the edit (the tracker never answered); the reopen reads both
+    const params = sanitizeParams(legacyProjection(edit, pre.detect.primary));
+    const o = reopen(v1({ width: 1000, height: 1000, schema: 2, edit, params, paramsKey: stableKey(params), detect: { ...pre.detect, bodyScans: [0] } }), size);
+    expect(o.detect?.bodies?.map((b) => b.id)).toEqual(pre.detect.bodies!.map((b) => b.id));
+    const a = firstAnswer({ ...base, detect: o.detect, prepared: two, v1Body: o.v1Body, rematch: o.rematch });
+    const e = a.rebase(o.edit);
+    const onBPerson = a.detect.persons.find((p) => p.body === held.body)!;
+    expect(onBPerson.face).toBe('f1');
+    expect(e.persons[onBPerson.id].values['body.waist']).toBe(0.7);
+    const onAPerson = a.detect.persons.find((p) => p.face === 'f0')!;
+    expect(e.persons[onAPerson.id].values['body.waist']).toBe(0);
+  });
+  it('a dropped cache rematched with a body that pairs with no face (D1): the rematched primary keeps its stored params', () => {
+    const glow = assignPersons(editFromLegacy(applyPreset('glow', 1), { primaryInit: true }), ['f0', 'f1'], 'f0');
+    const stored = withPersons(glow, ['f0'], () => personFromPreset('refined', 1));
+    const rematch = { f0: two.faces[0].box, f1: two.faces[1].box };
+    const lone = { pose: cacheBody('x', 0.95).pose, mask: null, score: 0.9 };
+    // the reviewer's probe: the lone body as the answer's b0, beside the rematch
+    const probe = firstAnswer({ ...base, prepared: two, rematch, v1Body: { bodies: [{ id: 'b0', ...lone }], complete: true } });
+    expect(probe.detect.persons.map((p) => p.id)).toEqual(['f0', 'f1', 'b0']);
+    expect(probe.detect.primary).toBe('f0');
+    expect(probe.rebase(stored).persons.f0).toEqual(stored.persons.f0);
+    // the editor's path: 美體 found the lone body while the tracker could not answer; the rematch rides in that cache
+    const pre = bodyAnswer(preAnswerCache(size, rematch), [lone], size);
+    expect(pre.detect.rematch).toEqual(rematch);
+    const meanwhile = withPersons(pre.rebase(stored), [pre.detect.primary], (p) => ({ ...p, values: { ...p.values, 'body.waist': 0.7 } }));
+    expect(Object.keys(meanwhile.persons).sort()).toEqual(['b0', 'f0', 'f1']);
+    const a = firstAnswer({ ...base, detect: pre.detect, prepared: two });
+    expect(a.dropped).toBe(true);
+    expect(a.detect.rematch).toBeUndefined();
+    expect(a.detect.primary).toBe('f0');
+    const e = a.rebase(meanwhile);
+    expect(e.persons.f0).toEqual(stored.persons.f0);
+    expect(e.persons.f1).toEqual(stored.persons.f1);
+    expect(e.persons.b0.values['body.waist']).toBe(0.7);
+    // and so after a reopen: the stored cache carries the rematch, the edit the persons it names
+    const params = sanitizeParams(legacyProjection(meanwhile, 'b0'));
+    const o = reopen(v1({ width: 1000, height: 1000, schema: 2, edit: meanwhile, params, paramsKey: stableKey(params), detect: pre.detect }), size);
+    expect(o.detect?.rematch).toEqual(rematch);
+    expect(Object.keys(o.edit.persons).sort()).toEqual(['b0', 'f0', 'f1']);
+    const r = firstAnswer({ ...base, detect: o.detect, prepared: two });
+    expect(r.dropped).toBe(true);
+    expect(r.rebase(o.edit).persons.f0).toEqual(stored.persons.f0);
+  });
+  it('a stored rematched person a new face pairs with keeps its params over the body person 美體 made of it meanwhile', () => {
+    // the stale f1 is the face that pairs with the body 美體 found first: the stored params win (S §5.3)
+    const stored = withPersons(assignPersons(editFromLegacy(applyPreset('glow', 1), { primaryInit: true }), ['f0', 'f1'], 'f0'), ['f1'], () => personFromPreset('refined', 1));
+    const pre = bodyAnswer(preAnswerCache(size, { f1: two.faces[1].box }), [{ pose: poseOnFace(two.faces[1].face), mask: null, score: 0.3 }], size);
+    const a = firstAnswer({ ...base, detect: pre.detect, prepared: two });
+    const owner = a.detect.persons.find((p) => p.face === 'f1')!;
+    expect(owner.id).toBe('b0');
+    expect(a.rebase(pre.rebase(stored)).persons.b0).toEqual(stored.persons.f1);
+  });
   it('p0: an edit made before the answer goes to the primary (unsure → 大眼 0.8 → 2 faces)', () => {
     const e0 = openState(v1(), SIZE).edit;
     const meanwhile = { ...e0, persons: { p0: { ...e0.persons.p0, values: { ...e0.persons.p0.values, 'shape.eyeEnlarge': 0.8 } } } };
@@ -341,6 +454,27 @@ describe('firstAnswer (S §3.3 item 4, §5.3 answer-time rows, C2)', () => {
     const merged = firstAnswer({ ...base, detect: basic.detect, prepared: two });
     expect(merged.detect.persons.map((p) => p.id)).toContain('b0');
     expect(merged.detect.faceScans).toEqual([{ quarter: 0, flipH: false }]);
+  });
+  it('a 基本模式 cache whose primary body person pairs with no face: A13 hands the face part to the face-score person, the body keeps its 美體 values', () => {
+    const p = setParam(applyPreset('refined', 1), 'body.waist', 0.7);
+    const basic = firstAnswer({ ...base, prepared: null, v1Body: { bodies: [cacheBody('b0', 0.95)], complete: true } });
+    const e0 = basic.rebase(openState(v1({ params: p }), SIZE).edit);
+    expect(basic.detect.primary).toBe('b0');
+    expect(e0.persons.b0.values['body.waist']).toBe(0.7);
+    const merged = firstAnswer({ ...base, detect: basic.detect, prepared: two });
+    expect(merged.detect.persons.find((x) => x.id === 'b0')?.face).toBeNull();
+    expect(merged.detect.primary).toBe('f0');
+    const e = merged.rebase(e0);
+    expect(e.persons.f0.values['skin.smooth']).toBe(personFromPreset('refined', 1).values['skin.smooth']);
+    expect(e.persons.f0.values['body.waist']).toBe(0);
+    expect(e.persons.b0.values['body.waist']).toBe(0.7);
+    expect(e.persons.b0.values['skin.smooth']).toBe(0);
+    expect(e.persons.f1).toEqual(neutralPerson());
+    // a face that pairs with the body person: it keeps everything, and the primary (A15)
+    const paired = firstAnswer({ ...base, prepared: null, v1Body: { bodies: [{ id: 'b0', pose: poseOnFace(two.faces[1].face), mask: null, score: 0.3 }], complete: true } });
+    const m = firstAnswer({ ...base, detect: paired.detect, prepared: two });
+    expect(m.detect.primary).toBe('b0');
+    expect(m.rebase(paired.rebase(openState(v1({ params: p }), SIZE).edit)).persons.b0).toEqual(paired.rebase(openState(v1({ params: p }), SIZE).edit).persons.b0);
   });
   it('a sideways re-scan (S §3.6) appends its up-frame to faceScans, finds or not; the cache only grows', () => {
     const upright = firstAnswer({ ...base, prepared: { faces: [], obstacles: [], dropped: { tooSmall: 0, overCap: 0 } } });
@@ -423,6 +557,194 @@ describe('bodyAnswer (S §3.4 P4, §7): a 美體 detection joined to the persons
     expect(e2.persons.b1).toEqual(e.template);
     expect(e2.persons.f0).toEqual(e.persons.f0);
     expect(e2.persons.f0.values['body.waist']).toBe(0);
+  });
+});
+
+/** a big central body whose face points sit on no face (it pairs with none): selectPerson's first choice */
+function wideBody(): Pose33 {
+  const points = new Float32Array(33 * 4);
+  for (let i = 0; i < 33; i++) {
+    points[i * 4] = 0.25 + (i % 2 ? 0.5 : 0);
+    points[i * 4 + 1] = 0.05 + (0.9 * i) / 32;
+    points[i * 4 + 3] = 0.99;
+  }
+  return { points };
+}
+
+describe('persons before the first face answer: a dropped cache, an unsure tracker, 美體 first (S §5.3 R1–R3)', () => {
+  const size = { width: 1000, height: 1000 };
+  const two = prepareFaces([lmAt(0.3, 0.4, 0.2), lmAt(0.7, 0.4, 0.12)], 1000, 1000);
+  const one = prepareFaces([lmAt(0.3, 0.4, 0.2)], 1000, 1000);
+  const base = { detect: null, size, v1Body: null, rematch: null, faceSeed: null } as const;
+  const waist = (e: EditState, id: string, v: number) => withPersons(e, [id], (p) => ({ ...p, values: { ...p.values, 'body.waist': v } }));
+  const withWaist = (p: EditState['template'], v: number) => ({ ...p, values: { ...p.values, 'body.waist': v } });
+  /** the record the autosave writes (edit, its projection, the cache), read back as the editor reads it */
+  const stored = (edit: EditState, detect: HistoryEntry['detect']) => {
+    const params = sanitizeParams(legacyProjection(edit, detect?.primary ?? 'p0'));
+    return v1({ width: 1000, height: 1000, schema: 2, edit, params, paramsKey: stableKey(params), detect });
+  };
+  const bodyOn = (face: Face, score: number) => ({ pose: poseOnFace(face), mask: null, score });
+
+  it('R2 (E1): a camera seed names face A, whose body person got 細腰 before the answer: A gets the look’s face part and keeps its 細腰', () => {
+    const look = { photo: splitLegacy(defaultParams()).photo, person: personFromPreset('glow', 1) };
+    const seed = { x: 0.3, y: 0.4 };
+    const onA = bodyOn(two.faces[0].face, 0.2);
+    const onB = bodyOn(two.faces[1].face, 0.9);
+    const pre = bodyAnswer(preAnswerCache(size, null), [onA, onB], size);
+    const bodyOf = (id: string) => pre.detect.bodies!.find((b) => b.id === pre.detect.persons.find((p) => p.id === id)!.body)!.pose;
+    // p0's look sits on B's body (selectPerson's choice); A's body person is a template person the user set 細腰 on
+    const holder = pre.detect.primary;
+    const a0 = pre.detect.persons.find((p) => p.id !== holder)!.id;
+    expect(bodyOf(holder)).toBe(onB.pose);
+    expect(bodyOf(a0)).toBe(onA.pose);
+    const shot = pre.rebase(cameraShotEdit(look, seed));
+    const edited = waist(shot, a0, 0.5);
+    const a = firstAnswer({ ...base, detect: pre.detect, prepared: two, faceSeed: seed });
+    expect(a.detect.primary).toBe(a0);
+    const e = a.rebase(edited);
+    expect(e.persons[a0]).toEqual(withWaist(look.person, 0.5));
+    // B's body person keeps the look's local 美體 values (none in 光澤) on its own face values: the template
+    expect(e.persons[holder]).toEqual(neutralPerson());
+    expect(e.persons.p0).toBeUndefined();
+    // every undo state merges the same way: ↶ past the 細腰 keeps the face part on A
+    expect(a.rebase(shot).persons[a0]).toEqual(look.person);
+  });
+
+  it('R2 (E1): the holder’s body pairs with no face, so face A’s body person (細腰 meanwhile) is the primary: it gets 0.3’s face look and keeps its 細腰', () => {
+    const v1e = openState(v1({ params: setParam(applyPreset('refined', 1), 'body.waist', 0.7) }), SIZE).edit;
+    const onA = bodyOn(two.faces[0].face, 0.2);
+    const pre = bodyAnswer(preAnswerCache(size, null), [onA, { pose: wideBody(), mask: null, score: 0.9 }], size);
+    const holder = pre.detect.primary;
+    const a0 = pre.detect.persons.find((p) => p.id !== holder)!.id;
+    expect(pre.detect.bodies!.find((b) => b.id === a0)!.pose).toBe(onA.pose);
+    const plain = pre.rebase(v1e);
+    expect(plain.persons[holder]).toEqual(v1e.persons.p0);
+    const a = firstAnswer({ ...base, detect: pre.detect, prepared: two });
+    expect(a.detect.persons.find((p) => p.id === holder)?.face).toBeNull();
+    expect(a.detect.primary).toBe(a0);
+    const e = a.rebase(waist(plain, a0, 0.5));
+    expect(e.persons[a0]).toEqual(withWaist(v1e.persons.p0, 0.5));
+    // the holder keeps 0.3's body edit (細腰 0.7) on a neutral face; the other face starts neutral
+    expect(e.persons[holder]).toEqual(withWaist(neutralPerson(), 0.7));
+    expect(e.persons.f1).toEqual(neutralPerson());
+    expect(a.rebase(plain).persons[a0]).toEqual(withWaist(v1e.persons.p0, 0));
+  });
+
+  it('R1 (E3): a dropped edit’s person without a face box goes at the 美體 merge: no new body person reads its params, its 長腿 anchor goes too', () => {
+    // the stored persons: b0 (face A, an A15 id: in the rematch) and b1 (C, body-only, 細腰 0.9, anchored: no face box)
+    let stale = assignPersons(editFromLegacy(applyPreset('glow', 1), { primaryInit: true }), ['b0', 'b1'], 'b0');
+    stale = withPersons(stale, ['b0'], () => personFromPreset('refined', 1));
+    stale = { ...waist(stale, 'b1', 0.9), photo: { ...stale.photo, legsAnchor: 'b1' } };
+    const rematch = { b0: one.faces[0].box };
+    const A = bodyOn(one.faces[0].face, 0.5);
+    const C = { pose: cacheBody('x', 0.8).pose, mask: null, score: 0.5 };
+    const pre = bodyAnswer(preAnswerCache(size, rematch), [A, C], size);
+    // b0 is reserved for its stored person; the new bodies take b1 and b2
+    expect(pre.detect.persons.map((p) => p.id)).toEqual(['b1', 'b2']);
+    expect(pre.detect.rematch).toEqual(rematch);
+    const e = pre.rebase(stale);
+    expect(Object.keys(e.persons).sort()).toEqual(['b0', 'b1', 'b2']);
+    expect(e.persons.b0).toEqual(stale.persons.b0);
+    for (const id of ['b1', 'b2']) expect(e.persons[id].values['body.waist']).toBe(0);
+    expect(e.photo.legsAnchor).toBeNull();
+    // the face answer renames b0 onto A's body person (a stored person wins its claim) and says so
+    const a = firstAnswer({ ...base, detect: pre.detect, prepared: one });
+    expect(a.dropped).toBe(true);
+    const owner = a.detect.persons.find((p) => p.face === 'f0')!;
+    const done = a.rebase(e);
+    expect(done.persons[owner.id]).toEqual(stale.persons.b0);
+    expect(Object.values(done.persons).every((p) => p.values['body.waist'] === 0)).toBe(true);
+  });
+
+  it('R1 (E3, Codex): four bodies beside a reserved b0: the lowest-scoring one is dropped, the stored b0 waits for the face answer, also after a reopen', () => {
+    const stale = withPersons(assignPersons(editFromLegacy(applyPreset('glow', 1), { primaryInit: true }), ['b0'], 'b0'), ['b0'], () => personFromPreset('refined', 1));
+    const rematch = { b0: one.faces[0].box };
+    const A = bodyOn(one.faces[0].face, 0.6);
+    const lone = (x: number, score: number) => ({ pose: cacheBody('x', x).pose, mask: null, score });
+    const weakest = lone(0.85, 0.1);
+    const pre = bodyAnswer(preAnswerCache(size, rematch), [A, lone(0.55, 0.5), lone(0.7, 0.4), weakest], size);
+    expect(pre.detect.bodies!.map((b) => b.id)).toEqual(['b1', 'b2', 'b3']);
+    expect(pre.detect.bodies!.some((b) => b.pose === weakest.pose)).toBe(false);
+    expect(pre.detect.persons.map((p) => p.id)).toEqual(['b1', 'b2', 'b3']);
+    const e = pre.rebase(stale);
+    expect(e.persons.b0).toEqual(stale.persons.b0);
+    // the reopen keeps the rematch (no person of the cache uses b0) and the person it names
+    expect(normalizeDetect(pre.detect)).toMatchObject({ lost: false, cache: { rematch } });
+    const o = reopen(stored(e, pre.detect), size);
+    expect(o.detect?.rematch).toEqual(rematch);
+    expect(o.edit.persons.b0).toEqual(stale.persons.b0);
+    const a = firstAnswer({ ...base, detect: o.detect, prepared: one });
+    expect(a.dropped).toBe(true);
+    const owner = a.detect.persons.find((p) => p.face === 'f0')!;
+    expect(owner.id).toBe('b1');
+    expect(a.rebase(o.edit).persons.b1).toEqual(stale.persons.b0);
+  });
+
+  it('R1 at a first answer without 美體: a stored person no box names is dropped before the new persons take their ids', () => {
+    // a corrupt cache: f0's box was unreadable, f1's was not. The new face f0 is somebody new: the template
+    const old = withPersons(assignPersons(editFromLegacy(applyPreset('glow', 1), { primaryInit: true }), ['f0', 'f1'], 'f0'), ['f0'], () => personFromPreset('refined', 1));
+    const anchored = { ...old, photo: { ...old.photo, legsAnchor: 'f0' } };
+    const a = firstAnswer({ ...base, prepared: two, rematch: { f1: two.faces[1].box } });
+    const e = a.rebase(anchored);
+    expect(a.dropped).toBe(true);
+    expect(e.persons.f0).toEqual(old.template);
+    expect(e.persons.f1).toEqual(old.persons.f1);
+    expect(e.photo.legsAnchor).toBeNull();
+  });
+
+  it('R3 (E5): a dropped cache with no readable face box ({}) still says so at the face answer, in this session and after a reopen', () => {
+    // a body-only person (細腰 0.9) of a cache that cannot be read: no face box, so the rematch is {}
+    const edit = waist(assignPersons(editFromLegacy(applyPreset('glow', 1), { primaryInit: true }), ['b0'], 'b0'), 'b0', 0.9);
+    const params = sanitizeParams(legacyProjection(edit, 'b0'));
+    const o = reopen(v1({ width: 1000, height: 1000, schema: 2, edit, params, paramsKey: stableKey(params), detect: { v: 7 } as unknown as HistoryEntry['detect'] }), size);
+    expect(o).toMatchObject({ detect: null, rematch: {}, cacheDropped: true });
+    const pre = bodyAnswer(preAnswerCache(size, o.rematch), [{ pose: cacheBody('x', 0.5).pose, mask: null, score: 0.3 }], size);
+    expect(pre.detect.rematch).toEqual({});
+    // the stored b0 is dropped at the merge: the new body b0 starts from the look, not from its 細腰
+    const e = pre.rebase(o.edit);
+    expect(Object.keys(e.persons)).toEqual(['b0']);
+    expect(e.persons.b0.values['body.waist']).toBe(0);
+    expect(firstAnswer({ ...base, detect: pre.detect, prepared: two, rematch: o.rematch }).dropped).toBe(true);
+    // closed before the face answer: the reopen keeps the empty rematch, so the answer still shows the reset toast
+    const back = reopen(stored(e, pre.detect), size);
+    expect(back.detect?.rematch).toEqual({});
+    const a = firstAnswer({ ...base, detect: back.detect, prepared: two });
+    expect(a.dropped).toBe(true);
+    expect(a.detect.rematch).toBeUndefined();
+  });
+
+  it('R3 (E5): a 美體 cache that carried a rematch and no longer fits hands the rematch on with its own boxes', () => {
+    const old = withPersons(assignPersons(editFromLegacy(applyPreset('glow', 1), { primaryInit: true }), ['f0', 'f1'], 'f0'), ['f0'], () => personFromPreset('refined', 1));
+    const rematch = { f0: two.faces[0].box, f1: two.faces[1].box };
+    const pre = bodyAnswer(preAnswerCache(size, rematch), [{ pose: cacheBody('x', 0.95).pose, mask: null, score: 0.3 }], size);
+    const e = pre.rebase(old);
+    const o = reopen(stored(e, { ...pre.detect, width: 1000, height: 1300 }), size);
+    expect(o).toMatchObject({ detect: null, rematch, cacheDropped: true });
+    const a = firstAnswer({ ...base, prepared: two, rematch: o.rematch });
+    const done = a.rebase(o.edit);
+    expect(done.persons.f0).toEqual(old.persons.f0);
+    expect(done.persons.f1).toEqual(old.persons.f1);
+  });
+
+  it('staleFirst (E7): two bodies, the stored person’s face pairs with the body that does not hold the look: its stored params win over this session’s', () => {
+    // f1 is stored as the primary; f0 (refined) is the stale person the rematch names
+    const old = withPersons(assignPersons(editFromLegacy(applyPreset('glow', 1), { primaryInit: true }), ['f0', 'f1'], 'f1'), ['f0'], () => personFromPreset('refined', 1));
+    const onF0 = bodyOn(two.faces[0].face, 0.3);
+    const onF1 = bodyOn(two.faces[1].face, 0.3);
+    const pre = bodyAnswer(preAnswerCache(size, { f0: two.faces[0].box }), [onF0, onF1], size);
+    const holder = pre.detect.primary;
+    const other = pre.detect.persons.find((p) => p.id !== holder)!.id;
+    expect(pre.detect.bodies!.find((b) => b.id === other)!.pose).toBe(onF0.pose);
+    // the body person f0's face pairs with got 細腰 meanwhile: the edit lists it before the stored f0
+    const meanwhile = waist(pre.rebase(old), other, 0.6);
+    expect(Object.keys(meanwhile.persons)).toEqual([...pre.detect.persons.map((p) => p.id), 'f0']);
+    const a = firstAnswer({ ...base, detect: pre.detect, prepared: two });
+    const owner = a.detect.persons.find((p) => p.face === 'f0')!;
+    expect(owner.id).toBe(other);
+    expect(a.dropped).toBe(true);
+    const e = a.rebase(meanwhile);
+    expect(e.persons[other]).toEqual(old.persons.f0);
+    expect(e.persons.f0).toBeUndefined();
   });
 });
 

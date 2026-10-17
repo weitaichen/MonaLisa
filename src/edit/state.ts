@@ -3,7 +3,7 @@
 import { isLookId } from '../engine/looks';
 import { adjustValuesNeutral } from '../engine/adjustMath';
 import { applyPreset, FILTERS, neutralValue, PARAM_DEFS, paramsInGroup, PRESETS, sanitizeBand, SHADE_PARTS, SHADES as SHADE_DEFS } from '../engine/params';
-import { clampStraighten, cropConstrain, cropValid, flipView, IDENTITY_GEOMETRY, isIdentity, rotateLeft } from '../geometry/view';
+import { clampStraighten, cropConstrain, cropValid, flipView, IDENTITY_GEOMETRY, isIdentity, rotateLeft, upQuarter } from '../geometry/view';
 import { stableKey } from '../store/undo';
 import { sanitizeStrokes } from './liquify';
 import { sanitizeRight } from './sides';
@@ -192,9 +192,15 @@ export function editFlipView(edit: EditState): EditState {
   return { ...edit, photo: { ...edit.photo, geometry: flipView(edit.photo.geometry) } };
 }
 
-/** 還原: the identity geometry; already identity → the same object */
+/**
+ * 還原: the identity geometry; already identity → the same object. From a turned up-frame (upQuarter ≠ 0) E turns back,
+ * so the 增高 band (E rows) is removed in the same state, as 旋轉 does (C §3.5); a crop, 拉直 or 翻轉 alone keeps it.
+ */
 export function editResetGeometry(edit: EditState): EditState {
-  return isIdentity(edit.photo.geometry) ? edit : editSetGeometry(edit, IDENTITY_GEOMETRY);
+  const g = edit.photo.geometry;
+  if (isIdentity(g)) return edit;
+  if (upQuarter(g) === 0 || edit.photo.heightBand === null) return editSetGeometry(edit, IDENTITY_GEOMETRY);
+  return { ...edit, photo: { ...edit.photo, geometry: IDENTITY_GEOMETRY, heightBand: null } };
 }
 
 /** one 推臉筆 gesture (one undo step): append its records; the records already there are shared, never copied (push-brush spec §5.4) */

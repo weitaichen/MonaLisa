@@ -5,7 +5,8 @@ import { reportError } from './debug';
 import { deps } from './deps';
 import { app, go, toast, type EditorSource } from './state';
 
-function maxImportEdge(): number {
+/** the working copy's long edge an import or a reopen decodes at; also the edge 設定 names for 標準 (C D6) */
+export function maxImportEdge(): number {
   // RB §4: long edge 2048, 1440 on tier L. 'auto' means the tier the live loop settled on this session
   // (H until the camera has run, so an import before that still decodes at 2048).
   const pref = app.get().prefs.tier;

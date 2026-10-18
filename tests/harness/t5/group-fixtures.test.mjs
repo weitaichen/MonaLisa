@@ -5,10 +5,39 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import { describe, expect, it } from 'vitest';
-import { GROUP_FACES, groupFace } from '../../../scripts/gen-group-fixture.mjs';
+import { ELEVEN_FACES, GROUP_FACES, groupFace, SMALL_FACES, smallFaceCell, TEN_FACES } from '../../../scripts/gen-group-fixture.mjs';
 import { composeFitWidth, composeGroupCam, GROUP_CAM, groupCamTiles, PREVIEW_34, resampleRgb, rng, shiftFrame } from '../../../scripts/gen-y4m.mjs';
 
 const fx = (n) => join(import.meta.dirname, '..', '..', 'fixtures', n);
+/** a JPEG's [width, height] from its first SOFn marker */
+const jpegSize = (buf) => {
+  expect([buf[0], buf[1]]).toEqual([0xff, 0xd8]);
+  let o = 2;
+  while (o < buf.length && !(buf[o + 1] >= 0xc0 && buf[o + 1] <= 0xc3)) o += 2 + buf.readUInt16BE(o + 2);
+  return [buf.readUInt16BE(o + 7), buf.readUInt16BE(o + 5)];
+};
+/** a layout's cells lie inside its image, its faces sit where the layout says, and no two cells overlap */
+const expectCells = (layout) => {
+  const cells = layout.faces.map((s) => smallFaceCell(s, layout));
+  for (const c of cells) {
+    expect(c.x).toBeGreaterThanOrEqual(0);
+    expect(c.y).toBeGreaterThanOrEqual(0);
+    expect(c.x + c.size).toBeLessThanOrEqual(layout.width);
+    expect(c.y + c.size).toBeLessThanOrEqual(layout.height);
+    // the face sits where the layout says: its centre at (cx, cy), its oval-box width fw of the image width
+    expect(c.face.cx / layout.width).toBeCloseTo(c.spec.cx, 2);
+    expect(c.face.cy / layout.height).toBeCloseTo(c.spec.cy, 2);
+    expect(c.face.fw / layout.width).toBeCloseTo(c.spec.fw, 2);
+  }
+  for (const a of cells) {
+    for (const b of cells) {
+      if (a === b) continue;
+      const apart = a.x + a.size <= b.x || b.x + b.size <= a.x || a.y + a.size <= b.y || b.y + b.size <= a.y;
+      expect(apart).toBe(true);
+    }
+  }
+  return cells;
+};
 
 describe('group fixtures', () => {
   it('group_faces.png is 1800×1200 and group6_faces.png 2048×1536', () => {
@@ -16,6 +45,41 @@ describe('group fixtures', () => {
     expect([a.width, a.height]).toEqual([1800, 1200]);
     const b = PNG.sync.read(readFileSync(fx('group6_faces.png')));
     expect([b.width, b.height]).toEqual([2048, 1536]);
+  });
+  it('small_faces.jpg: a 2000×1500 JPEG of seven faces 6–14 % of the width, cells inside the image and apart', () => {
+    expect(jpegSize(readFileSync(fx('small_faces.jpg')))).toEqual([SMALL_FACES.width, SMALL_FACES.height]);
+    expect(SMALL_FACES.faces).toHaveLength(7);
+    const fws = SMALL_FACES.faces.map((f) => f.fw);
+    expect(Math.min(...fws)).toBeCloseTo(0.06, 9);
+    expect(Math.max(...fws)).toBeCloseTo(0.14, 9);
+    // smallFaceCell's layout defaults to SMALL_FACES
+    expect(SMALL_FACES.faces.map((s) => smallFaceCell(s))).toEqual(expectCells(SMALL_FACES));
+  });
+  it('ten_faces.jpg / eleven_faces.jpg (S §6.7): ten faces 9–13 % of the width; the eleventh, 8 %, is the smallest', () => {
+    expect(jpegSize(readFileSync(fx('ten_faces.jpg')))).toEqual([TEN_FACES.width, TEN_FACES.height]);
+    expect(jpegSize(readFileSync(fx('eleven_faces.jpg')))).toEqual([ELEVEN_FACES.width, ELEVEN_FACES.height]);
+    expect([TEN_FACES.width, TEN_FACES.height]).toEqual([2000, 1500]);
+    expect(TEN_FACES.faces).toHaveLength(10);
+    expect(ELEVEN_FACES.faces).toHaveLength(11);
+    // the same ten faces, plus one
+    expect(ELEVEN_FACES.faces.slice(0, 10)).toEqual(TEN_FACES.faces);
+    expect([ELEVEN_FACES.width, ELEVEN_FACES.height]).toEqual([TEN_FACES.width, TEN_FACES.height]);
+    const fws = TEN_FACES.faces.map((f) => f.fw);
+    expect(Math.min(...fws)).toBeCloseTo(0.09, 9);
+    expect(Math.max(...fws)).toBeCloseTo(0.13, 9);
+    const extra = ELEVEN_FACES.faces[10];
+    expect(extra.fw).toBeCloseTo(0.08, 9);
+    // a clear margin under the ten (box area 0.79×; detected widths differ from these by ≤ 0.004), and well above
+    // MIN_FACE_FRAC (3 % of the short edge = 0.0225 of the width)
+    expect(Math.min(...fws) - extra.fw).toBeGreaterThanOrEqual(0.01 - 1e-9);
+    // every centre x at least 0.03 from every other: ids run left to right on any delegate (prepareFaces ties within 0.01)
+    const xs = ELEVEN_FACES.faces.map((f) => f.cx).sort((a, b) => a - b);
+    for (let i = 1; i < xs.length; i++) expect(xs[i] - xs[i - 1]).toBeGreaterThanOrEqual(0.03 - 1e-9);
+    expectCells(TEN_FACES);
+    expectCells(ELEVEN_FACES);
+    // modified derivatives of sample_face.png (Apache-2.0 §4(b)): NOTICE lists them
+    const notice = readFileSync(join(import.meta.dirname, '..', '..', '..', 'LICENSES', 'NOTICE.txt'), 'utf8');
+    expect(notice).toContain('tests/fixtures/ten_faces.jpg and tests/fixtures/eleven_faces.jpg: modified derivatives of sample_face.png');
   });
   it('group_people.jpg exists and is a JPEG', () => {
     const buf = readFileSync(fx('group_people.jpg'));

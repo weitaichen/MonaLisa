@@ -1,5 +1,6 @@
 // The v0.4 edit of one photo (RM §3.2–3.4): an immutable EditState with a photo layer and a person layer. Every change
 // returns a new object and shares what it did not change, so UndoStack keeps states by reference ({clone: false}).
+import { MAX_RENDER_FACES } from '../config/limits';
 import { isLookId } from '../engine/looks';
 import { adjustValuesNeutral } from '../engine/adjustMath';
 import { applyPreset, FILTERS, neutralValue, PARAM_DEFS, paramsInGroup, PRESETS, sanitizeBand, SHADE_PARTS, SHADES as SHADE_DEFS } from '../engine/params';
@@ -28,8 +29,8 @@ import type {
 
 export const P0: PersonId = 'p0';
 export const LIVE: PersonId = 'live';
-/** every id a person may carry (S §5.4) */
-export const PERSON_ID = /^(f[0-5]|b[0-3]|p0|live)$/;
+/** every id a person may carry (S §5.4): f0…f9 (MAX_RENDER_FACES faces, S §6.7), b0…b3, p0, live */
+export const PERSON_ID = new RegExp(`^(f[0-${MAX_RENDER_FACES - 1}]|b[0-3]|p0|live)$`);
 export const PHOTO_IDS: readonly PhotoParamId[] = PARAM_DEFS.filter((d) => d.scope === 'photo').map((d) => d.id as PhotoParamId);
 export const PERSON_IDS: readonly PersonParamId[] = PARAM_DEFS.filter((d) => d.scope === 'person').map((d) => d.id as PersonParamId);
 /** a beauty preset's person part: every person-level face item (RM §3.4); 美體 is never in a preset */
@@ -50,22 +51,40 @@ export function personFromPreset(id: PresetId, amount: number): PersonParams {
   return { values, right: null, shades: { ...emptyShades(), lip: p.lipShade, blush: p.blushShade }, preset: { id, amount: p.presetAmount } };
 }
 
-/** 原圖: every value neutral (the template of persons the camera did not beautify) */
+/** 原圖: every value neutral: every person of a new photo, the template, and what 重置 gives every person and the template (2026-10-18) */
 export function neutralPerson(): PersonParams {
   return personFromPreset('original', 1);
 }
 
-/** 自然 100: what 重置 gives every person */
+/** 自然 100, the person part of the 自然 preset (0.3's first-launch look) */
 export function naturalPerson(): PersonParams {
   return personFromPreset('natural', 1);
 }
 
-/** the 自然 photo part, everything else neutral or identity, the geometry included (重置, RM §3.4, C §12 #23) */
-export function defaultPhoto(): PhotoParams {
-  const p = applyPreset('natural', 1);
+function presetPhoto(id: PresetId): PhotoParams {
+  const p = applyPreset(id, 1);
   const values = {} as Record<PhotoParamId, number>;
   for (const k of PHOTO_IDS) values[k] = p.values[k];
-  return { values, filterId: p.filterId, look: null, presetLink: { id: 'natural', amount: 1 }, bodyProtect: true, heightBand: null, legsAnchor: null, geometry: IDENTITY_GEOMETRY, spots: [], strokes: [] };
+  return { values, filterId: p.filterId, look: null, presetLink: { id, amount: 1 }, bodyProtect: true, heightBand: null, legsAnchor: null, geometry: IDENTITY_GEOMETRY, spots: [], strokes: [] };
+}
+
+/** the 自然 photo part, everything else neutral or identity (0.3's first-launch photo part) */
+export function defaultPhoto(): PhotoParams {
+  return presetPhoto('natural');
+}
+
+/**
+ * the 原圖 photo part: every value neutral, no filter, no 質感, linked to 原圖 100, the identity geometry, no spots or
+ * strokes. A new photo (an import or a camera shot) opens with it, 重置 returns to it (RM §3.4, C §12 #23), and a photo
+ * value never stored reads as it (sanitizePhoto), 2026-10-18.
+ */
+export function neutralPhoto(): PhotoParams {
+  return presetPhoto('original');
+}
+
+/** the camera look nobody has set (a fresh install, or an upgrader who never changed the camera): 原圖 (2026-10-18; 0.3 and 0.4.0 started the camera at 自然) */
+export function neutralLook(): CameraLook {
+  return { photo: neutralPhoto(), person: neutralPerson() };
 }
 
 /** the undo / output de-dupe key: stableKey with every stroke reduced to its id (C §3.4) */
@@ -110,11 +129,11 @@ const SHADES: Record<ShadePart, ReadonlySet<string>> = Object.fromEntries(
 /**
  * The persons known now (display order) get their params (S §3.3 item 4): a person the edit has keeps its params; the
  * primary gets p0 (primaryInit plus every edit made meanwhile), else primaryInit, else the template; everyone else the
- * template. p0 stays only when it is the whole list (nobody found). `discardP0`: a camera seed matched no face, so the
- * look must not land on a face the camera did not beautify (S §3.4 C2). primaryInit becomes null.
+ * template. p0 stays only when it is the whole list (nobody found). p0 is never dropped: a new photo opens at 原圖, so
+ * it holds only the user's own edits (S §3.4 C2, C6). primaryInit becomes null.
  */
-export function assignPersons(edit: EditState, ids: readonly PersonId[], primary: PersonId, opts: { discardP0?: boolean } = {}): EditState {
-  const seed = opts.discardP0 ? edit.template : (edit.persons[P0] ?? edit.primaryInit ?? edit.template);
+export function assignPersons(edit: EditState, ids: readonly PersonId[], primary: PersonId): EditState {
+  const seed = edit.persons[P0] ?? edit.primaryInit ?? edit.template;
   const persons: Record<PersonId, PersonParams> = {};
   for (const id of ids) {
     const have = id === P0 ? undefined : edit.persons[id];
@@ -144,11 +163,16 @@ export function renamePersons(edit: EditState, map: Readonly<Record<PersonId, Pe
   return { ...edit, persons, photo: { ...edit.photo, legsAnchor, spots: spotsSame ? edit.photo.spots : spots } };
 }
 
-/** 重置 (RM §3.4): the 自然 photo part, every person 自然; the template stays. One undo step. */
+/**
+ * 重置 (RM §3.4): back to 原圖, the state a new photo opens with: the 原圖 photo part, every person 原圖, and the
+ * template 原圖 with no primaryInit, so a face found after it (a re-scan in a new up-frame, A15, a rematch) starts at
+ * 原圖 too, also on an entry another build stored with the 自然 camera look as its template (0.4.0's imports, C7).
+ * One undo step: ↶ brings back the template and primaryInit with the rest.
+ */
 export function resetAll(edit: EditState): EditState {
   const persons: Record<PersonId, PersonParams> = {};
-  for (const id of Object.keys(edit.persons)) persons[id] = naturalPerson();
-  return { ...edit, photo: defaultPhoto(), persons };
+  for (const id of Object.keys(edit.persons)) persons[id] = neutralPerson();
+  return { ...edit, photo: neutralPhoto(), persons, template: neutralPerson(), primaryInit: null };
 }
 
 const clampAmount = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
@@ -299,11 +323,11 @@ export function sanitizeGeometry(raw: unknown, oSize?: Size | null): Geometry {
 
 /**
  * Untrusted photo layer → valid; `persons` (when known) bounds the 長腿 anchor; a link survives only while it matches.
- * `oSize` (the entry's O size) validates the geometry and is the 推臉筆 frame; without it the geometry is identity (S D13)
- * and there are no strokes (push-brush spec §5.2).
+ * A value never stored is 原圖's (neutral), as a new photo's is. `oSize` (the entry's O size) validates the geometry and
+ * is the 推臉筆 frame; without it the geometry is identity (S D13) and there are no strokes (push-brush spec §5.2).
  */
 export function sanitizePhoto(raw: unknown, persons: ReadonlySet<PersonId> | null = null, oSize?: Size | null): PhotoParams {
-  const base = defaultPhoto();
+  const base = neutralPhoto();
   const r = isRecord(raw) ? raw : {};
   const rv = isRecord(r.values) ? r.values : {};
   const values = { ...base.values };

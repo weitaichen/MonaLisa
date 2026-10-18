@@ -8,8 +8,25 @@
 //   group6_faces.png 2048×1536: six square cells of sample_face.png (1.3 face widths each) in a 3×2 grid, odd cells
 //                    mirrored: faces 1.3 FW apart (clustered-cap bench and e2e)
 //   group_people.jpg fullbody.jpg + fullbody_yoga.jpg side by side at equal height (1000 px), JPEG q 0.92
+//   small_faces.jpg  2000×1500: seven GROUP6-style square cells (1.3 FW) of sample_face.png on the edge colour, three
+//                    large faces (10.5–14 % of the width) along the top and four small ones (6–7.8 %) below them,
+//                    alternate cells mirrored, JPEG q 0.92 (a small-face group photo: BlazeFace short-range finds a face
+//                    only from about 10–15 % of the photo's edge, full-range finds all seven; photo-detection e2e)
+//                    (a synthetic layout, chosen 2026-10-19 by a seeded random search and hill-climb over BlazeFace's
+//                    own scores, SwiftShader and CPU: every face scores ≥ 0.67 full-range, the four small ones also
+//                    alone; short-range finds the three large faces only. Kept alone with the small ones and turned
+//                    90°, the 14 % and 12.5 % faces are still found short-range, the 10.5 % one only once turned
+//                    upright, which detector.spec.ts needs. A face moved by 0.01 can score 0.1–0.3 apart (BlazeFace's
+//                    anchor grid): probe those cases again after any change)
+//   ten_faces.jpg    2000×1500: ten such cells, faces 9–13 % of the width in two staggered rows of five, alternate
+//                    cells mirrored, JPEG q 0.92 (the editor's face cap, S §6.7: 全部 + 10)
+//   eleven_faces.jpg the same ten plus an eleventh, smaller face (8 %) above them (the cap keeps the ten largest;
+//                    the eleventh is an obstacle and the over-cap toast shows)
+//                    (BlazeFace full-range missed some 7.5–8 % faces of a first 10-face layout on SwiftShader and CPU;
+//                    this one is found whole on both delegates at decodes 2048 and 1440, also with every face moved
+//                    by 0.01 or shrunk by 0.006 of the width: S §6.7)
 // Composed with canvas 2D in headless Chromium (Playwright), so it is deterministic for a given Chromium build.
-//   node scripts/gen-group-fixture.mjs
+//   node scripts/gen-group-fixture.mjs [file …]   (no file: write every fixture; else only the named ones)
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -38,6 +55,61 @@ export const GROUP6 = { width: 2048, height: 1536, cell: 644, crop: { x: 100.5, 
 
 /** sample_face.png's size and its face (centre and width of the oval bbox above), in its own px */
 export const SAMPLE_FACE = { width: 1000, height: 1500, cx: 503, cy: 631, fw: 619 };
+
+/** small_faces.jpg: each face's oval-box width (fraction of the image width) and centre (fractions of width, height) */
+export const SMALL_FACES = {
+  width: 2000,
+  height: 1500,
+  faces: [
+    { fw: 0.14, cx: 0.11, cy: 0.22, mirror: false },
+    { fw: 0.06, cx: 0.28, cy: 0.83, mirror: true },
+    { fw: 0.125, cx: 0.35, cy: 0.16, mirror: false },
+    { fw: 0.072, cx: 0.41, cy: 0.8, mirror: true },
+    { fw: 0.105, cx: 0.67, cy: 0.15, mirror: false },
+    { fw: 0.066, cx: 0.74, cy: 0.82, mirror: true },
+    { fw: 0.078, cx: 0.92, cy: 0.61, mirror: false },
+  ],
+};
+
+/**
+ * ten_faces.jpg (S §6.7): a back row of five faces 9–10 % of the width and a front row of five 11–13 %, staggered so
+ * that every centre x is at least 0.09 from every other (prepareFaces numbers f0…f9 left to right: f9 is the back
+ * row's rightmost). Same cells as SMALL_FACES.
+ */
+export const TEN_FACES = {
+  width: 2000,
+  height: 1500,
+  faces: [
+    { fw: 0.09, cx: 0.18, cy: 0.36, mirror: false },
+    { fw: 0.095, cx: 0.37, cy: 0.36, mirror: true },
+    { fw: 0.1, cx: 0.56, cy: 0.36, mirror: false },
+    { fw: 0.095, cx: 0.75, cy: 0.36, mirror: true },
+    { fw: 0.09, cx: 0.92, cy: 0.36, mirror: false },
+    { fw: 0.12, cx: 0.09, cy: 0.72, mirror: true },
+    { fw: 0.11, cx: 0.28, cy: 0.72, mirror: false },
+    { fw: 0.13, cx: 0.47, cy: 0.72, mirror: true },
+    { fw: 0.115, cx: 0.66, cy: 0.72, mirror: false },
+    { fw: 0.125, cx: 0.85, cy: 0.72, mirror: true },
+  ],
+};
+
+/** eleven_faces.jpg: TEN_FACES plus an eleventh face, the smallest (8 %), above the back row */
+export const ELEVEN_FACES = { ...TEN_FACES, faces: [...TEN_FACES.faces, { fw: 0.08, cx: 0.5, cy: 0.12, mirror: false }] };
+
+/**
+ * A layout's face cell (GROUP6's 1.3 FW crop of sample_face.png) in its image's px, and its face (centre, width). The
+ * layout is SMALL_FACES unless given (TEN_FACES, ELEVEN_FACES).
+ */
+export function smallFaceCell(spec, layout = SMALL_FACES) {
+  const { crop } = GROUP6;
+  const size = Math.round((spec.fw * layout.width * crop.w) / SAMPLE_FACE.fw);
+  const k = size / crop.w;
+  const fx = (SAMPLE_FACE.cx - crop.x) * k;
+  const fy = (SAMPLE_FACE.cy - crop.y) * k;
+  const x = Math.round(spec.cx * layout.width - (spec.mirror ? size - fx : fx));
+  const y = Math.round(spec.cy * layout.height - fy);
+  return { spec, x, y, size, face: { cx: x + (spec.mirror ? size - fx : fx), cy: y + fy, fw: SAMPLE_FACE.fw * k } };
+}
 
 /** A GROUP_FACES copy's face in group_faces.png px (centre, face width), from the copy's rect as `main` draws it. */
 export function groupFace(copy) {
@@ -79,7 +151,7 @@ async function main() {
     const page = await browser.newPage();
     await page.setContent('<!doctype html><meta charset="utf-8"><body></body>');
     const out = await page.evaluate(
-      async ({ face, body, yoga, G, G6 }) => {
+      async ({ face, body, yoga, G, G6, GS, smallCells, tenCells, elevenCells }) => {
         const load = async (src) => {
           const i = new Image();
           i.src = src;
@@ -140,7 +212,27 @@ async function main() {
         const [c3, g3] = canvas(Bd.naturalWidth + yw, Bd.naturalHeight);
         g3.drawImage(Bd, 0, 0);
         g3.drawImage(Y, 0, 0, Y.naturalWidth, Y.naturalHeight, Bd.naturalWidth, 0, yw, Bd.naturalHeight);
-        return { faces: c1.toDataURL('image/png'), six: c2.toDataURL('image/png'), people: c3.toDataURL('image/jpeg', 0.92) };
+        const [c4, g4] = canvas(GS.width, GS.height);
+        g4.fillStyle = fill;
+        g4.fillRect(0, 0, GS.width, GS.height);
+        for (const c of smallCells) draw(g4, F, G6.crop.x, G6.crop.y, G6.crop.w, G6.crop.h, c.x, c.y, c.size, c.size, c.spec.mirror);
+        // ten_faces.jpg / eleven_faces.jpg: small_faces.jpg's drawing with their cells (TEN_FACES is GS's size)
+        const cellsJpeg = (cells) => {
+          const [c, g] = canvas(GS.width, GS.height);
+          g.fillStyle = fill;
+          g.fillRect(0, 0, GS.width, GS.height);
+          for (const k of cells) draw(g, F, G6.crop.x, G6.crop.y, G6.crop.w, G6.crop.h, k.x, k.y, k.size, k.size, k.spec.mirror);
+          return c.toDataURL('image/jpeg', 0.92);
+        };
+
+        return {
+          faces: c1.toDataURL('image/png'),
+          six: c2.toDataURL('image/png'),
+          people: c3.toDataURL('image/jpeg', 0.92),
+          seven: c4.toDataURL('image/jpeg', 0.92),
+          ten: cellsJpeg(tenCells),
+          eleven: cellsJpeg(elevenCells),
+        };
       },
       {
         face: dataUrl('sample_face.png', 'image/png'),
@@ -148,15 +240,24 @@ async function main() {
         yoga: dataUrl('fullbody_yoga.jpg', 'image/jpeg'),
         G: GROUP_FACES,
         G6: GROUP6,
+        GS: SMALL_FACES,
+        smallCells: SMALL_FACES.faces.map((s) => smallFaceCell(s)),
+        tenCells: TEN_FACES.faces.map((s) => smallFaceCell(s, TEN_FACES)),
+        elevenCells: ELEVEN_FACES.faces.map((s) => smallFaceCell(s, ELEVEN_FACES)),
       },
     );
+    const only = process.argv.slice(2);
     const write = (name, url) => {
+      if (only.length && !only.includes(name)) return;
       writeFileSync(fx(name), Buffer.from(url.slice(url.indexOf(',') + 1), 'base64'));
       console.log(`wrote tests/fixtures/${name}`);
     };
     write('group_faces.png', out.faces);
     write('group6_faces.png', out.six);
     write('group_people.jpg', out.people);
+    write('small_faces.jpg', out.seven);
+    write('ten_faces.jpg', out.ten);
+    write('eleven_faces.jpg', out.eleven);
   } finally {
     await browser.close();
   }

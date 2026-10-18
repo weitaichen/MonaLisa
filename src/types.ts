@@ -76,7 +76,7 @@ export interface ParamDef {
   group: ParamGroup;
   /** true → neutral at 0.5, UI shows −50…+50 */
   bidirectional: boolean;
-  /** first-launch value (= 自然 preset), 0..1 */
+  /** the 自然 preset's value (0.3's first launch; the slider's double-tap value and tick), 0..1 */
   default: number;
   /** icon key for ui/icons.tsx */
   icon: string;
@@ -196,7 +196,7 @@ export type ShadePart = 'lip' | 'blush' | 'brow' | 'eyeshadow' | 'liner' | 'lens
 /** the ten 美妝 parts (face-detail spec §3.3); lives here (not in panelModel.ts) so engine code can use it */
 export type MakeupPart = ShadePart | 'lashes' | 'aegyo' | 'contour' | 'highlight';
 /**
- * 'f0'…'f5' a person first built from a face, 'b0'…'b3' from a body, 'p0' the implicit person while nobody is known,
+ * 'f0'…'f9' a person first built from a face, 'b0'…'b3' from a body, 'p0' the implicit person while nobody is known,
  * 'live' the camera. Immutable once persisted (a person keeps its id when it gains a face or a body).
  */
 export type PersonId = string;
@@ -315,13 +315,23 @@ export interface PersonInfoCached {
   face: string | null;
   body: string | null;
 }
+/** one face scan of an up-frame (DetectionCache.faceScans) */
+export interface FaceScanRecord {
+  quarter: 0 | 1 | 2 | 3;
+  flipH: boolean;
+  detector?: 'short-range';
+}
 export interface DetectionCache {
   v: 1;
   /** pixel size of the image the normalized coordinates were taken on (aspect check) */
   width: number;
   height: number;
-  /** step 1 writes [{quarter: 0, flipH: false}] after a definite answer, [] in 基本模式 */
-  faceScans: { quarter: 0 | 1 | 2 | 3; flipH: boolean }[];
+  /**
+   * step 1 writes [{quarter: 0, flipH: false}] after a definite answer, [] in 基本模式. `detector: 'short-range'` (only
+   * on a cache `photoDetector` marks): the short-range detector gave that up-frame's answer and no full-range one has
+   * replaced it yet, so the completion owes it one (step-1 spec §6.5); absent: full-range answered it (or 0.4 did)
+   */
+  faceScans: FaceScanRecord[];
   /** O-space, sorted by box centre x then y */
   faces: CachedFace[];
   obstacles: CachedObstacle[];
@@ -338,6 +348,14 @@ export interface DetectionCache {
    * readable) still means a cache was dropped: that answer shows the reset toast (R3).
    */
   rematch?: Record<PersonId, Rect>;
+  /**
+   * 'short-range': the face answer ran on the camera's short-range detector because the full-range one was not there
+   * (offline, a failed or slow download: Tracker.photoDetector), so a group photo's small faces may be missing. The
+   * first open the detector is in (also when it lands while the photo is open) draws the cache as it is, then detects
+   * once more, full-range, and adds what it finds (edit/migrate.ts completeAnswer, step-1 spec §6.5).
+   * Absent: full-range answered, or the cache is 0.4's (kept as it is).
+   */
+  photoDetector?: 'short-range';
   /** display order: left to right when first built, later persons appended */
   persons: PersonInfoCached[];
   primary: PersonId;
@@ -500,9 +518,16 @@ export interface Tracker {
   detectVideo(video: HTMLVideoElement, tsMs: number, opts: { maxFaces: number }): Landmarks478[] | null;
   /**
    * IMAGE mode on the same instance; the next detectVideo switches back. [] = no face, or not known (recovering /
-   * unusable): callers keep the health check (editorModel.ts detectSession). Throws as detectVideo.
+   * unusable): callers keep the health check (editorModel.ts detectSession). Throws as detectVideo. `detector`:
+   * 'photo' (default) runs what photoDetector says; 'camera' the camera's short-range detector, the retry for a face the
+   * full-range one misses (a close-up, a face cut off by the frame's edge; app/still.ts, step-1 spec §6.5).
    */
-  detectImage(image: ImageBitmap | HTMLCanvasElement | HTMLImageElement, opts: { maxFaces: number }): Landmarks478[];
+  detectImage(image: ImageBitmap | HTMLCanvasElement | HTMLImageElement, opts: { maxFaces: number; detector?: 'photo' | 'camera' }): Landmarks478[];
+  /**
+   * The detector a 'photo' detection runs now: 'full-range' once TrackerOptions.fullRangeDetector has one (and the photo
+   * bundle could be assembled), else 'short-range', the camera's (a 'camera' retry would then repeat the same detection).
+   */
+  readonly photoDetector: 'full-range' | 'short-range';
   close(): void;
 }
 
@@ -514,8 +539,19 @@ export interface Tracker {
 export type TrackerState = 'lost' | 'ok' | 'failed';
 
 export interface TrackerOptions {
-  /** face_landmarker.task bytes */
+  /**
+   * The camera bundle: face_landmarker.task (BlazeFace short-range) without face_blendshapes.tflite (engine/assets.ts):
+   * the camera (VIDEO), and photos while there is no full-range detector
+   */
   modelBuffer: Uint8Array;
+  /**
+   * The full-range face detector (blaze_face_full_range.tflite) photos detect with, read at every switch to a photo
+   * (so one that arrives later, or after a failed download, is used from the next photo on): the tracker then assembles
+   * the photo bundle from modelBuffer and it (engine/faceBundle.ts withFaceDetector), and keeps no copy of it. Absent, or
+   * answering null → photos run modelBuffer. MediaPipe copies every model buffer it is given (setOptions), so the caller's
+   * buffers are never read again after the call that passes them.
+   */
+  fullRangeDetector?: () => Uint8Array | null;
   /** e.g. '/mediapipe/0.10.35' */
   wasmBase: string;
   /** 'auto' tries GPU then CPU */
@@ -795,10 +831,18 @@ export interface DebugState {
   persons: number;
   /** selected person id, 'all', or null (no persons / camera) */
   selected: string | null;
-  /** face detectImage calls in this page session */
+  /** face detections (one per answer) in this page session */
   detectCalls: number;
+  /** of those, the answers whose full-range detection found no usable face and asked the short-range detector again (step-1 spec §6.5) */
+  detectRetries: number;
+  /** editor: the face detections that waited for the full-range detector's first download (D1, services.ts photoDetectorPending) */
+  detectorWaits?: number;
   /** face boxes, normalized and unmirrored (editor: cache faces; camera: shown tracks) */
   boxes: { id: string; x: number; y: number; w: number; h: number }[];
+  /** editor: the cache's obstacles (faces it dropped, too small or over the cap), as `boxes` (the camera does not write it) */
+  obstacles?: { x: number; y: number; w: number; h: number }[];
+  /** editor: the cache's dropped counts (S §3.2; the camera does not write it) */
+  dropped?: { tooSmall: number; overCap: number };
   /** the last 美體 field's global fold-guard λ (1 = untouched; e2e) */
   lambdaGlobal?: number;
   /** Phase 0: GL limits (always) and probes (bench and dev builds only) */
@@ -812,6 +856,8 @@ export interface DebugState {
   liquify?: { strokes: number; version: number; work: number; maxDisp: number; pending: boolean };
   /** display frames the still session drew (engine FBO exports do not count): e2e checks 裁切 gestures draw none */
   renderCount?: number;
+  /** still sessions created in this page session (e2e: a completion that adds no face rebuilds none, step-1 spec §6.5) */
+  stillSessions?: number;
   /** the last export of the editor, or null while one runs / after an abort */
   export?: { mode: 'working' | 'tiled'; width: number; height: number; tiles: number; ms: number } | null;
   /** 祛痘 spots of the open photo (editor; skin-cleanup spec §3.2) */

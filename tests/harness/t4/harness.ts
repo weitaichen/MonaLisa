@@ -1,5 +1,6 @@
 // T4 media harness: exposes window.t4 for tests/harness/t4/run.mjs (Playwright, headless Chromium).
-import { loadEngineAssets } from '../../../src/engine/assets';
+import { ENGINE_PATHS, loadEngineAssets, loadPhotoDetector } from '../../../src/engine/assets';
+import { withoutBlendshapes } from '../../../src/engine/faceBundle';
 import { createCamera, createCameraWith, maxLuma } from '../../../src/media/camera';
 import { canShareFiles, encodeJpeg, saveFile, toJpegBlob } from '../../../src/media/exporter';
 import { importPhoto, importViaBitmap, importViaImageElement } from '../../../src/media/importer';
@@ -447,7 +448,30 @@ const exporter = {
 
 // ───────────── assets ─────────────
 
-function summarize(ev: EngineAssetsProgress[]) {
+/**
+ * Where the photo detector, which the engine download starts beside the model and never waits for (engine/assets.ts),
+ * had finished among `ev`'s engine events: `inModel` while the model phase was still on (its bytes are in the model bar's
+ * last event), `inDone` before 'done' (its bytes are in the 'done' sum). Joined after loadEngineAssets started it, so the
+ * download runs as in the app, and after the engine's own detector listener: on each detector event that listener has
+ * already redrawn the model bar, which it does only while the model phase is on. A detector that finished earlier
+ * replays its 'done' at once.
+ */
+function watchDetector(ev: EngineAssetsProgress[]) {
+  const at = { inModel: false, inDone: false, failed: false };
+  let seen = 0;
+  loadPhotoDetector((p) => {
+    const redrawn = ev.length > seen && ev.at(-1)!.phase === 'model';
+    seen = ev.length;
+    if (p.phase !== 'done') return;
+    at.inModel = redrawn;
+    at.inDone = !ev.some((e) => e.phase === 'done');
+  }).catch(() => {
+    at.failed = true;
+  });
+  return at;
+}
+
+function summarize(ev: EngineAssetsProgress[], detector: ReturnType<typeof watchDetector>) {
   const by = (p: EngineAssetsProgress['phase']) => ev.filter((e) => e.phase === p);
   const m = by('model');
   const w = by('wasm');
@@ -458,16 +482,37 @@ function summarize(ev: EngineAssetsProgress[]) {
     wasm: { n: w.length, first: w[0], last: w.at(-1), monotone: monotone(w) },
     done: by('done'),
     order: ev.map((e) => e.phase).filter((p, i, a) => p !== a[i - 1]),
+    detector: { ...detector },
   };
 }
 
 const assets = {
+  /**
+   * The byte counts run.mjs expects, from the files the dev server serves (not cached: call it in a context of its own)
+   * and the app's own camera-bundle strip: the shipped model, the camera bundle loadEngineAssets returns, the photo
+   * detector and the wasm.
+   */
+  async expected() {
+    const get = async (url: string) => new Uint8Array(await (await fetch(url, { cache: 'no-store' })).arrayBuffer());
+    const [model, detector, wasm] = await Promise.all(
+      [ENGINE_PATHS.model, ENGINE_PATHS.photoDetector, ENGINE_PATHS.wasmFile].map(get),
+    );
+    return {
+      paths: { model: ENGINE_PATHS.model, detector: ENGINE_PATHS.photoDetector, wasm: ENGINE_PATHS.wasmFile },
+      model: model.byteLength,
+      camera: withoutBlendshapes(model).byteLength,
+      detector: detector.byteLength,
+      wasm: wasm.byteLength,
+    };
+  },
   async concurrent() {
     const a: EngineAssetsProgress[] = [];
     const b: EngineAssetsProgress[] = [];
     const t = performance.now();
     const pa = loadEngineAssets((p) => a.push(p));
     const pb = loadEngineAssets((p) => b.push(p));
+    const da = watchDetector(a);
+    const db = watchDetector(b);
     const [ra, rb] = await Promise.all([pa, pb]);
     const ms = Math.round(performance.now() - t);
     const late: EngineAssetsProgress[] = [];
@@ -478,18 +523,20 @@ const assets = {
       bytes: buf.byteLength,
       head: Array.from(buf.subarray(0, 4)),
       sameBuffer: ra.modelBuffer === rb.modelBuffer && rc.modelBuffer === buf,
-      a: summarize(a),
-      b: summarize(b),
+      a: summarize(a, da),
+      b: summarize(b, db),
       late,
     };
   },
   async once() {
     const ev: EngineAssetsProgress[] = [];
+    const run = loadEngineAssets((p) => ev.push(p));
+    const det = watchDetector(ev);
     try {
-      const r = await loadEngineAssets((p) => ev.push(p));
-      return { ok: true, bytes: r.modelBuffer.byteLength, ev: summarize(ev) };
+      const r = await run;
+      return { ok: true, bytes: r.modelBuffer.byteLength, ev: summarize(ev, det) };
     } catch (e) {
-      return { ok: false, error: String(e), ev: summarize(ev) };
+      return { ok: false, error: String(e), ev: summarize(ev, det) };
     }
   },
 };

@@ -171,6 +171,7 @@ describe('the U image (DOM half, a recording 2D context)', () => {
       const seen: unknown[] = [];
       const t: Tracker = {
         delegate: 'CPU',
+        photoDetector: 'short-range',
         detectVideo: () => null,
         detectImage: (image, opts) => {
           seen.push(image, opts.maxFaces);
@@ -189,6 +190,30 @@ describe('the U image (DOM half, a recording 2D context)', () => {
       expect(u.delegate).toBe('CPU');
       u.close();
       expect(t.close).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('upTracker forwards the detector choice (step-1 spec §6.5) and the photo detector, so a sideways scan retries like an upright one', () => {
+    const { rec } = stubCanvas();
+    try {
+      const seen: unknown[] = [];
+      const t: Tracker = {
+        delegate: 'GPU',
+        photoDetector: 'full-range',
+        detectVideo: () => null,
+        detectImage: (_image, opts) => {
+          seen.push(opts);
+          return [];
+        },
+        close: vi.fn(),
+      };
+      const u = upTracker(t, 1);
+      expect(u.photoDetector).toBe('full-range');
+      u.detectImage({ width: 300, height: 200 } as unknown as ImageBitmap, { maxFaces: 12, detector: 'camera' });
+      expect(seen).toEqual([{ maxFaces: 12, detector: 'camera' }]);
+      expect(rec.canvases[0]).toMatchObject({ width: 0, height: 0 });
     } finally {
       vi.unstubAllGlobals();
     }

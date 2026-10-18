@@ -2,12 +2,22 @@
 // with the measurements (spec §6.4). iPhone numbers need a preview deploy, which only happens with the user's go-ahead:
 // until then these defaults ship (RM §12 decision).
 
-/** selectable faces per photo (§6.3 PD1, PR1, PE1, PM1) */
-export const MAX_EDIT_FACES = 6;
-/** numFaces of the editor's IMAGE detection: two spare so dropped.overCap is real and tiny faces take no slot (A1) */
+/**
+ * selectable faces per photo (§6.3 PD1, PR1, PE1, PM1). 10 since 2026-10-18 (S §6.7, the user's cap: at most ten
+ * people); 8 from §6.6, 6 before (which kept the largest six of a seven-person photo)
+ */
+export const MAX_EDIT_FACES = 10;
+/**
+ * numFaces of the editor's IMAGE detection: two spare so dropped.overCap is real and tiny faces take no slot (A1), and
+ * a duplicate the CPU graph returns (S §6.5) still leaves room for a face over the cap. 12 since S §6.7
+ */
 export const EDIT_DETECT_FACES = MAX_EDIT_FACES + 2;
-/** shader loop bound and face-table height (compile time) */
-export const MAX_RENDER_FACES = 6;
+/**
+ * shader loop bound and face-table height (compile time). Face ids are f0…f{MAX_RENDER_FACES − 1} (one digit:
+ * cache.ts FACE_ID, state.ts PERSON_ID) and RESHAPE_FS's uDetail has one bit per face, so it stays ≤ 10; the UBO
+ * carrier's block is MAX_RENDER_FACES × 96 vec4 = 15,360 B at 10, within the 16,384 B WebGL2 guarantees (S §6.7)
+ */
+export const MAX_RENDER_FACES = 10;
 /** numPoses of the 美體 detection (§6.3 PB1, PM1) */
 export const MAX_EDIT_BODIES = 4;
 /**
@@ -37,10 +47,20 @@ export const ONE_EURO = { minCutoff: 0.05, beta: 80, dCutoff: 1.0 } as const;
 export const SEED_BOX_PAD = 0.25;
 /** 瘦臉 limit layer edge with ≥ 2 selectable faces (§4.7) */
 export const PROTECT_WINDOW = 128;
-/** obstacles kept in a detection cache (validation bound) */
-export const MAX_OBSTACLES = 8;
-/** the face table's carrier (§4.4): the faster of the two on the test iPhone; a PG1 failure forces 'ubo' */
-export const FACE_TABLE_CARRIER: 'texture' | 'ubo' = 'texture';
+/**
+ * obstacles kept in a detection cache (validation bound): one per face a detection returns, so every face it drops is
+ * an obstacle (A1), also when it kept only one. 12 since S §6.7 (was 8: with 12 requested, a photo of two or three
+ * people and a crowd of tiny faces lost some of them)
+ */
+export const MAX_OBSTACLES = EDIT_DETECT_FACES;
+/**
+ * the face table's carrier (§4.4): the faster of the two ships (PR1); a PG1 failure forces 'ubo'. 'ubo' since
+ * 2026-10-18 (S §6.4, bench R on the desktop GPU): 8 clustered faces at 2048 cost 4.4–4.8 ms through the UBO and
+ * 11.8–12.3 ms through the texture (one face 5.5 vs 10.4 ms); 10 clustered faces 4.9–6.0 vs 13.3–14.9 ms (S §6.7).
+ * Both stay behind RESHAPE_FS's F(f, i); the iPhone rows can flip it, and a software rasterizer gets the texture
+ * (engine/faceTableCarrier.ts).
+ */
+export const FACE_TABLE_CARRIER: 'texture' | 'ubo' = 'ubo';
 
 // ── step 3: crop and full-resolution export (step-3 spec §3.8) ──
 /** long edge of a 原始解析度 export (C §11 Q4: capped at 4096) */

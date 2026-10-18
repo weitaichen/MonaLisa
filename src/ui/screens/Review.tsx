@@ -1,8 +1,7 @@
 // Review 預覽 (spec §7.2.3): the captured result; 重拍 · 編輯 · 儲存. The JPEG is encoded right after
 // capture so 儲存 can call the share sheet synchronously inside the tap (RB §1 #10).
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { cameraShotEdit } from '../../edit/migrate';
-import { handOverLook } from '../../edit/sides';
+import { importEdit } from '../../edit/migrate';
 import { errorText, reportError } from '../debug';
 import { deps } from '../deps';
 import { freshSource } from '../flows';
@@ -92,7 +91,8 @@ export function Review({ shot }: { shot: Shot }) {
       return;
     }
     handedOff.current = true;
-    go({ name: 'editor', source: freshSource(shot.original, cameraShotEdit(handOverLook(shot.look, shot.mirrored), shot.faceSeed), 'camera', shot.faceSeed) });
+    // the shot opens at 原圖 like an import (2026-10-18): only the face seed goes along, to select the beautified person
+    go({ name: 'editor', source: freshSource(shot.original, importEdit(), 'camera', shot.faceSeed) });
   };
 
   const busy = !file && !encodeErr;

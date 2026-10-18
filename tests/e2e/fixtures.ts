@@ -249,9 +249,12 @@ export async function historyStamps(page: Page): Promise<Record<string, number>>
   });
 }
 
+/** person n's chip label: 「人物 {n}」 or 「人物 {n}（…）」, so 1 does not match 10 (S §6.7: ten persons) */
+export const personChip = (n: number): RegExp => new RegExp(`^人物 ${n}(（|$)`);
+
 /** click a strip chip: n = 0 is 全部 */
 export async function selectPerson(page: Page, n: number): Promise<void> {
-  await page.getByRole('radio', { name: n === 0 ? '全部' : new RegExp(`^人物 ${n}`) }).click();
+  await page.getByRole('radio', { name: n === 0 ? '全部' : personChip(n) }).click();
 }
 
 /** the screen point of a normalized source point on the editor's (unmirrored, zoom 1) layer */

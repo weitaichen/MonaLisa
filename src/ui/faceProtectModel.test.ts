@@ -225,11 +225,11 @@ describe('FaceProtectSource', () => {
     expect(h.deps.segmenter).not.toHaveBeenCalled();
   });
 
-  it('a 美體 detection landing live on the 自然 default (no contour edit) changes nothing shown (L2)', () => {
+  it('a 美體 detection landing live on 自然 (a preset, no contour slider edit) changes nothing shown (L2)', () => {
     const h = harness();
     const f = face();
     const natural = contourActiveValues(applyPreset('natural', 1).values);
-    expect(one(h.src, f, natural, null, false)).toBeNull(); // import: 自然 drawn unlimited
+    expect(one(h.src, f, natural, null, false)).toBeNull(); // 自然 tapped after the import: drawn unlimited
     expect(one(h.src, f, natural, mask(), false)).toBeNull(); // the user opened 美體, the pose model finished
     expect(h.deps.build).not.toHaveBeenCalled();
     expect(h.changed).not.toHaveBeenCalled();
@@ -730,7 +730,7 @@ describe('the request survives edits made while the limit cannot act (M1 / M3: L
     }
   };
 
-  it('saved at neutral contour → reopen → 美白 only → reopen → 重置: 自然 is drawn limited, as in sessions 1 and 2', () =>
+  it('saved at neutral contour → reopen → 美白 only → reopen → 一鍵 › 自然: drawn limited, as in sessions 1 and 2', () =>
     inDb(async () => {
       const { s1, f1, p, id, limit } = await limitedEntry(0.6);
       // every contour slider back to neutral (still session 1): the in-session limit is kept and autosaved
@@ -739,7 +739,8 @@ describe('the request survives edits made while the limit cannot act (M1 / M3: L
       // session 2: reopened at neutral contour: nothing to limit, so nothing is drawn with it
       const s2 = await open(id);
       expect(s2.draw(realFace(), n)).toBeNull();
-      // 重置 here would draw 自然 limited (the flag requests it) ...
+      // a preset with contour values (自然; before 2026-10-18 also what 重置 set, now 原圖) would draw limited here (the
+      // flag requests it) ...
       const s2b = await open(id);
       expect(s2b.draw(realFace(), applyPreset('natural', 1))).not.toBeNull();
       // ... but the user only moves 美白: its autosave must keep the request
@@ -747,7 +748,7 @@ describe('the request survives edits made while the limit cannot act (M1 / M3: L
       const e = (await getEntry(id))!;
       expect(e.faceProtect).toBe(true);
       expect(e.faceMask).toBeTruthy();
-      // session 3: 重置 → 自然, drawn with the same limit (from the saved mask, no model)
+      // session 3: 一鍵 › 自然, drawn with the same limit (from the saved mask, no model)
       const s3 = await open(id);
       const p3 = s3.draw(realFace(), applyPreset('natural', 1));
       expect(p3).not.toBeNull();
@@ -794,7 +795,7 @@ describe('the request survives edits made while the limit cannot act (M1 / M3: L
       expect(s2.draw(f2, p)).not.toBeNull();
     }));
 
-  it('never requested (the 自然 default, presets, 美體 only): every write records "unlimited"', () =>
+  it('never requested (presets such as 自然, 美體 only): every write records "unlimited"', () =>
     inDb(async () => {
       const s1 = await open(null);
       const f1 = realFace();

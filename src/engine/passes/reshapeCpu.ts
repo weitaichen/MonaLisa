@@ -119,6 +119,26 @@ function budgetScale(L: number, t: number, l: number, slope: number, k: number):
   return Ln >= L ? 1 : Ln / L;
 }
 
+/**
+ * A disc step's per-face constants (S §6.1: the fold check maps 65² points per face on the commit path): what the
+ * per-point form recomputed for every point, computed once with the same operations, so a finite point maps to the
+ * same doubles (and a point an earlier step made non-finite stays non-finite, which mapMinDet reads as −∞ either way).
+ * `reach` gates the hypot: a point farther than R' = max(R, 1e-6) from c along either iso axis is at least R' away
+ * (Math.hypot is never below its largest argument), so its w = |tc − c|_iso / R' is ≥ 1 and the step is known without
+ * it. `reach` is NaN (no point skips) when the step's move is not finite: there the per-point form yields NaN.
+ */
+interface Disc {
+  cx: number;
+  cy: number;
+  /** R' */
+  r: number;
+  reach: number;
+  /** curveWarp: dir = (t − o)·d; shiftAround: disp */
+  mx: number;
+  my: number;
+}
+const disc = (c: V2, r: number, mx: number, my: number): Disc => ({ cx: c[0], cy: c[1], r, reach: Number.isFinite(mx) && Number.isFinite(my) ? r : NaN, mx, my });
+
 /** one face's chain (reshape.ts faceChain), operation for operation */
 function chainOf(face: Face, u: ReshapeUniforms, aspect: number, prot: FaceProtect | null, win: Rect): (tc: V2) => V2 {
   const g = reshapeGeometry(face, aspect, u);
@@ -126,28 +146,48 @@ function chainOf(face: Face, u: ReshapeUniforms, aspect: number, prot: FaceProte
   const E = face.ext;
   const pt = (i: number): V2 => [P[i * 2], P[i * 2 + 1]];
   const ext = (i: number): V2 => [E[i * 2], E[i * 2 + 1]];
+  const at = (a: Float32Array, k: number): V2 => [a[k * 2], a[k * 2 + 1]];
   const isoD = (a: V2, b: V2) => Math.hypot(a[0] - b[0], (a[1] - b[1]) / aspect);
-  const curveWarp = (tc: V2, o: V2, t: V2, d: number): V2 => {
-    const dir: V2 = [(t[0] - o[0]) * d, (t[1] - o[1]) * d];
-    const r = Math.max(isoD(t, o), 1e-6);
-    const k = Math.min(1, Math.max(0, 1 - isoD(tc, o) / r));
-    return [tc[0] - dir[0] * k, tc[1] - dir[1] * k];
+  /** curveWarp's anchor o → t at strength d: dir = (t − o)·d and r = max(|t − o|_iso, 1e-6) */
+  const warpOf = (o: V2, t: V2, d: number): Disc => disc(o, Math.max(isoD(t, o), 1e-6), (t[0] - o[0]) * d, (t[1] - o[1]) * d);
+  /** k = clamp(1 − |tc − o|_iso / r); beyond `reach` k = 0 and tc − dir·0 is tc */
+  const curveWarp = (tc: V2, w: Disc): V2 => {
+    const ex = tc[0] - w.cx;
+    const ey = (tc[1] - w.cy) / aspect;
+    if (Math.abs(ex) >= w.reach || Math.abs(ey) >= w.reach) return tc;
+    const k = Math.min(1, Math.max(0, 1 - Math.hypot(ex, ey) / w.r));
+    return [tc[0] - w.mx * k, tc[1] - w.my * k];
   };
+  /** 大眼 about c (strength d ≠ 0): beyond R' with d in (0, ∞) the clamped w is 1, so the result is c + (tc − c) */
   const enlargeEye = (tc: V2, c: V2, R: number, d: number): V2 => {
-    let w = isoD(tc, c) / Math.max(R, 1e-6);
+    const r = Math.max(R, 1e-6);
+    const ex = tc[0] - c[0];
+    const ey = (tc[1] - c[1]) / aspect;
+    if (d > 0 && d < Infinity && (Math.abs(ex) >= r || Math.abs(ey) >= r)) return [c[0] + (tc[0] - c[0]), c[1] + (tc[1] - c[1])];
+    let w = Math.hypot(ex, ey) / r;
     w = Math.min(1, Math.max(0, 1 - (1 - w * w) * d));
     return [c[0] + (tc[0] - c[0]) * w, c[1] + (tc[1] - c[1]) * w];
   };
   const scaleAround = (tc: V2, c: V2, R: number, d: number): V2 => {
-    const w = isoD(tc, c) / Math.max(R, 1e-6);
+    const r = Math.max(R, 1e-6);
+    const ex = tc[0] - c[0];
+    const ey = (tc[1] - c[1]) / aspect;
+    if (Math.abs(ex) >= r || Math.abs(ey) >= r) return tc;
+    const w = Math.hypot(ex, ey) / r;
     if (w >= 1) return tc;
     const s = 1 - (1 - w * w) * d;
     return [c[0] + (tc[0] - c[0]) * s, c[1] + (tc[1] - c[1]) * s];
   };
-  const shiftAround = (tc: V2, c: V2, R: number, disp: V2): V2 => {
-    const w = isoD(tc, c) / Math.max(R, 1e-6);
+  /** shiftAround's disc at c with radius R moving by disp */
+  const shiftOf = (c: V2, R: number, disp: V2): Disc => disc(c, Math.max(R, 1e-6), disp[0], disp[1]);
+  /** k = clamp(1 − w²); beyond `reach` k = 0 and tc − disp·0·0 is tc */
+  const shiftAround = (tc: V2, s: Disc): V2 => {
+    const ex = tc[0] - s.cx;
+    const ey = (tc[1] - s.cy) / aspect;
+    if (Math.abs(ex) >= s.reach || Math.abs(ey) >= s.reach) return tc;
+    const w = Math.hypot(ex, ey) / s.r;
     const k = Math.min(1, Math.max(0, 1 - w * w));
-    return [tc[0] - disp[0] * k * k, tc[1] - disp[1] * k * k];
+    return [tc[0] - s.mx * k * k, tc[1] - s.my * k * k];
   };
   const fw = faceWidthIso(face, aspect);
   const reach = PROTECT_REACH * fw;
@@ -177,39 +217,44 @@ function chainOf(face: Face, u: ReshapeUniforms, aspect: number, prot: FaceProte
   // r̂ / m̂ (texel 88): the shader reads them only inside the 髮際線 and 山根 branches
   const rh: V2 = [g.axes[0], g.axes[1]];
   const mh: V2 = [g.axes[2], g.axes[3]];
+  // the steps' constants, once per chain, in chain order. Contour: each split anchor takes its side's strength (S5 §4.3)
+  const contour: Disc[] = [];
+  if (u.faceSlim !== 0 || slimR !== 0) SLIM.forEach(([o, t], i) => contour.push(warpOf(pt(o), pt(t), sided(u.faceSlim, slimR, SLIM_SIDE[i]))));
+  if (u.faceV !== 0 || vR !== 0) V_JAW.forEach((i, k) => contour.push(warpOf(pt(i), at(g.vTargets, k), sided(u.faceV, vR, VJAW_SIDE[k]))));
+  if (u.faceNarrow !== 0 || narrowR !== 0)
+    NARROW.forEach((i, k) => contour.push(warpOf(pt(i), at(g.narrowTargets, k), sided(u.faceNarrow, narrowR, NARROW_SIDE[k]))));
+  if (jaw !== 0 || jawR !== 0) JAW.forEach((i, k) => contour.push(warpOf(pt(i), at(g.jawTargets, k), sided(jaw, jawR, JAW_SIDE[k]))));
+  if (temple !== 0 || templeR !== 0)
+    TEMPLE.forEach((_, k) => contour.push(warpOf(at(g.templeAnchors, k), at(g.templeTargets, k), sided(temple, templeR, TEMPLE_SIDE[k]) * TEMPLE_W[k])));
+  if (u.chin !== 0) contour.push(warpOf(pt(16), g.chinTarget, u.chin));
+  if (u.forehead !== 0) contour.push(warpOf(ext(0), ext(3), u.forehead));
+  const nose = u.noseSlim !== 0 ? NOSE.map(([o, t]) => warpOf(pt(o), pt(t), u.noseSlim)) : [];
+  const wings = noseWing !== 0 ? [shiftOf(pt(80), g.noseWingR, g.noseWingDisp), shiftOf(pt(81), g.noseWingR, [-g.noseWingDisp[0], -g.noseWingDisp[1]])] : [];
+  const eyeShift = g.eyeDisp[0] !== 0 || g.eyeDisp[1] !== 0 ? [shiftOf(pt(74), g.eyeR[0], g.eyeDisp), shiftOf(pt(77), g.eyeR[1], [-g.eyeDisp[0], -g.eyeDisp[1]])] : [];
+  const hairC = ext(0);
+  const rootC: V2 = [g.root[0], g.root[1]];
+  const rootRadii = [g.root[2], g.root[3], g.rootRy] as const;
+  const mouthAx: V2 = [-g.mouthHAxis[1], g.mouthHAxis[0]];
+  const p106 = pt(106);
+  const p74 = pt(74);
+  const p77 = pt(77);
   return (tcIn) => {
     let tc = tcIn;
     const tc0 = tc;
-    const at = (a: Float32Array, k: number): V2 => [a[k * 2], a[k * 2 + 1]];
-    // contour: each split anchor takes its side's strength (S5 §4.3)
-    if (u.faceSlim !== 0 || slimR !== 0) SLIM.forEach(([o, t], i) => (tc = curveWarp(tc, pt(o), pt(t), sided(u.faceSlim, slimR, SLIM_SIDE[i]))));
-    if (u.faceV !== 0 || vR !== 0) V_JAW.forEach((i, k) => (tc = curveWarp(tc, pt(i), at(g.vTargets, k), sided(u.faceV, vR, VJAW_SIDE[k]))));
-    if (u.faceNarrow !== 0 || narrowR !== 0)
-      NARROW.forEach((i, k) => (tc = curveWarp(tc, pt(i), at(g.narrowTargets, k), sided(u.faceNarrow, narrowR, NARROW_SIDE[k]))));
-    if (jaw !== 0 || jawR !== 0) JAW.forEach((i, k) => (tc = curveWarp(tc, pt(i), at(g.jawTargets, k), sided(jaw, jawR, JAW_SIDE[k]))));
-    if (temple !== 0 || templeR !== 0)
-      TEMPLE.forEach((_, k) => (tc = curveWarp(tc, at(g.templeAnchors, k), at(g.templeTargets, k), sided(temple, templeR, TEMPLE_SIDE[k]) * TEMPLE_W[k])));
-    if (u.chin !== 0) tc = curveWarp(tc, pt(16), g.chinTarget, u.chin);
-    if (u.forehead !== 0) tc = curveWarp(tc, ext(0), ext(3), u.forehead);
-    if (hairline !== 0) tc = shiftEllipseUv(tc, ext(0), rh, mh, g.hairlineRadii, g.hairlineDisp, aspect);
+    for (const w of contour) tc = curveWarp(tc, w);
+    if (hairline !== 0) tc = shiftEllipseUv(tc, hairC, rh, mh, g.hairlineRadii, g.hairlineDisp, aspect);
     if (prot) tc = protectContour(tc0, tc);
     // nose
-    if (u.noseSlim !== 0) for (const [o, t] of NOSE) tc = curveWarp(tc, pt(o), pt(t), u.noseSlim);
-    if (noseWing !== 0) {
-      tc = shiftAround(tc, pt(80), g.noseWingR, g.noseWingDisp);
-      tc = shiftAround(tc, pt(81), g.noseWingR, [-g.noseWingDisp[0], -g.noseWingDisp[1]]);
-    }
-    if (rootK !== 0) tc = squeezeAxisUv(tc, [g.root[0], g.root[1]], rh, mh, [g.root[2], g.root[3], g.rootRy], rootK, aspect);
+    for (const w of nose) tc = curveWarp(tc, w);
+    for (const s of wings) tc = shiftAround(tc, s);
+    if (rootK !== 0) tc = squeezeAxisUv(tc, rootC, rh, mh, rootRadii, rootK, aspect);
     // mouth: 嘴高, then 嘴型 (backward order: forward, 嘴型 scales about the true p106, then 嘴高 moves it)
-    if (mouthH !== 0) tc = shiftEllipseUv(tc, pt(106), [-g.mouthHAxis[1], g.mouthHAxis[0]], g.mouthHAxis, g.mouthHRadii, g.mouthHDisp, aspect);
-    if (u.mouthSize !== 0) tc = scaleAround(tc, pt(106), g.mouthR, u.mouthSize);
+    if (mouthH !== 0) tc = shiftEllipseUv(tc, p106, mouthAx, g.mouthHAxis, g.mouthHRadii, g.mouthHDisp, aspect);
+    if (u.mouthSize !== 0) tc = scaleAround(tc, p106, g.mouthR, u.mouthSize);
     // eyes: 眼距, then 大眼 per side
-    if (g.eyeDisp[0] !== 0 || g.eyeDisp[1] !== 0) {
-      tc = shiftAround(tc, pt(74), g.eyeR[0], g.eyeDisp);
-      tc = shiftAround(tc, pt(77), g.eyeR[1], [-g.eyeDisp[0], -g.eyeDisp[1]]);
-    }
-    if (u.eyeEnlarge !== 0) tc = enlargeEye(tc, pt(74), g.eyeR[0], u.eyeEnlarge);
-    if (eyeR !== 0) tc = enlargeEye(tc, pt(77), g.eyeR[1], eyeR);
+    for (const s of eyeShift) tc = shiftAround(tc, s);
+    if (u.eyeEnlarge !== 0) tc = enlargeEye(tc, p74, g.eyeR[0], u.eyeEnlarge);
+    if (eyeR !== 0) tc = enlargeEye(tc, p77, g.eyeR[1], eyeR);
     return tc;
   };
 }

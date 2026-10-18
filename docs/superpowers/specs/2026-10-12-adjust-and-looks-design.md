@@ -103,8 +103,8 @@ Position: after 美妝 (C §2.1). In step 2 the editor has 7 tabs (一鍵 · 美
 - **Preview and capture:**
   - The preview uses the shot's crop as its picture frame (§4.5). The vignette is therefore centred on what is saved, not on the full sensor frame that the canvas crops with `object-fit: cover`.
   - Grain moves in the preview (a new seed every frame, §4.4); the capture freezes the grain of its own frame.
-- **Persistence:** 調節 and 質感 persist with the rest of the camera look under `meiyan.look.v1` (C §3.7), as 濾鏡 does today. Because imports start from the camera look (C §3.7, `flows.ts:32`), an imported photo also opens with the camera's 調節 and 質感, exactly as it opens with the camera's 濾鏡 today. See §11 Q5.
-- **Hand-over:** shutter → Review → 編輯 carries `look.photo`, so the editor opens with the same 調節 values and 質感 (C §3.7). The editor re-renders them on the unprocessed crop, which uses the same frame, so the vignette lands in the same place.
+- **Persistence:** 調節 and 質感 persist with the rest of the camera look under `meiyan.look.v1` (C §3.7), as 濾鏡 does today. Imports started from the camera look (C §3.7, `flows.ts:32`), so an imported photo also opened with the camera's 調節 and 質感, as with its 濾鏡. Since 2026-10-18 a new photo, imported or a camera shot, opens at 原圖 (C §3.7): the camera keeps its 調節 and 質感 for its own preview and capture. See §11 Q5.
+- **Hand-over:** shutter → Review → 編輯 carried `look.photo`, so the editor opened with the same 調節 values and 質感 (C §3.7), re-rendered on the unprocessed crop. Since 2026-10-18 the shot opens at 原圖 (C §3.7): the camera's 調節 and 質感 draw the preview and the capture only.
 
 ### 2.4 Copy (new strings)
 
@@ -194,7 +194,7 @@ The tuning loop (§4.6) may change the offsets and the LUT recipes. It must stay
 | Pick a 濾鏡 or drag 濾鏡強度 | Set | Unchanged | Unchanged | → null | Unchanged |
 | Pick a 質感, or drag 質感 程度 | Unchanged | Set | Unchanged | Unchanged | Unchanged |
 | Drag a 調節 slider / ⊘ 原圖 in 調節 | Unchanged | Unchanged | Set / neutral | Unchanged | Unchanged |
-| 重置 | `defaultPhoto()` (自然's photo part: no filter) | null | Neutral | `{natural, 1}` | `natural` |
+| 重置 | `neutralPhoto()` (原圖's photo part: no filter; 自然's `defaultPhoto()` until 2026-10-18) | null | Neutral | `{original, 1}` | `original` |
 
 - **濾鏡 and 質感 stack.** The 濾鏡 LUT runs first, then the 質感 LUT, then 調節. Making them exclusive would mean a look changes `filterId`, which breaks `presetLink` and goes against C §3.4 ("a look never changes a beauty preset"). The looks are tuned on `filterId = none`; the presets' filters run at 40 % and are mild, so the stacks stay wearable. §11 Q1 asks whether the user prefers exclusivity.
 - **`matchesPreset`** compares the person part only (C §3.4), so a look never turns the preset indicator into 自訂.
@@ -205,7 +205,7 @@ The tuning loop (§4.6) may change the offsets and the LUT recipes. It must stay
 - **`src/edit/state.ts`** (from step 1) gains:
   - `setLook(edit, id: LookId | null, amount)`. An id of null gives `look: null`; the amount is clamped to 0..1.
   - `resetGroup(edit, 'adjust')`: the 12 values become neutral and the look is untouched.
-  - `defaultPhoto()` already makes `adjust.*` neutral and `look: null`.
+  - `defaultPhoto()` and `neutralPhoto()` (原圖, what a new photo opens with and 重置 returns to, 2026-10-18) already make `adjust.*` neutral and `look: null`.
 - **The lens** (C §3.3) already has `setLook` and `resetGroup`. It gains `look(): PhotoParams['look']` for reading. `adjust.*` ids route to `photo` under every selection, as every photo item does.
 - **`src/ui/panelModel.ts`** (after the step-1 port to `(lens, sel, ctx)`):
   - `TabId` gains `'adjust'`. `TABS` gains `{id: 'adjust', label: '調節'}` after 美妝 (`panelModel.ts:22-34`); the camera's tab list is the same (it never shows 裁切).
@@ -551,7 +551,7 @@ No pass, FBO, readback or resample is added. The stages run inside the composite
 | Banding on smooth 8-bit gradients under strong curves | Accepted; the source is 8-bit. Grain, when on, hides it. No hidden dithering is added (it would break neutral parity and add noise users did not ask for). |
 | 黑白 濾鏡 + a 質感 | The stack gives a toned monochrome. Allowed, and visible in the thumbnail strip as the user explores. |
 | Camera ratio change or flip | `getFrame()` is read every frame. The vignette follows the new crop at once. The grain counter keeps running. |
-| Shot → 編輯 (mirrored or not) | The vignette is symmetric and lands in the same place (§2.3). The editor re-renders with seed 0, so its grain pattern differs from the capture's frame seed, with the same size and strength; grain is random by nature, so this is invisible. |
+| Shot → 編輯 (mirrored or not) | Since 2026-10-18 the shot opens at 原圖, without the camera's 調節 and 質感 (C §3.7). Before, the vignette landed in the same place (symmetric, §2.3) and the editor re-rendered the grain with seed 0. |
 | 基本模式 (no face model) | 調節 and 質感 work. `faceNote` never dims 調節 or 一鍵 › 質感. |
 | 按住對比 | `renderOriginal`: no 調節 and no 質感, as for every other effect. |
 | A history entry written by 0.4 opened by 0.3 | The legacy projection carries no 調節 or 質感 (§5). |
@@ -654,7 +654,7 @@ For each look, the same checks the filters get today (`assets.test.mjs:100-128`)
     - the 調節 tab exists;
     - 暗角 100 darkens the preview corners;
     - CCD changes the preview;
-    - shutter → Review → 編輯 keeps the look and the values;
+    - shutter → Review → 編輯 opens at 原圖: 暗角 and 顆粒 0, 質感 無 (2026-10-18; it kept the look and the values before);
     - after a reload `meiyan.look.v1` holds them.
 
     Grain moves, so camera comparisons run with 顆粒 at 0, except one check that grain raises the frame-to-frame difference in a flat region.
@@ -701,5 +701,5 @@ Each question has a default that this spec uses if the user does not answer.
 2. **Two 膠片 labels:** keep 濾鏡「膠片」 and 質感「膠片」 side by side, or rename the filter to 「復古」? *Default: keep both. They sit in different tabs, and the thumbnails differ clearly.*
 3. **Default 程度 of a 質感:** 80 or 100 when first tapped? *Default: 80. Each look is tuned so that 80 is the intended look, which leaves room to push it.*
 4. **Grain in the live camera:** moving (a new grain pattern every frame, like film) or still (a fixed pattern that stays on the screen)? *Default: moving. A still pattern looks like dirt on the lens when the camera moves.*
-5. **Camera 調節 across launches and into imports:** keep the camera's 調節 values and 質感 when the app is reopened (as 濾鏡 is kept today), or reset 調節 at each launch and keep only the 質感? The same choice decides what an imported photo starts with, because imports start from the camera look (C §3.7): with the default, a photo picked from 相簿 opens with the camera's 曝光, 色溫 and so on already applied. *Default: keep everything, and imports start with it, as today's camera look does for 濾鏡.*
+5. **Camera 調節 across launches and into imports:** keep the camera's 調節 values and 質感 when the app is reopened (as 濾鏡 is kept today), or reset 調節 at each launch and keep only the 質感? The same choice decides what an imported photo starts with, because imports start from the camera look (C §3.7): with the default, a photo picked from 相簿 opens with the camera's 曝光, 色溫 and so on already applied. *Default: keep everything, and imports start with it, as today's camera look does for 濾鏡.* **Decided 2026-10-18:** the camera keeps everything across launches, but imports and camera shots open at 原圖, without it (C §3.7).
 6. **Lowering a look's grain, fade or vignette:** with a 質感 on, 顆粒, 褪色 and 暗角 can only be raised above what the look adds; turning the look's grain down means lowering 程度, which also weakens its colour. Is that acceptable, or should these three sliders, while a look is on, start at the look's own amount and move both ways? *Default: acceptable (C §3.4: sliders show your own value, the look adds on top). The alternative changes what these sliders mean whenever a look is set, so it is left out unless asked for.*

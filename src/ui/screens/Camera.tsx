@@ -247,7 +247,7 @@ export function Camera() {
       original?.close();
       return;
     }
-    go({ name: 'review', shot: { image, file, original, look: lookRef.current, faceSeed, mirrored: mirror } });
+    go({ name: 'review', shot: { image, file, original, faceSeed } });
   };
 
   const shutter = () => {

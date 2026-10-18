@@ -430,7 +430,12 @@ test('no face: 推臉筆 stays enabled under the face note and pushes the floor 
   const after = await settled(frame);
   const col = Math.round((300 / size.width) * before.width);
   const cols: [number, number] = [col - 6, col + 6];
-  const y0 = darkestRow(before, cols, [0, before.height - 1]);
+  // the line's top row, looked for on the photo around it (rows 600…700): the whole column also crosses what floats over
+  // the frame, which can be as dark as the plain line (measured once: 38 at the frame's top, the line 40.5). A new photo
+  // opens at 原圖 since 2026-10-18; 自然's 銳化 used to make the line's edge (20) the darkest row of the whole column
+  const fb = (await frame.boundingBox())!;
+  const row = (y: number) => Math.round((at(300, y).y - fb.y) * k);
+  const y0 = darkestRow(before, cols, [row(600), row(700)]);
   const y1 = darkestRow(after, cols, [y0 - Math.round(4 * k), y0 + Math.round(40 * k)]);
   expect((y1 - y0) / (24 * k)).toBeGreaterThanOrEqual(0.45);
 });

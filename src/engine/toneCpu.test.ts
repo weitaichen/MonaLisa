@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { IDENTITY_WIN, NO_FOLDS, TONE_ZERO, type FoldChords } from './passes/toneGeometry';
 import { shaderHash } from './shaderHash';
-import { gaussWeights, lFactor, RETOUCH_FS, sigmaLow, sigmaMid, TONE, TONE_BLUR_FS, TONE_DOWN8_FS, TONE_FIELD_FS, TONE_LBOX_FS } from './shaders/tone';
-import { bandOf, deltaTexel, fromYcc, LUMA709, makeImg, q8, retouchCpu, retouchPixel, sample, toneFieldCpu, toYcc, type Img } from './toneCpu';
+import { MAX_RENDER_FACES } from '../config/limits';
+import { gaussWeights, lFactor, MAX_FOLDS, MAX_MOUTHS, RETOUCH_FS, sigmaLow, sigmaMid, TONE, TONE_BLUR_FS, TONE_DOWN8_FS, TONE_FIELD_FS, TONE_LBOX_FS } from './shaders/tone';
+import { bandOf, deltaTexel, foldBand, fromYcc, lipGuard, LUMA709, makeImg, q8, retouchCpu, retouchPixel, sample, toneFieldCpu, toYcc, type Img } from './toneCpu';
 
 const SKIN = [0.8, 0.62, 0.52] as const;
 const lum = (c: ArrayLike<number>) => LUMA709[0] * c[0] + LUMA709[1] * c[1] + LUMA709[2] * c[2];
@@ -357,8 +358,37 @@ describe('toneCpu (skin-cleanup spec §4.3–4.4)', () => {
   });
 });
 
+describe('every rendered face reaches the tone passes (MAX_RENDER_FACES = 10, S §6.7)', () => {
+  it('the arrays hold two fold chords and one mouth per rendered face, in the shaders and the CPU port', () => {
+    expect(MAX_RENDER_FACES).toBe(10);
+    expect(MAX_FOLDS).toBe(20);
+    expect(MAX_MOUTHS).toBe(10);
+    expect(TONE_FIELD_FS).toContain('uniform vec4 uFold[20];');
+    expect(RETOUCH_FS).toContain('uniform vec2 uMouth[80];');
+    expect(RETOUCH_FS).toContain('uniform float uMouthW[10];');
+  });
+  it("白牙's lip guard reads the tenth face's mouth; 法令紋 reads the twentieth chord", () => {
+    const sq = (cx: number): [number, number][] => [[cx - 0.02, 0.48], [cx + 0.02, 0.48], [cx + 0.02, 0.52], [cx - 0.02, 0.52]];
+    const mouths = Array.from({ length: MAX_RENDER_FACES }, (_, f) => ({ ring: sq(0.05 + f * 0.1), mouthW: 0.04 }));
+    const last = 0.05 + (MAX_RENDER_FACES - 1) * 0.1;
+    expect(lipGuard(last, 0.5, { aspect: 1, mouths })).toBeGreaterThan(0.5);
+    expect(lipGuard(last, 0.5, { aspect: 1, mouths: mouths.slice(0, -1) })).toBe(0);
+    // a dark horizontal valley (rows 23–33). 20 chords: nineteen far-off vertical ones and, last, one along the
+    // valley. At the texel on the valley the nearest chord is the last one, so the band runs across the valley and
+    // finds it; without that chord the nearest is vertical, the band runs along the valley and sees no depth
+    const base0 = image(256, 64, (_, y) => (Math.abs(y - 28) < 6 ? [0.3, 0.3, 0.3] : [0.7, 0.7, 0.7]));
+    const far = Array.from({ length: MAX_FOLDS - 1 }, (): [number, number, number, number] => [0, 0, 0, 8]);
+    const chords: [number, number, number, number][] = [...far, [190, 28, 250, 28]];
+    expect(chords).toHaveLength(20);
+    const d = foldBand({ base0, chords, k: 14 }, 27, 3, [0, 0, 0]);
+    expect(d).not.toBeNull();
+    expect(d![0]).toBeLessThan(-0.3);
+    expect(foldBand({ base0, chords: chords.slice(0, -1), k: 14 }, 27, 3, [0, 0, 0])![0]).toBeCloseTo(0, 6);
+  });
+});
+
 describe('tone shaders pin', () => {
   it('is pinned to the shader text and the TONE table: a change must be mirrored in toneCpu.ts (then update this hash)', () => {
-    expect(shaderHash([TONE_DOWN8_FS, TONE_BLUR_FS, TONE_LBOX_FS, TONE_FIELD_FS, RETOUCH_FS].join('\n'))).toBe('7b5800af');
+    expect(shaderHash([TONE_DOWN8_FS, TONE_BLUR_FS, TONE_LBOX_FS, TONE_FIELD_FS, RETOUCH_FS].join('\n'))).toBe('085ca0a9');
   });
 });

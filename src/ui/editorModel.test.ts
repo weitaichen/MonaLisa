@@ -4,13 +4,15 @@ import type { BodyFieldInput } from '../body/field';
 import type { BodyMeasure } from '../body/measure';
 import { fakeBodyTracker, makeBodyDetection, makeBodyDetections, makeBodyField, makeFace } from '../app/testFakes';
 import { personInfos } from '../detect/cache';
+import { prepareFaces } from '../detect/faces';
 import { cacheBody, makeCache } from '../detect/testCaches';
+import { sampleFaceAt } from '../detect/testMeshes';
 import { applyPreset, setHeightBand, setParam } from '../engine/params';
-import type { BeautyParams, BodyField, EditState, Face, ParamId, PersonId, RegionStatus, Selection, TrackerState } from '../types';
+import type { BeautyParams, BodyField, DetectionCache, EditState, Face, ParamId, PersonId, RegionStatus, Selection, TrackerState } from '../types';
 import { lensFor, P0_INFO } from '../edit/lens';
 import { flipView, IDENTITY_GEOMETRY, rotateLeft, upQuarter, vToO } from '../geometry/view';
 import { editFromLegacy } from '../edit/legacy';
-import { bodyAnswer, preAnswerCache } from '../edit/migrate';
+import { bodyAnswer, completeAnswer, firstAnswer, preAnswerCache } from '../edit/migrate';
 import { assignPersons, withPersons } from '../edit/state';
 import {
   addBodyScan,
@@ -25,6 +27,10 @@ import {
   bodyInputKey,
   bodyPanelContext,
   changedPersons,
+  completionDue,
+  completionHeld,
+  completionOf,
+  completionShows,
   detectBody,
   detectSession,
   exportOnLatest,
@@ -45,6 +51,7 @@ import {
   protectRequests,
   rebaseStamp,
   RedetectBudget,
+  rescanOf,
   RESTORE_POLL_MS,
   sessionPlan,
   settleBodyAnswer,
@@ -109,6 +116,155 @@ describe('detectSession', () => {
     expect(sessionPlan(null, true)).toEqual({ useCache: false, asks: true });
     expect(sessionPlan(makeCache({ faceScans: [] }), false)).toEqual({ useCache: true, asks: false });
     expect(sessionPlan(null, false)).toEqual({ useCache: false, asks: false });
+  });
+
+  it('a short-range cache is drawn as it is, faceless or not: a definite answer whatever the tracker health (§6.5)', () => {
+    const faces = makeCache({ photoDetector: 'short-range' });
+    const none = makeCache({ faces: [], persons: [{ id: 'p0', face: null, body: null }], primary: 'p0', photoDetector: 'short-range' });
+    for (const c of [faces, none]) {
+      const plan = sessionPlan(c, true);
+      expect(plan).toEqual({ useCache: true, asks: false });
+      // reopened while the tracker is lost or failed (iOS back from the background): still a definite answer, so
+      // faceAnswer is not 'recovering' / 'paused' and no 膚質 tool (祛痘 included) is gated
+      expect(detectSession(plan.asks, () => false, () => session(null)).unsure).toBe(false);
+    }
+  });
+});
+
+describe('the completion of a short-range answer (§6.5)', () => {
+  const at = (...qs: (0 | 1 | 2 | 3)[]) => qs.map((quarter) => ({ quarter, flipH: false }));
+  /** a record the short-range detector answered (FaceScanRecord.detector) */
+  const owe = (quarter: 0 | 1 | 2 | 3) => ({ quarter, flipH: false, detector: 'short-range' as const });
+  const none = (faceScans: DetectionCache['faceScans'] = at(0)) => makeCache({ faces: [], persons: [{ id: 'p0', face: null, body: null }], primary: 'p0', faceScans, photoDetector: 'short-range' });
+
+  it('runs where the answer it completes was found: a cache with faces in its last face scan, a faceless one upright', () => {
+    // faces found by a sideways scan after a faceless upright answer: the completion runs on that up-frame
+    expect(completionOf(makeCache({ faceScans: at(0, 1), photoDetector: 'short-range' }))).toEqual({ quarter: 1 });
+    expect(completionOf(makeCache({ faceScans: at(0, 3), photoDetector: 'short-range' }))).toEqual({ quarter: 3 });
+    expect(completionOf(makeCache({ photoDetector: 'short-range' }))).toEqual({ quarter: 0 });
+    // faceless: upright, whatever other up-frames the cache was scanned in, while the upright record is owed (or no record
+    // says which is); else the last owed one (round 4)
+    expect(completionOf(none(at(0, 1)))).toEqual({ quarter: 0 });
+    expect(completionOf(none([owe(0), owe(1)]))).toEqual({ quarter: 0 });
+    expect(completionOf(none([...at(0), owe(3)]))).toEqual({ quarter: 3 });
+    expect(completionOf(none([...at(0), owe(1), owe(3)]))).toEqual({ quarter: 3 });
+    // nothing to complete: no mark (0.4's caches, full-range answers), or no upright answer yet
+    expect(completionOf(makeCache())).toBeNull();
+    expect(completionOf({ ...none(), photoDetector: undefined })).toBeNull();
+    expect(completionOf(none(at(1)))).toBeNull();
+    expect(completionOf(null)).toBeNull();
+  });
+
+  it('is due once per open, with a tracker and the detector in', () => {
+    const c = makeCache({ photoDetector: 'short-range' });
+    expect(completionDue({ cache: c, tried: false, hasTracker: true, detectorIn: true })).toEqual({ quarter: 0 });
+    // tried in this open (whatever it found): a later open tries again while the mark stays
+    expect(completionDue({ cache: c, tried: true, hasTracker: true, detectorIn: true })).toBeNull();
+    expect(completionDue({ cache: c, tried: false, hasTracker: false, detectorIn: true })).toBeNull();
+    expect(completionDue({ cache: c, tried: false, hasTracker: true, detectorIn: false })).toBeNull();
+    expect(completionDue({ cache: makeCache(), tried: false, hasTracker: true, detectorIn: true })).toBeNull();
+  });
+
+  it('waits for a bound definite session, a healthy tracker, no pending scan and nothing it would freeze', () => {
+    const free = { bound: true, unsure: false, health: 'ok' as TrackerState, scanPending: false, busy: false };
+    expect(completionHeld(free)).toBe(false);
+    expect(completionHeld({ ...free, bound: false })).toBe(true);
+    expect(completionHeld({ ...free, unsure: true })).toBe(true);
+    // a recovering or paused tracker could not answer: the cached answer stands meanwhile, and the try is kept
+    expect(completionHeld({ ...free, health: 'lost' })).toBe(true);
+    expect(completionHeld({ ...free, health: 'failed' })).toBe(true);
+    expect(completionHeld({ ...free, scanPending: true })).toBe(true);
+    expect(completionHeld({ ...free, busy: true })).toBe(true);
+  });
+
+  it('a sideways faceless cache scanned short-range in two up-frames: the completion asks upright, and the scan asks the turned one again once full-range is in', () => {
+    // nobody upright, nobody turned (q1), both short-range; the photo is shown turned
+    const c = none([owe(0), owe(1)]);
+    const turned = rotateLeft(rotateLeft(rotateLeft(IDENTITY_GEOMETRY)));
+    expect(upQuarter(turned)).toBe(1);
+    expect(needsFaceScan({ cache: c, geometry: turned, mode: 'normal', hasTracker: true })).toBe(false);
+    const nobody = { faces: [], obstacles: [], dropped: { tooSmall: 0, overCap: 0 } };
+    // the completion (upright, full-range) finds nobody either: the turned up-frame's record is still owed its look
+    const done = completeAnswer(c, nobody, { width: 1000, height: 1000 }, completionOf(c)!.quarter).detect;
+    expect(done.faceScans).toEqual([owe(1), ...at(0)]);
+    expect(done.photoDetector).toBe('short-range');
+    // the scan asks it, but only with full-range in (short-range would answer what it answered)
+    expect(needsFaceScan({ cache: done, geometry: turned, mode: 'normal', hasTracker: true, fullRange: true })).toBe(true);
+    expect(needsFaceScan({ cache: done, geometry: turned, mode: 'normal', hasTracker: true, fullRange: false })).toBe(false);
+    expect(needsFaceScan({ cache: done, geometry: IDENTITY_GEOMETRY, mode: 'normal', hasTracker: true, fullRange: true })).toBe(false);
+    // it is no fresh answer: its "nobody" says nothing (the short-range one said so when it was fresh)
+    expect(rescanOf(done, 1)).toBe(true);
+    expect(rescanOf(none(at(0)), 1)).toBe(false);
+    // nobody there either, full-range: nothing is owed now, and no up-frame is scanned again
+    const after = firstAnswer({ detect: done, prepared: nobody, size: { width: 1000, height: 1000 }, v1Body: null, rematch: null, faceSeed: null, quarter: 1, detector: 'full-range' }).detect;
+    expect(after).not.toHaveProperty('photoDetector');
+    expect(needsFaceScan({ cache: after, geometry: turned, mode: 'normal', hasTracker: true, fullRange: true })).toBe(false);
+    expect(completionDue({ cache: after, tried: false, hasTracker: true, detectorIn: true })).toBeNull();
+  });
+  it('an up-frame scanned full-range before the completion is not scanned again after it (round 4 F4)', () => {
+    // nobody upright short-range; turned while the detector landed: q1 answered full-range, nobody
+    const c = none([owe(0), ...at(1)]);
+    const turned = rotateLeft(rotateLeft(rotateLeft(IDENTITY_GEOMETRY)));
+    const done = completeAnswer(c, { faces: [], obstacles: [], dropped: { tooSmall: 0, overCap: 0 } }, { width: 1000, height: 1000 }, 0).detect;
+    expect(done).not.toHaveProperty('photoDetector');
+    // round 3 dropped q1's record here: the scan asked it once more, full-range again, and said 「未偵測到臉部」 again
+    expect(needsFaceScan({ cache: done, geometry: turned, mode: 'normal', hasTracker: true, fullRange: true })).toBe(false);
+  });
+
+  describe('what a completion into a cache with faces shows (completionShows, round 5 G3)', () => {
+    const size = { width: 1000, height: 1000 };
+    const short = (lms: ReturnType<typeof sampleFaceAt>[]) =>
+      firstAnswer({ detect: null, prepared: prepareFaces(lms, 1000, 1000), size, v1Body: null, rematch: null, faceSeed: null, quarter: 0, detector: 'short-range' }).detect;
+    const OVER = '偵測到超過 10 張臉，只會美化最大的 10 張';
+    /** ten faces 0.08 wide in two rows of five, a group short-range found whole */
+    const ten = Array.from({ length: 10 }, (_, i) => sampleFaceAt(0.1 + 0.2 * (i % 5), 0.25 + 0.3 * Math.floor(i / 5), 0.08));
+
+    it('a tiny face full-range finds beside a cached one adds nobody but an obstacle: the render changed, the thumbnail is owed', () => {
+      const a = sampleFaceAt(0.5, 0.5, 0.4);
+      const cache = short([a]);
+      expect(cache.obstacles).toEqual([]);
+      // full-range finds A again and a background face under MIN_FACE_FRAC beside A's jaw (short-range missed it)
+      const c = completeAnswer(cache, prepareFaces([a, sampleFaceAt(0.344, 0.604, 0.025)], 1000, 1000), size);
+      expect(c.added).toEqual([]);
+      expect(c.detect.obstacles).toHaveLength(1);
+      const hint = vi.fn(() => true);
+      // one person: no group notice, and the hint is not taken (round 4 owed nothing: the thumbnail kept the old render)
+      expect(completionShows(cache, c.detect, c.added, hint)).toEqual({ redraws: true, notices: [] });
+      expect(hint).not.toHaveBeenCalled();
+    });
+
+    it('an eleventh face found past the cap adds nobody, joins as an obstacle and says so; a cache over the cap already says nothing again', () => {
+      const cache = short(ten);
+      expect([cache.faces.length, cache.dropped.overCap]).toEqual([10, 0]);
+      // full-range finds the ten and a larger eleventh below them: no free place, so it is an obstacle, over the cap
+      const c = completeAnswer(cache, prepareFaces([...ten, sampleFaceAt(0.5, 0.85, 0.09)], 1000, 1000), size);
+      expect(c.added).toEqual([]);
+      expect(c.detect.faces.map((f) => f.id)).toEqual(cache.faces.map((f) => f.id));
+      expect(c.detect.obstacles).toHaveLength(1);
+      expect(c.detect.dropped.overCap).toBeGreaterThan(0);
+      const hint = vi.fn(() => true);
+      // round 4 showed the notice only when a face was added, so 「偵測到超過 10 張臉」 never showed here
+      expect(completionShows(cache, c.detect, c.added, hint)).toEqual({ redraws: true, notices: [OVER] });
+      expect(hint).not.toHaveBeenCalled();
+      // the short-range answer was over the cap already (and said so then): nothing is said again
+      const eleven = short([...ten, sampleFaceAt(0.5, 0.85, 0.07)]);
+      expect(eleven.dropped.overCap).toBe(1);
+      const again = completeAnswer(eleven, prepareFaces([...ten, sampleFaceAt(0.5, 0.85, 0.07)], 1000, 1000), size);
+      expect(completionShows(eleven, again.detect, again.added, hint).notices).toEqual([]);
+    });
+
+    it('nothing new: no redraw, no notice; new faces: what an answer says, the hint taken from two persons on', () => {
+      const cache = short(ten.slice(0, 2));
+      const same = completeAnswer(cache, prepareFaces(ten.slice(0, 2), 1000, 1000), size);
+      const hint = vi.fn(() => true);
+      expect(completionShows(cache, same.detect, same.added, hint)).toEqual({ redraws: false, notices: [] });
+      const more = completeAnswer(cache, prepareFaces(ten.slice(0, 3), 1000, 1000), size);
+      expect(more.added).toHaveLength(1);
+      expect(completionShows(cache, more.detect, more.added, hint)).toEqual({ redraws: true, notices: ['點選臉部或下方人物，可個別調整'] });
+      expect(hint).toHaveBeenCalledTimes(1);
+      // the first group photo's hint was taken before: nothing to say
+      expect(completionShows(cache, more.detect, more.added, () => false)).toEqual({ redraws: true, notices: [] });
+    });
   });
 });
 
@@ -861,7 +1017,7 @@ describe('editor persons UI helpers (S §1.1 item 8, §2.6)', () => {
   });
   it('answer notices: over cap wins over too small, both only with the strip; the first group photo ever adds the hint', () => {
     const c = makeCache({ dropped: { tooSmall: 1, overCap: 2 } });
-    expect(answerNotices(c, 3, true)).toEqual(['偵測到超過 6 張臉，只會美化最大的 6 張', '點選臉部或下方人物，可個別調整']);
+    expect(answerNotices(c, 3, true)).toEqual(['偵測到超過 10 張臉，只會美化最大的 10 張', '點選臉部或下方人物，可個別調整']);
     expect(answerNotices({ ...c, dropped: { tooSmall: 1, overCap: 0 } }, 3, false)).toEqual(['有些臉太小，不會套用臉部效果']);
     expect(answerNotices(c, 1, true)).toEqual([]);
   });

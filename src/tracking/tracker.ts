@@ -1,8 +1,19 @@
 // MediaPipe FaceLandmarker 0.10.35 wrapper (spec §6, RB §3).
 //
 // One instance serves both live VIDEO and photo IMAGE detection: WebKit leaks memory when
-// instances are created/closed per photo (MPI 5036). setOptions() without a model asset rebuilds
-// the graph synchronously (its promise is already resolved), so detectImage can stay synchronous.
+// instances are created/closed per photo (MPI 5036). setOptions() without a model asset, or with a
+// Uint8Array one, rebuilds the graph synchronously (its promise is already resolved), so detectImage
+// can stay synchronous.
+//
+// Each mode has its own model: the camera keeps the camera bundle (BlazeFace short-range, the cheaper
+// detector a selfie needs), photos get the photo bundle (the same bundle with BlazeFace full-range,
+// engine/faceBundle.ts), which finds the small faces of a group photo the short-range detector misses.
+// The photo bundle is assembled from the camera bundle and opts.fullRangeDetector right before each switch
+// to it and not kept: MediaPipe copies every model buffer it is given. A photo may also ask for the camera
+// bundle (detector 'camera'): the retry for a face the full-range detector misses (step-1 spec §6.5).
+// The model travels in the mode switch's own setOptions, so switching costs no extra rebuild. Instances
+// are created on the camera model: building on the photo model only moves the full-range graph's
+// one-time GPU warm-up (about 1.2 s on desktop D3D11) from the first photo to the camera start.
 //
 // MediaPipe recovers from nothing by itself, so the wrapper heals in two steps, cheapest first:
 //  1. One bad inference poisons the graph (MPI 5152: every later call throws "Graph has errors").
@@ -18,6 +29,7 @@
 //     these rare events keeps to the single-instance rule.
 import { FaceLandmarker, FilesetResolver, type FaceLandmarkerOptions } from '@mediapipe/tasks-vision';
 import { EDIT_DETECT_FACES, LIVE_DETECT_FACES } from '../config/limits';
+import { withFaceDetector } from '../engine/faceBundle';
 import type { Delegate, Landmarks478, Tracker, TrackerOptions, TrackerState } from '../types';
 
 const N_POINTS = 478;
@@ -123,8 +135,8 @@ async function createInstance(
   numFaces: number,
 ): Promise<Instance> {
   const options: FaceLandmarkerOptions = {
-    // Kept by reference (not copied) and re-read on every setOptions graph rebuild, so the caller
-    // must not mutate it afterwards.
+    // Copied by tasks-vision 0.10.35 (setOptions keeps its own Uint8Array, which every graph rebuild serializes into
+    // the wasm heap): the caller's buffer is not read again after this call.
     baseOptions: { modelAssetBuffer: modelBuffer, delegate },
     runningMode: 'VIDEO',
     numFaces,
@@ -183,6 +195,9 @@ function release(inst: Instance, note: (where: string, e: unknown) => void): voi
   }
 }
 
+/** which bundle a graph holds: the camera's (short-range) or the photo bundle (full-range) */
+type ModelKind = 'camera' | 'photo';
+
 export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
   const fileset = await FilesetResolver.forVisionTasks(opts.wasmBase);
   const { modelBuffer } = opts;
@@ -194,6 +209,31 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
     if (logged.has(key) || logged.size >= MAX_LOGGED) return;
     logged.add(key);
     console.warn(`[tracker] ${where} failed:`, e);
+  };
+
+  /** a detector the photo bundle could not be assembled with (not a TFLite model, or the camera bundle is no stored zip) */
+  let refused: Uint8Array | null = null;
+  /** the full-range detector photos run now; null (none yet, or refused) → they run the camera bundle */
+  const fullRange = (): Uint8Array | null => {
+    let d: Uint8Array | null = null;
+    try {
+      d = opts.fullRangeDetector?.() ?? null;
+    } catch (e) {
+      note('fullRangeDetector', e);
+    }
+    return d && d !== refused ? d : null;
+  };
+  /** the photo bundle, assembled for one switch to it (about 3–4 ms on the desktop); null when there is none */
+  const photoBundle = (): Uint8Array | null => {
+    const d = fullRange();
+    if (!d) return null;
+    try {
+      return withFaceDetector(modelBuffer, d);
+    } catch (e) {
+      refused = d;
+      note('photo model', e);
+      return null;
+    }
   };
 
   // declared before the first instance exists: its loss listener closes over `inst`
@@ -218,6 +258,8 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
   let frameCopy = inst.delegate === 'CPU' ? createFrameCopy() : null;
   let lastTs = -Infinity;
   let mode: 'VIDEO' | 'IMAGE' = 'VIDEO';
+  /** the bundle of the current graph (every instance is built on the camera's) */
+  let model: ModelKind = 'camera';
   let closed = false;
   // step 1: in-place graph rebuild
   let needsRebuild = false;
@@ -274,10 +316,11 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
       else requestReplace();
       return;
     }
-    // The new graph starts in VIDEO with the last requested count (`faces` is unchanged); lastTs is kept so
-    // timestamps stay strictly increasing.
+    // The new graph starts in VIDEO, on the camera model, with the last requested count (`faces` is unchanged);
+    // lastTs is kept so timestamps stay strictly increasing.
     inst = next;
     mode = 'VIDEO';
+    model = 'camera';
     needsRebuild = false;
     lastRebuildAt = -Infinity;
     failures = 0;
@@ -353,23 +396,35 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
     return e;
   };
 
-  // Every mode or count change rebuilds the graph, and the first inference after a rebuild is slow on the
+  // Every mode, count or model change rebuilds the graph, and the first inference after a rebuild is slow on the
   // GPU delegate (~1 s in desktop Chromium). Switching back to VIDEO lazily, on the next
   // detectVideo, keeps back-to-back photo detections from paying that twice. After a failure the
   // same-mode setOptions is the rebuild that clears the poisoned graph.
-  const setMode = (m: 'VIDEO' | 'IMAGE', n: number) => {
-    if (mode === m && faces === n && !needsRebuild) return;
-    // Mode and count first: on a poisoned graph setOptions applies the new options and starts the new graph,
-    // then throws while closing the old one, so the graph is in (m, n) either way. Both keys every time: the
-    // bundle writes numFaces only when the key is present, and options are sticky.
+  const setMode = (m: 'VIDEO' | 'IMAGE', n: number, detector: 'photo' | 'camera' = 'photo') => {
+    let want: ModelKind = m === 'IMAGE' && detector === 'photo' && fullRange() ? 'photo' : 'camera';
+    // the bytes to switch to (null: the graph already holds `want`); the photo bundle is assembled only for a switch
+    let buffer: Uint8Array | null = null;
+    if (want === 'photo' && model !== 'photo') {
+      buffer = photoBundle();
+      if (!buffer) want = 'camera';
+    }
+    if (want === 'camera' && model !== 'camera') buffer = modelBuffer;
+    if (mode === m && faces === n && model === want && !needsRebuild) return;
+    // Mode, count and model first: on a poisoned graph setOptions applies the new options (the model asset before
+    // the rebuild) and starts the new graph, then throws while closing the old one, so the graph is in (m, n, want)
+    // either way. runningMode and numFaces every time: the bundle writes numFaces only when the key is present, and
+    // options are sticky. The model only when it changes, without `delegate` (sticky too); a Uint8Array keeps the
+    // call synchronous.
     mode = m;
     faces = n;
+    model = want;
     if (needsRebuild) {
       needsRebuild = false;
       lastRebuildAt = performance.now();
     }
     try {
-      Promise.resolve(inst.landmarker.setOptions({ runningMode: m, numFaces: n })).catch((e: unknown) => note('rebuild', e));
+      const o: FaceLandmarkerOptions = buffer ? { baseOptions: { modelAssetBuffer: buffer }, runningMode: m, numFaces: n } : { runningMode: m, numFaces: n };
+      Promise.resolve(inst.landmarker.setOptions(o)).catch((e: unknown) => note('rebuild', e));
     } catch (e) {
       note('rebuild', e);
     }
@@ -398,14 +453,18 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
       }
     },
 
-    detectImage(image: ImageInput, o: { maxFaces: number }): Landmarks478[] {
+    get photoDetector() {
+      return fullRange() ? ('full-range' as const) : ('short-range' as const);
+    },
+
+    detectImage(image: ImageInput, o: { maxFaces: number; detector?: 'photo' | 'camera' }): Landmarks478[] {
       if (closed) return [];
       const [w, h] = imageSize(image);
       if (w <= 0 || h <= 0) return [];
       if (!usable()) return [];
       // one-shot and user-initiated: rebuild right away, no throttle
       try {
-        setMode('IMAGE', clampFaces(o.maxFaces));
+        setMode('IMAGE', clampFaces(o.maxFaces), o.detector ?? 'photo');
         return succeeded(toLandmarksAll(inst.landmarker.detect(image).faceLandmarks));
       } catch (e) {
         throw failed('detectImage', e);

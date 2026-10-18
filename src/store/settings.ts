@@ -6,7 +6,7 @@
 // saves never throw.
 import { sanitizeParams } from '../engine/params';
 import { splitLegacy } from '../edit/legacy';
-import { naturalPerson, sanitizePerson, sanitizePhoto } from '../edit/state';
+import { neutralLook, neutralPerson, sanitizePerson, sanitizePhoto } from '../edit/state';
 import type { BeautyParams, CameraLook, ExportFormat, ExportSize, Prefs } from '../types';
 
 export const PARAMS_KEY = 'meiyan.params.v1';
@@ -46,23 +46,30 @@ export function savePrefs(p: Prefs): void {
 
 export const LOOK_KEY = 'meiyan.look.v1';
 
-/** Untrusted camera look → valid (RM §3.7): every field defaulted; no geometry / spots / strokes in the camera. */
+/**
+ * Untrusted camera look → valid (RM §3.7): a field it lacks is 原圖's (neutral), as nobody set it; no geometry / spots /
+ * strokes in the camera.
+ */
 export function sanitizeLook(raw: unknown): CameraLook {
   const r = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-  return { photo: sanitizePhoto(r.photo), person: sanitizePerson(r.person, naturalPerson()) };
+  return { photo: sanitizePhoto(r.photo), person: sanitizePerson(r.person, neutralPerson()) };
 }
 
 /**
  * The live-camera look. The first load without meiyan.look.v1 migrates meiyan.params.v1 (0.3) through splitLegacy and
- * stores the result; meiyan.params.v1 is neither written nor deleted (RM §3.7). A fresh install (neither key) gets
- * the 自然 look and writes nothing, so hasSavedSettings still tells it from a returning user (announceUpdate).
+ * stores the result; meiyan.params.v1 is neither written nor deleted (RM §3.7). Without either key nobody saved a
+ * camera look here: a fresh install, or an upgrader who never moved a camera slider or preset (0.3 wrote params.v1
+ * only from the camera's own edits, 0.4.0 never wrote its default look). Both start at the 原圖 look (2026-10-18, the
+ * user's 「全部都原圖」; 0.3 and 0.4.0 started at 自然) and nothing is written, so hasSavedSettings still tells a fresh
+ * install from a returning user (announceUpdate).
  */
 export function loadLook(): CameraLook {
   const raw = readJson(LOOK_KEY);
   if (raw !== undefined) return sanitizeLook(raw);
   const legacy = readJson(PARAMS_KEY);
+  if (legacy === undefined) return neutralLook();
   const look = splitLegacy(sanitizeParams(legacy));
-  if (legacy !== undefined) writeJson(LOOK_KEY, look);
+  writeJson(LOOK_KEY, look);
   return look;
 }
 

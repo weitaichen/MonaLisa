@@ -1,6 +1,5 @@
 // App-level UI state. No router, no history.pushState, no hash (RB §1 #9): the screen is plain state.
-import { defaultParams } from '../engine/params';
-import { splitLegacy } from '../edit/legacy';
+import { neutralLook } from '../edit/state';
 import { DEFAULT_PREFS } from '../store/settings';
 import type { V1Bodies } from '../edit/migrate';
 import type { SourceInfo } from '../media/exportPlan';
@@ -22,20 +21,16 @@ export interface Shot {
   image: ImageData;
   /** encoding starts right after capture so 儲存 can share synchronously */
   file: Promise<File>;
-  /** unprocessed frame with the same crop / mirror, for 編輯 (avoids applying effects twice) */
+  /** unprocessed frame with the same crop / mirror, for 編輯: it opens there at 原圖, the camera look stays behind (2026-10-18) */
   original: ImageBitmap | null;
-  /** the camera look at the shutter (RM §3.7) */
-  look: CameraLook;
-  /** camera → editor (C2): the beautified face's centre in the saved image, 'all', or null */
+  /** camera → editor (C2): the beautified face's centre in the saved image, 'all', or null; it picks who is selected */
   faceSeed: FaceSeed;
-  /** saved mirrored (front camera with 鏡像儲存): the shot's GPUPixel halves are the live look's swapped (S5 §3.4) */
-  mirrored: boolean;
 }
 
 export interface EditorSource {
   /** owned by the editor session afterwards */
   bitmap: ImageBitmap;
-  /** the edit to open with: openState for an entry, importEdit / cameraShotEdit for a new photo */
+  /** the edit to open with: openState for an entry, importEdit (原圖) for a new photo, imported or a camera shot */
   edit: EditState;
   /** existing history entry being re-edited, or null for a new photo */
   historyId: string | null;
@@ -102,7 +97,7 @@ function safeLoad<T>(load: () => T, fallback: () => T, what: string): T {
 export const app = createStore<AppState>({
   screen: { name: 'home' },
   sheet: null,
-  look: safeLoad(() => deps.loadLook(), () => splitLegacy(defaultParams()), 'loadLook'),
+  look: safeLoad(() => deps.loadLook(), neutralLook, 'loadLook'),
   prefs: safeLoad(() => deps.loadPrefs(), () => ({ ...DEFAULT_PREFS }), 'loadPrefs'),
   ratio: '3:4',
   timer: 0,

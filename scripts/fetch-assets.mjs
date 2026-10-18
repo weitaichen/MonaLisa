@@ -3,6 +3,7 @@
 //  - face_landmarker.task (downloaded once, md5-verified)
 //  - pose_landmarker_{full,lite}.task for 美體 (downloaded once, md5-verified)
 //  - selfie_segmenter.tflite for the 瘦臉 background limit (downloaded once, md5-verified)
+//  - blaze_face_full_range.tflite, the photo face detector (downloaded once, md5-verified)
 //  - GPUPixel resource PNGs at a pinned commit, re-encoded without colour chunks
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -76,6 +77,24 @@ for (const [variant, { md5: want }] of Object.entries(POSE_MODELS)) {
   const md5Of = (buf) => createHash('md5').update(buf).digest('base64');
   if (!existsSync(dst) || md5Of(readFileSync(dst)) !== want) {
     const buf = await download(`https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/${name}`);
+    if (md5Of(buf) !== want) throw new Error(`${name} md5 mismatch: ${md5Of(buf)}`);
+    ensureDir(dst);
+    writeFileSync(dst, buf);
+  }
+  console.log(`${name} ok`);
+}
+
+// 2d. Photo face detection: BlazeFace full-range (input 192×192). The app swaps it into face_landmarker.task in the
+//     browser (src/engine/faceBundle.ts) for photos (IMAGE mode); the camera keeps the bundle's short-range detector.
+//     Downloaded with the engine, so photo detection works offline after the first launch. Versioned GCS path
+//     (float16/1; `latest` has the same md5 today). md5 = GCS x-goog-hash.
+{
+  const name = 'blaze_face_full_range.tflite';
+  const want = 'XeN2/MhVJzxccgdm02UjoA=='; // 1,083,786 B
+  const dst = pub('models', 'face_detector', 'full-range-float16-1', name);
+  const md5Of = (buf) => createHash('md5').update(buf).digest('base64');
+  if (!existsSync(dst) || md5Of(readFileSync(dst)) !== want) {
+    const buf = await download(`https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_full_range/float16/1/${name}`);
     if (md5Of(buf) !== want) throw new Error(`${name} md5 mismatch: ${md5Of(buf)}`);
     ensureDir(dst);
     writeFileSync(dst, buf);

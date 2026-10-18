@@ -16,7 +16,7 @@ import { syntheticPortrait } from '../../body/synthetic';
 import { buildFaceProtect } from '../../tracking/faceProtect';
 import { shaderHash } from '../shaderHash';
 
-const PINNED = '12c178ac';
+const PINNED = 'bd89e096';
 
 const lm = JSON.parse(readFileSync(new URL('../../../tests/fixtures/landmarks_sample_face.json', import.meta.url), 'utf8')) as {
   width: number;
@@ -37,6 +37,13 @@ describe('reshapeMapCpu (CPU port of RESHAPE_FS)', () => {
     // step 3: P2's view uniforms (geometry, tile, window)
     expect(RESHAPE_FS).toContain('uniform mat3 uGeo');
     expect(reshapeFs('ubo')).toContain('uniform vec4 uWin');
+    // S §6.7: ten faces, so the loop bound is 10 and the UBO carrier's block is 10 × 96 vec4 (std140: a vec4 array's
+    // stride is 16 B) = 15,360 B, within the 16,384 B every WebGL2 context guarantees (MAX_UNIFORM_BLOCK_SIZE)
+    expect(MAX_RENDER_FACES).toBe(10);
+    expect(RESHAPE_FS).toContain('const int MAX_RENDER_FACES = 10;');
+    expect(reshapeFs('ubo')).toContain('vec4 uFaceTab[960];');
+    expect(FT.ROW * MAX_RENDER_FACES * 16).toBe(15_360);
+    expect(FT.ROW * MAX_RENDER_FACES * 16).toBeLessThanOrEqual(16_384);
     expect(shaderHash(RESHAPE_FS)).toBe(PINNED);
   });
 
@@ -387,11 +394,12 @@ describe('N-face port (S §4.4)', () => {
     const caps = capsFor([boxCentre(ovalBox(A)), [0.9, 0.5]], [[0.47, 0.5]], 1);
     expect(caps[0]).toBeCloseTo(Math.abs(0.47 - boxCentre(ovalBox(A))[0]) / 2, 6);
   });
-  it('7 faces (S §8.1): the one the face cap drops is an obstacle; it sets the cap of the one face it is nearest to, and only that one', () => {
-    // six faces in a 3 × 2 grid (0.15 UV across, 0.3 down) and a seventh, smaller one 0.1 UV left of the top-left face:
-    // prepareFaces keeps the six largest (MAX_RENDER_FACES) and makes the seventh an obstacle (dropped.overCap)
-    const lms = [0.35, 0.5, 0.65].flatMap((x) => [0.35, 0.65].map((y) => lmAt(x, y, 0.1)));
-    const prep = prepareFaces([...lms, lmAt(0.25, 0.35, 0.08)], 1000, 1000, MAX_RENDER_FACES);
+  it('11 faces (S §8.1, §6.7): the one the face cap drops is an obstacle; it sets the cap of the one face it is nearest to, and only that one', () => {
+    // ten faces in a 5 × 2 grid (0.15 UV across, 0.3 down) and an eleventh, smaller one 0.1 UV left of the top-left
+    // face: prepareFaces keeps the ten largest (MAX_RENDER_FACES) and makes the eleventh an obstacle (dropped.overCap)
+    const lms = [0.25, 0.4, 0.55, 0.7, 0.85].flatMap((x) => [0.35, 0.65].map((y) => lmAt(x, y, 0.1)));
+    expect(lms).toHaveLength(MAX_RENDER_FACES);
+    const prep = prepareFaces([...lms, lmAt(0.15, 0.35, 0.08)], 1000, 1000, MAX_RENDER_FACES);
     expect(prep.faces).toHaveLength(MAX_RENDER_FACES);
     expect(prep.obstacles).toHaveLength(1);
     expect(prep.dropped).toEqual({ tooSmall: 0, overCap: 1 });
@@ -439,7 +447,7 @@ describe('N-face port (S §4.4)', () => {
         }
       }
     expect(outside).toBeGreaterThan(100_000);
-    expect(differs, 'the other five faces warp exactly as without the obstacle').toBe(0);
+    expect(differs, 'the other nine faces warp exactly as without the obstacle').toBe(0);
     expect(annulus).toBeGreaterThan(1000);
     expect(moved, 'beyond its new cap the near face moves nothing').toBe(0);
     expect(movedBefore, 'without the obstacle the near face warps there (the check is not vacuous)').toBeGreaterThan(100);
@@ -701,7 +709,19 @@ describe('the step-5 read gate (RESHAPE_FS uDetail, detailMask)', () => {
     }
   });
 
-  it('detailMask on the packed row and faceDetailOn on the uniforms agree (random persons, split or not, 1–6 faces)', () => {
+  it('one bit per face up to MAX_RENDER_FACES = 10: the tenth face alone with step-5 work sets bit 9 (S §6.7)', () => {
+    const natural = reshapeUniforms(applyPreset('natural', 1).values, 1);
+    const ten = Array.from({ length: MAX_RENDER_FACES }, (_, f) => tf(f === MAX_RENDER_FACES - 1 ? U5({ 'shape.jawline': 1 }) : natural));
+    expect(ten).toHaveLength(10);
+    expect(detailMask(table(ten), 10)).toBe(0b10_0000_0000);
+    // the ninth alone: bit 8
+    expect(detailMask(table(ten.map((_, f) => (f === 8 ? tf(U5({ 'shape.temple': 0 })) : tf(natural)))), 10)).toBe(0b1_0000_0000);
+    expect(detailMask(table(ten.map(() => tf(U5({ 'shape.temple': 1 })))), 10)).toBe(0x3ff);
+    // allDetail's mask ((1 << MAX_RENDER_FACES) − 1) covers every listed face
+    expect((1 << MAX_RENDER_FACES) - 1).toBe(0x3ff);
+  });
+
+  it('detailMask on the packed row and faceDetailOn on the uniforms agree (random persons, split or not, 1–10 faces)', () => {
     let s = 99;
     const rnd = () => ((s = (s * 1103515245 + 12345) >>> 0) / 2 ** 32);
     const shape = paramsInGroup('shape').map((d) => d.id);

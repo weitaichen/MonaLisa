@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { paramsInGroup, SPLIT_IDS } from '../engine/params';
 import { adapt } from '../tracking/adapter111';
 import type { PersonParamId } from '../types';
-import { benchFaces, makeupBenchPerson, medianMs, warpBenchPerson } from './faceDetailBench';
+import { BENCH_FACE_COUNTS, benchFaces, makeupBenchPerson, medianMs, warpBenchPerson } from './faceDetailBench';
 
 const lm = JSON.parse(readFileSync(new URL('../../tests/fixtures/landmarks_sample_face.json', import.meta.url), 'utf8')) as {
   width: number;
@@ -29,8 +29,9 @@ describe('step-5 bench inputs (face-detail spec §6.2)', () => {
     expect(p.shades).toMatchObject({ lip: 'rose', blush: 'peach', brow: 'black', eyeshadow: 'earth', liner: 'black', lens: 'blue' });
   });
 
-  it('N faces fit in the frame without overlapping', () => {
-    for (const n of [1, 3, 6]) {
+  it('N = 1, 3, 6 and the face cap (10, S §6.7) fit in the frame without overlapping', () => {
+    expect(BENCH_FACE_COUNTS).toEqual([1, 3, 6, 10]);
+    for (const n of BENCH_FACE_COUNTS) {
       const fs = benchFaces(face, n, warpBenchPerson(1));
       expect(fs).toHaveLength(n);
       const boxes = fs.map((f) => {

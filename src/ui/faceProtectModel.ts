@@ -3,7 +3,7 @@
 // When the limit applies: only once it is *requested* for this photo, i.e. the user dragged or committed a contour
 // slider (瘦臉 / V臉 / 窄臉 / 下巴 / 額頭, CONTOUR_IDS) in this editor, or the photo is a reopened history entry saved
 // with the request (HistoryEntry.faceProtect). Preset, default, 重置 and undo / redo values never request it (the
-// shipped 自然 default already has 瘦臉 / V臉 on). Until then the warp is today's unlimited one whatever mask is at
+// 自然 preset already has 瘦臉 / V臉 on). Until then the warp is today's unlimited one whatever mask is at
 // hand: neither a model download nor a 美體 detection landing changes what is shown by itself.
 // The request is sticky for the photo (undo / 重置 do not withdraw it: once built the limit has no effect at neutral
 // contour values), within an editor and across reopens (record()). Once requested, the person mask that bounds the

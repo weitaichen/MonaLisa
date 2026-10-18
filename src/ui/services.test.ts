@@ -46,6 +46,7 @@ async function load(prefs: { current: Prefs }): Promise<{ svc: Services; deps: D
   svc.bindPrefs(() => prefs.current);
   deps.isWebGL2Supported = () => true;
   deps.loadEngineAssets = async () => ({ modelBuffer: new Uint8Array(4) });
+  deps.loadPhotoDetector = async () => new Uint8Array(8);
   return { svc, deps };
 }
 
@@ -187,6 +188,211 @@ describe('services: tracker builds', () => {
     prefs.current = { ...prefs.current, delegate: 'CPU' };
     await svc.restartTracker();
     expect(gates).toHaveLength(0);
+  });
+});
+
+describe('services: the full-range photo detector (C4)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function withTrackers(prefs: { current: Prefs }) {
+    const loaded = await load(prefs);
+    loaded.deps.createEngine = (() => fakeEngine(Promise.resolve())) as unknown as Deps['createEngine'];
+    const opts: TrackerOptions[] = [];
+    loaded.deps.createTracker = (async (o: TrackerOptions) => {
+      opts.push(o);
+      return { delegate: 'GPU', close: vi.fn() };
+    }) as unknown as Deps['createTracker'];
+    return { ...loaded, opts };
+  }
+
+  it('the engine (the camera) is ready without waiting for the detector; every tracker build reads it at each photo through fullRangeDetector', async () => {
+    const prefs = { current: { ...PREFS } };
+    const { svc, deps, opts } = await withTrackers(prefs);
+    const camera = new Uint8Array(4);
+    deps.loadEngineAssets = async () => ({ modelBuffer: camera });
+    const det = deferred<Uint8Array>();
+    deps.loadPhotoDetector = vi.fn(() => det.promise) as unknown as Deps['loadPhotoDetector'];
+    await svc.ensureEngine();
+    expect(svc.svc.get().engine.state).toBe('ready');
+    expect(opts[0].modelBuffer).toBe(camera);
+    expect(opts[0]).not.toHaveProperty('photoModelBuffer');
+    expect(opts[0].fullRangeDetector!()).toBeNull();
+    const bytes = new Uint8Array(6);
+    det.resolve(bytes);
+    await flush();
+    expect(opts[0].fullRangeDetector!()).toBe(bytes);
+    prefs.current = { ...PREFS, delegate: 'CPU' } as Prefs;
+    await svc.restartTracker();
+    expect(opts).toHaveLength(2);
+    expect(opts[1].fullRangeDetector!()).toBe(bytes);
+    expect(deps.loadPhotoDetector).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed detector download is not kept: the next photo asks again (fullRangeDetector), and the answer after it is used', async () => {
+    const { svc, deps, opts } = await withTrackers({ current: { ...PREFS } });
+    const bytes = new Uint8Array(6);
+    const load = vi.fn().mockRejectedValueOnce(new Error('HTTP 404')).mockResolvedValueOnce(bytes);
+    deps.loadPhotoDetector = load as unknown as Deps['loadPhotoDetector'];
+    await svc.ensureEngine();
+    await flush();
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(opts[0].fullRangeDetector!()).toBeNull(); // this photo detects short-range, and a retry starts
+    expect(load).toHaveBeenCalledTimes(2);
+    await flush();
+    expect(opts[0].fullRangeDetector!()).toBe(bytes);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('svc.photoDetector says the detector is in whichever request brought it (round 4): a 5xx first, then a retry no editor asked for (a photo switching the tracker) lands', async () => {
+    const { svc, deps, opts } = await withTrackers({ current: { ...PREFS } });
+    const retry = deferred<Uint8Array>();
+    const load = vi.fn().mockRejectedValueOnce(new Error('HTTP 503')).mockReturnValueOnce(retry.promise);
+    deps.loadPhotoDetector = load as unknown as Deps['loadPhotoDetector'];
+    await svc.ensureEngine();
+    await flush();
+    expect(svc.svc.get().photoDetector).toBe(false);
+    const seen: boolean[] = [];
+    svc.svc.subscribe((s) => seen.push(s.photoDetector));
+    // a photo's switch to its model reads the detector: missing, so services asks again by itself
+    expect(opts[0].fullRangeDetector!()).toBeNull();
+    expect(load).toHaveBeenCalledTimes(2);
+    await flush();
+    expect(svc.svc.get().photoDetector).toBe(false);
+    retry.resolve(new Uint8Array(6));
+    await flush();
+    // the store says so (an open editor completes its short-range answer on it, not on its own asks)
+    expect(svc.svc.get().photoDetector).toBe(true);
+    expect(seen.at(-1)).toBe(true);
+    // and it stays in: an editor's later ask joins nothing, the bytes are there
+    await svc.ensurePhotoDetector();
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(svc.svc.get().photoDetector).toBe(true);
+  });
+
+  it('photoDetectorPending: a face detection waits for the first download when it lands within the cap; null once the detector is in', async () => {
+    const { svc, deps } = await load({ current: { ...PREFS } });
+    const first = deferred<Uint8Array>();
+    const loadDet = vi.fn().mockReturnValueOnce(first.promise);
+    deps.loadPhotoDetector = loadDet as unknown as Deps['loadPhotoDetector'];
+    const p = svc.photoDetectorPending();
+    expect(p).not.toBeNull();
+    let done = false;
+    void p!.then(() => (done = true));
+    await flush();
+    expect(done).toBe(false);
+    first.resolve(new Uint8Array(6));
+    await flush();
+    expect(done).toBe(true);
+    expect(svc.photoDetectorPending()).toBeNull();
+    expect(loadDet).toHaveBeenCalledTimes(1);
+  });
+
+  it('photoDetectorPending: a hanging first download is waited for DETECTOR_WAIT_MS at most, once per session (D1)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { svc, deps } = await load({ current: { ...PREFS } });
+      // the request never answers (lie-fi): its stall abort would come only after STALL_TIMEOUT_MS of silence per chunk
+      deps.loadPhotoDetector = vi.fn(() => new Promise<Uint8Array>(() => undefined)) as unknown as Deps['loadPhotoDetector'];
+      expect(svc.DETECTOR_WAIT_MS).toBe(3000);
+      const p = svc.photoDetectorPending();
+      expect(p).not.toBeNull();
+      let done = false;
+      void p!.then(() => (done = true));
+      await vi.advanceTimersByTimeAsync(svc.DETECTOR_WAIT_MS - 1);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(done).toBe(true);
+      // the cap is spent: the next photo detects with what is there at once, though the download is still in flight
+      expect(svc.photoDetectorPending()).toBeNull();
+      expect(deps.loadPhotoDetector).toHaveBeenCalledTimes(1);
+      // one wait in the session (window.__meiyan, read by the e2e)
+      expect(window.__meiyan?.detectorWaits).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('photoDetectorPending: a photo opened within the cap waits only for what is left of it', async () => {
+    vi.useFakeTimers();
+    try {
+      const { svc, deps } = await load({ current: { ...PREFS } });
+      deps.loadPhotoDetector = vi.fn(() => new Promise<Uint8Array>(() => undefined)) as unknown as Deps['loadPhotoDetector'];
+      void svc.photoDetectorPending();
+      await vi.advanceTimersByTimeAsync(2000);
+      let done = false;
+      void svc.photoDetectorPending()!.then(() => (done = true));
+      await vi.advanceTimersByTimeAsync(999);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('photoDetectorPending: no wait on a retry after a failed first download (D1), though one is in flight', async () => {
+    const { svc, deps } = await load({ current: { ...PREFS } });
+    const first = deferred<Uint8Array>();
+    const retry = deferred<Uint8Array>();
+    const loadDet = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
+    deps.loadPhotoDetector = loadDet as unknown as Deps['loadPhotoDetector'];
+    const p = svc.photoDetectorPending();
+    expect(svc.photoDetectorPending()).not.toBeNull(); // joins the same download
+    first.reject(new TypeError('Failed to fetch'));
+    await p;
+    // the next photo starts a retry (the tracker's fullRangeDetector), and nothing waits for it
+    void svc.ensurePhotoDetector();
+    expect(loadDet).toHaveBeenCalledTimes(2);
+    expect(svc.photoDetectorPending()).toBeNull();
+    retry.resolve(new Uint8Array(6));
+    await flush();
+    expect(svc.photoDetectorPending()).toBeNull();
+  });
+
+  it("the engine download's own detector request is the session's first: when it fails before 'done', the request 'done' starts is a retry nobody waits for (D1)", async () => {
+    const { svc, deps } = await load({ current: { ...PREFS } });
+    // loadPhotoDetector as assets.ts has it: memoised while in flight, the memo cleared by a failure
+    const attempts: Deferred<Uint8Array>[] = [];
+    let memo: Promise<Uint8Array> | null = null;
+    const loadDet = vi.fn(() => {
+      if (!memo) {
+        const d = deferred<Uint8Array>();
+        attempts.push(d);
+        const m = d.promise;
+        memo = m;
+        m.catch(() => {
+          if (memo === m) memo = null;
+        });
+      }
+      return memo;
+    });
+    deps.loadPhotoDetector = loadDet as unknown as Deps['loadPhotoDetector'];
+    // the engine download starts the detector's request right after the model's, and never waits for it
+    const engine = deferred<{ modelBuffer: Uint8Array }>();
+    deps.loadEngineAssets = (() => {
+      void deps.loadPhotoDetector().catch(() => undefined);
+      return engine.promise;
+    }) as unknown as Deps['loadEngineAssets'];
+    const assets = svc.prefetchAssets();
+    expect(attempts).toHaveLength(1);
+    // lie-fi: the request is reset at once while the model downloads on
+    attempts[0].reject(new TypeError('Failed to fetch'));
+    await flush();
+    engine.resolve({ modelBuffer: new Uint8Array(4) });
+    await assets;
+    await flush();
+    // 'done' asks again, and that retry hangs: the first photo detects at once, short-range
+    expect(attempts).toHaveLength(2);
+    expect(svc.photoDetectorPending()).toBeNull();
+    expect(window.__meiyan?.detectorWaits ?? 0).toBe(0);
+    attempts[1].resolve(new Uint8Array(6));
+    await flush();
+    expect(svc.photoDetectorPending()).toBeNull();
+    // two requests in all: services joined the engine's, it started no third
+    expect(attempts).toHaveLength(2);
   });
 });
 

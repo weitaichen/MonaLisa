@@ -306,6 +306,7 @@ function fakeStill(
     obstacles: [],
     dropped: { tooSmall: 0, overCap: 0 },
     faceKnown: true,
+    detector: null,
     render(p) {
       last = p;
       if (!raf) raf = requestAnimationFrame(paint);
@@ -468,6 +469,8 @@ export async function installFakes(deps: Deps, defaults: { params: BeautyParams;
       onProgress?.({ loaded: total, total, phase: 'done' });
       return { modelBuffer: new Uint8Array(4) };
     },
+    // the full-range photo detector (the fake tracker never reads it)
+    loadPhotoDetector: async () => new Uint8Array(4),
     createEngine: (canvas: HTMLCanvasElement) => {
       if (flag('engine') === 'throw') throw new Error('createEngine: not implemented');
       return new FakeEngine(canvas);
@@ -475,7 +478,7 @@ export async function installFakes(deps: Deps, defaults: { params: BeautyParams;
     createTracker: async () => {
       await sleep(150);
       if (flag('tracker') === 'fail') throw new Error('FaceLandmarker: GPU and CPU delegates both failed');
-      return { delegate: 'GPU', detectVideo: () => null, detectImage: () => [], close() {} } satisfies Tracker;
+      return { delegate: 'GPU', photoDetector: 'short-range', detectVideo: () => null, detectImage: () => [], close() {} } satisfies Tracker;
     },
     // pose=fail (download fails) · none (no person) · slow (download stalls at 40 %)
     loadPoseModel: async (_variant: string, onProgress?: (p: EngineAssetsProgress) => void) => {

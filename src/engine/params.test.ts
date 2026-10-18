@@ -231,7 +231,7 @@ describe('presets', () => {
     expect([p.filterId, p.lipShade, p.blushShade]).toEqual(['none', null, null]);
   });
 
-  it('自然 = the defaults column (first launch)', () => {
+  it('自然 = the defaults column (0.3’s first launch; 0.5 opens new photos at 原圖, and the camera too without a saved look)', () => {
     const p = presetDef('natural');
     for (const d of PARAM_DEFS) expect(p.values[d.id]).toBe(d.default);
     expect(defaultParams()).toEqual(applyPreset('natural', 1));

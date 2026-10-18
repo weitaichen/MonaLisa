@@ -41,7 +41,7 @@ export async function openInEditor(blob: Blob, opts: { entry?: HistoryEntry | nu
       source = { ...freshSource(bitmap, o.edit, opts.returnTo), historyId: entry.id, detect: o.detect, rematch: o.rematch, v1Body: o.v1Body, cacheDropped: o.cacheDropped, frame: o.frame };
       if (entry.faceProtect === true) source.faceProtect = true;
       if (entry.faceMask) source.faceMask = entry.faceMask;
-    } else source = freshSource(bitmap, importEdit(app.get().look), opts.returnTo);
+    } else source = freshSource(bitmap, importEdit(), opts.returnTo);
     if (entry) source.source = { blob: entry.source ?? null, width: entry.sourceWidth ?? null, height: entry.sourceHeight ?? null };
     else if (opts.picked && oriented) {
       source.picked = blob as File;

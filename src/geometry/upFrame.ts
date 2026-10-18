@@ -152,6 +152,10 @@ export function upTracker(t: Tracker, q: Quarter): Tracker {
     get delegate() {
       return t.delegate;
     },
+    // a sideways scan retries on the short-range detector like an upright detection (app/still.ts): `opts` carries the choice
+    get photoDetector() {
+      return t.photoDetector;
+    },
     detectVideo: (video, ts, opts) => t.detectVideo(video, ts, opts),
     detectImage(image, opts) {
       const c = upCanvas(image as CanvasImageSource & { width: number; height: number }, q);

@@ -14,6 +14,7 @@ function state(): DebugState {
       persons: 0,
       selected: null,
       detectCalls: 0,
+      detectRetries: 0,
       boxes: [],
       screen: 'home',
       cameraState: 'idle',

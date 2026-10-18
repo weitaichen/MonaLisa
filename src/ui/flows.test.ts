@@ -1,6 +1,8 @@
 // flows.ts openInEditor: the import decode size follows the effective tier (RB §4: 1440 on tier L).
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { defaultParams } from '../engine/params';
+import { applyPreset, defaultParams, setFilter, setParam } from '../engine/params';
+import { splitLegacy } from '../edit/legacy';
+import { neutralPerson, neutralPhoto } from '../edit/state';
 import type { HistoryEntry, Prefs, Tier } from '../types';
 
 async function load(tier: Prefs['tier'], sessionTier: Tier) {
@@ -36,6 +38,25 @@ describe('openInEditor import size', () => {
     await flows.openInEditor(new Blob([]), { returnTo: 'home' });
     expect(importPhoto).toHaveBeenCalledWith(expect.anything(), edge);
     expect(app.get().screen.name).toBe('editor');
+  });
+});
+
+describe('openInEditor of a new photo (2026-10-18: 全部都原圖)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('an import opens at 原圖 for everyone, whatever look the camera holds', async () => {
+    const { flows, app } = await load('auto', 'H');
+    const styled = splitLegacy(setFilter(setParam(applyPreset('glow', 1), 'skin.whiten', 0.9), 'warm'));
+    app.set({ look: { photo: { ...styled.photo, values: { ...styled.photo.values, 'adjust.vignette': 0.6 }, look: { id: 'film', amount: 0.8 } }, person: styled.person } });
+    await flows.openInEditor(new Blob([]), { returnTo: 'home' });
+    const screen = app.get().screen;
+    if (screen.name !== 'editor') throw new Error('not the editor');
+    expect(screen.source.edit).toEqual({ v: 2, photo: neutralPhoto(), persons: { p0: neutralPerson() }, template: neutralPerson(), primaryInit: null });
+    // the camera keeps its own look
+    expect(app.get().look.photo.look).toEqual({ id: 'film', amount: 0.8 });
   });
 });
 

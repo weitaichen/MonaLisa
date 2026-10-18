@@ -1,7 +1,7 @@
 // The detection cache of one photo (RM §3.6, S §3.2, §5.4): faces, obstacles, bodies and the persons built from them,
 // all in normalized O-space, stored in HistoryEntry.detect so a reopen runs no detector. This file validates a stored
 // cache, answers questions about it, and builds and merges it (buildCache, withFaces, withBodies, rematchByIoU).
-import { MAX_EDIT_BODIES, MAX_OBSTACLES, MAX_RENDER_FACES } from '../config/limits';
+import { MAX_EDIT_BODIES, MAX_EDIT_FACES, MAX_OBSTACLES, MAX_RENDER_FACES } from '../config/limits';
 import { P0_INFO, type PersonInfo } from '../edit/lens';
 import type {
   BodyDetection,
@@ -11,23 +11,25 @@ import type {
   CachedObstacle,
   DetectionCache,
   Face,
+  FaceScanRecord,
   PersonId,
   PersonInfoCached,
   PersonMask,
   Pose33,
   Rect,
 } from '../types';
-import { boxIoU, type PreparedFaces } from './faces';
+import { boxIoU, sameHead, type HeadLike, type PreparedFace, type PreparedFaces } from './faces';
 import { pairPersons, primaryOf } from './persons';
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
-const FACE_ID = /^f[0-5]$/;
+/** f0…f{MAX_RENDER_FACES − 1} (S §6.7: f0…f9): prepareFaces numbers at most MAX_EDIT_FACES ≤ MAX_RENDER_FACES */
+const FACE_ID = new RegExp(`^f[0-${MAX_RENDER_FACES - 1}]$`);
 const BODY_ID = /^b[0-3]$/;
 /** every body id a cache can hold, in the order new bodies take them */
 const BODY_IDS: readonly string[] = Array.from({ length: MAX_EDIT_BODIES }, (_, j) => `b${j}`);
-const PERSON_ID = /^(f[0-5]|b[0-3]|p0)$/;
+const PERSON_ID = new RegExp(`^(f[0-${MAX_RENDER_FACES - 1}]|b[0-3]|p0)$`);
 
 /** Untrusted mask → valid PersonMask (w·h bytes), else null (was history.ts normalizeMask). */
 export function normalizeMask(raw: unknown): PersonMask | null {
@@ -142,9 +144,16 @@ export function normalizeDetect(raw: unknown): { cache: DetectionCache | null; s
       else lost = true;
     }
   }
-  const faceScans = arr(raw.faceScans)
-    .filter((s): s is { quarter: 0 | 1 | 2 | 3; flipH: boolean } => isRecord(s) && [0, 1, 2, 3].includes(s.quarter as number) && typeof s.flipH === 'boolean')
-    .map((s) => ({ quarter: s.quarter, flipH: s.flipH }));
+  const scans = arr(raw.faceScans).filter(
+    (s): s is { quarter: 0 | 1 | 2 | 3; flipH: boolean; detector?: unknown } => isRecord(s) && [0, 1, 2, 3].includes(s.quarter as number) && typeof s.flipH === 'boolean',
+  );
+  // a record's short-range flag lives only on a marked cache (step-1 spec §6.5); a marked one that flags none (written
+  // before the records carried it) owes every record its full-range look, as the mark said then
+  const marked = raw.photoDetector === 'short-range';
+  const flagsNone = !scans.some((s) => s.detector === 'short-range');
+  const faceScans: FaceScanRecord[] = scans.map((s) =>
+    marked && (flagsNone || s.detector === 'short-range') ? { quarter: s.quarter, flipH: s.flipH, detector: 'short-range' } : { quarter: s.quarter, flipH: s.flipH },
+  );
   // quarters the 美體 detection ran in (S §3.6, D5): only distinct integers 0–3, else dropped (absent = [0])
   const bs = raw.bodyScans;
   const bodyScans =
@@ -172,6 +181,8 @@ export function normalizeDetect(raw: unknown): { cache: DetectionCache | null; s
     bodiesComplete: typeof raw.bodiesComplete === 'boolean' ? raw.bodiesComplete : true,
     dropped: { tooSmall: count(dropped.tooSmall), overCap: count(dropped.overCap) },
     ...(bodyScans ? { bodyScans } : {}),
+    // the answer came from the short-range detector standing in for full-range (step-1 spec §6.5); anything else: absent
+    ...(raw.photoDetector === 'short-range' ? { photoDetector: 'short-range' as const } : {}),
   };
   if (!faces.length && !bodies?.length) {
     // p0 only in the stored no-face form (faces = [], bodies null or []). A record whose faces or bodies were all
@@ -218,10 +229,23 @@ export function scanned0(cache: DetectionCache): boolean {
   return cache.faceScans.some((s) => s.quarter === 0 && !s.flipH);
 }
 
-/** a scan counts for both flip states (a mirror does not change detectability), so it is recorded with flipH false */
-export function addFaceScan(scans: DetectionCache['faceScans'], q: 0 | 1 | 2 | 3): DetectionCache['faceScans'] {
-  return scans.some((x) => x.quarter === q) ? [...scans] : [...scans, { quarter: q, flipH: false }];
+/**
+ * a scan counts for both flip states (a mirror does not change detectability), so it is recorded with flipH false. The
+ * detector that answered it, when given: a short-range answer flags the record (FaceScanRecord.detector), and an answer
+ * for a quarter already recorded replaces its record (a full-range one clears the flag), moved last as the newest answer
+ * (a cache with faces found them in its last record, completionOf); none given keeps the record as it is
+ */
+export function addFaceScan(scans: DetectionCache['faceScans'], q: 0 | 1 | 2 | 3, detector?: 'full-range' | 'short-range' | null): DetectionCache['faceScans'] {
+  const rec: FaceScanRecord = detector === 'short-range' ? { quarter: q, flipH: false, detector } : { quarter: q, flipH: false };
+  if (!scans.some((x) => x.quarter === q)) return [...scans, rec];
+  return detector ? [...scans.filter((x) => x.quarter !== q), rec] : [...scans];
 }
+
+/** the record still owes the completion a full-range look (only on a marked cache) */
+export const shortScan = (s: FaceScanRecord): boolean => s.detector === 'short-range';
+
+/** the records without their short-range flags: what a cache keeps once its mark is gone */
+export const plainScans = (scans: readonly FaceScanRecord[]): FaceScanRecord[] => scans.map((s) => ({ quarter: s.quarter, flipH: s.flipH }));
 
 /** what the lens needs per person; before any cache the implicit person edits everything */
 export function personInfos(cache: DetectionCache | null): PersonInfo[] {
@@ -347,6 +371,64 @@ export function withFaces(cache: DetectionCache, prepared: PreparedFaces, faceSc
     dropped: prepared.dropped,
     primary: cache.primary === 'p0' ? primaryOf(persons, faces, cache.bodies) : cache.primary,
   };
+}
+
+const isFace = (o: CachedObstacle | PreparedFace): o is PreparedFace => 'face' in o;
+
+/**
+ * A cache whose faces the short-range detector found because the full-range one was not there (photoDetector
+ * 'short-range', step-1 spec §6.5) gains what a full-range detection of the photo finds, without touching anything it
+ * holds: every cached face keeps its id, box and landmarks, every person its id and links, the obstacles that are not
+ * a face now and the primary stay, so no stored edit needs a rename (the editor only adds the new persons from the
+ * template, assignPersons). A found face that is a cached one is skipped: one on a cached face's head (faces.ts sameHead:
+ * their landmarks nearly coincide, however the two detectors box that head), so a face full-range misses (a close-up, a
+ * cut-off edge) stays as well, and nothing is added twice. The others, largest first, take the lowest free face ids
+ * (f0…f{MAX_RENDER_FACES − 1}) until the photo holds MAX_EDIT_FACES; the rest become obstacles and count as over the
+ * cap. A new face that pairs with a body-only person links to it (that person keeps its id and params, as withFaces
+ * does for a 基本模式 cache, A15); the others are appended as persons.
+ * Faces stay in display order; the mark is cleared. Every cached obstacle stays but one a new face is (sameHead: an
+ * obstacle has no landmarks, so boxed as that face, IoU > 0.6), so whatever bounded a face's warp cap still does. The
+ * detection's obstacles and the faces without room join them (each once, none on a face's head), so a completion that
+ * adds nobody can still bound a cap that was free and change the render: a face below MIN_FACE_FRAC, or past the cap,
+ * that short-range missed (the editor owes the thumbnail then, and says a face is over the cap: editorModel.ts
+ * completionShows; round 5: round 4's doc said such a completion left every cap as it was). `added`: the new face ids.
+ * The caller's detection must have run where the cached faces were found (the cache's last face scan: a cache with
+ * faces is never scanned again), so the cached landmarks and the found ones are in one frame, z included.
+ */
+export function withMoreFaces(cache: DetectionCache, found: PreparedFaces): { cache: DetectionCache; added: string[] } {
+  const same = (a: HeadLike, b: HeadLike) => sameHead(a, b, cache.width, cache.height);
+  const fresh = found.faces.filter((f) => !cache.faces.some((c) => same(c, f))).sort((a, b) => b.box.w * b.box.h - a.box.w * a.box.h);
+  const taken = new Set<string>([...cache.faces.map((f) => f.id), ...cache.persons.map((p) => p.id), ...Object.keys(cache.rematch ?? {})]);
+  const free = Array.from({ length: MAX_RENDER_FACES }, (_, i) => `f${i}`).filter((id) => !taken.has(id));
+  const room = Math.max(0, Math.min(MAX_EDIT_FACES - cache.faces.length, free.length));
+  const kept = fresh.slice(0, room).sort((a, b) => byPosition(a.box, b.box));
+  const over = fresh.slice(room);
+  const added = kept.map((f, i) => ({ ...f, id: free[i] }));
+  const faces: CachedFace[] = [...cache.faces, ...added.map((f) => ({ id: f.id, lm: f.lm, box: f.box }))].sort((a, b) => byPosition(a.box, b.box));
+  // a body-only person whose body a new face pairs with takes that face (its id and params stay)
+  const bodyOnly = cache.persons.filter((p) => p.face === null && p.body !== null);
+  const pairs = bodyOnly.length && cache.bodies ? pairPersons(added, cache.bodies.filter((b) => bodyOnly.some((p) => p.body === b.id)), cache.width / cache.height) : [];
+  const faceOfBody = new Map(pairs.map(([f, b]) => [b, f]));
+  const persons: PersonInfoCached[] = cache.persons.map((p) => (p.face === null && p.body && faceOfBody.has(p.body) ? { ...p, face: faceOfBody.get(p.body)! } : p));
+  const linked = new Set(persons.map((p) => p.face));
+  for (const f of added) if (!linked.has(f.id)) persons.push({ id: f.id, face: f.id, body: null });
+  // obstacles: the cached ones, each still no face, unless a new face is it (an obstacle on a face's head would bound
+  // that face's own cap, §4.1); then the detection's and the faces without room, each once and none on a face's head
+  const heads: HeadLike[] = [...cache.faces, ...added];
+  const obstacles: CachedObstacle[] = cache.obstacles.filter((o) => !added.some((f) => same(f, o)));
+  for (const o of [...found.obstacles, ...over]) {
+    if (heads.some((f) => same(f, o)) || obstacles.some((x) => same(x, o))) continue;
+    obstacles.push(isFace(o) ? { box: o.box, oval: o.face.oval } : o);
+  }
+  const out: DetectionCache = {
+    ...cache,
+    faces,
+    obstacles: obstacles.slice(0, MAX_OBSTACLES),
+    persons,
+    dropped: { tooSmall: Math.max(cache.dropped.tooSmall, found.dropped.tooSmall), overCap: found.dropped.overCap + over.length },
+  };
+  delete out.photoDetector;
+  return { cache: out, added: added.map((f) => f.id) };
 }
 
 /** mean distance of the keypoints visible in both poses (v1 b0 rematch, S §5.3) */

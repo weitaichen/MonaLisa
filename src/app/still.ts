@@ -2,7 +2,8 @@
 // v0.4 (S §3.4 S1): every selectable face of the photo (cache order f0…) plus the obstacles; the caller builds the
 // frame (src/edit/frame.ts buildFrame), each face carrying its own 瘦臉 limit (A6).
 import { EDIT_DETECT_FACES } from '../config/limits';
-import { adaptCached, prepareFaces } from '../detect/faces';
+import { adaptCached, prepareFaces, prepareWith, type PreparedFaces } from '../detect/faces';
+import { seedPrimary } from '../detect/persons';
 import { photoLuts } from '../engine/looks';
 import { IDENTITY_GEOMETRY, snapCrop, viewSize } from '../geometry/view';
 import type { TileInputBase } from '../media/exportFull';
@@ -27,6 +28,12 @@ export interface StillSession {
   readonly obstacles: readonly CachedObstacle[];
   /** this session's detection drops (zeros when the faces were given) */
   readonly dropped: { tooSmall: number; overCap: number };
+  /**
+   * the photo detector this session's own detection ran (Tracker.photoDetector): 'short-range' while the full-range one
+   * was unavailable, which the detection cache records (DetectionCache.photoDetector, step-1 spec §6.5). null: the faces
+   * were given, there is no tracker, or the detection threw
+   */
+  readonly detector: 'full-range' | 'short-range' | null;
   /**
    * false when the detector threw, so no faces is not a real "no face" (the tracker rebuilds its graph
    * on the next call). An empty answer from a tracker that is recovering cannot be told apart here: callers
@@ -139,6 +146,12 @@ export interface StillSessionOptions {
   body?: BodyField | null;
   /** 推臉筆 field to start with (a replacement session draws the strokes on its first frame) */
   liquify?: LiquifyField | null;
+  /**
+   * The camera hand-over's face seed (O-space, EditorSource.faceSeed), for the photo's first answer only: a full-range
+   * answer with no face whose padded box holds it also asks the short-range detector, and adds the faces of that answer
+   * that hold it (D2, step-1 spec §6.5). null / absent: none (an import, 全部, a later answer).
+   */
+  faceSeed?: { x: number; y: number } | null;
 }
 
 /** prepareExport re-waits after a loss + restore during its wait at most this often (repeated cycles cannot loop) */
@@ -155,13 +168,16 @@ export function createStillSession(
   const width = bitmap.width;
   const height = bitmap.height;
   const detected =
-    opts.faces !== undefined ? fromCache(opts.faces, opts.obstacles ?? [], width, height) : detectOnce(tracker, bitmap, width, height);
+    opts.faces !== undefined
+      ? fromCache(opts.faces, opts.obstacles ?? [], width, height)
+      : detectOnce(tracker, bitmap, width, height, opts.faceSeed ?? null);
   // window.__meiyan.face describes whatever is on screen: the photo now (the live loop is stopped)
   const dbg = debugState();
   if (dbg) {
     dbg.face = detected.faces.length > 0;
     dbg.faces = detected.faces.length;
     dbg.boxes = detected.faces.map((f) => ({ id: f.id, ...f.box }));
+    dbg.stillSessions = (dbg.stillSessions ?? 0) + 1;
   }
   /** LUT loads this session waits on to redraw (`${kind}:${id}`); cleared on restore */
   const waiting = new Set<string>();
@@ -327,6 +343,7 @@ export function createStillSession(
     obstacles: detected.obstacles,
     dropped: detected.dropped,
     faceKnown: detected.known,
+    detector: detected.detector,
     render(f) {
       if (disposed) return;
       frame = f;
@@ -445,6 +462,29 @@ interface Detected {
   obstacles: CachedObstacle[];
   dropped: { tooSmall: number; overCap: number };
   known: boolean;
+  detector: 'full-range' | 'short-range' | null;
+}
+
+/** one face answer of a photo without a session (detectStill) */
+export interface StillDetection {
+  readonly faces: readonly SessionFace[];
+  readonly obstacles: readonly CachedObstacle[];
+  readonly dropped: { tooSmall: number; overCap: number };
+  /** as StillSession.faceKnown */
+  readonly faceKnown: boolean;
+  /** as StillSession.detector */
+  readonly detector: 'full-range' | 'short-range' | null;
+}
+
+/**
+ * The face detection a session runs (the short-range retry included, no camera seed), without a session: the
+ * completion's probe (step-1 spec §6.5). It draws nothing and holds nothing, so the session bound to the engine keeps its
+ * 美體 and 推臉筆 field textures (a session's dispose releases the engine's, round 4: the probe session released the
+ * bound one's) and the debug state keeps describing what is on screen; `detectCalls` counts it like any answer.
+ */
+export function detectStill(tracker: Tracker, bitmap: ImageBitmap): StillDetection {
+  const d = detectOnce(tracker, bitmap, bitmap.width, bitmap.height, null);
+  return { faces: d.faces, obstacles: d.obstacles, dropped: d.dropped, faceKnown: d.known, detector: d.detector };
 }
 
 const NO_DROPS = { tooSmall: 0, overCap: 0 };
@@ -455,19 +495,58 @@ function fromCache(faces: readonly CachedFace[], obstacles: readonly CachedObsta
     obstacles: [...obstacles],
     dropped: { ...NO_DROPS },
     known: true,
+    detector: null,
   };
 }
 
-function detectOnce(tracker: Tracker | null, bitmap: ImageBitmap, width: number, height: number): Detected {
-  if (!tracker) return { faces: [], obstacles: [], dropped: { ...NO_DROPS }, known: true };
+/**
+ * One face answer (step-1 spec §6.5). BlazeFace full-range misses a face that fills the frame or is cut off by its edge
+ * (a close-up, a forehead cut at the brows, a face partly past a side), which the camera's short-range detector finds.
+ * So the short-range detector is asked once more when the full-range answer
+ * - has no usable face (none that prepareFaces keeps): its answer is taken when it has a face;
+ * - or holds no face whose padded box (SEED_BOX_PAD) holds a camera hand-over's seed, a sign that it missed the face
+ *   the camera was beautifying (D2): the faces of the short-range answer that hold the seed are added, each in place of
+ *   any full-range face on its head (faces.ts prepareWith, sameHead: their landmarks nearly coincide, however the two
+ *   detectors box that head), and the union is numbered afresh. This retry is an extra pass over an answer that has
+ *   faces: if it throws, the full-range answer stands.
+ * Otherwise full-range faces are never merged with a short-range pass: that would cost every photo a second graph rebuild
+ * and inference (§6.5). The tracker given may be upTracker's, so a sideways scan retries the same way.
+ */
+function detectFaces(tracker: Tracker, bitmap: ImageBitmap, width: number, height: number, seed: { x: number; y: number } | null): { prepared: PreparedFaces; detector: 'full-range' | 'short-range' } {
+  const raw = tracker.detectImage(bitmap, { maxFaces: EDIT_DETECT_FACES });
+  const first = prepareFaces(raw, width, height);
+  // what that detection ran (read right after it, synchronously: the same answer the switch to IMAGE got)
+  const detector = tracker.photoDetector;
+  if (detector !== 'full-range') return { prepared: first, detector };
+  const seedMissed = first.faces.length > 0 && seed !== null && seedPrimary(seed, first.faces) === null;
+  if (first.faces.length > 0 && !seedMissed) return { prepared: first, detector };
+  const dbg = debugState();
+  if (dbg) dbg.detectRetries = (dbg.detectRetries ?? 0) + 1;
+  let retry: PreparedFaces;
   try {
-    const lms = tracker.detectImage(bitmap, { maxFaces: EDIT_DETECT_FACES });
+    retry = prepareFaces(tracker.detectImage(bitmap, { maxFaces: EDIT_DETECT_FACES, detector: 'camera' }), width, height);
+  } catch (err) {
+    // a face answer that found nobody fails with its retry (detectOnce: unsure, so the bounded re-detect asks again);
+    // one with faces stands, the seed then routing as an import's does (C6)
+    if (!seedMissed) throw err;
+    reportError('still detect retry', err);
+    return { prepared: first, detector };
+  }
+  if (!seedMissed) return { prepared: retry.faces.length > 0 ? retry : first, detector };
+  const held = retry.faces.filter((f) => seedPrimary(seed!, [f]) !== null);
+  if (!held.length) return { prepared: first, detector };
+  return { prepared: prepareWith(raw, held, width, height), detector };
+}
+
+function detectOnce(tracker: Tracker | null, bitmap: ImageBitmap, width: number, height: number, seed: { x: number; y: number } | null): Detected {
+  if (!tracker) return { faces: [], obstacles: [], dropped: { ...NO_DROPS }, known: true, detector: null };
+  try {
+    const { prepared: p, detector } = detectFaces(tracker, bitmap, width, height, seed);
     const dbg = debugState();
     if (dbg) dbg.detectCalls++;
-    const p = prepareFaces(lms, width, height);
-    return { faces: p.faces, obstacles: p.obstacles, dropped: p.dropped, known: true };
+    return { faces: p.faces, obstacles: p.obstacles, dropped: p.dropped, known: true, detector };
   } catch (err) {
     reportError('still detect', err);
-    return { faces: [], obstacles: [], dropped: { ...NO_DROPS }, known: false };
+    return { faces: [], obstacles: [], dropped: { ...NO_DROPS }, known: false, detector: null };
   }
 }

@@ -20,7 +20,7 @@ import { patchPlan, readPatch } from '../edit/patch';
 import { planSpot, spotRadius } from '../edit/spots';
 import { defaultPhoto, neutralPerson } from '../edit/state';
 import { strokesS30 } from '../edit/strokeFixtures';
-import { ENGINE_PATHS, loadEngineAssets, loadPoseModel } from '../engine/assets';
+import { ENGINE_PATHS, loadEngineAssets, loadPhotoDetector, loadPoseModel } from '../engine/assets';
 import { createEngine, isWebGL2Supported } from '../engine/index';
 import { applyPreset, resetGroup } from '../engine/params';
 import { applyRatio, IDENTITY_GEOMETRY, rotateLeft } from '../geometry/view';
@@ -49,7 +49,7 @@ import { formatAdjustBench, runAdjustBench } from './adjustBench';
 import { runExportBench } from './exportBench';
 import { runFaceDetailRows } from './faceDetailBench';
 import { benchReplay, benchStamps, formatLiquifyReport, liquifyFrameRows, uploadMs, type LiquifyBenchRow, type LiquifyFrameScene } from './liquifyBench';
-import { mountMultiFace } from './multiFace';
+import { mountMultiFace, noteFullRangeRun } from './multiFace';
 import { formatToneBench, runToneBench, spotGrid, type ToneBenchCase } from './toneBench';
 import {
   type BenchSample,
@@ -119,6 +119,8 @@ let camera: CameraController | null = null;
 let engine: Engine | null = null;
 let tracker: Tracker | null = null;
 let model: Uint8Array | null = null;
+/** the full-range photo detector, as the app's tracker gets it (read at each photo); null until it downloads, or if it fails */
+let photoDetector: Uint8Array | null = null;
 let loop: LiveLoop | null = null;
 let still: StillSession | null = null;
 /** the still session's photo (the session closes it on dispose): 臉型細項＋美妝 renders it at 1080 / 2048 */
@@ -339,6 +341,11 @@ async function start(): Promise<void> {
 
     const assets = await loadEngineAssets(onProgress);
     model = assets.modelBuffer;
+    // as services.ts: the camera does not wait for the photo detector
+    void loadPhotoDetector().then(
+      (d) => (photoDetector = d),
+      () => undefined,
+    );
     gateProgress.textContent = '建立 GPU 引擎…';
     engine ??= createEngine(canvas, { mirror: true, matchGpupixel: false, showLandmarks: false });
     await engine.ready;
@@ -375,8 +382,8 @@ function onProgress(p: EngineAssetsProgress): void {
 async function makeTracker(delegate: 'auto' | Delegate): Promise<Tracker | null> {
   if (!model) return null;
   try {
-    // copy: the buffer may be transferred into the wasm heap, and a delegate restart needs it again
-    const t = await createTracker({ modelBuffer: model.slice(), wasmBase: ENGINE_PATHS.wasmBase, delegate });
+    // (MediaPipe copies the model buffer, so a delegate restart can pass the same one again)
+    const t = await createTracker({ modelBuffer: model, fullRangeDetector: () => photoDetector, wasmBase: ENGINE_PATHS.wasmBase, delegate });
     if (dbg) dbg.delegate = t.delegate;
     return t;
   } catch (err) {
@@ -521,6 +528,8 @@ async function runStill(file: File): Promise<void> {
     loop = null;
     const t0 = performance.now();
     still = createStillSession(engine, tracker, bitmap);
+    // the full-range graph's GPU programs are compiled now: row D's app rows are no longer cold on this page
+    if (tracker?.photoDetector === 'full-range') noteFullRangeRun();
     stillBitmap = bitmap;
     const detectMs = performance.now() - t0;
     still.render(stillFrame(still));
@@ -561,7 +570,7 @@ async function runFaceDetail(): Promise<void> {
     showError('faceDetail', err);
   } finally {
     busy = false;
-    // the bench frames left the canvas on a 6-face grid: show the still photo again
+    // the bench frames left the canvas on a 10-face grid: show the still photo again
     if (still) still.render(stillFrame(still));
     syncButtons();
   }

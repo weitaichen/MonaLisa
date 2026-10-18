@@ -1,10 +1,12 @@
 // src/detect/cache.test.ts
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { MAX_OBSTACLES, MAX_RENDER_FACES } from '../config/limits';
 import type { Face, Landmarks478, Pose33 } from '../types';
-import { addFaceScan, aspectFits, bodyBox, boxScore, buildCache, cachedFits, noFaceCache, normalizeDetect, personInfos, poseBox, rematchByIoU, withBodies, withFaces } from './cache';
-import { EMPTY_PREPARED, prepareFaces } from './faces';
+import { addFaceScan, aspectFits, bodyBox, boxScore, buildCache, cachedFits, noFaceCache, normalizeDetect, personInfos, poseBox, rematchByIoU, withBodies, withFaces, withMoreFaces } from './cache';
+import { boxIoU, EMPTY_PREPARED, prepareFaces } from './faces';
 import { cacheBody, cacheFace, makeCache } from './testCaches';
+import { retake, ringHolds, sampleFaceAt } from './testMeshes';
 
 const fx = (n: string) => JSON.parse(readFileSync(new URL(`../../tests/fixtures/${n}`, import.meta.url), 'utf8'));
 const sample = fx('landmarks_sample_face.json') as { points: number[] };
@@ -80,10 +82,30 @@ describe('normalizeDetect (S §5.4)', () => {
   it('a cache with more faces than this tier allows is not truncated, but obstacles beyond MAX_OBSTACLES are', () => {
     const faces = [0.1, 0.25, 0.4, 0.55, 0.7, 0.85].map((x, i) => cacheFace(`f${i}`, x, 0.1));
     const persons = faces.map((f) => ({ id: f.id, face: f.id, body: null }));
-    const obstacles = Array.from({ length: 10 }, () => ({ box: { x: 0.1, y: 0.1, w: 0.01, h: 0.01 }, oval: new Float32Array(72).fill(0.1) }));
+    const obstacles = Array.from({ length: MAX_OBSTACLES + 2 }, () => ({ box: { x: 0.1, y: 0.1, w: 0.01, h: 0.01 }, oval: new Float32Array(72).fill(0.1) }));
     const r = normalizeDetect(makeCache({ faces, persons, obstacles }));
     expect(r.cache?.faces).toHaveLength(6);
-    expect(r.cache?.obstacles).toHaveLength(8);
+    expect(r.cache?.obstacles).toHaveLength(MAX_OBSTACLES);
+    // S §6.7: a cache holds every obstacle one detection can leave (12); an older build's 8 read back whole
+    expect(MAX_OBSTACLES).toBe(12);
+    expect(normalizeDetect(makeCache({ faces, persons, obstacles: obstacles.slice(0, 8) })).cache?.obstacles).toHaveLength(8);
+  });
+  it('a cache at the face cap (MAX_RENDER_FACES = 10, ids f0…f9) is kept whole: faces, persons, nothing lost (S §6.7)', () => {
+    const ids = ['f0', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9'];
+    expect(MAX_RENDER_FACES).toBe(ids.length);
+    const faces = ids.map((id, i) => cacheFace(id, 0.05 + i * 0.1, 0.07));
+    const persons = faces.map((f) => ({ id: f.id, face: f.id, body: null }));
+    const r = normalizeDetect(makeCache({ faces, persons, primary: 'f9' }));
+    expect(r.lost).toBe(false);
+    expect(r.cache?.faces.map((f) => f.id)).toEqual(ids);
+    expect(r.cache?.persons.map((p) => p.id)).toEqual(ids);
+    expect(r.cache?.primary).toBe('f9');
+    // one past the bound: an eleventh face (f10 is no valid id: ids are one digit) is dropped with its person, and the
+    // cache-dropped flag is set
+    const eleven = normalizeDetect(makeCache({ faces: [...faces, cacheFace('f10', 0.5, 0.04)], persons: [...persons, { id: 'f10', face: 'f10', body: null }], primary: 'f0' }));
+    expect(eleven.cache?.faces).toHaveLength(MAX_RENDER_FACES);
+    expect(eleven.cache?.persons.map((p) => p.id)).not.toContain('f10');
+    expect(eleven.lost).toBe(true);
   });
   it('an unusable cache is dropped with the readable face boxes of its persons', () => {
     const c = makeCache();
@@ -124,8 +146,9 @@ describe('normalizeDetect (S §5.4)', () => {
   it('a pending rematch (a dropped cache’s persons a 美體 cache carries, S §7) keeps its readable boxes, never under p0 or an id the persons use', () => {
     const box = { x: 0.2, y: 0.2, w: 0.1, h: 0.1 };
     const basic = { ...noFaceCache(1000, 800, []), bodies: [cacheBody('b1', 0.5)], persons: [{ id: 'b1', face: null, body: 'b1' }], primary: 'b1' };
-    const r = normalizeDetect({ ...basic, rematch: { f0: box, b1: box, p0: box, f9: box, f1: { x: 'a' }, b0: box } });
-    expect(r.cache?.rematch).toEqual({ f0: box, b0: box });
+    // f9 is the tenth face's id (S §6.7); f10 is no id
+    const r = normalizeDetect({ ...basic, rematch: { f0: box, b1: box, p0: box, f9: box, f10: box, f1: { x: 'a' }, b0: box } });
+    expect(r.cache?.rematch).toEqual({ f0: box, f9: box, b0: box });
     expect(r.lost).toBe(false);
     expect(normalizeDetect({ ...basic, rematch: 'x' }).cache?.rematch).toBeUndefined();
     expect(normalizeDetect(basic).cache).toEqual(basic);
@@ -309,12 +332,165 @@ describe('building the cache (S §3.3, §5.3)', () => {
     expect(withFaces({ ...basic, bodyScans: [0, 1] }, two, scans).bodyScans).toEqual([0, 1]);
     expect(withFaces(basic, two, scans).bodyScans).toBeUndefined();
   });
+  it('normalizeDetect keeps the short-range mark (D3), and only that value', () => {
+    const owed = [{ quarter: 0 as const, flipH: false, detector: 'short-range' as const }];
+    const c = { ...buildCache(size, two, null, { faceScans: owed }), photoDetector: 'short-range' as const };
+    expect(normalizeDetect(structuredClone(c)).cache).toEqual(c);
+    expect(normalizeDetect({ ...structuredClone(c), photoDetector: 'full-range' }).cache).not.toHaveProperty('photoDetector');
+    const none = { ...noFaceCache(1000, 1000, owed), photoDetector: 'short-range' as const };
+    expect(normalizeDetect(structuredClone(none)).cache).toEqual(none);
+  });
+  it('normalizeDetect: a scan record keeps its short-range flag only on a marked cache; a marked one that flags none owes every record (round 4)', () => {
+    const turned = [
+      { quarter: 0 as const, flipH: false },
+      { quarter: 1 as const, flipH: false, detector: 'short-range' as const },
+    ];
+    // the turned up-frame owed, the upright one answered full-range: both read back as they are
+    const mixed = { ...noFaceCache(1000, 1000, turned), photoDetector: 'short-range' as const };
+    expect(normalizeDetect(structuredClone(mixed)).cache?.faceScans).toEqual(turned);
+    // no mark, nothing owed: a stray flag is dropped
+    expect(normalizeDetect(structuredClone(noFaceCache(1000, 1000, turned))).cache?.faceScans).toEqual([
+      { quarter: 0, flipH: false },
+      { quarter: 1, flipH: false },
+    ]);
+    // a mark over records that carry no flag (written before they did): every one is owed, as the mark said then
+    const old = { ...noFaceCache(1000, 1000, [{ quarter: 0, flipH: false }, { quarter: 1, flipH: false }]), photoDetector: 'short-range' as const };
+    expect(normalizeDetect(structuredClone(old)).cache?.faceScans).toEqual([
+      { quarter: 0, flipH: false, detector: 'short-range' },
+      { quarter: 1, flipH: false, detector: 'short-range' },
+    ]);
+    // any other value is no flag
+    const odd = { ...mixed, faceScans: [{ quarter: 0, flipH: false, detector: 'full-range' }, { quarter: 1, flipH: false, detector: 'short-range' }] };
+    expect(normalizeDetect(structuredClone(odd)).cache?.faceScans).toEqual(turned);
+  });
+  it('withMoreFaces (D3): the faces full-range adds to a short-range cache; every cached face, person and link stays as it was', () => {
+    // short-range found A and C of four; full-range finds all four, A and C boxed a little differently
+    const short = { ...buildCache(size, prepareFaces([lmAt(0.2, 0.4, 0.12), lmAt(0.6, 0.4, 0.12)], 1000, 1000), null, { faceScans: scans }), primary: 'f1', photoDetector: 'short-range' as const };
+    const full = prepareFaces([lmAt(0.205, 0.4, 0.12), lmAt(0.4, 0.4, 0.1), lmAt(0.6, 0.402, 0.12), lmAt(0.8, 0.4, 0.1)], 1000, 1000);
+    const r = withMoreFaces(short, full);
+    expect(r.added).toEqual(['f2', 'f3']);
+    // display order, the cached faces under their ids and with their own landmarks (the same arrays)
+    expect(r.cache.faces.map((f) => f.id)).toEqual(['f0', 'f2', 'f1', 'f3']);
+    expect(r.cache.faces[0].lm).toBe(short.faces[0].lm);
+    expect(r.cache.faces[2]).toBe(short.faces[1]);
+    expect(r.cache.persons).toEqual([...short.persons, { id: 'f2', face: 'f2', body: null }, { id: 'f3', face: 'f3', body: null }]);
+    expect(r.cache.primary).toBe('f1');
+    expect(r.cache).not.toHaveProperty('photoDetector');
+    expect(r.cache.faceScans).toEqual(scans);
+    expect(normalizeDetect(structuredClone(r.cache))).toMatchObject({ lost: false });
+    // nothing new: the same faces and persons, the mark cleared
+    const same = withMoreFaces(short, prepareFaces([lmAt(0.2, 0.4, 0.12), lmAt(0.6, 0.4, 0.12)], 1000, 1000));
+    expect(same.added).toEqual([]);
+    expect(same.cache).toEqual({ ...short, photoDetector: undefined, dropped: same.cache.dropped });
+    expect(same.cache).not.toHaveProperty('photoDetector');
+  });
+  it('withMoreFaces: a found face on a cached face\'s head is that face, though boxed apart (IoU ≤ 0.6: its landmarks on the cached ones, sameHead); a neighbour is new', () => {
+    const head = lmAt(0.5, 0.4, 0.2);
+    const short = { ...buildCache(size, prepareFaces([head], 1000, 1000), null, { faceScans: scans }), photoDetector: 'short-range' as const };
+    // full-range meshes the cached head 1.3× larger about its nose, and finds a neighbour cheek to cheek
+    const full = prepareFaces([retake(head, { scale: 1.3 }), lmAt(0.32, 0.4, 0.14)], 1000, 1000);
+    expect(full.faces).toHaveLength(2);
+    expect(boxIoU(full.faces[1].box, short.faces[0].box)).toBeLessThan(0.6);
+    const r = withMoreFaces(short, full);
+    expect(r.added).toEqual(['f1']);
+    expect(r.cache.faces.map((f) => [f.id, +(f.box.x + f.box.w / 2).toFixed(2)])).toEqual([['f1', 0.32], ['f0', 0.5]]);
+    expect(r.cache.persons.map((p) => p.id)).toEqual(['f0', 'f1']);
+  });
+  it("withMoreFaces (real face ovals): a smaller friend whose face shows beside the cached face's jaw is new; the cached head meshed 1.3× larger is not (round 4)", () => {
+    const a = sampleFaceAt(0.5, 0.5, 0.4);
+    const short = { ...buildCache(size, prepareFaces([a], 1000, 1000), null, { faceScans: scans }), photoDetector: 'short-range' as const };
+    // B: about a quarter of it behind A's jaw, its centre outside A's face oval (IoU 0.17)
+    const r = withMoreFaces(short, prepareFaces([a, sampleFaceAt(0.344, 0.604, 0.2)], 1000, 1000));
+    expect(r.added).toEqual(['f1']);
+    expect(r.cache.faces.map((f) => [f.id, +(f.box.x + f.box.w / 2).toFixed(2)])).toEqual([['f1', 0.34], ['f0', 0.5]]);
+    expect(r.cache.persons.map((p) => p.id)).toEqual(['f0', 'f1']);
+    // full-range meshes A's head 1.3× larger about its nose (IoU under 0.6): nobody new, no obstacle
+    const larger = prepareFaces([retake(a, { scale: 1.3 })], 1000, 1000);
+    expect(boxIoU(larger.faces[0].box, short.faces[0].box)).toBeLessThan(0.6);
+    const e1 = withMoreFaces(short, larger);
+    expect(e1.added).toEqual([]);
+    expect(e1.cache.faces).toEqual(short.faces);
+    expect(e1.cache.obstacles).toEqual([]);
+    // a mesh 0.4× A's size inside its oval is a smaller person (round 3's E1 premise, which no real pair showed)
+    expect(withMoreFaces(short, prepareFaces([sampleFaceAt(0.64, 0.5, 0.16)], 1000, 1000)).added).toEqual(['f1']);
+  });
+  it('withMoreFaces keeps a cached obstacle that is no face: a tiny face beside the cached face\'s jaw stays, unless a new face is it, boxed as it (IoU > 0.6: an obstacle has no landmarks; round 4 F2)', () => {
+    const a = sampleFaceAt(0.5, 0.5, 0.4);
+    const o = sampleFaceAt(0.344, 0.604, 0.028);
+    const first = prepareFaces([a, o], 1000, 1000);
+    // O is under MIN_FACE_FRAC: an obstacle, its nose outside A's face oval
+    expect(first.faces).toHaveLength(1);
+    expect(first.obstacles).toHaveLength(1);
+    expect(ringHolds(first.faces[0].face.oval, [o.points[3], o.points[4]])).toBe(false);
+    const short = { ...buildCache(size, first, null, { faceScans: scans }), photoDetector: 'short-range' as const };
+    const cached = short.obstacles[0];
+    // full-range finds A, O and C: C is added, O stays, the cached copy
+    const withC = withMoreFaces(short, prepareFaces([a, o, sampleFaceAt(0.85, 0.3, 0.1)], 1000, 1000));
+    expect(withC.added).toEqual(['f1']);
+    expect(withC.cache.obstacles).toHaveLength(1);
+    expect(withC.cache.obstacles[0]).toBe(cached);
+    // nothing new (full-range boxes O a hair apart): the obstacles as they were
+    const same = withMoreFaces(short, prepareFaces([a, sampleFaceAt(0.3445, 0.6045, 0.028)], 1000, 1000));
+    expect(same.added).toEqual([]);
+    expect(same.cache.obstacles).toEqual(short.obstacles);
+    expect(same.cache.obstacles[0]).toBe(cached);
+    // full-range meshes O a little larger, over the size filter: a new face, which takes the obstacle's place
+    const grown = withMoreFaces(short, prepareFaces([a, sampleFaceAt(0.344, 0.604, 0.031)], 1000, 1000));
+    expect(grown.added).toEqual(['f1']);
+    expect(grown.cache.obstacles).toEqual([]);
+    // a face twice O's size there is not boxed as O (IoU 0.25), which no mesh of one head is: O stays
+    const twice = withMoreFaces(short, prepareFaces([a, sampleFaceAt(0.344, 0.604, 0.056)], 1000, 1000));
+    expect(twice.added).toEqual(['f1']);
+    expect(twice.cache.obstacles).toEqual([cached]);
+  });
+  it('withMoreFaces fills up to MAX_EDIT_FACES (largest first, ids f0…f9); the rest are obstacles and count as over the cap', () => {
+    const xs = [0.05, 0.14, 0.23, 0.32, 0.41, 0.5, 0.59, 0.68, 0.77];
+    const short = { ...buildCache(size, prepareFaces(xs.map((x) => lmAt(x, 0.3, 0.06)), 1000, 1000), null, { faceScans: scans }), photoDetector: 'short-range' as const };
+    expect(short.faces).toHaveLength(9);
+    // full-range: six of the nine (it misses three) and four more in a row below, the second one the largest
+    const more = [lmAt(0.2, 0.7, 0.07), lmAt(0.4, 0.7, 0.08), lmAt(0.6, 0.7, 0.065), lmAt(0.8, 0.7, 0.05)];
+    const full = prepareFaces([...xs.slice(0, 6).map((x) => lmAt(x, 0.3, 0.06)), ...more], 1000, 1000);
+    expect(full.faces).toHaveLength(10);
+    const r = withMoreFaces(short, full);
+    expect(r.cache.faces).toHaveLength(MAX_RENDER_FACES);
+    expect(r.added).toEqual(['f9']);
+    const added = r.cache.faces.find((f) => f.id === 'f9')!;
+    expect(added.box.x + added.box.w / 2).toBeCloseTo(0.4, 2);
+    // the three full-range missed stay, the three new ones without room are obstacles
+    for (const f of short.faces) expect(r.cache.faces).toContain(f);
+    expect(r.cache.obstacles.map((o) => +(o.box.x + o.box.w / 2).toFixed(2)).sort()).toEqual([0.2, 0.6, 0.8]);
+    expect(r.cache.dropped.overCap).toBe(3);
+    expect(r.cache.persons.map((p) => p.id)).toEqual([...short.persons.map((p) => p.id), 'f9']);
+  });
+  it('withMoreFaces: a new face pairs with a body-only person, which keeps its id (A15); an obstacle at a new face goes', () => {
+    const ab = prepareFaces([lmAt(0.3, 0.4, 0.12), lmAt(0.7, 0.4, 0.12)], 1000, 1000);
+    const onB = { pose: poseOnFace(ab.faces[1].face), mask: null, score: 0.2 };
+    const short = withBodies(buildCache(size, prepareFaces([lmAt(0.3, 0.4, 0.12)], 1000, 1000), null, { faceScans: scans }), [onB], () => null).cache;
+    const marked = { ...short, obstacles: [{ box: ab.faces[1].box, oval: ab.faces[1].face.oval }], photoDetector: 'short-range' as const };
+    expect(marked.persons).toEqual([{ id: 'f0', face: 'f0', body: null }, { id: 'b0', face: null, body: 'b0' }]);
+    const r = withMoreFaces(marked, ab);
+    expect(r.added).toEqual(['f1']);
+    expect(r.cache.persons).toEqual([{ id: 'f0', face: 'f0', body: null }, { id: 'b0', face: 'f1', body: 'b0' }]);
+    expect(r.cache.obstacles).toEqual([]);
+    expect(r.cache.bodies).toBe(marked.bodies);
+  });
   it('addFaceScan records a quarter once, as flipH false', () => {
     const s0: { quarter: 0 | 1 | 2 | 3; flipH: boolean }[] = [{ quarter: 0, flipH: false }];
     expect(addFaceScan(s0, 3)).toEqual([{ quarter: 0, flipH: false }, { quarter: 3, flipH: false }]);
     expect(addFaceScan(s0, 0)).toEqual(s0);
     expect(addFaceScan(s0, 0)).not.toBe(s0);
     expect(addFaceScan([], 0)).toEqual([{ quarter: 0, flipH: false }]);
+  });
+  it('addFaceScan flags a short-range answer; a full-range one for a recorded up-frame replaces its record, moved last (round 4)', () => {
+    const short = addFaceScan([], 0, 'short-range');
+    expect(short).toEqual([{ quarter: 0, flipH: false, detector: 'short-range' }]);
+    const turned = addFaceScan(short, 1, 'full-range');
+    expect(turned).toEqual([{ quarter: 0, flipH: false, detector: 'short-range' }, { quarter: 1, flipH: false }]);
+    // the completion's upright answer: the owed record goes, the new one is the last (the newest answer)
+    expect(addFaceScan(turned, 0, 'full-range')).toEqual([{ quarter: 1, flipH: false }, { quarter: 0, flipH: false }]);
+    // no detector named: the record stays as it is
+    expect(addFaceScan(turned, 0)).toEqual(turned);
+    expect(addFaceScan(turned, 0, null)).toEqual(turned);
   });
   it('rematchByIoU maps old persons to the new ones by face box (≥ 0.5), the rest to null', () => {
     const c = buildCache(size, two, null, { faceScans: scans });

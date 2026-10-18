@@ -134,8 +134,13 @@ test('full-body photo: 美體 progress → sliders; 細腰 / 長腿 / 腰臀比 
   for (const n of ['瘦身', '細腰', '腰臀比', '美臀', '長腿', '瘦腿', '瘦手臂']) {
     await expect(option(page, n), n).not.toHaveAttribute('aria-disabled', 'true');
   }
-  // the photo's face is masked: head / neck stay off with the face reason (no fold-prone guess)
-  await expect(option(page, '小頭')).toHaveAttribute('aria-disabled', 'true');
+  // The man wears a black face mask. BlazeFace full-range (photo detection) finds that face on desktop Chromium's CPU
+  // delegate and misses it on the GPU delegate (SwiftShader and D3D11 alike). Without a face, head / neck stay off with
+  // the face reason (no fold-prone guess); with one they work on its anchors.
+  const faces = (await debugState(page)).faces;
+  console.log(`body: faces found on the masked fullbody.jpg: ${faces}`);
+  if (faces === 0) await expect(option(page, '小頭')).toHaveAttribute('aria-disabled', 'true');
+  else await expect(option(page, '小頭')).not.toHaveAttribute('aria-disabled', 'true');
   await shot(page, 'b03-body-ready');
 
   // ── 細腰 max: the torso band changes, the far background corners stay identical (背景保護 on) ──

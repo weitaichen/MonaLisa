@@ -259,6 +259,8 @@ export function fakeCamera(video: FakeVideo, state: CameraState = 'live', facing
 }
 
 export interface FakeTracker extends Tracker {
+  /** 'short-range' unless a test sets it: photos then get no short-range retry (app/still.ts) */
+  photoDetector: 'full-range' | 'short-range';
   face: boolean;
   /** faces per detection */
   count: number;
@@ -274,6 +276,7 @@ export function fakeTracker(clock?: { work(ms: number): void }, face = true, cou
   const faces = () => Array.from({ length: t.count }, (_, i) => makeLandmarks(i));
   const t = {
     delegate: 'GPU' as const,
+    photoDetector: 'short-range' as 'full-range' | 'short-range',
     face,
     count,
     unusable: false,

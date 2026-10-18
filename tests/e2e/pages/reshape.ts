@@ -3,9 +3,10 @@
 // shader sampled there, and the port's map at the same pixel centre must agree. Run by tests/e2e/reshape.spec.ts on
 // the dev server (this page imports src/ directly).
 import landmarks from '../../fixtures/landmarks_sample_face.json';
-import { createReshapePass, reshapeUniforms, type ReshapeUniforms, type ReshapeView } from '../../../src/engine/passes/reshape';
+import { createReshapePass, reshapeFs, reshapeUniforms, type ReshapeUniforms, type ReshapeView } from '../../../src/engine/passes/reshape';
 import { reshapeMapCpu, reshapeMapMulti, withView, type UvMap } from '../../../src/engine/passes/reshapeCpu';
-import { attenuate, boxCentre, ovalBox, WHOLE, type TableFace } from '../../../src/engine/passes/faceCap';
+import { MAX_RENDER_FACES } from '../../../src/config/limits';
+import { attenuate, boxCentre, capsFor, ovalBox, WHOLE, type TableFace } from '../../../src/engine/passes/faceCap';
 import { applyPreset, neutralValue, PARAM_DEFS, paramsInGroup, setParam } from '../../../src/engine/params';
 import { adapt } from '../../../src/tracking/adapter111';
 import { glMat3, IDENTITY_GEOMETRY, setStraighten, vToO } from '../../../src/geometry/view';
@@ -13,7 +14,7 @@ import { buildFaceProtect, protectWindow } from '../../../src/tracking/faceProte
 import { LiquifyModel, liquifyGrid } from '../../../src/edit/liquify';
 import { straightStroke } from '../../../src/edit/strokeFixtures';
 import type { BodyField, Face, FaceProtect, LiquifyField, ParamId, PersonParams } from '../../../src/types';
-import type { Framebuffer, GL, Texture } from '../../../src/engine/gl/gl';
+import { createProgram, FULLSCREEN_VS, type Framebuffer, type GL, type Texture } from '../../../src/engine/gl/gl';
 
 export interface PinCase {
   name: string;
@@ -29,16 +30,19 @@ export interface PinCase {
 
 declare global {
   interface Window {
-    runReshapePin?: () => PinCase[];
-    runReshapePinView?: () => PinCase[];
+    /** the one-face pins take the face-table carrier too (default texture): GPUs run the UBO (S §6.4, 2026-10-18) */
+    runReshapePin?: (carrier?: 'texture' | 'ubo') => PinCase[];
+    runReshapePinView?: (carrier?: 'texture' | 'ubo') => PinCase[];
     runReshapePinMulti?: (carrier: 'texture' | 'ubo') => PinCase[];
     runProtectPinMulti?: (carrier: 'texture' | 'ubo') => PinCase[];
     /** step 5 (face-detail spec §8.3 item 1): 13 cases per face-table carrier */
     runReshapePinFaceDetail?: (carrier: 'texture' | 'ubo') => PinCase[];
     /** step 6 (push-brush spec §8.2): the 推臉筆 field as the outermost map */
-    runReshapePinLiquify?: () => PinCase[];
+    runReshapePinLiquify?: (carrier?: 'texture' | 'ubo') => PinCase[];
     /** the step-5 read gate (uDetail) vs every bit set: output floats that differ (must be 0), pixels moved > 1 px */
     runReshapeDetailGate?: (carrier: 'texture' | 'ubo') => { name: string; diff: number; moved: number }[];
+    /** S §6.7: the UBO carrier's FaceTab block as this context lays it out (std140), and the context's block limit */
+    reshapeUboLayout?: () => { dataSize: number; arrayStride: number; arraySize: number; maxBlockSize: number };
   }
 }
 
@@ -115,7 +119,7 @@ function rig(gl: GL) {
   return { src, dst, compare, dispose };
 }
 
-window.runReshapePin = () => {
+window.runReshapePin = (carrier = 'texture') => {
   const gl = context();
   const r = rig(gl);
   const { width: W, height: H } = landmarks;
@@ -147,7 +151,7 @@ window.runReshapePin = () => {
     { name: 'body field + contour', ids: contour, body: true },
   ];
 
-  const pass = createReshapePass(gl);
+  const pass = createReshapePass(gl, { carrier });
   const res: PinCase[] = [];
   for (const c of cases) {
     const u = reshapeUniforms(at(c.ids), 1);
@@ -164,7 +168,7 @@ window.runReshapePin = () => {
  * step 3: the face warps drawn through a view (uGeo, uTile, uWin), against withView of the same CPU map; the body field
  * and face of runReshapePin, every contour / chin / nose / eye warp
  */
-window.runReshapePinView = () => {
+window.runReshapePinView = (carrier = 'texture') => {
   const gl = context();
   const r = rig(gl);
   const { width: W, height: H } = landmarks;
@@ -192,7 +196,7 @@ window.runReshapePinView = () => {
   ];
   const ids: ParamId[] = ['shape.faceSlim', 'shape.faceV', 'shape.faceNarrow', 'shape.chin', 'shape.noseSlim', 'shape.eyeEnlarge'];
   const u = reshapeUniforms(at(ids), 1);
-  const pass = createReshapePass(gl);
+  const pass = createReshapePass(gl, { carrier });
   const res: PinCase[] = [];
   for (const { name, view } of views) {
     // runReshapePin's draw (step 1's one-face signature); the view is the new last argument
@@ -248,10 +252,27 @@ window.runReshapePinMulti = (carrier) => {
   // an obstacle at cA + (0.2, 0), 0.75 FW out (A is 0.265 iso wide): its cap 0.1 is below capAB 0.24, so the obstacle
   // sets it, and the capped warp still moves ~575 px of the 200×300 render (at 0.08 out the disc is 8 px: 66 moved)
   const capObs = Math.hypot(0.2, 0) / 2;
+  // S §6.7: ten faces (MAX_RENDER_FACES) in a 2 × 5 grid, 0.16 UV wide, each capped at half the distance to its
+  // nearest neighbour: the table's last rows are drawn like the first (an 8-row table would leave faces 9 and 10
+  // unwarped); then the same table with only the tenth face warping
+  const ob = ovalBox(base);
+  const place = (cx: number, cy: number, k: number): Face => {
+    const c = [ob.x + ob.w / 2, ob.y + ob.h / 2];
+    const m = (a: Float32Array) => a.map((v, i) => (i % 2 === 0 ? cx + (v - c[0]) * k : cy + (v - c[1]) * k));
+    return { pts111: m(base.pts111), ext: m(base.ext), oval: m(base.oval), yaw: base.yaw, iris: m(base.iris), lids: m(base.lids) };
+  };
+  const grid = Array.from({ length: 10 }, (_, i) => place(i % 2 === 0 ? 0.27 : 0.73, 0.1 + Math.floor(i / 2) * 0.2, 0.16 / ob.w));
+  const gridCaps = capsFor(grid.map((f) => boxCentre(ovalBox(f))), [], aspect);
+  const original = reshapeUniforms(applyPreset('original', 1).values, 1);
   const cases: { name: string; faces: TableFace[] }[] = [
     { name: `two faces, every warp (${carrier})`, faces: [tf(A, capAB), tf(B, capAB)] },
     { name: `capped pair, one neutral (${carrier})`, faces: [tf(A, capAB), { ...tf(B, capAB), u: reshapeUniforms(applyPreset('original', 1).values, 1) }] },
     { name: `obstacle bounds the cap (${carrier})`, faces: [tf(A, Math.min(capObs, capAB))] },
+    { name: `${grid.length} faces of ${MAX_RENDER_FACES}, every warp, capped (${carrier})`, faces: grid.map((f, i) => tf(f, gridCaps[i])) },
+    {
+      name: `${grid.length} faces of ${MAX_RENDER_FACES}, only the tenth warps (${carrier})`,
+      faces: grid.map((f, i) => (i === 9 ? tf(f, gridCaps[i]) : { ...tf(f, gridCaps[i]), u: original })),
+    },
   ];
   return pinCases(gl, cases, aspect, carrier);
 };
@@ -409,7 +430,7 @@ function liquifyCase(W: number, H: number): LiquifyField {
 }
 
 /** runReshapePin's 'body field + contour' case with the 推臉筆 field as the outermost map (push-brush spec §8.2). */
-window.runReshapePinLiquify = () => {
+window.runReshapePinLiquify = (carrier = 'texture') => {
   // the page's own GL context, identity source, 200 × 300 RGBA32F target and GPU/CPU comparison (context, rig)
   const gl = context();
   const r = rig(gl);
@@ -432,7 +453,7 @@ window.runReshapePinLiquify = () => {
   const face = adapt({ points: new Float32Array(landmarks.points) }, W, H);
   const at = (ids: ParamId[]) => ids.reduce((p, k) => setParam(p, k, 1), applyPreset('original', 1)).values;
   const u = reshapeUniforms(at(['shape.faceSlim', 'shape.faceV', 'shape.faceNarrow']), 1);
-  const pass = createReshapePass(gl);
+  const pass = createReshapePass(gl, { carrier });
   // runReshapePin's one-face draw (protect null, view undefined = identity) plus the liquify texture as the new last argument
   pass.draw(r.src, r.dst, face, u, aspect, bodyTex, null, undefined, liqTex);
   const res = [r.compare('liquify + body field + contour', reshapeMapCpu(face, u, aspect, bodyField, null, liqField))];
@@ -441,4 +462,17 @@ window.runReshapePinLiquify = () => {
   gl.deleteTexture(liqTex.tex);
   r.dispose();
   return res;
+};
+
+window.reshapeUboLayout = () => {
+  const gl = context();
+  const prog = createProgram(gl, FULLSCREEN_VS, reshapeFs('ubo'), 'reshape-ubo-layout');
+  const p = prog.program;
+  const block = gl.getUniformBlockIndex(p, 'FaceTab');
+  const dataSize = Number(gl.getActiveUniformBlockParameter(p, block, gl.UNIFORM_BLOCK_DATA_SIZE));
+  const [index] = Array.from(gl.getUniformIndices(p, ['uFaceTab[0]']) ?? [gl.INVALID_INDEX]);
+  const at = (pname: number) => Number((gl.getActiveUniforms(p, [index], pname) as number[])[0]);
+  const out = { dataSize, arrayStride: at(gl.UNIFORM_ARRAY_STRIDE), arraySize: at(gl.UNIFORM_SIZE), maxBlockSize: Number(gl.getParameter(gl.MAX_UNIFORM_BLOCK_SIZE)) };
+  prog.dispose();
+  return out;
 };

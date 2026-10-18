@@ -17,8 +17,12 @@ import {
   emptyShades,
   isEditStateRecord,
   lookOf,
+  matchesPhotoLink,
   naturalPerson,
+  neutralLook,
   neutralPerson,
+  neutralPhoto,
+  PERSON_ID,
   PERSON_IDS,
   PHOTO_IDS,
   rebaseStrokes,
@@ -26,6 +30,7 @@ import {
   resetAll,
   sanitizeEditState,
   sanitizeGeometry,
+  sanitizePhoto,
   withPersons,
   withStrokes,
 } from './state';
@@ -77,6 +82,27 @@ describe('constructors', () => {
     expect(neutralPerson().values['skin.smooth']).toBe(0);
     expect(neutralPerson().shades).toEqual({ ...emptyShades(), lip: null, blush: null });
   });
+  it('neutralPhoto is the 原圖 photo part, linked to 原圖 100, everything else neutral or identity', () => {
+    const p = neutralPhoto();
+    for (const id of PHOTO_IDS) expect(p.values[id], id).toBe(neutralValue(paramDef(id)));
+    expect(p).toEqual({
+      values: p.values,
+      filterId: 'none',
+      look: null,
+      presetLink: { id: 'original', amount: 1 },
+      bodyProtect: true,
+      heightBand: null,
+      legsAnchor: null,
+      geometry: IDENTITY_GEOMETRY,
+      spots: [],
+      strokes: [],
+    });
+    expect(matchesPhotoLink(p, { id: 'original', amount: 1 })).toBe(true);
+    expect(neutralPhoto()).not.toBe(p);
+  });
+  it('neutralLook, the camera look nobody has set (a fresh install, or an upgrader who never changed the camera), is 原圖', () => {
+    expect(neutralLook()).toEqual({ photo: neutralPhoto(), person: neutralPerson() });
+  });
   it('cameraEdit / lookOf round-trip the camera look through the one person "live"', () => {
     const look = { photo: defaultPhoto(), person: naturalPerson() };
     const e = cameraEdit(look);
@@ -120,10 +146,10 @@ describe('assignPersons (S §3.3 item 4)', () => {
     expect(Object.keys(none.persons)).toEqual(['p0']);
     expect(none.persons.p0.values['shape.eyeEnlarge']).toBe(0.8);
   });
-  it('a 長腿 anchor on p0 follows p0 to the primary; discardP0 starts everyone from the template', () => {
+  it('a 長腿 anchor on p0 follows p0 to the primary', () => {
     const e = edit0({ photo: { ...defaultPhoto(), legsAnchor: 'p0' } });
     expect(assignPersons(e, ['f0', 'f1'], 'f1').photo.legsAnchor).toBe('f1');
-    expect(assignPersons(e, ['f0', 'f1'], 'f1', { discardP0: true }).persons.f1).toEqual(neutralPerson());
+    expect(assignPersons(e, ['f0', 'f1'], 'f1').persons.f1.values['shape.eyeEnlarge']).toBe(0.8);
   });
   it('without p0 the primary starts from primaryInit (a camera shot), else the template', () => {
     expect(assignPersons({ ...edit0(), persons: {} }, ['f0', 'f1'], 'f0').persons.f0).toEqual(naturalPerson());
@@ -141,12 +167,36 @@ describe('renamePersons (S §5.3 dropped cache)', () => {
 });
 
 describe('resetAll (重置)', () => {
-  it('sets the 自然 photo part and every person to 自然; keeps the template', () => {
+  it('sets the 原圖 photo part and every person to 原圖, the state a new photo opens with', () => {
     const e = resetAll(assignPersons(edit0(), ['f0', 'f1'], 'f0'));
-    expect(e.photo).toEqual(defaultPhoto());
-    expect(e.persons.f0).toEqual(naturalPerson());
-    expect(e.persons.f1).toEqual(naturalPerson());
+    expect(e.photo).toEqual(neutralPhoto());
+    expect(e.persons.f0).toEqual(neutralPerson());
+    expect(e.persons.f1).toEqual(neutralPerson());
     expect(e.template).toEqual(neutralPerson());
+    expect(e.primaryInit).toBeNull();
+  });
+  it('C7: a template and a primaryInit another build stored (0.4.0: the 自然 camera look) go back to 原圖 too, so a face found later starts at 原圖', () => {
+    const natural = { ...edit0(), template: naturalPerson(), primaryInit: naturalPerson() };
+    const r = resetAll(natural);
+    expect(r.template).toEqual(neutralPerson());
+    expect(r.primaryInit).toBeNull();
+    expect(r).toEqual({ v: 2, photo: neutralPhoto(), persons: { p0: neutralPerson() }, template: neutralPerson(), primaryInit: null });
+    // every person a later face answer adds reads the template
+    expect(Object.values(assignPersons(r, ['f0', 'f1', 'f2'], 'f1').persons)).toEqual([neutralPerson(), neutralPerson(), neutralPerson()]);
+    // a primary without p0 would read primaryInit
+    expect(assignPersons({ ...r, persons: {} }, ['f0'], 'f0').persons.f0).toEqual(neutralPerson());
+    // the state before stays as it was: ↶ brings the stored template back in one step
+    expect(natural.template).toEqual(naturalPerson());
+  });
+});
+
+describe('sanitizePhoto: a value never stored', () => {
+  it('is 原圖 (neutral), in a camera look and in an entry alike; a stored value is kept', () => {
+    const p = sanitizePhoto({ values: { 'skin.whiten': 0.4 } });
+    expect(p.values['skin.whiten']).toBe(0.4);
+    for (const id of PHOTO_IDS) if (id !== 'skin.whiten') expect(p.values[id], id).toBe(neutralValue(paramDef(id)));
+    expect(sanitizePhoto(undefined).values).toEqual(neutralPhoto().values);
+    expect(sanitizeEditState({ v: 2, photo: {}, persons: {} }, null).photo.values).toEqual(neutralPhoto().values);
   });
 });
 
@@ -173,9 +223,22 @@ describe('sanitizeEditState (RM §3.4)', () => {
       const s = sanitizeEditState(junk(r), r() < 0.5 ? null : ['f0', 'p0']);
       for (const p of [s.template, ...Object.values(s.persons)]) for (const v of Object.values(p.values)) expect(v >= 0 && v <= 1).toBe(true);
       for (const v of Object.values(s.photo.values)) expect(v >= 0 && v <= 1).toBe(true);
-      for (const id of Object.keys(s.persons)) expect(/^(f[0-5]|b[0-3]|p0|live)$/.test(id)).toBe(true);
+      for (const id of Object.keys(s.persons)) expect(/^(f[0-9]|b[0-3]|p0|live)$/.test(id)).toBe(true);
       expect(sanitizeEditState(s, Object.keys(s.persons))).toEqual(s);
     }
+  });
+  it('person ids: f0…f9 (MAX_RENDER_FACES = 10 faces, S §6.7), b0…b3, p0 and live; nothing else', () => {
+    for (const id of ['f0', 'f5', 'f7', 'f8', 'f9', 'b0', 'b3', 'p0', 'live']) expect(PERSON_ID.test(id), id).toBe(true);
+    for (const id of ['f10', 'f11', 'f01', 'b4', 'p1', 'f', 'F0', ' f0', 'f9 ']) expect(PERSON_ID.test(id), id).toBe(false);
+    // the ninth and tenth persons of a group photo keep their edits through a reopen
+    const e = assignPersons(edit0(), ['f0', 'f8', 'f9'], 'f0');
+    const big = { ...e, persons: { ...e.persons, f9: { ...e.persons.f9, values: { ...e.persons.f9.values, 'shape.eyeEnlarge': 0.9 } } } };
+    const s = sanitizeEditState(big, ['f0', 'f8', 'f9']);
+    expect(Object.keys(s.persons).sort()).toEqual(['f0', 'f8', 'f9']);
+    expect(s.persons.f9.values['shape.eyeEnlarge']).toBe(0.9);
+    expect(Object.keys(sanitizeEditState(big, null).persons).sort()).toEqual(['f0', 'f8', 'f9']);
+    // the 長腿 anchor may name the tenth person
+    expect(sanitizeEditState({ ...big, photo: { ...big.photo, legsAnchor: 'f9' } }, ['f0', 'f8', 'f9']).photo.legsAnchor).toBe('f9');
   });
   it('drops persons not in the list, adds missing ones from the template, keeps all with null', () => {
     const e = assignPersons(edit0(), ['f0', 'f1'], 'f0');
@@ -229,8 +292,9 @@ const OSIZE = { width: 1536, height: 2048 };
 const base = (): EditState => ({ v: 2, photo: defaultPhoto(), persons: { p0: naturalPerson() }, template: neutralPerson(), primaryInit: null });
 
 describe('geometry in the edit state (step 3)', () => {
-  it('defaultPhoto carries the identity geometry, so 重置 resets crop and rotation', () => {
-    expect(defaultPhoto().geometry).toEqual(IDENTITY_GEOMETRY);
+  it('neutralPhoto carries the identity geometry, so 重置 resets crop and rotation', () => {
+    expect(neutralPhoto().geometry).toEqual(IDENTITY_GEOMETRY);
+    expect(resetAll({ ...base(), photo: { ...base().photo, geometry: rotateLeft(IDENTITY_GEOMETRY) } }).photo.geometry).toEqual(IDENTITY_GEOMETRY);
   });
 
   it('旋轉 clears the 增高 band in the same state; ↶ to the previous state brings both back (Review Focus 2)', () => {
@@ -293,8 +357,8 @@ describe('geometry in the edit state (step 3)', () => {
 });
 
 describe('step 4: spots in the photo params', () => {
-  it('defaultPhoto has no spots (重置 clears them, C §3.4)', () => {
-    expect(defaultPhoto().spots).toEqual([]);
+  it('neutralPhoto has no spots (重置 clears them, C §3.4)', () => {
+    expect(neutralPhoto().spots).toEqual([]);
   });
 });
 
@@ -511,14 +575,14 @@ describe('strokes in EditState (push-brush spec §3.4, §5)', () => {
     expect(sanitizeEditState(old, ['p0'], SIZE).photo.strokes).toEqual([]);
   });
 
-  it('presets and ⊘ never touch strokes (C §3.4); 重置 clears them (defaultPhoto has none)', () => {
+  it('presets and ⊘ never touch strokes (C §3.4); 重置 clears them (neutralPhoto has none)', () => {
     const e = withStrokes(base(), [rec('a')]);
     const lens = lensFor(e, { kind: 'person', id: 'p0' }, P0_INFO, 'p0');
     expect(lens.applyPreset('refined', 1).photo.strokes).toBe(e.photo.strokes);
     expect(lens.applyPreset('original', 1).photo.strokes).toBe(e.photo.strokes);
     expect(lens.resetGroup('shape').photo.strokes).toBe(e.photo.strokes);
     expect(lens.resetGroup('body').photo.strokes).toBe(e.photo.strokes);
-    expect(defaultPhoto().strokes).toHaveLength(0);
+    expect(neutralPhoto().strokes).toHaveLength(0);
     expect(resetAll(e).photo.strokes).toEqual([]); // 重置 is one undo step that removes every stroke
   });
 });

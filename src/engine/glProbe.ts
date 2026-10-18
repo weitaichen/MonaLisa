@@ -1,6 +1,7 @@
 // Phase 0 GL limits and probes (S §6.2). Limits are plain getParameter reads (free) and are logged once per engine
 // build. The probes compile tiny programs and read pixels back, so they run only in /bench.html and dev builds: in
-// production they would stall every engine build, and the face-table carrier is a build-time choice anyway.
+// production they would stall every engine build, and the face-table carrier is not chosen from them anyway
+// (faceTableCarrier.ts: FACE_TABLE_CARRIER on a GPU, the texture on a software rasterizer).
 
 export function readGlLimits(gl: WebGL2RenderingContext): Record<string, number | boolean> {
   return {

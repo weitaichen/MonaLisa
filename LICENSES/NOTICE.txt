@@ -29,17 +29,26 @@ CainCamera — Copyright (c) 2018 cain.huang — Apache License 2.0
   - Lineage only (GPUPixel derives from them); no code or assets of theirs are used directly.
     Same Apache-2.0 text as GPUPixel-Apache-2.0.txt.
 
-MediaPipe Tasks Vision 0.10.35, the Face Landmarker model (Face Mesh V2), the Pose Landmarker models
-  (BlazePose GHUM 3D, full and lite, float16 version 1) and the Image Segmenter selfie_segmenter model
-  (float16 version 1) — Copyright Google LLC — Apache License 2.0 (MediaPipe-Apache-2.0.txt)
+MediaPipe Tasks Vision 0.10.35, the Face Landmarker model (Face Mesh V2), the Face Detector model BlazeFace
+  full-range (blaze_face_full_range.tflite, float16 version 1), the Pose Landmarker models (BlazePose GHUM 3D, full
+  and lite, float16 version 1) and the Image Segmenter selfie_segmenter model (float16 version 1) — Copyright Google
+  LLC — Apache License 2.0 (MediaPipe-Apache-2.0.txt)
   - Self-hosted unmodified under /mediapipe/0.10.35/, /models/face_landmarker/float16-1/,
-    /models/pose_landmarker/{full,lite}-float16-1/ and /models/image_segmenter/selfie-float16-1/ (the pose
+    /models/face_detector/full-range-float16-1/, /models/pose_landmarker/{full,lite}-float16-1/ and
+    /models/image_segmenter/selfie-float16-1/ (the full-range detector is downloaded with the engine; the pose
     models are downloaded on demand for 美體 and the bench; selfie_segmenter.tflite on demand the first time the user
     moves a face-contour slider (瘦臉 / V臉 / 窄臉 / 下巴 / 額頭) in the photo editor without a 美體 person mask, never
     for preset or default values; never precached).
-    Source: storage.googleapis.com/mediapipe-models/pose_landmarker/ and
+    Source: storage.googleapis.com/mediapipe-models/face_detector/blaze_face_full_range/float16/1/,
+    storage.googleapis.com/mediapipe-models/pose_landmarker/ and
     storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/, md5-pinned in
     scripts/fetch-assets.mjs.
+  - Modified derivative (Apache-2.0 §4(b) change notice): the photo face-detection model, face_landmarker.task with
+    its face_detector.tflite replaced by blaze_face_full_range.tflite (BlazeFace short-range → full-range, so
+    photos find smaller faces). The app assembles it on the device at run time (src/engine/faceBundle.ts): the
+    other entries (face_landmarks_detector.tflite, geometry_pipeline_metadata_landmarks.binarypb,
+    face_blendshapes.tflite) are byte-identical, and the zip entries stay stored, 4-byte aligned. It is used for
+    photo detection only (the camera runs the unmodified bundle) and is never stored or served as a file.
 
 Preact 10.29.8 — Copyright (c) 2015-present Jason Miller — MIT (Preact-MIT.txt)
 Workbox 7.4 — Copyright 2018 Google LLC — MIT (Workbox-MIT.txt)
@@ -69,6 +78,11 @@ Test data in the repository only (not part of the deployed app):
     (Apache-2.0 §4(b) change notice): scaled, mirrored and cropped copies composed on a flat background by
     scripts/gen-group-fixture.mjs. group_faces.landmarks.json / group_faces.pose.json are this project's recorded
     Face / Pose Landmarker results on group_faces.png. The generated fake-camera clips group*.y4m derive from it.
+  - tests/fixtures/small_faces.jpg: modified derivative of sample_face.png (Apache-2.0 §4(b) change notice): seven
+    scaled, cropped and partly mirrored copies on a flat background, JPEG-encoded, by scripts/gen-group-fixture.mjs.
+  - tests/fixtures/ten_faces.jpg and tests/fixtures/eleven_faces.jpg: modified derivatives of sample_face.png
+    (Apache-2.0 §4(b) change notice): ten and eleven scaled, cropped and partly mirrored copies on a flat
+    background, JPEG-encoded, by scripts/gen-group-fixture.mjs.
   - tests/fixtures/group_people.jpg: modified derivative of fullbody.jpg and fullbody_yoga.jpg (Apache-2.0 §4(b)
     change notice): the two photos side by side at equal height (scripts/gen-group-fixture.mjs);
     group_people.pose.json is this project's recorded Pose Landmarker result on it.

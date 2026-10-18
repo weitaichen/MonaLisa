@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyPreset, defaultParams, PARAM_DEFS, setFilter, setParam, setShade } from '../engine/params';
 import { splitLegacy } from '../edit/legacy';
+import { neutralLook, neutralPerson } from '../edit/state';
 import type { Prefs } from '../types';
 import {
   clearExportCap,
@@ -29,6 +30,7 @@ import {
   savePrefs,
   SEEN_MAKEUP_PARTS_KEY,
   takePersonsHint,
+  VERSION_KEY,
   writeExportGuard,
 } from './settings';
 
@@ -77,8 +79,10 @@ function stubThrowingGetter(): void {
   });
 }
 
-describe('loadParams / saveParams', () => {
-  it('first launch (nothing stored) → 自然 defaults', () => {
+// 0.3's camera params key: no app path calls loadParams or saveParams since 0.4 (the camera reads loadLook, which
+// migrates the key, and without any saved look starts at 原圖); kept for the legacy format, these tests and the t6 harness
+describe('loadParams / saveParams (legacy meiyan.params.v1)', () => {
+  it('nothing stored → the 自然 defaults (sanitizeParams of nothing: 0.3’s first launch)', () => {
     expect(loadParams()).toEqual(defaultParams());
   });
 
@@ -336,17 +340,52 @@ describe('camera look meiyan.look.v1 (RM §3.7, C3)', () => {
     expect(s.photo.filterId).toBe('none');
     expect(s.person.values['skin.smooth']).toBe(1);
   });
-  it('a fresh install gets the 自然 look; hasSavedSettings sees the new key', () => {
-    expect(loadLook()).toEqual(splitLegacy(defaultParams()));
+  it('a fresh install gets the 原圖 look (2026-10-18); hasSavedSettings sees the new key', () => {
+    expect(loadLook()).toEqual(neutralLook());
     store.clear();
     expect(hasSavedSettings()).toBe(false);
     store.setItem(LOOK_KEY, '{}');
     expect(hasSavedSettings()).toBe(true);
   });
   it('a fresh install writes nothing: the next announceUpdate must not take it for a returning user', () => {
-    expect(loadLook()).toEqual(splitLegacy(defaultParams()));
+    expect(loadLook()).toEqual(neutralLook());
     expect(store.map.size).toBe(0);
     expect(hasSavedSettings()).toBe(false);
+  });
+  it('an upgrader who never changed the camera (0.3.0 / 0.4.0 ran here, no saved look) starts at 原圖 too, and nothing is written (2026-10-18: 全部都原圖)', () => {
+    for (const seen of ['0.3.0', '0.4.0']) {
+      store.clear();
+      // what 0.3 / 0.4.0 leave behind for a camera used at its default 自然: the version and maybe the settings, no look
+      store.setItem(VERSION_KEY, JSON.stringify(seen));
+      store.setItem(PREFS_KEY, JSON.stringify({ ...DEFAULT_PREFS, exportFormat: 'png' }));
+      const before = new Map(store.map);
+      expect(loadLook(), seen).toEqual(neutralLook());
+      expect(store.map, seen).toEqual(before);
+      expect(store.getItem(LOOK_KEY), seen).toBeNull();
+      // still a returning user for announceUpdate (已更新至 v0.5)
+      expect(hasSavedSettings(), seen).toBe(true);
+    }
+    // the version alone (prefs never saved) reads the same
+    store.clear();
+    store.setItem(VERSION_KEY, JSON.stringify('0.4.0'));
+    expect(loadLook()).toEqual(neutralLook());
+    expect(store.getItem(LOOK_KEY)).toBeNull();
+  });
+  it('a stored look keeps what it holds; a field it lacks (or junk) is 原圖, never 自然', () => {
+    const glow = splitLegacy(applyPreset('glow', 1));
+    saveLook(glow);
+    expect(loadLook()).toEqual(glow);
+    for (const raw of ['{}', 'null', '{"photo":7,"person":"x"}']) {
+      store.setItem(LOOK_KEY, raw);
+      const l = loadLook();
+      expect(l.photo.values, raw).toEqual(neutralLook().photo.values);
+      expect(l.person, raw).toEqual(neutralPerson());
+    }
+    store.setItem(LOOK_KEY, JSON.stringify({ photo: { values: { 'skin.whiten': 0.4 } }, person: { values: { 'skin.smooth': 0.7 } } }));
+    expect(loadLook().photo.values['skin.whiten']).toBe(0.4);
+    expect(loadLook().photo.values['skin.sharpen']).toBe(0);
+    expect(loadLook().person.values['skin.smooth']).toBe(0.7);
+    expect(loadLook().person.values['shape.faceSlim']).toBe(0);
   });
 });
 

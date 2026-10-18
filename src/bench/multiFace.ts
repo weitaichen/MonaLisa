@@ -1,17 +1,22 @@
 // Bench 「多臉」 section (S §6.2 rows). Rows D (multi-face detectImage), B (multi-pose body detection) and GL (limits +
-// probes) land in Phase 0; later tasks add R, RC, RP (Task 17), F (Task 19), BF (Task 20), PE, M (Task 23) and L, J,
-// J2 (Task 25). Results join 複製結果 through formatMultiRows. /bench.html?fixtures=1 (dev server) loads the group
-// fixtures by URL so scripts/bench-multiface.mjs can drive it; on a phone the rows take a picked photo.
+// probes) land in Phase 0; later tasks add R, RC, RP (Task 17), F (Task 19), BF (Task 20), PE, M (Task 23), L, J,
+// J2 (Task 25) and PC (the slider commit's fold check, S §6.3 PC1). Results join 複製結果 through formatMultiRows.
+// /bench.html?fixtures=1 (dev server) loads the group fixtures by URL so scripts/bench-multiface.mjs can drive it; on a
+// phone the rows take a picked photo.
 import { FaceLandmarker, FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import { LandmarkSmoother } from '../app/oneEuro';
 import { EDIT_DETECT_FACES, LIVE_DETECT_FACES } from '../config/limits';
-import { ENGINE_PATHS, loadEngineAssets, loadPoseModel } from '../engine/assets';
+import { ENGINE_PATHS, loadEngineAssets, loadPhotoDetector, loadPoseModel } from '../engine/assets';
+import { withFaceDetector } from '../engine/faceBundle';
 import { probeFaceTable, probeR16FArray, readGlLimits } from '../engine/glProbe';
 import { ovalBox } from '../engine/passes/faceCap';
 import { adapt } from '../tracking/adapter111';
 import { downscaleMask } from '../tracking/bodyTracker';
 import type { Delegate, Landmarks478, Tracker } from '../types';
+import { foldGuardRows } from './foldGuardBench';
 import { formatMultiRows, liveRows, type LiveRun, median, type MultiRow } from './report';
+// static, like foldGuardBench (which imports it too): a dynamic import here could not split it from the bench chunk
+import { placeBenchFace, reshapeBenchLayouts } from './reshapeLayouts';
 
 const rows: MultiRow[] = [];
 const now = () => performance.now();
@@ -26,15 +31,83 @@ async function decode(blob: Blob, longEdge: number): Promise<ImageBitmap> {
   return createImageBitmap(blob, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' });
 }
 
-/** D: detectImage at numFaces 1/4/6/8 on GPU and CPU, decodes 2048 and 1440: first call, median of 5, faces, order */
-export async function rowD(photo: Blob): Promise<MultiRow[]> {
-  const out: MultiRow[] = [];
+/** what services.ts gives every tracker: the camera bundle, and the full-range detector once it downloaded (null if it failed) */
+export async function trackerInputs(): Promise<{ modelBuffer: Uint8Array; detector: Uint8Array | null; fullRangeDetector: () => Uint8Array | null }> {
   const { modelBuffer } = await loadEngineAssets();
+  const detector = await loadPhotoDetector().catch(() => null);
+  return { modelBuffer, detector, fullRangeDetector: () => detector };
+}
+
+/**
+ * whether this page already ran a full-range detection: its GPU programs are compiled once per browser session, so a
+ * later "first photo" is not the cold one (row D's app rows say so in `cold`)
+ */
+let fullRangeRan = false;
+/** bench/main.ts's still test detects on the app's tracker too */
+export function noteFullRangeRun(): void {
+  fullRangeRan = true;
+}
+
+/**
+ * D app (step-1 spec §6.5): the editor's first photo of a session as the app runs it. A fresh tracker as services.ts
+ * builds it (the camera bundle in VIDEO, the full-range detector for photos), then its first detectImage at
+ * EDIT_DETECT_FACES on the 2048 decode: the switch to the photo bundle plus, on the GPU delegate, the full-range graph's
+ * one-time program compile (`first_ms`; cold only as the page's first full-range detection, so tap D right after
+ * opening /bench.html). Then a warm photo (`next_ms`), the short-range retry a photo without a usable face makes
+ * (`retry_ms`, detector 'camera'), and the photo bundle again (`back_ms`). GPU, then CPU.
+ */
+export async function rowDApp(photo: Blob): Promise<MultiRow[]> {
+  const { createTracker } = await import('../tracking/tracker');
+  const inputs = await trackerInputs();
+  const bmp = await decode(photo, 2048);
+  const out: MultiRow[] = [];
+  for (const delegate of ['GPU', 'CPU'] as const) {
+    const cold = delegate === 'GPU' ? String(!fullRangeRan && !!inputs.detector) : '—';
+    try {
+      const t0 = now();
+      const t = await createTracker({ modelBuffer: inputs.modelBuffer, fullRangeDetector: inputs.fullRangeDetector, wasmBase: ENGINE_PATHS.wasmBase, delegate });
+      const trackerMs = now() - t0;
+      const time = (detector: 'photo' | 'camera'): [number, number] => {
+        const s = now();
+        const n = t.detectImage(bmp, { maxFaces: EDIT_DETECT_FACES, detector }).length;
+        return [round(now() - s), n];
+      };
+      const [firstMs, faces] = time('photo');
+      if (t.photoDetector === 'full-range') fullRangeRan = true;
+      const [nextMs] = time('photo');
+      const [retryMs, retryFaces] = time('camera');
+      const [backMs] = time('photo');
+      out.push({
+        row: 'D',
+        config: `app ${t.delegate} 2048 first photo`,
+        values: { detector: t.photoDetector, cold, decode: `${bmp.width}x${bmp.height}`, tracker_ms: round(trackerMs), first_ms: firstMs, next_ms: nextMs, retry_ms: retryMs, back_ms: backMs, faces, retry_faces: retryFaces },
+      });
+      t.close();
+    } catch (e) {
+      out.push({ row: 'D', config: `app ${delegate} 2048 first photo`, values: { error: e instanceof Error ? e.message : String(e) } });
+    }
+  }
+  bmp.close();
+  return out;
+}
+
+/**
+ * D: the app rows (rowDApp, first: they must be the page's first full-range detection to be cold), then detectImage at
+ * numFaces 1/4/6/8/10 and EDIT_DETECT_FACES (12 since S §6.7, PD1) on GPU and CPU, decodes 2048 and 1440: first call,
+ * median of 5, faces, order. On an instance built on the photo bundle (the camera bundle with BlazeFace full-range, as
+ * photos detect; `detector` says which one ran); its first_ms is the first call after each numFaces change on that
+ * instance, not the app's cold first photo (the app rows' first_ms is).
+ */
+export async function rowD(photo: Blob): Promise<MultiRow[]> {
+  const out: MultiRow[] = await rowDApp(photo);
+  const { modelBuffer, detector: fullRange } = await trackerInputs();
+  const photoModel = fullRange ? withFaceDetector(modelBuffer, fullRange) : modelBuffer;
+  const detector = fullRange ? 'full-range' : 'short-range';
   const fileset = await FilesetResolver.forVisionTasks(ENGINE_PATHS.wasmBase);
   for (const delegate of ['GPU', 'CPU'] as const) {
     const canvas = new OffscreenCanvas(1, 1);
     const lm = await FaceLandmarker.createFromOptions(fileset, {
-      baseOptions: { modelAssetBuffer: modelBuffer, delegate },
+      baseOptions: { modelAssetBuffer: photoModel, delegate },
       runningMode: 'IMAGE',
       numFaces: 1,
       canvas: delegate === 'GPU' ? canvas : undefined,
@@ -42,7 +115,7 @@ export async function rowD(photo: Blob): Promise<MultiRow[]> {
     const orders: Record<number, string[]> = {};
     for (const edge of [2048, 1440]) {
       const bmp = await decode(photo, edge);
-      for (const n of [1, 4, 6, 8]) {
+      for (const n of [...new Set([1, 4, 6, 8, 10, EDIT_DETECT_FACES])]) {
         await lm.setOptions({ numFaces: n });
         const t0 = now();
         const first = lm.detect(bmp).faceLandmarks;
@@ -62,19 +135,20 @@ export async function rowD(photo: Blob): Promise<MultiRow[]> {
           }
           return ((lo + hi) / 2).toFixed(2);
         });
-        if (n === 8) orders[edge] = centres;
+        if (n === EDIT_DETECT_FACES) orders[edge] = centres;
         out.push({
           row: 'D',
           config: `${delegate} ${edge} n${n}`,
           // decode: the bitmap actually detected on (a photo smaller than the decode edge is not upscaled)
-          values: { decode: `${bmp.width}x${bmp.height}`, first_ms: round(firstMs), median_ms: round(median(times)), faces: first.length, centres: centres.join(' ') },
+          values: { detector, decode: `${bmp.width}x${bmp.height}`, first_ms: round(firstMs), median_ms: round(median(times)), faces: first.length, centres: centres.join(' ') },
         });
       }
       bmp.close();
     }
-    out.push({ row: 'D', config: `${delegate} order 2048 vs 1440 (n8)`, values: { same: String(orders[2048]?.join() === orders[1440]?.join()) } });
+    out.push({ row: 'D', config: `${delegate} order 2048 vs 1440 (n${EDIT_DETECT_FACES})`, values: { same: String(orders[2048]?.join() === orders[1440]?.join()) } });
     lm.close();
   }
+  if (fullRange) fullRangeRan = true;
   return out;
 }
 
@@ -135,6 +209,8 @@ export function rowGL(): MultiRow[] {
 
 const RUNNERS: Record<string, (photos: { faces: Blob; people: Blob }) => Promise<MultiRow[]> | MultiRow[]> = {
   D: (p) => rowD(p.faces),
+  // row D's app rows alone (scripts and the e2e; the D button runs them first anyway)
+  DA: (p) => rowDApp(p.faces),
   B: (p) => rowB(p.people),
   GL: () => rowGL(),
 };
@@ -154,7 +230,7 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
   // own classes (styled in bench/main.ts STYLE like the 美體偵測 box): tests/harness/b3/bench.mjs locates '.body-bench'
   // and tests/harness/t8/run-bench.mjs '.gate .note', and this section sits in .gate, so reusing either breaks them
   section.className = 'multi-bench';
-  section.innerHTML = '<h3>多臉</h3><p class="multi-note">D：多臉偵測（選 group_faces.png）　B：多人美體（選 group_people.jpg）　GL：GPU 上限　R：多臉美型 GPU 時間　F：每張臉的瘦臉限制建構時間　BF：四人美體場建構時間　PE：多臉編輯每格時間　M：多人美體偵測記憶體（頁面被終止時，下次開啟會回報）　L：相機多臉追蹤時間（GPU／CPU，numFaces 1–3；鏡頭前一張臉得 PL2，三張臉得 PL1）　J／J2：相機平滑的抖動／延遲（L、J、J2 用相機）（R、F、BF、PE、M 需開發伺服器的 /tests/fixtures）</p>';
+  section.innerHTML = '<h3>多臉</h3><p class="multi-note">D：多臉偵測（選 group_faces.png）　B：多人美體（選 group_people.jpg）　GL：GPU 上限　R：多臉美型 GPU 時間　F：每張臉的瘦臉限制建構時間　BF：四人美體場建構時間　PE：多臉編輯每格時間　PC：滑桿放開時的摺疊檢查時間（6／8／10 張臉，全部或一人改變；得 PC1）　M：多人美體偵測記憶體（頁面被終止時，下次開啟會回報）　L：相機多臉追蹤時間（GPU／CPU，numFaces 1–3；鏡頭前一張臉得 PL2，三張臉得 PL1）　J／J2：相機平滑的抖動／延遲（L、J、J2 用相機）（R、F、BF、PE、PC、M 需開發伺服器的 /tests/fixtures）</p>';
   // a page killed during M (out of memory) left its breadcrumb: report it first
   const killed = staleKill();
   if (killed) rows.push(killed);
@@ -188,7 +264,7 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
       note.textContent = `${id}: ${e instanceof Error ? e.message : String(e)}`;
     }
   };
-  for (const id of ['D', 'B', 'GL', 'R', 'F', 'BF', 'PE', 'M', 'L', 'J', 'J2']) {
+  for (const id of ['D', 'B', 'GL', 'R', 'F', 'BF', 'PE', 'PC', 'M', 'L', 'J', 'J2']) {
     const b = document.createElement('button');
     b.textContent = id;
     b.addEventListener('click', () => void run(id));
@@ -211,10 +287,11 @@ export function mountMultiFace(parent: HTMLElement): { rows(): readonly MultiRow
 }
 
 /**
- * R: the reshape microbench (S §6.2): every 美型 item at maximum with the caps on, N = 1…6 spread across the frame,
- * 6 in a row at 1.2 FW and a 2×3 grid at 1.3 FW, both face-table carriers, at 1080 and 2048: 30 warm-up draws, then
- * 10 batches of 10 draws per 1-px readPixels, the median batch / 10 minus the N = 0 baseline. RC: compile + link (the
- * first draw). RP (GPU vs CPU pin) is tests/e2e/pages/reshape.ts, opened on the device.
+ * R: the reshape microbench (S §6.2): every 美型 item at maximum with the caps on, the layouts of reshapeLayouts.ts
+ * (N = 1…MAX_RENDER_FACES (10) spread across the frame, 6, 8 and 10 in a row at 1.2 FW, 2×3, 2×4 and 2×5 grids at
+ * 1.3 FW), both face-table carriers, at 1080 and 2048: 30 warm-up draws, then 10 batches of 10 draws per 1-px
+ * readPixels, the median batch / 10 minus the N = 0 baseline. RC: compile + link (the first draw). RP (GPU vs CPU
+ * pin) is tests/e2e/pages/reshape.ts, opened on the device.
  */
 export async function rowR(): Promise<MultiRow[]> {
   const { adapt } = await import('../tracking/adapter111');
@@ -227,22 +304,9 @@ export async function rowR(): Promise<MultiRow[]> {
   const lm = (await res.json()) as { width: number; height: number; points: number[] };
   const base = adapt({ points: new Float32Array(lm.points) }, lm.width, lm.height);
   const u = reshapeUniforms(PARAM_DEFS.filter((d) => d.group === 'shape').reduce((p, d) => setParam(p, d.id, 1), applyPreset('original', 1)).values, 1);
-  /** the fixture face scaled by k about its oval-box centre, moved to (cx, cy), frontal */
-  const at = (cx: number, cy: number, k: number) => {
-    const b = ovalBox(base);
-    const c = [b.x + b.w / 2, b.y + b.h / 2];
-    const m = (a: Float32Array) => a.map((v, i) => (i % 2 === 0 ? cx + (v - c[0]) * k : cy + (v - c[1]) * k));
-    return { pts111: m(base.pts111), ext: m(base.ext), oval: m(base.oval), yaw: 0, iris: m(base.iris), lids: m(base.lids) };
-  };
-  // the clustered layouts at FW 0.1 (the bench frame is square: iso = UV), so their spacing is what their names say
-  const kClustered = 0.1 / faceWidthIso(base, 1);
-  const layouts: Record<string, { centres: [number, number][]; k: number }> = {};
-  for (let n = 1; n <= 6; n++) layouts[`spread ${n}`] = { centres: Array.from({ length: n }, (_, i): [number, number] => [(i + 0.5) / n, 0.5]), k: 0.6 / n };
-  layouts['row 6 @1.2FW'] = { centres: Array.from({ length: 6 }, (_, i): [number, number] => [0.2 + i * 0.12, 0.5]), k: kClustered };
-  layouts['grid 2×3 @1.3FW'] = {
-    centres: Array.from({ length: 6 }, (_, i): [number, number] => [0.37 + (i % 3) * 0.13, 0.435 + Math.floor(i / 3) * 0.13]),
-    k: kClustered,
-  };
+  // the clustered layouts at FW 0.1 (the row of ten at FW 0.081; the bench frame is square: iso = UV), so their
+  // spacing is what their names say
+  const layouts = reshapeBenchLayouts(faceWidthIso(base, 1));
   const out: MultiRow[] = [];
   for (const carrier of ['texture', 'ubo'] as const) {
     for (const edge of [1080, 2048]) {
@@ -271,7 +335,7 @@ export async function rowR(): Promise<MultiRow[]> {
       };
       const baseline = time([]);
       for (const [name, { centres, k }] of Object.entries(layouts)) {
-        const faces = centres.map(([x, y]) => at(x, y, k));
+        const faces = centres.map(([x, y]) => placeBenchFace(base, x, y, k));
         const caps = capsFor(faces.map((f) => boxCentre(ovalBox(f))), [], 1);
         const tfs = faces.map((f, i) => ({ face: f, u: attenuate(u, 0), layer: -1, window: WHOLE, centre: boxCentre(ovalBox(f)), cap: caps[i] }));
         out.push({ row: 'R', config: `${carrier} ${edge} ${name}`, values: { ms: Math.round((time(tfs) - baseline) * 100) / 100 } });
@@ -293,8 +357,8 @@ export async function rowF(): Promise<MultiRow[]> {
   const res = await fetch('/tests/fixtures/group6_faces.png');
   if (!res.ok) throw new Error(`F needs /tests/fixtures/group6_faces.png (the dev server): ${res.status}`);
   const bmp = await decode(await res.blob(), 2048);
-  const { modelBuffer } = await loadEngineAssets();
-  const t = await createTracker({ modelBuffer, wasmBase: ENGINE_PATHS.wasmBase, delegate: 'auto' });
+  const { modelBuffer, fullRangeDetector } = await trackerInputs();
+  const t = await createTracker({ modelBuffer, fullRangeDetector, wasmBase: ENGINE_PATHS.wasmBase, delegate: 'auto' });
   const p = prepareFaces(t.detectImage(bmp, { maxFaces: EDIT_DETECT_FACES }), bmp.width, bmp.height);
   t.close();
   const mask = { width: 256, height: 192, data: new Uint8Array(256 * 192).fill(255) };
@@ -376,8 +440,8 @@ export async function rowPE(): Promise<MultiRow[]> {
   const res = await fetch('/tests/fixtures/group6_faces.png');
   if (!res.ok) throw new Error(`PE needs /tests/fixtures/group6_faces.png (the dev server): ${res.status}`);
   const bmp = await decode(await res.blob(), 2048);
-  const { modelBuffer } = await loadEngineAssets();
-  const t = await createTracker({ modelBuffer, wasmBase: ENGINE_PATHS.wasmBase, delegate: 'auto' });
+  const { modelBuffer, fullRangeDetector } = await trackerInputs();
+  const t = await createTracker({ modelBuffer, fullRangeDetector, wasmBase: ENGINE_PATHS.wasmBase, delegate: 'auto' });
   const prepared = prepareFaces(t.detectImage(bmp, { maxFaces: EDIT_DETECT_FACES }), bmp.width, bmp.height);
   t.close();
   const cache = buildCache({ width: bmp.width, height: bmp.height }, prepared, null, { faceScans: [{ quarter: 0, flipH: false }] });
@@ -407,6 +471,20 @@ export async function rowPE(): Promise<MultiRow[]> {
   return [{ row: 'PE', config: `${faces} faces 2048`, values: { p50_ms: round(median(times)) } }];
 }
 addRunner('PE', () => rowPE());
+
+/**
+ * PC (S §6.1, §6.3 PC1): the slider commit's fold check (warpGuard through createWarpGuard, as the editor runs it after
+ * a contour drag: every face with its 瘦臉 limit) on the fixture face in row R's 2-row grids of 6, 8 and 10 faces, every
+ * 美型 item at max: a 全部 commit and one person's change, and the 全部 commit without limits (bench/foldGuardBench.ts,
+ * imported statically: in the bench chunk, which the service worker does not precache). CPU only, no GL.
+ */
+export async function rowPC(): Promise<MultiRow[]> {
+  const res = await fetch('/tests/fixtures/landmarks_sample_face.json');
+  if (!res.ok) throw new Error(`PC needs /tests/fixtures/landmarks_sample_face.json (the dev server): ${res.status}`);
+  const lm = (await res.json()) as { width: number; height: number; points: number[] };
+  return foldGuardRows(adapt({ points: new Float32Array(lm.points) }, lm.width, lm.height));
+}
+addRunner('PC', () => rowPC());
 
 const M_KEY = 'meiyan.bench.m';
 /**
@@ -477,8 +555,8 @@ function eachFrame(video: HTMLVideoElement, ms: number, frame: (now: number) => 
 
 async function liveTracker(delegate: 'auto' | Delegate = 'auto'): Promise<Tracker> {
   const { createTracker } = await import('../tracking/tracker');
-  const { modelBuffer } = await loadEngineAssets();
-  return createTracker({ modelBuffer, wasmBase: ENGINE_PATHS.wasmBase, delegate });
+  const { modelBuffer, fullRangeDetector } = await trackerInputs();
+  return createTracker({ modelBuffer, fullRangeDetector, wasmBase: ENGINE_PATHS.wasmBase, delegate });
 }
 
 /** warm-up after each numFaces switch: setOptions rebuilds the graph and the first GPU inferences take about a second */

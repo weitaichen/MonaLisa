@@ -10,7 +10,9 @@ describe('limits (S §3.5)', () => {
     expect(L.EDIT_DETECT_FACES).toBe(12);
     expect(L.MAX_RENDER_FACES).toBe(10);
     expect(L.MAX_EDIT_BODIES).toBe(4);
-    expect(L.MAX_LIVE_FACES).toBe(3);
+    // camera per-person spec §6.3 (K5): every face in view up to the editor's cap (3 until 0.6)
+    expect(L.MAX_LIVE_FACES).toBe(10);
+    expect(L.MAX_LIVE_FACES).toBe(L.MAX_EDIT_FACES);
     // sub-step 1e: the camera tracks every face it can show (T1)
     expect(L.LIVE_DETECT_FACES).toBe(L.MAX_LIVE_FACES);
     expect(L.MIN_FACE_FRAC).toBe(0.03);

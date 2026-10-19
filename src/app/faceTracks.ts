@@ -1,19 +1,26 @@
-// Camera face tracks (S §3.4 T4): de-duplicate, match, hold, smooth (MediaPipe's smoother, bypassed at one face),
-// select (auto = the largest with the A7 hysteresis, or a pinned track) and ease each face's beautify weight, its
-// presence (the neighbours' caps, A3) and the any-face weight (the global skin, A2). Pure: no DOM, no GL.
-import { LOST_HOLD_MS, MAX_LIVE_FACES } from '../config/limits';
+// Camera face tracks (S §3.4 T4; camera per-person spec §5.2, §7): de-duplicate, match against each track's predicted
+// box (velocity, the size gate), continue a held track through the re-identification gates, hold, smooth (MediaPipe's
+// smoother, bypassed at one face), and give each track a camera person: `claim` when it starts, `release` when it is
+// dropped or reset. The A7 auto pick goes to the session (`sync`), which owns the selection; each face's weight eases
+// toward "present and its person edited", its presence (the neighbours' caps, A3) and the any-face weight (the global
+// skin, A2) as before. Pure: no DOM, no GL.
+import { LOST_HOLD_MS, MAX_LIVE_FACES, TRACK_SIZE_JUMP } from '../config/limits';
 import { boxIoU } from '../detect/faces';
 import { ovalBox } from '../engine/passes/faceCap';
 import { adapt } from '../tracking/adapter111';
 import type { Face, Landmarks478, Rect } from '../types';
 import { FaceWeightEaser } from './liveCore';
+import { type LivePersonId, nearestUnambiguous, reidDistance, type TrackPersons } from './livePersons';
 import { LandmarkSmoother } from './oneEuro';
 
 export type TrackId = number;
-export type CameraSelection = 'auto' | TrackId;
+/** the camera's selection: auto (the target follows the A7 pick) or a pinned person */
+export type CameraSelection = 'auto' | LivePersonId;
 
 export interface LiveTrackView {
   id: TrackId;
+  /** the camera person this track shows (kept for the track's life) */
+  person: LivePersonId;
   /** the shown (smoothed) face's oval box, unmirrored video UV */
   box: Rect;
   /** the last raw detection's box: the hand-over seed (C2) */
@@ -23,20 +30,34 @@ export interface LiveTrackView {
   weight: number;
   /** presence 0..1: scales this face's part in its neighbours' caps (A3) */
   presence: number;
-  /** the face beautified without 全部套用 (the pinned one, else the auto pick) */
-  beautified: boolean;
+  /** the person's params differ from 原圖 */
+  edited: boolean;
+  /** the target's track (the person the sliders edit) */
+  selected: boolean;
   /** found by the last detection (false while held) */
   present: boolean;
+  /** the track's last refresh (ms, the loop's clock) */
+  seen: number;
+  /** the view that last refreshed it ('video' on the solo path) */
+  view: string;
 }
 
 interface Track {
   id: TrackId;
+  person: LivePersonId;
   filter: LandmarkSmoother | null;
   shown: Face;
   box: Rect;
   rawBox: Rect;
   present: boolean;
+  /** the hold's clock: the last refresh, moved on by a no-answer stretch (A5) */
   lastSeen: number;
+  /** the last refresh as it happened */
+  seen: number;
+  /** box-centre velocity, UV per ms: an EMA (τ VELOCITY_TAU_MS) of the raw boxes' Δcentre / Δt (§7.2) */
+  vx: number;
+  vy: number;
+  view: string;
   easer: FaceWeightEaser;
   presence: FaceWeightEaser;
 }
@@ -50,23 +71,32 @@ interface Det {
 /** A7: auto switches only to a face ≥ 1.2× larger for 500 ms */
 const AUTO_RATIO = 1.2;
 const AUTO_HOLD_MS = 500;
+/** §7.2: the velocity EMA's time constant */
+const VELOCITY_TAU_MS = 200;
 const area = (b: Rect) => b.w * b.h;
 const centre = (b: Rect): [number, number] => [b.x + b.w / 2, b.y + b.h / 2];
 const finiteBox = (b: Rect) => b.w > 0 && b.h > 0 && Number.isFinite(b.x + b.y + b.w + b.h);
+/** §7.3 item 3: a face whose width differs from the predicted box by more than × TRACK_SIZE_JUMP is someone else */
+const sizeOk = (p: Rect, d: Rect) => Math.max(d.w / p.w, p.w / d.w) <= TRACK_SIZE_JUMP;
 
 export class FaceTracks {
   private list: Track[] = [];
   private nextId = 1;
-  private sel: CameraSelection = 'auto';
+  /** the A7 auto pick (a track; its person goes to the session) */
   private autoId: TrackId | null = null;
   private challenger: { id: TrackId; since: number } | null = null;
   private readonly any = new FaceWeightEaser();
   private readonly max: number;
   private readonly hold: number;
+  /** the last detection's frame width / height (the predicted box's one-width bound and the gates' distances) */
+  private aspect = 1;
   /** a no-answer stretch began here: the hold clock is paused until the next answer (S §3.4 T4, A5) */
   private noAnswerSince: number | null = null;
 
-  constructor(opts: { maxFaces?: number; holdMs?: number } = {}) {
+  constructor(
+    private readonly persons: TrackPersons,
+    opts: { maxFaces?: number; holdMs?: number } = {},
+  ) {
     this.max = Math.max(1, opts.maxFaces ?? MAX_LIVE_FACES);
     this.hold = opts.holdMs ?? LOST_HOLD_MS;
   }
@@ -85,6 +115,8 @@ export class FaceTracks {
       for (const t of this.list) t.lastSeen += paused;
       this.noAnswerSince = null;
     }
+    const aspect = w / h;
+    this.aspect = aspect;
     const dets: Det[] = [];
     for (const lm of lms) {
       const face = adapt(lm, w, h);
@@ -100,13 +132,15 @@ export class FaceTracks {
       if (j < 0) unique.push(d);
       else if (!onTrack(unique[j].box) && onTrack(d.box)) unique[j] = d;
     }
-    // match: greedy by IoU ≥ 0.3, then the nearest centre within half a box width
+    // §7.3: every rule matches against the predicted boxes, and refuses a pair across the size gate
+    const pred = new Map<Track, Rect>(this.list.map((t) => [t, this.predict(t, tsMs)]));
     const free = new Set(this.list);
     const used = new Set<Det>();
     const pairs: [Track, Det][] = [];
+    // greedy by IoU ≥ 0.3
     const cand = this.list
-      .flatMap((t) => unique.map((d) => ({ t, d, iou: boxIoU(t.box, d.box) })))
-      .filter((c) => c.iou >= 0.3)
+      .flatMap((t) => unique.map((d) => ({ t, d, iou: boxIoU(pred.get(t)!, d.box) })))
+      .filter((c) => c.iou >= 0.3 && sizeOk(pred.get(c.t)!, c.d.box))
       .sort((a, b) => b.iou - a.iou);
     for (const c of cand) {
       if (!free.has(c.t) || used.has(c.d)) continue;
@@ -114,12 +148,14 @@ export class FaceTracks {
       used.add(c.d);
       pairs.push([c.t, c.d]);
     }
+    // then the nearest centre within half a predicted box width
     for (const t of [...free]) {
-      const [tx, ty] = centre(t.box);
+      const p = pred.get(t)!;
+      const [tx, ty] = centre(p);
       let best: Det | null = null;
-      let bestD = 0.5 * t.box.w;
+      let bestD = 0.5 * p.w;
       for (const d of unique) {
-        if (used.has(d)) continue;
+        if (used.has(d) || !sizeOk(p, d.box)) continue;
         const [dx, dy] = centre(d.box);
         const dist = Math.hypot(dx - tx, dy - ty);
         if (dist <= bestD) {
@@ -132,9 +168,23 @@ export class FaceTracks {
       used.add(best);
       pairs.push([t, best]);
     }
-    // one track, one face: the same track wherever the face went (after no answer, a [] gap or a brisk pan), as v0.3
-    // followed lms[0] (S §1.2 item 1); a new track would leave the held one the target, and the only face unbeautified
-    if (this.list.length === 1 && unique.length === 1 && pairs.length === 0) {
+    // §7.3 item 4, continuation: a detection still unmatched, largest first, continues a track within the hold whose
+    // predicted box passes the re-identification gates (§7.4), the nearest unless another is about as near (A2)
+    for (const d of unique.filter((x) => !used.has(x)).sort((a, b) => area(b.box) - area(a.box))) {
+      const near: { item: Track; d: number }[] = [];
+      for (const t of free) {
+        if (tsMs - t.lastSeen > this.hold) continue;
+        const r = reidDistance(pred.get(t)!, d.box, aspect);
+        if (r !== null) near.push({ item: t, d: r });
+      }
+      const t = nearestUnambiguous(near);
+      if (!t) continue;
+      free.delete(t);
+      used.add(d);
+      pairs.push([t, d]);
+    }
+    // MAX_LIVE_FACES = 1 (v0.3's camera, one person): one track, one face, wherever the face went (S §1.2 item 1)
+    if (this.max === 1 && this.list.length === 1 && unique.length === 1 && pairs.length === 0) {
       const t = this.list[0];
       free.delete(t);
       used.add(unique[0]);
@@ -142,32 +192,71 @@ export class FaceTracks {
     }
     for (const [t, d] of pairs) this.feed(t, d, tsMs, w, h);
     for (const t of free) t.present = false;
-    // unmatched detections start tracks, largest first, while there is room; ids count up per session
-    for (const d of unique) {
-      if (used.has(d) || this.list.length >= this.max) continue;
+    // §7.3 item 5: unmatched detections start tracks, largest first, each with the person `claim` gives it; when full,
+    // the held track seen longest ago is dropped early (its person released) to make room, and only such a track
+    for (const d of unique.filter((x) => !used.has(x)).sort((a, b) => area(b.box) - area(a.box))) {
+      if (this.list.length >= this.max) {
+        let oldest: Track | null = null;
+        for (const t of this.list) if (!t.present && (!oldest || t.lastSeen < oldest.lastSeen)) oldest = t;
+        if (!oldest) break;
+        this.drop(oldest);
+      }
       const t: Track = {
         id: this.nextId++,
+        person: this.persons.claim(d.box, aspect, tsMs),
         filter: this.max > 1 ? new LandmarkSmoother() : null,
         shown: d.face,
         box: d.box,
         rawBox: d.box,
         present: true,
         lastSeen: tsMs,
+        seen: tsMs,
+        vx: 0,
+        vy: 0,
+        view: 'video',
         easer: new FaceWeightEaser(),
         presence: new FaceWeightEaser(),
       };
       this.feed(t, d, tsMs, w, h);
       this.list.push(t);
     }
-    this.list = this.list.filter((t) => t.present || tsMs - t.lastSeen <= this.hold);
-    if (this.sel !== 'auto' && !this.list.some((t) => t.id === this.sel)) this.sel = 'auto';
+    // §7.3 item 6: a track missing longer than the hold is dropped and its person released
+    for (const t of this.list.filter((x) => !x.present && tsMs - x.lastSeen > this.hold)) this.drop(t);
     if (this.autoId !== null && !this.list.some((t) => t.id === this.autoId)) this.autoId = null;
   }
 
+  /** §7.2: the track's box moved by its velocity since its last refresh, at most one box width */
+  private predict(t: Track, tsMs: number): Rect {
+    const dt = Math.max(0, tsMs - t.lastSeen);
+    let dx = t.vx * dt;
+    let dy = t.vy * dt;
+    const len = Math.hypot(dx * this.aspect, dy);
+    const max = t.box.w * this.aspect;
+    if (len > max) {
+      dx *= max / len;
+      dy *= max / len;
+    }
+    return { ...t.box, x: t.box.x + dx, y: t.box.y + dy };
+  }
+
+  private drop(t: Track): void {
+    this.list = this.list.filter((x) => x !== t);
+    this.persons.release(t.person, t.box, t.lastSeen);
+  }
+
   private feed(t: Track, d: Det, tsMs: number, w: number, h: number): void {
+    const dt = tsMs - t.lastSeen;
+    if (dt > 0) {
+      const [px, py] = centre(t.rawBox);
+      const [nx, ny] = centre(d.box);
+      const a = 1 - Math.exp(-dt / VELOCITY_TAU_MS);
+      t.vx += ((nx - px) / dt - t.vx) * a;
+      t.vy += ((ny - py) / dt - t.vy) * a;
+    }
     t.rawBox = d.box;
     t.present = true;
     t.lastSeen = tsMs;
+    t.seen = tsMs;
     if (t.filter) {
       t.shown = adapt({ points: t.filter.apply(d.lm.points, w, h, tsMs) }, w, h);
       const b = ovalBox(t.shown);
@@ -179,8 +268,8 @@ export class FaceTracks {
     }
   }
 
-  /** every frame (tracks hold between detections): the A7 auto pick, then the easers */
-  step(dtMs: number, all: boolean, nowMs: number): void {
+  /** every frame (tracks hold between detections): the A7 auto pick to the session, then the easers */
+  step(dtMs: number, nowMs: number): void {
     const present = this.list.filter((t) => t.present);
     const largest = present.reduce<Track | null>((a, t) => (!a || area(t.box) > area(a.box) ? t : a), null);
     if (this.autoId === null) {
@@ -196,43 +285,46 @@ export class FaceTracks {
         }
       } else this.challenger = null;
     } else this.challenger = null;
-    const target = this.sel === 'auto' ? this.autoId : this.sel;
+    const auto = this.list.find((t) => t.id === this.autoId);
+    this.persons.sync(
+      this.list.map((t) => t.person),
+      auto?.person ?? null,
+    );
     for (const t of this.list) {
-      t.easer.update(t.present && (all || t.id === target), dtMs);
+      // §3.3: only an edited person is drawn; an untouched face stays listed at weight 0 (caps only)
+      t.easer.update(t.present && this.persons.edited(t.person), dtMs);
       t.presence.update(t.present, dtMs);
     }
     this.any.update(present.length > 0, dtMs);
   }
 
   views(): LiveTrackView[] {
-    const target = this.sel === 'auto' ? this.autoId : this.sel;
+    const target = this.persons.target();
     return this.list.map((t) => ({
       id: t.id,
+      person: t.person,
       box: t.box,
       rawBox: t.rawBox,
       face: t.shown,
       weight: t.easer.value,
       presence: t.presence.value,
-      beautified: t.id === target,
+      edited: this.persons.edited(t.person),
+      selected: t.person === target,
       present: t.present,
+      seen: t.seen,
+      view: t.view,
     }));
+  }
+
+  /** §7.2: track `id`'s box predicted at `nowMs`; null when there is no such track */
+  predicted(id: TrackId, nowMs: number): Rect | null {
+    const t = this.list.find((x) => x.id === id);
+    return t ? this.predict(t, nowMs) : null;
   }
 
   /** "any face present", eased: 1 − it is the global skin's weight (A2); one face: today's single easer */
   get anyFace(): number {
     return this.any.value;
-  }
-
-  beautified(): LiveTrackView | null {
-    return this.views().find((v) => v.beautified) ?? null;
-  }
-
-  select(id: TrackId): void {
-    if (this.list.some((t) => t.id === id)) this.sel = id;
-  }
-
-  selection(): CameraSelection {
-    return this.sel;
   }
 
   /** the shown track under (u, v), each box grown to at least minW × minH about its centre; nearest centre wins */
@@ -253,21 +345,26 @@ export class FaceTracks {
     return best;
   }
 
-  /** resetSession / pause: no tracks, auto; 全部套用 is not ours to touch */
+  /**
+   * resetSession / pause / stop: every track's person is released with its last shown box and time (§7.5: to the away
+   * pool when edited, so the next live frame re-identifies them in place), then nobody is in view (no target)
+   */
   reset(): void {
+    const gone = this.list;
     this.list = [];
-    this.sel = 'auto';
+    for (const t of gone) this.persons.release(t.person, t.box, t.lastSeen);
     this.autoId = null;
     this.challenger = null;
     this.noAnswerSince = null;
     this.any.reset(0);
+    this.persons.sync([], null);
   }
 }
 
-export type TapAction = { kind: 'collapse' } | { kind: 'select'; id: TrackId; allOff: boolean };
+export type TapAction = { kind: 'collapse' } | { kind: 'select'; id: LivePersonId; allOff: boolean };
 
-/** S §2.5: what a camera tap does */
-export function cameraTapAction(hit: TrackId | null, shownTracks: number, selection: CameraSelection, allOn: boolean): TapAction {
+/** S §2.5: what a camera tap does (`hit`: the person under the tap) */
+export function cameraTapAction(hit: LivePersonId | null, shownTracks: number, selection: CameraSelection, allOn: boolean): TapAction {
   if (shownTracks < 2) return { kind: 'collapse' };
   if (allOn && hit !== null) return { kind: 'select', id: hit, allOff: true };
   if (hit !== null && selection !== hit) return { kind: 'select', id: hit, allOff: false };

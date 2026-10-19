@@ -21,13 +21,14 @@ export const MAX_RENDER_FACES = 10;
 /** numPoses of the 美體 detection (§6.3 PB1, PM1) */
 export const MAX_EDIT_BODIES = 4;
 /**
- * faces the camera tracks; 1 hides the camera's 選臉 and bypasses the smoother (§6.3 PL1, PL2, PJ1). Desktop 2026-10-13
- * (S §6.4, bench L): with one face in view, numFaces 3 adds 3.5–4.2 ms per detection on the GPU delegate (p50 about
- * 12.4 → 16.3 ms, +28–35 %) and 1.9–2.1 ms on CPU, within PL2's 5 ms. With three faces in view p50 is about 31 ms
- * (numFaces 2: about 22 ms), over PL1's 20 ms on that desktop. §6.3 applies both rows to the slowest iPhone, so this
- * default ships until the iPhone rows exist (RM §12); the bench prints the PL1 / PL2 verdicts (bench/report.ts liveRows).
+ * faces the camera tracks, one camera person each (camera per-person spec §6.3, K5): every face in view up to the
+ * editor's cap (U1). 1 hides the camera's 選臉, bypasses the smoother and has no group path (§6.3 PL1, PL2, PJ1).
+ * Desktop 2026-10-19 (camera per-person spec §6.1): on the front camera's short-range detector, numFaces 10 costs a lone
+ * face what v0.5's 3 cost (p50 14.1 vs 14.2 ms GPU, 14.1 vs 14.3 ms CPU), so A1 / PL2 hold; each tracked face adds a
+ * landmark inference (about 6–7 ms GPU, 7–8 ms CPU), which the detection cadence spreads (§6.4). 3 from S §6.4 (bench L,
+ * 2026-10-13) until 0.6. The default ships until the iPhone rows exist (RM §12; bench/report.ts liveRows prints PL2).
  */
-export const MAX_LIVE_FACES = 3;
+export const MAX_LIVE_FACES = MAX_EDIT_FACES;
 /**
  * numFaces the camera requests: every live instance is built with it and the camera never toggles it (T1). A count
  * switch rebuilds the graph, and its first inference took 145–165 ms on the desktop's GPU delegate (33–49 ms on CPU),

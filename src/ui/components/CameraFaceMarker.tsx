@@ -1,10 +1,12 @@
-// The camera's face marker (S §2.5): an 800 ms accent ring after a selection and a 6 px dot above the beautified face
-// while ≥ 2 tracks are shown and 全部套用 is off. DOM only, pointer-events: none; never part of the captured photo.
+// The camera's face marker (S §2.5): an 800 ms accent ring around the tapped person and a 6 px dot above the target's
+// face (the person the sliders edit, camera per-person spec §3.1) while ≥ 2 tracks are shown and 全部套用 is off. DOM
+// only, pointer-events: none; never part of the captured photo.
 // It runs next to the 30 fps camera render, so its nodes live as long as the marker: one dot, and one ring per
 // selection (a fresh node starts the CSS fade); each frame writes only the styles whose value changed.
 import { useEffect, useRef } from 'preact/hooks';
 import type { LiveLoop } from '../../app/live';
-import { type TrackId, videoToFrame } from '../../app/faceTracks';
+import { videoToFrame } from '../../app/faceTracks';
+import type { LivePersonId } from '../../app/livePersons';
 
 /** px, rounded to 0.1 so sub-pixel smoothing noise writes nothing */
 const px = (v: number) => `${Math.round(v * 10) / 10}px`;
@@ -81,7 +83,8 @@ export function CameraFaceMarker({
   canvas: HTMLCanvasElement;
   video: HTMLVideoElement;
   mirrored: boolean;
-  ring: { id: TrackId; at: number } | null;
+  /** the tapped person and the tap's time */
+  ring: { person: LivePersonId; at: number } | null;
   all: boolean;
   count: number;
 }) {
@@ -105,8 +108,8 @@ export function CameraFaceMarker({
         const vw = video.videoWidth;
         const vh = video.videoHeight;
         for (const v of views) {
-          const showRing = ringOn && v.id === ring!.id;
-          const showDot = dotOn && v.beautified;
+          const showRing = ringOn && v.person === ring!.person;
+          const showDot = dotOn && v.selected;
           if (!showRing && !showDot) continue;
           const [ax, ay] = videoToFrame(v.box.x, v.box.y, rect, vw, vh, mirrored);
           const [bx, by] = videoToFrame(v.box.x + v.box.w, v.box.y + v.box.h, rect, vw, vh, mirrored);

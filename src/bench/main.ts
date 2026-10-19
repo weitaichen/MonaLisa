@@ -12,6 +12,7 @@
 // each row's budget (ok / OVER).
 import { debugState, reportError } from '../app/debug';
 import { type LiveLoop, type LiveStats, autoTierSession, resetAutoTierSession, startLiveLoop } from '../app/live';
+import { LivePersons } from '../app/livePersons';
 import { type StillSession, createStillSession } from '../app/still';
 import { legacyFrame } from '../edit/frame';
 import { splitLegacy } from '../edit/legacy';
@@ -115,6 +116,10 @@ const prefs: Prefs = {
 
 let mode: Mode = 'skin+shape';
 let params = paramsFor(mode);
+/** the bench's camera session: 全部套用 with the mode's person, so every face draws it (v0.5's one look on every face) */
+const livePersons = new LivePersons();
+livePersons.setAll(true);
+livePersons.edit(splitLegacy(params).person);
 let camera: CameraController | null = null;
 let engine: Engine | null = null;
 let tracker: Tracker | null = null;
@@ -402,8 +407,8 @@ function startLoop(): void {
     camera,
     engine,
     tracker,
-    getLook: () => splitLegacy(params),
-    getAll: () => false,
+    persons: livePersons,
+    getPhoto: () => splitLegacy(params).photo,
     getPrefs: () => prefs,
     onStats: (s) => {
       stats = s;
@@ -433,6 +438,7 @@ function setTier(t: Prefs['tier']): void {
 function setMode(m: Mode): void {
   mode = m;
   params = paramsFor(m);
+  livePersons.edit(splitLegacy(params).person);
   if (still) still.render(stillFrame(still));
   syncButtons();
 }

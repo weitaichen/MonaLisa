@@ -579,7 +579,7 @@ cd /d/GitSource/MonaLisa && git add src/edit/state.ts src/edit/state.test.ts src
   // types.ts DebugState.boxes[]: { id; x; y; w; h; person?: string /* c{n} */; edited?: boolean; view?: string; seen?: number }
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `src/app/faceTracks.test.ts`: construct every tracker as `new FaceTracks(persons)`; `run()` loses its `all` argument and calls `t.step(33, now)`. Add helpers and these tests (keep the dedupe, A5, A7, hitTest, cover-mapping, ChipGate and maxFaces-1-smoother tests, reading the selection through `s.pin()` / `views().find((v) => v.selected)` instead of `select()` / `beautified()`):
 
@@ -795,12 +795,12 @@ describe('the live loop on persons (camera per-person spec §8, §7.5)', () => {
 
 `src/ui/components/CameraFaceMarker.test.tsx:126-138`: `view(id, x, selected)` builds `{ id, person: id, box, rawBox, weight: 1, presence: 1, edited: false, selected, present: true, seen: 0, view: 'video' }`; the ring is `{ person, at }`.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cd /d/GitSource/MonaLisa && npx vitest run src/app/faceTracks.test.ts src/app/live.test.ts src/ui/components/CameraFaceMarker.test.tsx`
 Expected: FAIL — `FaceTracks` takes no persons, `predicted` / `person` / `selected` missing, `LiveDeps.persons` unknown.
 
-- [ ] **Step 3: Implement `FaceTracks` on persons**
+- [x] **Step 3: Implement `FaceTracks` on persons**
 
 `Track` gains `person`, `vx`, `vy` (UV per ms), `view`. The `sel` / `autoId`-as-selection state and `select()` / `selection()` / `beautified()` (`:60-61, :163, :226-236`) leave `FaceTracks` (the A7 pick and its challenger stay). `detect()` keeps its dedupe (`:94-102`) and A5 null path (`:76-87`); then:
 
@@ -820,7 +820,7 @@ Expected: FAIL — `FaceTracks` takes no persons, `predicted` / `person` / `sele
 
 `step(dtMs, nowMs)`: the A7 pick (`:184-198`) → `persons.sync(list.map((t) => t.person), autoTrack?.person ?? null)`, then `t.easer.update(t.present && persons.edited(t.person), dtMs)`; presence and `any` as today. `views()` fills `edited` from `persons.edited`, `selected` from `t.person === persons.target()`. `reset()` releases every track (person, last shown box, `lastSeen`), clears, then `persons.sync([], null)`, so `target()` is null while nobody is in view (a paused camera has no target to write). `cameraTapAction` keeps its body; only its parameter types change.
 
-- [ ] **Step 4: Implement the loop on persons, the session singleton and the call sites**
+- [x] **Step 4: Implement the loop on persons, the session singleton and the call sites**
 
 `live.ts`:
 - `liveFrame(views, anyFace, photo, persons)`: views with `weight > 0 || presence > 0`, stably ordered (present ∧ edited, present, held), cut at `MAX_RENDER_FACES`, each `{ face, weight, person: persons.params(v.person) ?? neutralPerson(), protect: null, presence }`; `globalSkin: { smooth: persons.ambient.values['skin.smooth'], rosy: persons.ambient.values['skin.rosy'], weight: 1 − anyFace }`; `photo`.
@@ -835,12 +835,12 @@ Call sites: `Camera.tsx` passes `persons: cameraSession()`, `getPhoto: () => loo
 
 `limits.ts:30`: `export const MAX_LIVE_FACES = MAX_EDIT_FACES;` with the doc comment rewritten from §6.1 (front `numFaces` 10 costs what 3 cost: 14.1 vs 14.2 ms GPU, 14.1 vs 14.3 ms CPU); `limits.test.ts:13` expects 10.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `cd /d/GitSource/MonaLisa && npx vitest run src/app src/ui src/config && npm run typecheck`
 Expected: all PASS; typecheck 0.
 
-- [ ] **Step 6: Commit** (CRLF check on `live.ts`, `types.ts`, `Camera.tsx`, `bench/main.ts`)
+- [x] **Step 6: Commit** (CRLF check on `live.ts`, `types.ts`, `Camera.tsx`, `bench/main.ts`)
 
 ```bash
 cd /d/GitSource/MonaLisa && git add src/config src/app/faceTracks.ts src/app/faceTracks.test.ts src/app/live.ts src/app/live.test.ts src/ui/cameraSession.ts src/types.ts src/ui/screens/Camera.tsx src/ui/components/CameraFaceMarker.tsx src/ui/components/CameraFaceMarker.test.tsx src/bench/main.ts tests/harness/t7/fakes.ts && git commit -m "camera per-person: tracks claim persons (prediction, size gate, re-identification), each face renders its own person, MAX_LIVE_FACES 10" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat

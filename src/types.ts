@@ -837,8 +837,11 @@ export interface DebugState {
   detectRetries: number;
   /** editor: the face detections that waited for the full-range detector's first download (D1, services.ts photoDetectorPending) */
   detectorWaits?: number;
-  /** face boxes, normalized and unmirrored (editor: cache faces; camera: shown tracks) */
-  boxes: { id: string; x: number; y: number; w: number; h: number }[];
+  /**
+   * face boxes, normalized and unmirrored (editor: cache faces; camera: shown tracks). Camera only (camera per-person
+   * spec §6.6): the track's person `c{n}`, whether that person is edited, the view that last refreshed it and when
+   */
+  boxes: { id: string; x: number; y: number; w: number; h: number; person?: string; edited?: boolean; view?: string; seen?: number }[];
   /** editor: the cache's obstacles (faces it dropped, too small or over the cap), as `boxes` (the camera does not write it) */
   obstacles?: { x: number; y: number; w: number; h: number }[];
   /** editor: the cache's dropped counts (S §3.2; the camera does not write it) */

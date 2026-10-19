@@ -2,13 +2,15 @@
 // BeautyPanel + floating slider, timer, flip, hold-to-compare, shutter → Review.
 // 美體 is photo-only for now (body research report P1): the tab is shown with every item off and a note.
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { cameraTapAction, ChipGate, coverTapUv, type TrackId } from '../../app/faceTracks';
+import { cameraTapAction, ChipGate, coverTapUv } from '../../app/faceTracks';
 import type { LiveLoop, LiveStats } from '../../app/live';
+import type { LivePersonId } from '../../app/livePersons';
 import type { CameraController, CameraSnapshot, EditState } from '../../types';
 import { lensFor, LIVE_PERSONS, type PersonInfo } from '../../edit/lens';
 import { cameraScreenSwap } from '../../edit/sides';
 import { cameraEdit, LIVE, lookOf } from '../../edit/state';
 import { cameraErrorCopy } from '../cameraErrors';
+import { cameraSession, endCameraSession } from '../cameraSession';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
 import { CameraFaceMarker } from '../components/CameraFaceMarker';
 import { CanvasHost } from '../components/CanvasHost';
@@ -42,7 +44,7 @@ export function Camera() {
   const prefs = useStore(app, (s) => s.prefs);
   const ratio = useStore(app, (s) => s.ratio);
   const timer = useStore(app, (s) => s.timer);
-  /** 全部套用 (S §2.5): in memory, kept across Review and retakes */
+  /** 全部套用 (S §2.5): in memory, kept across Review and retakes, mirrored into the camera session; off when the session ends */
   const cameraAll = useStore(app, (s) => s.cameraAll);
   const engine = useStore(svc, (s) => s.engine);
   const bundle = engine.state === 'ready' ? engine.bundle : null;
@@ -63,8 +65,8 @@ export function Camera() {
   /** the 全部套用 chip shows (ChipGate's 300 / 1200 ms debounce of the shown tracks) */
   const [chip, setChip] = useState(false);
   const chipGate = useRef(new ChipGate());
-  /** the accent ring of the last tap selection (800 ms, CameraFaceMarker) */
-  const [ring, setRing] = useState<{ id: TrackId; at: number } | null>(null);
+  /** the accent ring of the last tap selection: the tapped person (800 ms, CameraFaceMarker) */
+  const [ring, setRing] = useState<{ person: LivePersonId; at: number } | null>(null);
   /** shown tracks, from LiveStats: redraws the marker when the count changes */
   const [shownFaces, setShownFaces] = useState(0);
   /** LiveStats.gpLeftOnLeft: the tracked face's halves on the unmirrored frame (the 左／右 chips, S5 §3.4) */
@@ -141,8 +143,9 @@ export function Camera() {
         camera: ctrl,
         engine: bundle.engine,
         tracker: bundle.tracker,
-        getLook: () => lookRef.current,
-        getAll: () => app.get().cameraAll,
+        // the camera session outlives this loop (a new stream, Review → 重拍, a bundle change keep everyone, §3.11)
+        persons: cameraSession(),
+        getPhoto: () => lookRef.current.photo,
         getPrefs: () => prefsRef.current,
         // the picture the shutter keeps (captureFrom crops to the same ratio): vignette and grain follow it
         getFrame: () => normalizedCropRect(ctrl.video.videoWidth, ctrl.video.videoHeight, RATIO_VALUE[app.get().ratio]),
@@ -193,6 +196,8 @@ export function Camera() {
 
   const close = () => {
     clearInterval(countTimer.current);
+    // ✕ ends the camera session first, so the stopping loop's releases are dropped (Review Focus #1)
+    endCameraSession();
     stopCamera();
     go({ name: 'home' });
   };
@@ -286,17 +291,19 @@ export function Camera() {
   const flip = () => {
     if (!ctrl) return;
     haptic();
+    // another camera, another scene: the session ends before the old stream stops (Review Focus #1, §3.11)
+    endCameraSession();
     ctrl.flip().catch((e: unknown) => setStartErr(reportError(e, 'camera.flip')));
   };
 
-  /** S §2.5: with ≥ 2 shown tracks a tap on a face selects it (ring, haptic); otherwise the panel collapse toggles */
+  /** S §2.5: with ≥ 2 shown tracks a tap on a face selects its person (ring, haptic); otherwise the panel collapse toggles */
   const onStageClick = (e: MouseEvent) => {
     if ((e.target as Element).closest('.slider-row, .status, button')) return;
     if (!live) return;
     const l = loopRef.current;
     const canvas = bundle?.engine.canvas;
     const shown = l?.tracks().length ?? 0;
-    let hit: TrackId | null = null;
+    let hit: LivePersonId | null = null;
     if (l && canvas && ctrl && shown >= 2) {
       const m = coverTapUv(e.clientX, e.clientY, canvas.getBoundingClientRect(), ctrl.video.videoWidth, ctrl.video.videoHeight, snap?.facing === 'user');
       hit = l.hitTest(m.u, m.v, m.minW, m.minH);
@@ -307,9 +314,13 @@ export function Camera() {
       return;
     }
     haptic();
-    if (a.allOff) app.set({ cameraAll: false });
+    if (a.allOff) {
+      // a tap on a face turns 全部套用 off; nobody reverts (§3.4)
+      app.set({ cameraAll: false });
+      cameraSession().setAll(false);
+    }
     l!.select(a.id);
-    setRing({ id: a.id, at: performance.now() });
+    setRing({ person: a.id, at: performance.now() });
   };
 
   const binding = sliderFor(lensOf(look), sel, cameraBody);
@@ -411,7 +422,9 @@ export function Camera() {
               onClick={(e) => {
                 e.stopPropagation();
                 haptic();
+                // on copies the target's params to everyone in view; off reverts nobody (§3.4, K10)
                 app.set({ cameraAll: !cameraAll });
+                cameraSession().setAll(!cameraAll);
               }}
             >
               <span>全部套用</span>

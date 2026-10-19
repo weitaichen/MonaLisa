@@ -123,10 +123,23 @@ function frame(ms = 16) {
 }
 const pending = () => frames.size;
 
-const view = (id: number, x: number, beautified: boolean): LiveTrackView =>
-  ({ id, box: { x, y: 0.3, w: 0.2, h: 0.3 }, rawBox: { x, y: 0.3, w: 0.2, h: 0.3 }, weight: 1, presence: 1, beautified, present: true }) as LiveTrackView;
+/** track `id` shows person `id`; `selected` marks the target's track (the dot) */
+const view = (id: number, x: number, selected: boolean): LiveTrackView =>
+  ({
+    id,
+    person: id,
+    box: { x, y: 0.3, w: 0.2, h: 0.3 },
+    rawBox: { x, y: 0.3, w: 0.2, h: 0.3 },
+    weight: 1,
+    presence: 1,
+    edited: false,
+    selected,
+    present: true,
+    seen: 0,
+    view: 'video',
+  }) as LiveTrackView;
 
-function mount(views: { current: LiveTrackView[] }, ring: { id: number; at: number } | null, all = false) {
+function mount(views: { current: LiveTrackView[] }, ring: { person: number; at: number } | null, all = false) {
   const root = new FakeElement('div');
   const loop = { tracks: () => views.current } as unknown as LiveLoop;
   const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 300, height: 400 }) } as unknown as HTMLCanvasElement;
@@ -175,7 +188,7 @@ describe('CameraFaceMarker', () => {
 
   it('shows the ring for 800 ms on one node (its fade runs once), then hides it; a new selection gets a fresh ring', () => {
     const views = { current: [view(1, 0.1, true), view(2, 0.6, false)] };
-    const { marker, rerender } = mount(views, { id: 2, at: 1000 });
+    const { marker, rerender } = mount(views, { person: 2, at: 1000 });
     frame();
     const ring = shown(marker, 'cam-ring');
     expect(ring).toHaveLength(1);
@@ -190,12 +203,21 @@ describe('CameraFaceMarker', () => {
     expect(shown(marker, 'cam-ring')).toHaveLength(0);
     expect(shown(marker, 'cam-dot')).toHaveLength(1);
     // a tap on face 1: one new ring node (a new fade), the old one gone, node count unchanged
-    rerender({ id: 1, at: clock });
+    rerender({ person: 1, at: clock });
     frame();
     const ring2 = shown(marker, 'cam-ring');
     expect(ring2).toHaveLength(1);
     expect(ring2[0]).not.toBe(ring[0]);
     expect(marker.childNodes.length).toBe(nodes);
+  });
+
+  it('the ring follows the tapped person, whichever track shows them (camera per-person spec §3.1)', () => {
+    // person 2 re-identified on track 7 after the tap
+    const views = { current: [{ ...view(7, 0.1, false), person: 2 }, view(1, 0.6, true)] };
+    const { marker } = mount(views, { person: 2, at: 1000 });
+    frame();
+    expect(shown(marker, 'cam-ring')[0].style.left).toBe('30px'); // 0.1·300
+    expect(shown(marker, 'cam-dot')[0].style.left).toBe('207px'); // the dot stays on the target's track
   });
 
   it('stops its loop when it has nothing to draw (one face, or 全部套用 without a ring)', () => {

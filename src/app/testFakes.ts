@@ -21,9 +21,15 @@ import type {
   Tracker,
 } from '../types';
 
-/** performance.now() = fake-timer clock + simulated synchronous work (`work(ms)`). */
+/**
+ * performance.now() = fake-timer clock + simulated synchronous work (`work(ms)`). A second clock in the same test (two
+ * loops) adds its work on top of the first: spyOn returns the spy already installed, so its base is the first clock's
+ * implementation, not the spy itself (which would call itself).
+ */
 export function installWorkClock() {
-  const base = performance.now.bind(performance);
+  const installed = performance.now;
+  const prev = vi.isMockFunction(installed) ? installed.getMockImplementation() : undefined;
+  const base: () => number = prev ?? performance.now.bind(performance);
   let extra = 0;
   vi.spyOn(performance, 'now').mockImplementation(() => base() + extra);
   return {

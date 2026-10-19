@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { splitLegacy } from '../edit/legacy';
-import { defaultPhoto, naturalPerson } from '../edit/state';
+import { defaultPhoto, naturalPerson, neutralPerson } from '../edit/state';
 import { applyPreset } from '../engine/params';
 import { adapt } from '../tracking/adapter111';
-import type { CameraLook, DebugState, Face, Prefs, Rect } from '../types';
+import type { CameraLook, DebugState, Face, PersonParams, Prefs, Rect } from '../types';
+import type { LiveTrackView } from './faceTracks';
 import { AUTO_TIER, FACE_EASE_MS } from './liveCore';
-import { type LiveDeps, type LiveStats, autoTierSession, resetAutoTierSession, startLiveLoop } from './live';
+import { LivePersons } from './livePersons';
+import { type LiveDeps, type LiveStats, autoTierSession, liveFrame, resetAutoTierSession, startLiveLoop } from './live';
 import {
   FakeVideo,
   faceOf,
@@ -26,9 +28,18 @@ vi.mock('../tracking/adapter111', () => ({
 }));
 
 const params = applyPreset('natural');
+const look = splitLegacy(params);
+/** a session in which every face is edited with `p` (全部套用 on): the v0.5 tests' one look on every face */
+function editedAll(p: PersonParams): LivePersons {
+  const s = new LivePersons();
+  s.setAll(true);
+  s.edit(p);
+  return s;
+}
 
-function setup(opts: { prefs?: Partial<Prefs>; tracker?: boolean; engineTier?: 'H' | 'M' | 'L'; period?: number; faces?: number } = {}) {
-  let all = false;
+function setup(
+  opts: { prefs?: Partial<Prefs>; tracker?: boolean; engineTier?: 'H' | 'M' | 'L'; period?: number; faces?: number; persons?: LivePersons } = {},
+) {
   const clock = installWorkClock();
   const video = new FakeVideo();
   const camera = fakeCamera(video);
@@ -40,8 +51,8 @@ function setup(opts: { prefs?: Partial<Prefs>; tracker?: boolean; engineTier?: '
     camera,
     engine,
     tracker,
-    getLook: () => splitLegacy(params),
-    getAll: () => all,
+    persons: opts.persons ?? editedAll(look.person),
+    getPhoto: () => look.photo,
     getPrefs: () => p,
     onStats: (s) => stats.push(s),
   };
@@ -57,9 +68,6 @@ function setup(opts: { prefs?: Partial<Prefs>; tracker?: boolean; engineTier?: '
     stats,
     setPrefs(over: Partial<Prefs>) {
       p = { ...p, ...over };
-    },
-    setAll(on: boolean) {
-      all = on;
     },
   };
 }
@@ -125,8 +133,8 @@ describe('frame loop basics', () => {
       camera: fakeCamera(video),
       engine,
       tracker: null,
-      getLook: () => splitLegacy(p),
-      getAll: () => false,
+      persons: new LivePersons(),
+      getPhoto: () => splitLegacy(p).photo,
       getPrefs: () => makePrefs(),
     });
     video.play();
@@ -512,31 +520,108 @@ describe('rVFC watchdog', () => {
   });
 });
 
-describe('live loop on face tracks (S §3.3 Live camera, §3.4 T4)', () => {
-  it('lists every shown track: the auto face at weight 1, the other at 0 (caps only); 全部套用 beautifies both', () => {
-    const { engine, loop, setAll } = setup({ faces: 2 });
-    vi.advanceTimersByTime(600);
-    const input = engine.lastInput()!;
-    expect(input.faces.map((f) => f.weight).sort()).toEqual([0, 1]);
-    expect(input.globalSkin?.weight).toBe(0);
-    setAll(true);
+describe('the live loop on persons (camera per-person spec §8, §7.5)', () => {
+  const fresh = () => new LivePersons();
+  it('each face renders its own person: the edited one at its params, the untouched one at 原圖 and weight 0', () => {
+    const persons = fresh();
+    const { engine, loop } = setup({ faces: 2, persons });
     vi.advanceTimersByTime(300);
-    expect(engine.lastInput()!.faces.map((f) => f.weight)).toEqual([1, 1]);
+    const right = loop.tracks().find((v) => v.box.x > 0.5)!;
+    persons.write([right.person], naturalPerson());
+    vi.advanceTimersByTime(300);
+    const [a, b] = engine.lastInput()!.faces;
+    expect(a).toMatchObject({ weight: 1, person: naturalPerson() });
+    expect(b).toMatchObject({ weight: 0, person: neutralPerson() });
+    expect(engine.lastInput()!.globalSkin).toEqual({ smooth: 0, rosy: 0, weight: 0 });
     loop.stop();
   });
-  it('select pins a track; capture returns the beautified raw box centre, or all', () => {
-    const { loop, setAll } = setup({ faces: 2 });
+  it('基本模式 draws the ambient person on all skin; with a tracker the global skin is 原圖 (§3.6, K11)', () => {
+    const persons = fresh();
+    persons.setAmbient(naturalPerson());
+    const basic = setup({ tracker: false, persons });
+    vi.advanceTimersByTime(100);
+    expect(basic.engine.lastInput()!.globalSkin).toMatchObject({ smooth: naturalPerson().values['skin.smooth'], weight: 1 });
+    basic.loop.stop();
+  });
+  it('liveFrame orders present edited faces first, then present, then held, cut at MAX_RENDER_FACES', () => {
+    const persons = fresh();
+    const ids = Array.from({ length: 12 }, () => persons.claim({ x: 0.4, y: 0.4, w: 0.1, h: 0.1 }, 16 / 9, 0));
+    persons.write(ids.filter((id) => id % 2 === 1), naturalPerson());
+    const view = (id: number): LiveTrackView => ({
+      id, person: id, box: { x: 0.4, y: 0.4, w: 0.1, h: 0.1 }, rawBox: { x: 0.4, y: 0.4, w: 0.1, h: 0.1 }, face: makeFace(id),
+      weight: 0, presence: 1, edited: persons.edited(id), selected: false, present: id > 4, seen: 0, view: 'video',
+    });
+    const f = liveFrame(ids.map(view), 1, look.photo, persons);
+    expect(f.faces.map((x) => x.face.pts111[0])).toEqual([5, 7, 9, 11, 6, 8, 10, 12, 1, 2]);
+    expect(f.faces[0].person).toEqual(naturalPerson());
+    expect(f.faces[4].person).toEqual(neutralPerson());
+  });
+  it('pause and stop release the tracks into the away pool; the next live frame re-identifies them in place', () => {
+    const persons = fresh();
+    const { camera, loop } = setup({ persons });
+    vi.advanceTimersByTime(300);
+    const p = loop.tracks()[0].person;
+    persons.write([p], naturalPerson());
+    camera.set({ state: 'interrupted' });
+    vi.advanceTimersByTime(20_000);
+    camera.set({ state: 'live' });
+    vi.advanceTimersByTime(100);
+    expect(loop.tracks()[0].person).toBe(p);
+    loop.stop();
+    const again = setup({ persons });
+    vi.advanceTimersByTime(100);
+    expect(again.loop.tracks()[0].person).toBe(p);
+    again.loop.stop();
+  });
+  it.each([true, false])('Review Focus #1: a flip (session ended first: %s) never hands a front-camera person to the back camera', (ended) => {
+    const persons = fresh();
+    const { camera, loop } = setup({ persons });
+    vi.advanceTimersByTime(300);
+    persons.write([loop.tracks()[0].person], naturalPerson());
+    if (ended) persons.clear();
+    camera.set({ state: 'starting' });
+    camera.set({ state: 'live', facing: 'environment' });
+    vi.advanceTimersByTime(300);
+    expect(persons.edited(loop.tracks()[0].person)).toBe(false);
+    loop.stop();
+  });
+  it('select pins a person; capture hands over every edited person in view and the seed of the target, or all', () => {
+    const persons = fresh();
+    const { loop } = setup({ faces: 2, persons });
     vi.advanceTimersByTime(600);
     const right = loop.tracks().find((t) => t.box.x > 0.5)!;
-    expect(loop.hitTest(right.box.x + right.box.w / 2, 0.5, 0.01, 0.01)).toBe(right.id);
-    loop.select(right.id);
-    expect(loop.selection()).toBe(right.id);
+    expect(loop.hitTest(right.box.x + right.box.w / 2, 0.5, 0.01, 0.01)).toBe(right.person);
+    loop.select(right.person);
+    expect(loop.selection()).toBe(right.person);
+    persons.edit(naturalPerson());
     vi.advanceTimersByTime(300);
-    expect(loop.capture()!.seed).toEqual({ x: right.rawBox.x + right.rawBox.w / 2, y: right.rawBox.y + right.rawBox.h / 2 });
-    setAll(true);
+    const shot = loop.capture()!;
+    const now = loop.tracks().find((t) => t.person === right.person)!;
+    expect(shot.seed).toEqual({ x: now.rawBox.x + now.rawBox.w / 2, y: now.rawBox.y + now.rawBox.h / 2 });
+    expect(shot.persons).toEqual([{ rawBox: now.rawBox, params: naturalPerson() }]);
+    persons.setAll(true);
     expect(loop.capture()!.seed).toBe('all');
     loop.stop();
   });
+  it('debug: boxes carry c{n} and edited; selected is the target track; passes are the last frame’s; LiveStats.target is emitted at once', () => {
+    const persons = fresh();
+    const { loop, stats, engine } = setup({ faces: 2, persons });
+    engine.render.mockImplementation((i) => ({ cpuMs: 0, width: i.width, height: i.height, passes: ['composite'] }));
+    vi.advanceTimersByTime(600);
+    const d = dbg()!;
+    expect(d.boxes.map((b) => [b.person, b.edited])).toEqual(loop.tracks().map((t) => [`c${t.person}`, false]));
+    const sel = loop.tracks().find((t) => t.selected)!;
+    expect(d.selected).toBe(`t${sel.id}`);
+    expect(d.passes).toEqual(['composite']);
+    const n = stats.length;
+    loop.select(loop.tracks().find((t) => !t.selected)!.person);
+    vi.advanceTimersByTime(34);
+    expect(stats.slice(n).some((s) => s.target !== stats[n - 1].target)).toBe(true);
+    loop.stop();
+  });
+});
+
+describe('live loop on face tracks (S §3.3 Live camera, §3.4 T4)', () => {
   it('LiveStats.faces counts the shown tracks', () => {
     const { stats, loop } = setup({ faces: 2 });
     vi.advanceTimersByTime(600);
@@ -592,8 +677,8 @@ describe('調節 and 質感 in the live loop (step-2 spec §2.3, §4.4–4.5)', 
       camera: fakeCamera(video),
       engine,
       tracker: null,
-      getLook: () => look,
-      getAll: () => false,
+      persons: new LivePersons(),
+      getPhoto: () => look.photo,
       getPrefs: () => makePrefs(),
       getFrame: () => frame,
     });
@@ -622,7 +707,7 @@ describe('調節 and 質感 in the live loop (step-2 spec §2.3, §4.4–4.5)', 
     const video = new FakeVideo();
     const engine = fakeEngine(clock);
     const look = lookWith({ filterId: 'warm', look: { id: 'ccd', amount: 0.8 } });
-    const loop = startLiveLoop({ camera: fakeCamera(video), engine, tracker: null, getLook: () => look, getAll: () => false, getPrefs: () => makePrefs() });
+    const loop = startLiveLoop({ camera: fakeCamera(video), engine, tracker: null, persons: new LivePersons(), getPhoto: () => look.photo, getPrefs: () => makePrefs() });
     video.play();
     vi.advanceTimersByTime(33 * 5 + 1);
     expect(engine.loadLut.mock.calls.filter(([k, id]) => k === 'filter' && id === 'warm')).toHaveLength(1);

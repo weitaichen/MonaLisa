@@ -325,7 +325,8 @@ describe('camera look meiyan.look.v1 (RM §3.7, C3)', () => {
     const p = setParam(applyPreset('glow', 1), 'skin.whiten', 0.9);
     store.setItem(PARAMS_KEY, JSON.stringify(p));
     const look = loadLook();
-    expect(look).toEqual(splitLegacy(p));
+    // K15: the migrated person look is not kept (camera per-person spec §9)
+    expect(look).toEqual({ ...splitLegacy(p), person: neutralPerson() });
     expect(JSON.parse(store.getItem(LOOK_KEY)!)).toEqual(look);
     expect(JSON.parse(store.getItem(PARAMS_KEY)!)).toEqual(p);
     // the next launch reads the migrated look back unchanged
@@ -334,11 +335,10 @@ describe('camera look meiyan.look.v1 (RM §3.7, C3)', () => {
   it('round-trips and sanitizes', () => {
     const look = splitLegacy(applyPreset('refined', 0.4));
     saveLook(look);
-    expect(loadLook()).toEqual(look);
+    expect(loadLook()).toEqual({ ...look, person: neutralPerson() });
     store.setItem(LOOK_KEY, JSON.stringify({ photo: { filterId: 'nope' }, person: { values: { 'skin.smooth': 7 } } }));
     const s = loadLook();
     expect(s.photo.filterId).toBe('none');
-    expect(s.person.values['skin.smooth']).toBe(1);
   });
   it('a fresh install gets the 原圖 look (2026-10-18); hasSavedSettings sees the new key', () => {
     expect(loadLook()).toEqual(neutralLook());
@@ -374,7 +374,7 @@ describe('camera look meiyan.look.v1 (RM §3.7, C3)', () => {
   it('a stored look keeps what it holds; a field it lacks (or junk) is 原圖, never 自然', () => {
     const glow = splitLegacy(applyPreset('glow', 1));
     saveLook(glow);
-    expect(loadLook()).toEqual(glow);
+    expect(loadLook()).toEqual({ ...glow, person: neutralPerson() });
     for (const raw of ['{}', 'null', '{"photo":7,"person":"x"}']) {
       store.setItem(LOOK_KEY, raw);
       const l = loadLook();
@@ -384,8 +384,13 @@ describe('camera look meiyan.look.v1 (RM §3.7, C3)', () => {
     store.setItem(LOOK_KEY, JSON.stringify({ photo: { values: { 'skin.whiten': 0.4 } }, person: { values: { 'skin.smooth': 0.7 } } }));
     expect(loadLook().photo.values['skin.whiten']).toBe(0.4);
     expect(loadLook().photo.values['skin.sharpen']).toBe(0);
-    expect(loadLook().person.values['skin.smooth']).toBe(0.7);
-    expect(loadLook().person.values['shape.faceSlim']).toBe(0);
+  });
+  it('K15: the stored person is never read; every save writes it as 原圖; the photo part round-trips', () => {
+    const glow = splitLegacy(applyPreset('glow', 1));
+    store.setItem(LOOK_KEY, JSON.stringify(glow));
+    expect(loadLook()).toEqual({ photo: glow.photo, person: neutralPerson() });
+    saveLook(glow);
+    expect(JSON.parse(store.getItem(LOOK_KEY)!).person).toEqual(neutralPerson());
   });
 });
 

@@ -6,11 +6,11 @@ import { cameraTapAction, ChipGate, coverTapUv } from '../../app/faceTracks';
 import type { LiveLoop, LiveStats } from '../../app/live';
 import type { LivePersonId } from '../../app/livePersons';
 import type { CameraController, CameraSnapshot, EditState } from '../../types';
-import { lensFor, LIVE_PERSONS, type PersonInfo } from '../../edit/lens';
+import { lensFor, LIVE_PERSONS, type Lens, type PersonInfo } from '../../edit/lens';
 import { cameraScreenSwap } from '../../edit/sides';
-import { cameraEdit, LIVE, lookOf } from '../../edit/state';
+import { cameraEdit, LIVE, neutralPerson, personOf } from '../../edit/state';
 import { cameraErrorCopy } from '../cameraErrors';
-import { cameraSession, endCameraSession } from '../cameraSession';
+import { beginDrag, cameraSession, endCameraSession, keepDrag, panelPerson, writePerson, type CameraDrag } from '../cameraSession';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
 import { CameraFaceMarker } from '../components/CameraFaceMarker';
 import { CanvasHost } from '../components/CanvasHost';
@@ -74,12 +74,43 @@ export function Camera() {
 
   const lookRef = useRef(look);
   lookRef.current = look;
+  /** the camera session: every person's params, the selection, 全部套用 (camera per-person spec §3.11, §5.1) */
+  const session = cameraSession();
+  /** the slider drag in progress: it writes the persons it started on until it commits (§3.2, Review Focus #3) */
+  const drag = useRef<CameraDrag | null>(null);
+  /** LiveStats.personsVersion, and every panel write: a target or param change re-renders the panel */
+  const [, setPersonsTick] = useState(0);
   /** the camera is one person, 'live' (RM §3.7): the panel uses the editor's lens and code */
   // 左／右 follow the tracked face through the preview mirror (S5 §3.4): a front ↔ back flip, or the face turned upside
   // down, re-maps the side chips on the next render (S5 §7)
   const livePersons: PersonInfo[] = [{ ...LIVE_PERSONS[0], screenSwap: cameraScreenSwap(snap?.facing ?? 'user', gpLeft) }];
-  const lensOf = (l: typeof look) => lensFor(cameraEdit(l.photo, l.person), { kind: 'person', id: LIVE }, livePersons, LIVE);
-  const setEdit = (e: EditState) => setLook(lookOf(e));
+  /**
+   * the panel's lens (§3.2): the photo look over one person, 'live', holding the target's params (a drag's lead while it
+   * runs; 基本模式: the session's ambient person, §3.6). It reads `ready`, so the render calls it below that line.
+   */
+  const lensOf = (l: typeof look): Lens => {
+    const basic = !!bundle?.basic;
+    const person = basic ? session.ambient : panelPerson(session, drag.current);
+    // noFace does not read trackerHealth: with no face shown there is no target, so a person slider would write nobody
+    // and snap back; while the tracker restarts its badge says why
+    return lensFor(cameraEdit(l.photo, person), { kind: 'person', id: LIVE }, livePersons, LIVE, {
+      camera: { shown: shownFaces, all: cameraAll, noFace: !basic && ready && shownFaces === 0, target: drag.current?.lead ?? session.target() },
+    });
+  };
+  /**
+   * a panel edit against the lens it was made on (`from`): the photo part to the look (meiyan.look.v1, its person 原圖,
+   * K15), the person part to the drag's persons or the target (全部套用: everyone in view), 基本模式 to the ambient person
+   */
+  const setEdit = (e: EditState, from: Lens = lensOf(lookRef.current)) => {
+    if (e.photo !== from.edit.photo) setLook({ photo: e.photo, person: neutralPerson() });
+    const person = personOf(e, LIVE);
+    if (person !== personOf(from.edit, LIVE)) {
+      if (bundle?.basic) session.setAmbient(person);
+      else writePerson(session, person, drag.current);
+    }
+    // a write re-renders the panel whether or not a loop runs (基本模式 before the stream is live included)
+    setPersonsTick(session.version);
+  };
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
   const countTimer = useRef(0);
@@ -130,6 +161,8 @@ export function Camera() {
     const onStats = (s: LiveStats) => {
       setShownFaces(s.faces);
       setGpLeft(s.gpLeftOnLeft);
+      // the target or someone's params changed (a tap, a re-identification, the auto pick): the panel re-reads (§3.2)
+      setPersonsTick(s.personsVersion);
       setChip(chipGate.current.update(s.faces, app.get().cameraAll, performance.now()));
       if (s.face === lastFace) return;
       lastFace = s.face;
@@ -198,6 +231,7 @@ export function Camera() {
     clearInterval(countTimer.current);
     // ✕ ends the camera session first, so the stopping loop's releases are dropped (Review Focus #1)
     endCameraSession();
+    drag.current = null;
     stopCamera();
     go({ name: 'home' });
   };
@@ -293,6 +327,7 @@ export function Camera() {
     haptic();
     // another camera, another scene: the session ends before the old stream stops (Review Focus #1, §3.11)
     endCameraSession();
+    drag.current = null;
     ctrl.flip().catch((e: unknown) => setStartErr(reportError(e, 'camera.flip')));
   };
 
@@ -323,12 +358,23 @@ export function Camera() {
     setRing({ person: a.id, at: performance.now() });
   };
 
-  const binding = sliderFor(lensOf(look), sel, cameraBody);
+  // above the lens: lensOf and keepDrag read them (a const read before its line throws)
   const state = snap?.state ?? 'idle';
   const ready = !!loop && live && !lost;
   // basic mode only: the live no-face state comes and goes (the badge covers it), the panel must not flicker
   const faceNote = ready && bundle?.basic ? '基本模式不支援臉型與美妝' : null;
   const faceOff = !!faceNote && FACE_TABS.includes(sel.tab);
+  let lens = lensOf(look);
+  let binding = sliderFor(lens, sel, cameraBody);
+  // SliderRow drops its drag without onCommit when its key changes or it unmounts (Slider.tsx), in this same render: a
+  // dropped drag never writes again (Review Focus #3). The lens and the binding are then read again on the session's
+  // target, so the row and the next beginDrag agree on the key
+  const kept = keepDrag(drag.current, ready && !collapsed && !faceOff ? (binding?.key ?? null) : null);
+  if (kept !== drag.current) {
+    drag.current = kept;
+    lens = lensOf(look);
+    binding = sliderFor(lens, sel, cameraBody);
+  }
   // the 美妝 note (S5 §2.5): no closed-eye or small-face note in the camera, they change every frame
   const mkNote = makeupNote(sel, { lensClosed: false, lashesClosed: false, lashesSmall: false, procFailed: !!bundle?.engine.procMakeupFailed });
 
@@ -454,8 +500,20 @@ export function Camera() {
           <SliderRow
             float
             binding={faceOff ? null : binding}
-            onChange={(v) => binding && setEdit(binding.apply(lensOf(lookRef.current), v))}
-            onCommit={(v) => binding && setEdit(binding.apply(lensOf(lookRef.current), v))}
+            onChange={(v) => {
+              if (!binding) return;
+              // the drag's first change fixes whom it writes (the target, 全部套用: everyone in view) until it commits
+              drag.current ??= beginDrag(session, binding.key);
+              const l = lensOf(lookRef.current);
+              setEdit(binding.apply(l, v), l);
+            }}
+            onCommit={(v) => {
+              if (binding) {
+                const l = lensOf(lookRef.current);
+                setEdit(binding.apply(l, v), l);
+              }
+              drag.current = null;
+            }}
             onSel={setSel}
           />
         )}
@@ -480,10 +538,10 @@ export function Camera() {
 
       <BeautyPanel
         id="beauty-panel"
-        lens={lensOf(look)}
+        lens={lens}
         sel={sel}
         onSel={setSel}
-        onEdit={setEdit}
+        onEdit={(e) => setEdit(e, lens)}
         collapsed={collapsed}
         faceNote={faceNote}
         body={cameraBody}

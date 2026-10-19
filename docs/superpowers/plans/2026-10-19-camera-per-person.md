@@ -871,7 +871,7 @@ cd /d/GitSource/MonaLisa && git add src/config src/app/faceTracks.ts src/app/fac
   export function writePerson(s: LivePersons, p: PersonParams, drag: CameraDrag | null): void; // s.edit(p, drag?.ids)
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `src/ui/cameraSession.test.ts`:
 
@@ -946,12 +946,12 @@ it('K15: the stored person is never read; every save writes it as 原圖; the ph
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cd /d/GitSource/MonaLisa && npx vitest run src/ui/cameraSession.test.ts src/store/settings.test.ts`
 Expected: FAIL — `beginDrag` not exported; the stored person still read.
 
-- [ ] **Step 3: Implement the drag helpers, K15 and the Camera wiring**
+- [x] **Step 3: Implement the drag helpers, K15 and the Camera wiring**
 
 - `cameraSession.ts`: the four functions of the Interfaces block.
 - `settings.ts`: `sanitizeLook(raw)` returns `{ photo: sanitizePhoto(r.photo), person: neutralPerson() }`; `saveLook` writes it; the legacy migration (`:71-73`) writes `sanitizeLook(look)`. Doc comment cites K15 and §9.
@@ -964,22 +964,22 @@ Expected: FAIL — `beginDrag` not exported; the stored person still read.
   - `SliderRow`: `onChange(v)`: `drag.current ??= beginDrag(session, binding.key)`, then apply; `onCommit(v)`: apply, then `drag.current = null`.
 - `state.ts` comments: `look` holds the photo look (its `person` stays 原圖, K15); `cameraAll` resets with the camera session (`endCameraSession`).
 
-- [ ] **Step 4: Run the unit tests**
+- [x] **Step 4: Run the unit tests**
 
 Run: `cd /d/GitSource/MonaLisa && npx vitest run src/ui src/store && npm run typecheck`
 Expected: PASS; typecheck 0.
 
-- [ ] **Step 5: Update the e2e specs changed on purpose**
+- [x] **Step 5: Update the e2e specs changed on purpose**
 
 `tests/e2e/camera-group.spec.ts` (first test): after the three faces are found, 一鍵 › 自然 now edits and pins the auto target (the largest, A); 美白 / 銳化 to 0 as before. Tap B: `selected` is B; B is 原圖 until edited, so apply 一鍵 › 自然 to B and set 美白 / 銳化 back to 0 (the preset's photo part re-applies them to the whole frame; the same `ArrowLeft` loop as `:50-56`), then assert `regionDiff(original, beautified, gb.rect).inside > 0.5` (B adjusted), the same `> 0.5` for A (A keeps its result, U3), and `< 0.3` for C (untouched). 全部套用: the chip copies B's params to everyone, so C's region now differs (`> 0.5`); a tap on C turns it off and selects C, and C's region still differs (nobody reverts). The hand-over part (B selected → 編輯 selects B) is unchanged.
 `tests/e2e/original.spec.ts`: the poll at `:200-202` reads `JSON.parse(localStorage.getItem('meiyan.look.v1')).photo.values['skin.whiten']` (`1`) and `person.preset.id` (`'original'`); `:248` expects `'original'`.
 
-- [ ] **Step 6: Run the camera e2e specs**
+- [x] **Step 6: Run the camera e2e specs**
 
 Run: `cd /d/GitSource/MonaLisa && npm run build && npx playwright test tests/e2e/camera.spec.ts tests/e2e/original.spec.ts --project chromium && npx playwright test tests/e2e/camera-group.spec.ts --project chromium-group`
 Expected: all pass (the original.spec camera test still opens the shot at 原圖: the hand-over lands in Task 11).
 
-- [ ] **Step 7: Commit** (CRLF check on `Camera.tsx`, `state.ts`)
+- [x] **Step 7: Commit** (CRLF check on `Camera.tsx`, `state.ts`)
 
 ```bash
 cd /d/GitSource/MonaLisa && git add src/ui/cameraSession.ts src/ui/cameraSession.test.ts src/ui/screens/Camera.tsx src/store/settings.ts src/store/settings.test.ts src/ui/state.ts tests/e2e/camera-group.spec.ts tests/e2e/original.spec.ts && git commit -m "camera per-person: the panel edits the selected person (drag keeps its target), 全部套用 copies, meiyan.look.v1 keeps only the photo look (K15)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat

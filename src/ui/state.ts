@@ -69,7 +69,10 @@ export type Sheet = null | 'settings' | 'credits';
 export interface AppState {
   screen: Screen;
   sheet: Sheet;
-  /** live-camera look (persisted as meiyan.look.v1); the editor keeps its own per-photo edit */
+  /**
+   * the live camera's photo look (persisted as meiyan.look.v1); its `person` stays 原圖 (K15: each camera person's
+   * params live in the camera session, ui/cameraSession.ts, camera per-person spec §9); the editor keeps its own edit
+   */
   look: CameraLook;
   prefs: Prefs;
   ratio: Ratio;
@@ -81,7 +84,10 @@ export interface AppState {
   saveFallbackName: string | null;
   /** blocking work in progress (e.g. decoding an imported photo) */
   busy: string | null;
-  /** 全部套用 (S §2.5): in memory only, false at app start, kept across Review and retakes */
+  /**
+   * 全部套用 (S §2.5, camera per-person spec §3.4): in memory only, false at app start, kept across Review and retakes;
+   * off when the camera session ends (endCameraSession: ✕, a flip)
+   */
   cameraAll: boolean;
 }
 

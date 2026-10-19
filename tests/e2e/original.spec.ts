@@ -191,15 +191,21 @@ test('an upgrader without a saved camera look starts the camera at 原圖; a cam
   ).toEqual([null, null, true]);
   await page.getByRole('tab', { name: '一鍵', exact: true }).click();
   await expect(page.getByRole('option', { name: '原圖', exact: true })).toHaveAttribute('aria-selected', 'true');
-  // a camera look the user set: 自然 and 美白 100 (saved, debounced 300 ms)
+  // a camera look the user set: 自然 on the face and 美白 100 on the frame. meiyan.look.v1 saves the photo look
+  // (debounced 300 ms); its person part stays 原圖, the face's 自然 lives in the camera session (K15)
   await page.getByRole('option', { name: '自然', exact: true }).click();
   await page.getByRole('tab', { name: '美膚', exact: true }).click();
   await page.getByRole('option', { name: '美白', exact: true }).click();
   await dragSlider(page, 400);
   await expect(page.getByRole('slider')).toHaveAttribute('aria-valuenow', '100');
   await expect
-    .poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('meiyan.look.v1') ?? '{}').person?.preset?.id ?? null))
-    .toBe('natural');
+    .poll(() =>
+      page.evaluate(() => {
+        const l = JSON.parse(localStorage.getItem('meiyan.look.v1') ?? '{}');
+        return [l.photo?.values?.['skin.whiten'] ?? null, l.person?.preset?.id ?? null];
+      }),
+    )
+    .toEqual([1, 'original']);
   // it draws the live preview
   const frame = page.locator('.cam-stage .frame');
   await page.waitForTimeout(800);
@@ -242,8 +248,8 @@ test('an upgrader without a saved camera look starts the camera at 原圖; a cam
   expect(d.max).toBe(0);
   await expectOriginalPanel(page);
   expect(models, 'no segmenter and no 美體 model on the hand-over').toEqual({ segmenter: 0, pose: 0 });
-  // the camera look is still the user's
+  // the photo look is still the user's; the person part is stored as 原圖 (K15)
   const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('meiyan.look.v1') ?? 'null'));
   expect(stored?.photo?.values?.['skin.whiten']).toBe(1);
-  expect(stored?.person?.preset?.id).toBe('natural');
+  expect(stored?.person?.preset?.id).toBe('original');
 });

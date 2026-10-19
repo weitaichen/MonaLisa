@@ -10,6 +10,7 @@ import type { CameraController, CameraSnapshot, EditState, Facing } from '../../
 import { lensFor, LIVE_PERSONS, type Lens, type PersonInfo } from '../../edit/lens';
 import { cameraScreenSwap } from '../../edit/sides';
 import { cameraEdit, LIVE, neutralPerson, personOf } from '../../edit/state';
+import { takeCameraPersonsHint } from '../../store/settings';
 import { cameraErrorCopy } from '../cameraErrors';
 import { beginDrag, cameraSession, endCameraSession, keepDrag, panelPerson, writePerson, type CameraDrag } from '../cameraSession';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
@@ -24,7 +25,7 @@ import { deps } from '../deps';
 import { openInEditor, pickPhoto } from '../flows';
 import { Icon } from '../icons';
 import { cropImageData, grabOriginalFrame, normalizedCropRect, shotSeed } from '../imaging';
-import { CAMERA_BODY, INITIAL_SELECTION, makeupNote, sliderFor, type BodyContext, type PanelSelection } from '../panelModel';
+import { CAMERA_BODY, INITIAL_SELECTION, makeupNote, photoScoped, sliderFor, type BodyContext, type PanelSelection } from '../panelModel';
 import { haptic, isStandalone } from '../platform';
 import { ensureEngine, getCamera, stopCamera, svc } from '../services';
 import { app, go, RATIO_VALUE, RATIOS, setLook, TIMERS, toast } from '../state';
@@ -94,6 +95,8 @@ export function Camera() {
   const [ring, setRing] = useState<{ person: LivePersonId; at: number } | null>(null);
   /** shown tracks, from LiveStats: redraws the marker when the count changes */
   const [shownFaces, setShownFaces] = useState(0);
+  /** this mount already saw ≥ 2 faces: the one-time hint (§3.1) is asked for once, not on every stats tick */
+  const sawGroup = useRef(false);
   /** LiveStats.gpLeftOnLeft: the tracked face's halves on the unmirrored frame (the 左／右 chips, S5 §3.4) */
   const [gpLeft, setGpLeft] = useState<boolean | null>(null);
 
@@ -189,6 +192,11 @@ export function Camera() {
       // the target or someone's params changed (a tap, a re-identification, the auto pick): the panel re-reads (§3.2)
       setPersonsTick(s.personsVersion);
       setChip(chipGate.current.update(s.faces, app.get().cameraAll, performance.now()));
+      // the first time ≥ 2 faces are shown: 「點選畫面中的臉，可個別調整」 once per install (§3.1, K12)
+      if (s.faces >= 2 && !sawGroup.current) {
+        sawGroup.current = true;
+        if (takeCameraPersonsHint()) toast('點選畫面中的臉，可個別調整', 3200);
+      }
       if (s.face === lastFace) return;
       lastFace = s.face;
       clearTimeout(faceTimer);
@@ -489,6 +497,7 @@ export function Camera() {
               ring={ring}
               all={cameraAll}
               count={shownFaces}
+              dim={photoScoped(sel, lens)}
             />
           )}
           {ready && (chip || cameraAll) && !hold.held && (

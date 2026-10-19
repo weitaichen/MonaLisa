@@ -182,6 +182,17 @@ export function takePersonsHint(): boolean {
   return readJson(PERSONS_HINT_KEY) !== undefined;
 }
 
+/** a UI flag, not a setting (camera per-person spec §3.1, §9) */
+export const CAM_PERSONS_HINT_KEY = 'meiyan.hint.camPersons.v1';
+
+/** The first time the camera shows ≥ 2 faces: 「點選畫面中的臉，可個別調整」 once per install (§3.1): true once, then false. */
+export function takeCameraPersonsHint(): boolean {
+  if (readJson(CAM_PERSONS_HINT_KEY) !== undefined) return false;
+  writeJson(CAM_PERSONS_HINT_KEY, 1);
+  // as takePersonsHint: storage that drops writes would repeat it in every camera session, so only if it stuck
+  return readJson(CAM_PERSONS_HINT_KEY) !== undefined;
+}
+
 // ───────────── full-resolution export: crash breadcrumb, cap and test knob (step-3 spec §3.7) ─────────────
 
 export const EXPORT_GUARD_KEY = 'meiyan.exportGuard.v1';

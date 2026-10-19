@@ -139,12 +139,14 @@ const view = (id: number, x: number, selected: boolean): LiveTrackView =>
     view: 'video',
   }) as LiveTrackView;
 
-function mount(views: { current: LiveTrackView[] }, ring: { person: number; at: number } | null, all = false) {
+function mount(views: { current: LiveTrackView[] }, ring: { person: number; at: number } | null, all = false, dim = false) {
   const root = new FakeElement('div');
   const loop = { tracks: () => views.current } as unknown as LiveLoop;
   const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 300, height: 400 }) } as unknown as HTMLCanvasElement;
   const video = { videoWidth: 300, videoHeight: 400 } as HTMLVideoElement;
-  const el = (r: typeof ring, a = all) => <CameraFaceMarker loop={loop} canvas={canvas} video={video} mirrored={false} ring={r} all={a} count={views.current.length} />;
+  const el = (r: typeof ring, a = all) => (
+    <CameraFaceMarker loop={loop} canvas={canvas} video={video} mirrored={false} ring={r} all={a} count={views.current.length} dim={dim} />
+  );
   act(() => render(el(ring), root as unknown as Element));
   const marker = root.childNodes[0] as FakeElement;
   return { marker, rerender: (r: typeof ring, a = all) => act(() => render(el(r, a), root as unknown as Element)) };
@@ -170,14 +172,14 @@ describe('CameraFaceMarker', () => {
     expect(marker.childNodes.length).toBe(nodes);
     expect(created).toBe(made);
     expect(styleWrites).toBe(0);
-    // the face moves: the same node follows it, and only `left` is written
+    // the face moves: the same node follows it, and only `left` is written (the dot's and the face's bracket's, §3.1)
     views.current = [view(1, 0.2, true), view(2, 0.6, false)];
     frame();
     expect(marker.childNodes.length).toBe(nodes);
     expect(created).toBe(made);
     expect(shown(marker, 'cam-dot')[0]).toBe(dot);
     expect(dot.style.left).toBe('87px');
-    expect(styleWrites).toBe(1);
+    expect(styleWrites).toBe(2);
     // the selection moves to face 2: still the same dot
     views.current = [view(1, 0.2, false), view(2, 0.6, true)];
     frame();
@@ -218,6 +220,38 @@ describe('CameraFaceMarker', () => {
     frame();
     expect(shown(marker, 'cam-ring')[0].style.left).toBe('30px'); // 0.1·300
     expect(shown(marker, 'cam-dot')[0].style.left).toBe('207px'); // the dot stays on the target's track
+  });
+
+  // camera per-person spec §3.1 (K12): faint corner brackets on every shown face, the dot on the target
+  it('brackets: one node per shown face while ≥ 2 are shown and 全部套用 is off, kept across frames, removed with its track', () => {
+    const views = { current: [view(1, 0.1, true), view(2, 0.6, false), view(3, 0.35, false)] };
+    const { marker } = mount(views, null);
+    frame();
+    const brackets = shown(marker, 'cam-bracket');
+    expect(brackets).toHaveLength(3);
+    expect(brackets[0].style).toMatchObject({ left: '30px', top: '120px', width: '60px', height: '120px' });
+    const made = created;
+    for (let i = 0; i < 10; i++) frame();
+    expect(created).toBe(made);
+    views.current = views.current.slice(0, 2);
+    frame();
+    expect(shown(marker, 'cam-bracket')).toHaveLength(2);
+    expect(shown(marker, 'cam-dot')).toHaveLength(1);
+  });
+
+  it('no brackets with one face or under 全部套用 (no dot either); dim puts the layer at 30 %', () => {
+    const one = mount({ current: [view(1, 0.1, true)] }, null);
+    frame();
+    expect(shown(one.marker, 'cam-bracket')).toHaveLength(0);
+    const all = mount({ current: [view(1, 0.1, true), view(2, 0.6, false)] }, null, true);
+    frame();
+    expect([shown(all.marker, 'cam-bracket').length, shown(all.marker, 'cam-dot').length]).toEqual([0, 0]);
+    // Preact sets `class` as an attribute on this DOM stand-in (FakeElement has no `class` property)
+    expect(all.marker.getAttribute('class')).toBe('cam-marker');
+    const dimmed = mount({ current: [view(1, 0.1, true), view(2, 0.6, false)] }, null, false, true);
+    frame();
+    expect(dimmed.marker.getAttribute('class')).toBe('cam-marker dim');
+    expect(shown(dimmed.marker, 'cam-bracket')).toHaveLength(2);
   });
 
   it('stops its loop when it has nothing to draw (one face, or 全部套用 without a ring)', () => {

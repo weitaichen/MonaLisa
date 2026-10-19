@@ -21,6 +21,20 @@ async function camGeom(page: Page, id: string) {
     };
   }, b);
 }
+/** every toast text shown from now on (the camera hint lasts 3.2 s, the 3-face poll can outlive it) */
+const watchToasts = (page: Page) =>
+  page.evaluate(() => {
+    const w = window as unknown as { __toasts: string[] };
+    w.__toasts = [];
+    const scan = () => {
+      for (const el of document.querySelectorAll('.toast')) {
+        const t = (el.textContent ?? '').trim();
+        if (t && w.__toasts.at(-1) !== t) w.__toasts.push(t);
+      }
+    };
+    new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+const toastsSeen = (page: Page): Promise<string[]> => page.evaluate(() => (window as unknown as { __toasts: string[] }).__toasts);
 const byX = async (page: Page) => [...(await debugState(page)).boxes].sort((a, b) => b.x - a.x).map((b) => b.id); // mirrored: screen left → right
 
 /** a photo-level look of zero (美白, 銳化 to 0), so an untouched face is untouched pixel for pixel */
@@ -37,10 +51,16 @@ async function zeroPhotoLook(page: Page) {
 // camera per-person spec §12.2 (changed on purpose): every face renders its own person's params, 全部套用 copies
 test('three faces, one person at a time: 自然 edits and pins the largest (A); tap B and edit B: A keeps its result, C stays 原圖; 全部套用 copies B to everyone; a tap on C turns it off, nobody reverts; the hand-over selects B', async ({ page }) => {
   await page.goto('/');
+  await watchToasts(page);
   await page.getByRole('button', { name: /拍攝/ }).click();
   await page.getByRole('button', { name: '點擊開啟相機' }).click();
   await expect.poll(async () => (await debugState(page)).faces, { timeout: 120_000, intervals: [500] }).toBe(3);
-  // the face marker keeps its nodes across frames: one dot above the beautified face, the same node every frame
+  // the first time ≥ 2 faces are shown: the one-time hint (§3.1)
+  await expect.poll(() => toastsSeen(page)).toContain('點選畫面中的臉，可個別調整');
+  // 美膚 › 磨皮 is a person item: the marker is not dimmed
+  await expect(page.locator('.cam-marker')).toHaveAttribute('class', 'cam-marker');
+  // the face marker keeps its nodes across frames: one dot above the target's face and one bracket per face (§3.1,
+  // K12), the same nodes every frame
   const marker = await page.evaluate(async () => {
     const m = document.querySelector('.cam-marker')!;
     const seen = new Set<Element>();
@@ -53,13 +73,15 @@ test('three faces, one person at a time: 自然 edits and pins the largest (A); 
     const dots = Array.from(m.querySelectorAll<HTMLElement>('.cam-dot')).filter((d) => d.style.display !== 'none');
     return { nodes: seen.size, most, dots: dots.length };
   });
-  expect(marker).toEqual({ nodes: 1, most: 1, dots: 1 });
+  expect(marker).toEqual({ nodes: 4, most: 4, dots: 1 });
   // the camera starts at 原圖 (2026-10-18); 一鍵 › 自然 edits the auto target, the largest face (A), and pins it (K9)
   await page.getByRole('tab', { name: '一鍵' }).click();
   await page.getByRole('option', { name: '自然', exact: true }).click();
   await expect(page.getByRole('option', { name: '自然', exact: true })).toHaveAttribute('aria-selected', 'true');
   // the preset's photo part goes to the whole frame: zero it
   await zeroPhotoLook(page);
+  // 美膚 › 銳化 is photo-level: brackets and dot dim to 30 % (S A11)
+  await expect(page.locator('.cam-marker')).toHaveAttribute('class', 'cam-marker dim');
   const boxes = (await debugState(page)).boxes;
   const largest = [...boxes].sort((a, b) => b.w * b.h - a.w * a.h)[0].id;
   expect((await debugState(page)).selected).toBe(largest);

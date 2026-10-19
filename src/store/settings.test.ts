@@ -4,6 +4,7 @@ import { splitLegacy } from '../edit/legacy';
 import { neutralLook, neutralPerson } from '../edit/state';
 import type { Prefs } from '../types';
 import {
+  CAM_PERSONS_HINT_KEY,
   clearExportCap,
   clearExportGuard,
   consumeExportGuardAtLaunch,
@@ -31,6 +32,7 @@ import {
   saveParams,
   savePrefs,
   SEEN_MAKEUP_PARTS_KEY,
+  takeCameraPersonsHint,
   takePersonsHint,
   VERSION_KEY,
   writeExportGuard,
@@ -404,6 +406,24 @@ describe('first group photo hint (S §1.1 item 11)', () => {
     // storage that cannot keep the flag would repeat the hint on every photo: never shown there
     stubThrowingGetter();
     expect(takePersonsHint()).toBe(false);
+  });
+});
+
+describe('camera persons hint (camera per-person spec §3.1)', () => {
+  it('is true exactly once per install, under its own key (the photo hint does not take it)', () => {
+    expect(takePersonsHint()).toBe(true);
+    expect(takeCameraPersonsHint()).toBe(true);
+    expect(store.getItem(CAM_PERSONS_HINT_KEY)).not.toBeNull();
+    expect(CAM_PERSONS_HINT_KEY).toBe('meiyan.hint.camPersons.v1');
+    expect(takeCameraPersonsHint()).toBe(false);
+  });
+
+  it('is false when storage drops writes (private mode would repeat it on every camera session)', () => {
+    vi.spyOn(store, 'setItem').mockImplementation(() => undefined);
+    expect(takeCameraPersonsHint()).toBe(false);
+    expect(takeCameraPersonsHint()).toBe(false);
+    stubThrowingGetter();
+    expect(takeCameraPersonsHint()).toBe(false);
   });
 });
 

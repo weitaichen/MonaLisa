@@ -1640,7 +1640,7 @@ cd /d/GitSource/MonaLisa && git add src/app/faceTracks.ts src/app/faceTracks.tes
   export function takeCameraPersonsHint(): boolean; // true once per install (as takePersonsHint, :174-179)
   ```
 
-- [ ] **Step 1: Write the failing tests** (`CameraFaceMarker.test.tsx`)
+- [x] **Step 1: Write the failing tests** (`CameraFaceMarker.test.tsx`)
 
 ```ts
 it('brackets: one node per shown face while ≥ 2 are shown and 全部套用 is off, kept across frames, removed with its track', () => {
@@ -1678,17 +1678,19 @@ it('no brackets with one face or under 全部套用 (no dot either); dim puts th
 
 `settings.test.ts`: `takeCameraPersonsHint()` is true once, then false; false when storage drops writes.
 
-- [ ] **Step 2: Run to verify they fail** — `npx vitest run src/ui/components/CameraFaceMarker.test.tsx src/store/settings.test.ts` → FAIL.
+- [x] **Step 2: Run to verify they fail** — `npx vitest run src/ui/components/CameraFaceMarker.test.tsx src/store/settings.test.ts` → FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `MarkerNodes` gains `showBrackets(boxes: Map<TrackId, PxBox> | null)`: one `<i class="cam-bracket">` per track id holding four corner `<i class="br tl|tr|bl|br-r">` children made once, styles written through `set()` (only on change), nodes of vanished ids removed, all hidden when `null`. Brackets show while `views.length >= 2 && !all`; the rAF loop keeps running while brackets, the dot or the ring show (`:121`). The root is `<div class={\`cam-marker${dim ? ' dim' : ''}\`}>`. CSS: `.cam-bracket` is the editor's `.face-box` corner shape (`theme.css:2668-2687`) at `opacity: .4`; `.cam-marker.dim { opacity: .3 }`. `Camera.tsx`: `dim={photoScoped(sel, lensOf(look))}`; in `onStats`, the first time `s.faces >= 2` in this mount, `if (takeCameraPersonsHint()) toast('點選畫面中的臉，可個別調整', 3200)`.
 
-- [ ] **Step 4: Update `camera-group.spec.ts:31-44`**: the marker holds one dot plus one bracket per face: `expect(marker).toEqual({ nodes: 4, most: 4, dots: 1 })`.
+- [x] **Step 4: Update `camera-group.spec.ts:31-44`**: the marker holds one dot plus one bracket per face: `expect(marker).toEqual({ nodes: 4, most: 4, dots: 1 })`.
 
-- [ ] **Step 5: Run** — `npx vitest run src/ui src/store && npm run typecheck && npm run build && npx playwright test tests/e2e/camera-group.spec.ts --project chromium-group` → PASS.
+*As executed:* the existing marker test "keeps one dot node…" now expects 2 style writes when face 1 moves (the dot's `left` and its bracket's `left`), not 1. The corner rules are shared (`.face-box .br, .cam-bracket .br`, and the four corner selectors) rather than copied; `.cam-marker` gains the editor layer's `transition: opacity 200ms`. `Camera.tsx` passes `dim={photoScoped(sel, lens)}` (the render's `lens`, the same value as `lensOf(look)` after `keepDrag`) and asks for the hint once per mount (a `sawGroup` ref). `camera-group.spec.ts` also checks the hint toast (recorded by a `MutationObserver`, as `crop.spec.ts` does), the marker undimmed on 美膚 › 磨皮 and dimmed on 美膚 › 銳化; each new check was seen failing on a build without the `Camera.tsx` wiring.
 
-- [ ] **Step 6: Commit** (CRLF check on `theme.css`, `Camera.tsx`)
+- [x] **Step 5: Run** — `npx vitest run src/ui src/store && npm run typecheck && npm run build && npx playwright test tests/e2e/camera-group.spec.ts --project chromium-group` → PASS.
+
+- [x] **Step 6: Commit** (CRLF check on `theme.css`, `Camera.tsx`)
 
 ```bash
 cd /d/GitSource/MonaLisa && git add src/ui/components/CameraFaceMarker.tsx src/ui/components/CameraFaceMarker.test.tsx src/ui/theme.css src/store/settings.ts src/store/settings.test.ts src/ui/screens/Camera.tsx tests/e2e/camera-group.spec.ts && git commit -m "camera per-person: faint brackets on every face, the dot on the target, dimming on photo items, the one-time hint" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat

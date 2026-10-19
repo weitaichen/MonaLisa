@@ -1391,6 +1391,18 @@ describe('the camera panel (camera per-person spec §3.2, §3.6)', () => {
     const one = sliderFor(camLens(1), sel('skin.smooth'))!;
     expect([one.label, one.aria]).toEqual(['磨皮', undefined]);
   });
+  it('the slider key carries the target whatever the face count: a drag survives a second face arriving or leaving (§3.2)', () => {
+    const one = sliderFor(camLens(1), sel('skin.smooth'))!;
+    expect(one.key).toBe('c3:skin.smooth');
+    expect(sliderFor(camLens(2), sel('skin.smooth'))!.key).toBe(one.key);
+    expect([one.label, one.aria]).toEqual(['磨皮', undefined]);
+    // photo items too: the label and aria rules still follow ≥ 2 faces, the key does not
+    const photo = sliderFor(camLens(1), sel('skin.whiten'))!;
+    expect([photo.key, photo.label, photo.aria]).toEqual(['c3:skin.whiten', '美白', undefined]);
+    expect(sliderFor(camLens(2), sel('skin.whiten'))!.key).toBe(photo.key);
+    // the editor with one person keeps the bare key
+    expect(sliderFor(lensFor(cameraEdit(neutralPhoto(), naturalPerson()), { kind: 'person', id: LIVE }, LIVE_PERSONS, LIVE), sel('skin.smooth'))!.key).toBe('skin.smooth');
+  });
   it('no face shown: person items are off with the note, photo items stay; 一鍵 presets are off; 美型 / 美妝 dim', () => {
     const l = camLens(0, false, true);
     const skin = itemsFor(l, sel('skin.smooth'));

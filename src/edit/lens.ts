@@ -48,7 +48,10 @@ export interface CameraLensInfo {
   all: boolean;
   /** a working tracker shows no face: person items write nothing and say CAMERA_NO_FACE_NOTE */
   noFace: boolean;
-  /** the camera person the sliders edit (slider identity: a target change resets the drag state); null for none */
+  /**
+   * the camera person the sliders edit; null for none. Slider identity: every camera slider key carries it, whatever
+   * the face count, so a target change resets the drag state and a face-count change does not
+   */
   target: number | null;
 }
 export interface LensOptions {

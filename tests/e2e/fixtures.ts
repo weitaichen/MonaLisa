@@ -237,6 +237,39 @@ export async function cpuDelegate(page: Page, delegate: string = 'CPU'): Promise
   }, delegate);
 }
 
+/**
+ * The unprocessed frame the camera hands to 編輯 (grabOriginalFrame: createImageBitmap of a 2D canvas), copied to
+ * window.__shotOriginal once `window.__armOriginal` is set (the next shot's frame). An init script: call before page.goto.
+ */
+export async function armShotOriginal(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __armOriginal?: boolean; __shotOriginal?: { width: number; height: number; data: Uint8ClampedArray } };
+    const make = window.createImageBitmap.bind(window) as (...a: unknown[]) => Promise<ImageBitmap>;
+    (window as unknown as { createImageBitmap: unknown }).createImageBitmap = (src: unknown, ...rest: unknown[]) => {
+      if (w.__armOriginal && src instanceof HTMLCanvasElement) {
+        const g = src.getContext('2d')!;
+        w.__shotOriginal = { width: src.width, height: src.height, data: g.getImageData(0, 0, src.width, src.height).data };
+        w.__armOriginal = false;
+      }
+      return make(src, ...rest);
+    };
+  });
+}
+
+/** after a shot taken armed (armShotOriginal): 預覽's capture against the unprocessed frame (same size, MAD) */
+export async function capturedVsOriginal(page: Page): Promise<{ same: boolean; mad: number }> {
+  await expect.poll(async () => (await debugState(page)).screen).toBe('review');
+  await expect.poll(() => page.evaluate(() => !!(window as unknown as { __shotOriginal?: unknown }).__shotOriginal)).toBe(true);
+  return page.locator('canvas[aria-label="拍攝結果"]').evaluate((c: HTMLCanvasElement) => {
+    const s = (window as unknown as { __shotOriginal: { width: number; height: number; data: Uint8ClampedArray } }).__shotOriginal;
+    const a = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+    if (c.width !== s.width || c.height !== s.height) return { same: false, mad: -1 };
+    let sum = 0;
+    for (let k = 0; k < a.length; k += 4) for (let ch = 0; ch < 3; ch++) sum += Math.abs(a[k + ch] - s.data[k + ch]);
+    return { same: true, mad: sum / ((a.length / 4) * 3) };
+  });
+}
+
 /** import a fixture through the home screen's picker and wait for the editor */
 export async function importFixture(page: Page, path: string): Promise<void> {
   await page.goto('/');
@@ -394,6 +427,64 @@ export function withExifOrientation(jpeg: Buffer, orientation: number): Buffer {
   const app1 = Buffer.concat([Buffer.from([0xff, 0xe1, len >> 8, len & 0xff]), body]);
   const at = jpeg[2] === 0xff && jpeg[3] === 0xe0 ? 4 + jpeg.readUInt16BE(4) : 2;
   return Buffer.concat([jpeg.subarray(0, at), app1, jpeg.subarray(at)]);
+}
+
+export interface Diff {
+  size: [number, number];
+  ref: [number, number];
+  mad: number;
+  max: number;
+}
+
+/**
+ * 儲存 → the long-press fallback's PNG, compared in the page with `ref`: a base64 file decoded at the export's size, or
+ * the pixels stashed under window.__shotOriginal (the camera's unprocessed frame, armShotOriginal)
+ */
+export async function exportDiff(page: Page, ref: { file: string; mime: string } | 'shot'): Promise<Diff> {
+  await page.getByRole('button', { name: '儲存' }).click();
+  const dlg = page.getByRole('dialog', { name: '儲存照片' });
+  await expect(dlg).toBeVisible({ timeout: 60_000 });
+  const img = dlg.getByRole('img', { name: '編輯結果' });
+  await expect.poll(() => img.evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
+  const arg = ref === 'shot' ? null : { b64: readFileSync(ref.file).toString('base64'), mime: ref.mime };
+  const d = await img.evaluate(async (i: HTMLImageElement, f: { b64: string; mime: string } | null) => {
+    const w = i.naturalWidth;
+    const h = i.naturalHeight;
+    const read = (draw: (g: CanvasRenderingContext2D) => void, cw = w, ch = h) => {
+      const c = document.createElement('canvas');
+      c.width = cw;
+      c.height = ch;
+      const g = c.getContext('2d', { willReadFrequently: true })!;
+      draw(g);
+      return g.getImageData(0, 0, cw, ch).data;
+    };
+    const a = read((g) => g.drawImage(i, 0, 0));
+    let b: Uint8ClampedArray;
+    let ref: [number, number];
+    if (f) {
+      const bytes = Uint8Array.from(atob(f.b64), (c) => c.charCodeAt(0));
+      const src = await createImageBitmap(new Blob([bytes], { type: f.mime }), { imageOrientation: 'from-image' });
+      ref = [src.width, src.height];
+      b = read((g) => g.drawImage(src, 0, 0, w, h));
+    } else {
+      const s = (window as unknown as { __shotOriginal: { width: number; height: number; data: Uint8ClampedArray } }).__shotOriginal;
+      ref = [s.width, s.height];
+      b = s.width === w && s.height === h ? s.data : new Uint8ClampedArray(a.length);
+    }
+    let sum = 0;
+    let max = 0;
+    let n = 0;
+    for (let k = 0; k < a.length; k += 4)
+      for (let ch = 0; ch < 3; ch++) {
+        const dv = Math.abs(a[k + ch] - b[k + ch]);
+        sum += dv;
+        max = Math.max(max, dv);
+        n++;
+      }
+    return { size: [w, h] as [number, number], ref, mad: sum / n, max };
+  }, arg);
+  await dlg.getByRole('button', { name: '關閉' }).click();
+  return d;
 }
 
 /** 儲存 → (a second tap when the pill turned 分享) → the long-press fallback's image: size, blob type and file name. */

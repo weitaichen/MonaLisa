@@ -4,9 +4,8 @@
 // 質感 or 濾鏡, no segmenter (瘦臉 limit) and no 美體 model. A shot with a camera look opens with it (camera per-person
 // spec U6, §3.8; changed on purpose, §12.2). The camera keeps its own photo look for its preview and capture (its person
 // part is not applied, K15), and starts at 原圖 for anyone who never saved one (a fresh install, or an upgrader).
-import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
-import { debugState, dragSlider, expect, grab, hold, importFixture, mad, SAMPLE_FACE, settled, test } from './fixtures';
+import { armShotOriginal, capturedVsOriginal, debugState, dragSlider, expect, exportDiff, grab, hold, importFixture, mad, SAMPLE_FACE, settled, test } from './fixtures';
 
 const SEGMENTER = /\/models\/image_segmenter\//;
 const POSE_MODEL = /\/models\/pose_landmarker\//;
@@ -35,64 +34,6 @@ function countModels(page: Page): { segmenter: number; pose: number } {
     if (POSE_MODEL.test(path)) n.pose++;
   });
   return n;
-}
-
-interface Diff {
-  size: [number, number];
-  ref: [number, number];
-  mad: number;
-  max: number;
-}
-
-/**
- * 儲存 → the long-press fallback's PNG, compared in the page with `ref`: a base64 file decoded at the export's size, or
- * the pixels stashed under window.__shotOriginal (the camera's unprocessed frame)
- */
-async function exportDiff(page: Page, ref: { file: string; mime: string } | 'shot'): Promise<Diff> {
-  await page.getByRole('button', { name: '儲存' }).click();
-  const dlg = page.getByRole('dialog', { name: '儲存照片' });
-  await expect(dlg).toBeVisible({ timeout: 60_000 });
-  const img = dlg.getByRole('img', { name: '編輯結果' });
-  await expect.poll(() => img.evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
-  const arg = ref === 'shot' ? null : { b64: readFileSync(ref.file).toString('base64'), mime: ref.mime };
-  const d = await img.evaluate(async (i: HTMLImageElement, f: { b64: string; mime: string } | null) => {
-    const w = i.naturalWidth;
-    const h = i.naturalHeight;
-    const read = (draw: (g: CanvasRenderingContext2D) => void, cw = w, ch = h) => {
-      const c = document.createElement('canvas');
-      c.width = cw;
-      c.height = ch;
-      const g = c.getContext('2d', { willReadFrequently: true })!;
-      draw(g);
-      return g.getImageData(0, 0, cw, ch).data;
-    };
-    const a = read((g) => g.drawImage(i, 0, 0));
-    let b: Uint8ClampedArray;
-    let ref: [number, number];
-    if (f) {
-      const bytes = Uint8Array.from(atob(f.b64), (c) => c.charCodeAt(0));
-      const src = await createImageBitmap(new Blob([bytes], { type: f.mime }), { imageOrientation: 'from-image' });
-      ref = [src.width, src.height];
-      b = read((g) => g.drawImage(src, 0, 0, w, h));
-    } else {
-      const s = (window as unknown as { __shotOriginal: { width: number; height: number; data: Uint8ClampedArray } }).__shotOriginal;
-      ref = [s.width, s.height];
-      b = s.width === w && s.height === h ? s.data : new Uint8ClampedArray(a.length);
-    }
-    let sum = 0;
-    let max = 0;
-    let n = 0;
-    for (let k = 0; k < a.length; k += 4)
-      for (let ch = 0; ch < 3; ch++) {
-        const dv = Math.abs(a[k + ch] - b[k + ch]);
-        sum += dv;
-        max = Math.max(max, dv);
-        n++;
-      }
-    return { size: [w, h] as [number, number], ref, mad: sum / n, max };
-  }, arg);
-  await dlg.getByRole('button', { name: '關閉' }).click();
-  return d;
 }
 
 /** the 一鍵 strip shows 原圖 selected and no 程度 slider; no tab carries a dot; 美膚 › 磨皮 reads 0 */
@@ -154,21 +95,6 @@ test('重置 returns to 原圖, the state a new photo opens with: composite only
   await expectOriginalPanel(page);
 });
 
-/** the unprocessed frame the camera hands to 編輯 (grabOriginalFrame: createImageBitmap of a 2D canvas), copied to window.__shotOriginal while armed */
-const keepShotOriginal = (page: Page) =>
-  page.addInitScript(() => {
-    const w = window as unknown as { __armOriginal?: boolean; __shotOriginal?: { width: number; height: number; data: Uint8ClampedArray } };
-    const make = window.createImageBitmap.bind(window) as (...a: unknown[]) => Promise<ImageBitmap>;
-    (window as unknown as { createImageBitmap: unknown }).createImageBitmap = (src: unknown, ...rest: unknown[]) => {
-      if (w.__armOriginal && src instanceof HTMLCanvasElement) {
-        const g = src.getContext('2d')!;
-        w.__shotOriginal = { width: src.width, height: src.height, data: g.getImageData(0, 0, src.width, src.height).data };
-        w.__armOriginal = false;
-      }
-      return make(src, ...rest);
-    };
-  });
-
 /** Home → 拍攝 → the live camera with the face found */
 async function openCamera(page: Page): Promise<void> {
   await page.goto('/');
@@ -186,16 +112,7 @@ async function openCamera(page: Page): Promise<void> {
 async function shootArmed(page: Page): Promise<{ same: boolean; mad: number }> {
   await page.evaluate(() => ((window as unknown as { __armOriginal: boolean }).__armOriginal = true));
   await page.getByRole('button', { name: '拍照' }).click();
-  await expect.poll(async () => (await debugState(page)).screen).toBe('review');
-  await expect.poll(() => page.evaluate(() => !!(window as unknown as { __shotOriginal?: unknown }).__shotOriginal)).toBe(true);
-  return page.locator('canvas[aria-label="拍攝結果"]').evaluate((c: HTMLCanvasElement) => {
-    const s = (window as unknown as { __shotOriginal: { width: number; height: number; data: Uint8ClampedArray } }).__shotOriginal;
-    const a = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
-    if (c.width !== s.width || c.height !== s.height) return { same: false, mad: -1 };
-    let sum = 0;
-    for (let k = 0; k < a.length; k += 4) for (let ch = 0; ch < 3; ch++) sum += Math.abs(a[k + ch] - s.data[k + ch]);
-    return { same: true, mad: sum / ((a.length / 4) * 3) };
-  });
+  return capturedVsOriginal(page);
 }
 
 /** 預覽 → 編輯, the photo's face found and drawn */
@@ -218,7 +135,7 @@ test('an upgrader without a saved camera look starts the camera at 原圖; a sho
   await page.addInitScript(() => {
     if (!localStorage.getItem('meiyan.version.v1')) localStorage.setItem('meiyan.version.v1', JSON.stringify('0.4.0'));
   });
-  await keepShotOriginal(page);
+  await armShotOriginal(page);
   await openCamera(page);
   // nobody saved a camera look on this profile, so the camera starts at 原圖: the upgrader's default 自然 is not kept
   // (2026-10-18, 「全部都原圖」; a fresh install likewise), and loading it wrote nothing
@@ -248,7 +165,7 @@ test('an upgrader without a saved camera look starts the camera at 原圖; a sho
 
 test('a shot with a camera look opens in 編輯 with it (U6): the photo look from the first frame, the face takes its camera person’s params', async ({ page }) => {
   test.setTimeout(300_000);
-  await keepShotOriginal(page);
+  await armShotOriginal(page);
   await openCamera(page);
   // a camera look the user set: 自然 on the face and 美白 100 on the frame. meiyan.look.v1 saves the photo look
   // (debounced 300 ms); its person part stays 原圖, the face's 自然 lives in the camera session (K15)

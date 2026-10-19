@@ -2103,7 +2103,7 @@ cd /d/GitSource/MonaLisa && git add scripts/gen-y4m.mjs scripts/gen-group-fixtur
 **Interfaces:**
 - Consumes: `debugState`, `grab`, `hold`, `mad`, `regionDiff`, `dragSlider`, `selectPerson`, `camBox` (`tests/e2e/fixtures.ts`); debug `boxes[].person / edited`, `selected`, `passes` (Tasks 3, 8); the editor's debug `boxes` (face ids) and `selected` (a person id: a face person's id is its face's, `detect/cache.ts:331`).
 
-- [ ] **Step 1: Write the tests**
+- [x] **Step 1: Write the tests**
 
 ```ts
 // E1–E3 (camera per-person spec §12.2) on group.y4m: A above, B and C side by side below (composeGroupCam), front camera.
@@ -2238,10 +2238,12 @@ test('E3 全部套用: on copies the target to all three; a slider writes all; a
 });
 ```
 
-- [ ] **Step 2: Run** — `npm run build && npx playwright test tests/e2e/camera-persons.spec.ts --project chromium-group`
+- [x] **Step 2: Run** — `npm run build && npx playwright test tests/e2e/camera-persons.spec.ts --project chromium-group`
 Expected: 3 passed. E1's capture MAD is printed; if it exceeds 1, record the measured value in the test as its bound with a comment (a WebGL upload against a 2D copy, §12.2 E1), never above 2.
 
-- [ ] **Step 3: Commit**
+(Executed with these adaptations, 2026-10-20. The `original.spec.ts` anchors above predate Task 11: at this commit `Diff` and `exportDiff` were `:40-96`, the init script `keepShotOriginal` `:158-170` (now `armShotOriginal`), and the comparison the end of `shootArmed` `:186-199` (now `capturedVsOriginal`; `shootArmed` stays as arm, 拍照, `capturedVsOriginal`). `openCamera` also hides `.corner-label`, 按住對比's 「原圖」 tag, which is drawn over the frame only while held, so E1's whole-frame MAD would otherwise count it. E2: `value()` picks the tab and item before the person (S A11: the 人物 chips are not selectable while a photo item is active), the primary's selection is polled, and the test also checks 大眼 reads 100 after the drag and that no 「未帶入相機效果」 toast shows. E3 uses `natural()` instead of the bare preset: with 自然's 美白 and 銳化 on the whole frame, A and C differ from 按住對比 whether or not 全部套用 copied anything, so the copy check proved nothing. It also checks that only B differs before the chip, that `selected` is `'all'` while on and everyone is `edited`, and that 磨皮 reads 100 on A after the tap and on C (the slider wrote all three). E1 and E3 get `test.setTimeout(240_000)`: the three-face poll alone may take the config's 120 s. Measured on SwiftShader: E1 preview against 按住對比 MAD 0, capture against the unprocessed frame MAD 0 at the same size, so the bound stays 1. The behaviour already existed (Tasks 1–12), so each test was shown to fail against a deliberate break, built and run, then reverted (not committed): untouched faces drawn at 磨皮 0.55 → E1 fails at `passes`; v0.5's one look (every face drawn with the target's params) → E2 fails at "B keeps its result"; 全部套用 on copying nothing → E3 fails at "everyone edited"; the hand-over giving every matched face the first camera person's params → E2 fails at C's 大眼. Untouched faces drawn at weight 1 with neutral params changes nothing observable, since `planPasses` skips the mask pass at 磨皮 0, so no test can catch it. The full `npm run test:e2e` at this commit: 197 passed, 2 skipped (`@bench`), 1 failed, `detector.spec.ts:1299` D2 (CPU). It also fails alone, and Task 13 did not cause it (only test files changed, and that test uses none of them). The live camera never settles at 2 faces: it shows 5–6. A throwaway probe (not committed) logged the cause. On the group path (front, short-range, the whole view), face B, cut by the frame's top edge, gets a new track and a new person on every call (t1 → t157 in 45 s, the same box at y 0), and the old ones are held for `LOST_HOLD_MS`. `ovalBox` clamps the detection to y 0, so the tolerant `insideView` (`faceTracks.ts:84`, EDGE_EPS) lets it start a track (`:215`). The group path's `matchable` = `holdsWhole` (`liveViews.ts:70-74`, strict px, no epsilon) then keeps the track out of every match. Inferred, not traced: the track's predicted box (`predict`, `:247`, velocity × dt, unclamped) drifts above y 0 with landmark jitter, the only gate the logged boxes can fail; the other edges are 6 px or more inside the 370–910 crop. A face touching the crop's edge on the group path is therefore a new person on every detection (its edits are lost; A2's spirit). This is Task 8's code, left for its owner to fix.)
+
+- [x] **Step 3: Commit**
 
 ```bash
 cd /d/GitSource/MonaLisa && git add tests/e2e/camera-persons.spec.ts tests/e2e/fixtures.ts tests/e2e/original.spec.ts && git commit -m "camera per-person: e2e E1–E3 (fresh camera = original, per person, 全部套用 copy)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat

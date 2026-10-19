@@ -290,6 +290,16 @@ export interface CameraLook {
 }
 /** camera → editor: the beautified face's centre in the saved image, 'all' under 全部套用, null = no face seen */
 export type FaceSeed = { x: number; y: number } | 'all' | null;
+/** camera → editor (camera per-person spec U6, §5.3): the camera's result in the saved image's space */
+export interface CameraHandOver {
+  /** the camera's photo look (meiyan.look.v1's photo): the edit's photo */
+  photo: PhotoParams;
+  /** each edited person in the picture: box in the saved image's UV (cropped to the ratio, mirrored as saved), params
+   * (左右分開 sides swapped when saved mirrored) */
+  persons: readonly { box: Rect; params: PersonParams }[];
+  /** 基本模式: the all-skin person (§3.6), else null */
+  ambient: PersonParams | null;
+}
 
 /** raw 478×3 MediaPipe landmarks in O-space (adapt() derives Face on load); box = oval bbox */
 export interface CachedFace {

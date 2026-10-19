@@ -8,6 +8,7 @@ import type { LivePersonId } from '../../app/livePersons';
 import { LIVE_DETECTOR, LIVE_GROUP } from '../../config/limits';
 import type { CameraController, CameraSnapshot, EditState, Facing } from '../../types';
 import { lensFor, LIVE_PERSONS, type Lens, type PersonInfo } from '../../edit/lens';
+import { handOverOf } from '../../edit/migrate';
 import { cameraScreenSwap } from '../../edit/sides';
 import { cameraEdit, LIVE, neutralPerson, personOf } from '../../edit/state';
 import { takeCameraPersonsHint } from '../../store/settings';
@@ -24,7 +25,7 @@ import { reportError } from '../debug';
 import { deps } from '../deps';
 import { openInEditor, pickPhoto } from '../flows';
 import { Icon } from '../icons';
-import { cropImageData, grabOriginalFrame, normalizedCropRect, shotSeed } from '../imaging';
+import { cropImageData, grabOriginalFrame, normalizedCropRect, shotPersons, shotSeed } from '../imaging';
 import { CAMERA_BODY, INITIAL_SELECTION, makeupNote, photoScoped, sliderFor, type BodyContext, type PanelSelection } from '../panelModel';
 import { haptic, isStandalone } from '../platform';
 import { ensureEngine, getCamera, stopCamera, svc } from '../services';
@@ -308,8 +309,13 @@ export function Camera() {
     }
     file.catch((e: unknown) => reportError(e, 'encodeJpeg'));
     const mirror = prefsRef.current.mirrorOnSave && cam.snapshot.facing === 'user';
+    const vw = cam.video.videoWidth;
+    const vh = cam.video.videoHeight;
     // the hand-over (C2): the seed in the saved crop, mirrored as the shot
-    const faceSeed = shotSeed(shotOut.seed, cam.video.videoWidth, cam.video.videoHeight, ratioValue, mirror);
+    const faceSeed = shotSeed(shotOut.seed, vw, vh, ratioValue, mirror);
+    // U6 (camera per-person spec §3.8, §5.3): the photo look, each edited person in the picture (box in the saved crop,
+    // mirrored as saved, 左右分開 swapped) and 基本模式's ambient person; null when nothing is set (編輯 opens at 原圖)
+    const handOver = handOverOf(lookRef.current.photo, shotPersons(shotOut.persons, vw, vh, ratioValue, mirror), bundle?.basic ? cameraSession().ambient : null);
     let original: ImageBitmap | null = null;
     try {
       original = await grabOriginalFrame(cam.video, ratioValue, mirror);
@@ -322,7 +328,7 @@ export function Camera() {
       original?.close();
       return;
     }
-    go({ name: 'review', shot: { image, file, original, faceSeed } });
+    go({ name: 'review', shot: { image, file, original, faceSeed, handOver } });
   };
 
   const shutter = () => {

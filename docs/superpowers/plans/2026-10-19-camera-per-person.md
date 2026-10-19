@@ -1729,7 +1729,7 @@ cd /d/GitSource/MonaLisa && git add src/ui/components/CameraFaceMarker.tsx src/u
   export function freshSource(bitmap, edit, returnTo, faceSeed: FaceSeed = null, handOver: CameraHandOver['persons'] | null = null): EditorSource;
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `sides.test.ts`: restore the deleted test verbatim (`git show 94b76ce:src/edit/sides.test.ts`, "mirrorSides swaps exactly the six split ids and is an involution").
 
@@ -1774,15 +1774,15 @@ describe('the camera hand-over (camera per-person spec §3.8, §5.3)', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify they fail** — `npx vitest run src/edit/sides.test.ts src/ui/imaging.frame.test.ts src/edit/migrate.test.ts` → FAIL.
+- [x] **Step 2: Run to verify they fail** — `npx vitest run src/edit/sides.test.ts src/ui/imaging.frame.test.ts src/edit/migrate.test.ts` → FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `mirrorSides` from the removed code (`git show 94b76ce:src/edit/sides.ts`, the function after `splitOff`). `shotBox` uses `centerCropRect` as `shotSeed` does. `shotPersons` maps each box, swaps sides when mirrored, and keeps only boxes whose centre lies in `[0, 1]²`. `handOverOf` returns `null` when `persons` is empty, `isNeutralPhoto(photo)` and (`ambient` null or `isNeutralPerson(ambient)`); else `{ photo, persons, ambient: ambient && !isNeutralPerson(ambient) ? ambient : null }`. `handOverEdit(h) = { v: 2, photo: sanitizePhoto(h.photo), persons: { [P0]: h.ambient ?? neutralPerson() }, template: neutralPerson(), primaryInit: null }`. `Camera.tsx` `captureFrom`: `const handOver = handOverOf(lookRef.current.photo, shotPersons(shotOut.persons, vw, vh, ratioValue, mirror), bundle?.basic ? cameraSession().ambient : null)`, stored on the `Shot`. `Review.tsx` `edit()`: `freshSource(shot.original, shot.handOver ? handOverEdit(shot.handOver) : importEdit(), 'camera', shot.faceSeed, shot.handOver?.persons ?? null)`; its comment cites U6. `freshSource` stores `handOver`.
 
-- [ ] **Step 4: Run** — `npx vitest run src/edit src/ui && npm run typecheck` → PASS.
+- [x] **Step 4: Run** — `npx vitest run src/edit src/ui && npm run typecheck` → PASS.
 
-- [ ] **Step 5: Commit** (CRLF check on `types.ts`, `state.ts`, `flows.ts`, `Camera.tsx`, `Review.tsx`)
+- [x] **Step 5: Commit** (CRLF check on `types.ts`, `state.ts`, `flows.ts`, `Camera.tsx`, `Review.tsx`)
 
 ```bash
 cd /d/GitSource/MonaLisa && git add src/types.ts src/ui/imaging.ts src/ui/imaging.frame.test.ts src/edit/sides.ts src/edit/sides.test.ts src/edit/migrate.ts src/edit/migrate.test.ts src/ui/state.ts src/ui/flows.ts src/ui/screens/Camera.tsx src/ui/screens/Review.tsx && git commit -m "camera per-person: the shot carries the hand-over (photo look, each edited person's box and params, mirrored as saved); 編輯 opens with the camera photo look" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat

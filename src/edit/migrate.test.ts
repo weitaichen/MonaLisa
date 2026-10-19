@@ -13,7 +13,7 @@ import { stableKey } from '../store/undo';
 import type { BeautyParams, DetectionCache, EditState, Face, HistoryEntry, Landmarks478, ParamId, Pose33, Stroke } from '../types';
 import { buildFrame } from './frame';
 import { editFromLegacy, legacyProjection, splitLegacy } from './legacy';
-import { bodyAnswer, completeAnswer, firstAnswer, importEdit, openState, preAnswerCache } from './migrate';
+import { bodyAnswer, completeAnswer, firstAnswer, handOverEdit, handOverOf, importEdit, openState, preAnswerCache } from './migrate';
 import { assignPersons, defaultPhoto, editFlipView, naturalPerson, neutralPerson, neutralPhoto, personFromPreset, resetAll, withPersons } from './state';
 import { completionOf, frameFacesOf, protectRequests, sessionPlan } from '../ui/editorModel';
 
@@ -248,6 +248,22 @@ describe('new photos (RM §3.7, 2026-10-18: 全部都原圖)', () => {
     // every person a detection adds starts there too
     const a = firstAnswer({ detect: null, prepared: prepareFaces([lmAt(0.3, 0.4, 0.2), lmAt(0.7, 0.4, 0.12)], 1000, 1000), size: { width: 1000, height: 1000 }, v1Body: null, rematch: null, faceSeed: { x: 0.7, y: 0.4 } });
     expect(Object.values(a.rebase(e).persons)).toEqual([neutralPerson(), neutralPerson()]);
+  });
+});
+
+describe('the camera hand-over (camera per-person spec §3.8, §5.3)', () => {
+  const box = { x: 0.4, y: 0.3, w: 0.2, h: 0.2 };
+  it('handOverOf: null when nothing is set; otherwise the photo look, the edited persons and the ambient person', () => {
+    expect(handOverOf(neutralPhoto(), [], null)).toBeNull();
+    expect(handOverOf({ ...neutralPhoto(), presetLink: null }, [], neutralPerson())).toBeNull();
+    expect(handOverOf(defaultPhoto(), [], null)).toEqual({ photo: defaultPhoto(), persons: [], ambient: null });
+    expect(handOverOf(neutralPhoto(), [{ box, params: naturalPerson() }], null)?.persons).toEqual([{ box, params: naturalPerson() }]);
+    expect(handOverOf(neutralPhoto(), [], naturalPerson())?.ambient).toEqual(naturalPerson());
+  });
+  it('handOverEdit: the camera photo look from the first frame, p0 the ambient person or 原圖, template 原圖', () => {
+    const e = handOverEdit({ photo: defaultPhoto(), persons: [{ box, params: naturalPerson() }], ambient: null });
+    expect(e).toEqual({ v: 2, photo: defaultPhoto(), persons: { p0: neutralPerson() }, template: neutralPerson(), primaryInit: null });
+    expect(handOverEdit({ photo: neutralPhoto(), persons: [], ambient: naturalPerson() }).persons.p0).toEqual(naturalPerson());
   });
 });
 

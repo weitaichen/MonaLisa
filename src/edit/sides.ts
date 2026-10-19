@@ -45,6 +45,22 @@ export function splitOff(p: PersonParams, slot: Slot): PersonParams {
   return { ...p, values, right: null };
 }
 
+/**
+ * A mirrored image puts each cheek on the other GPUPixel half (adapter111.ts:3-4), so a shot saved mirrored hands its
+ * split values over swapped (S5 §3.4, camera per-person spec §3.8). Swaps exactly the six split ids; an involution on a
+ * complete `right`.
+ */
+export function mirrorSides(p: PersonParams): PersonParams {
+  if (p.right === null) return p;
+  const values = { ...p.values };
+  const right: Partial<Record<SplitParamId, number>> = {};
+  for (const id of SPLIT_IDS) {
+    right[id] = p.values[id];
+    values[id] = p.right[id] ?? p.values[id];
+  }
+  return { ...p, values, right };
+}
+
 /** untrusted `right`: only split ids with finite numbers, clamped to 0..1; nothing left → null (S5 §3.5) */
 export function sanitizeRight(raw: unknown): PersonParams['right'] {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;

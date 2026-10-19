@@ -7,10 +7,10 @@ import { addFaceScan, aspectFits, boxScore, buildCache, cachedFits, noFaceCache,
 import { adaptCached, EMPTY_PREPARED, type PreparedFaces } from '../detect/faces';
 import { primaryOf, seedPrimary } from '../detect/persons';
 import { cropConstrain, cropValid, isIdentity } from '../geometry/view';
-import type { BodyDetections, CachedBody, DetectionCache, EditState, FaceSeed, HistoryEntry, LiquifyFrame, PersonId, PersonParams, Rect } from '../types';
+import type { BodyDetections, CachedBody, CameraHandOver, DetectionCache, EditState, FaceSeed, HistoryEntry, LiquifyFrame, PersonId, PersonParams, PhotoParams, Rect } from '../types';
 import { editFromLegacy, mergeLegacy } from './legacy';
 import { sanitizeStrokes } from './liquify';
-import { assignPersons, neutralPerson, neutralPhoto, P0, renamePersons, sanitizeEditState, sanitizeGeometry, withPersons } from './state';
+import { assignPersons, isNeutralPerson, isNeutralPhoto, neutralPerson, neutralPhoto, P0, renamePersons, sanitizeEditState, sanitizeGeometry, sanitizePhoto, withPersons } from './state';
 
 export interface V1Bodies {
   bodies: CachedBody[];
@@ -118,12 +118,32 @@ function openStored(entry: HistoryEntry, size: { width: number; height: number }
 }
 
 /**
- * A new photo, imported or a camera shot handed over from 預覽, opens at 原圖 for everyone (RM §3.7, 2026-10-18): it
- * renders as the original until the user touches something, whatever look the camera holds. A shot hands over only
- * its face seed (EditorSource.faceSeed), which names the person the editor selects (C2).
+ * A new photo, imported or a camera shot with nothing set, opens at 原圖 for everyone (RM §3.7, 2026-10-18): it renders
+ * as the original until the user touches something. Such a shot hands over only its face seed (EditorSource.faceSeed),
+ * which names the person the editor selects (C2); a shot with beauty set opens with handOverEdit (camera per-person U6).
  */
 export function importEdit(): EditState {
   return { v: 2, photo: neutralPhoto(), persons: { [P0]: neutralPerson() }, template: neutralPerson(), primaryInit: null };
+}
+
+/**
+ * The shot's hand-over (camera per-person spec §3.8, §5.3), or null when nothing is set: no edited person in the
+ * picture, the photo look neutral (isNeutralPhoto: the preset link never counts) and no edited ambient person; 編輯 then
+ * opens at 原圖 as today (importEdit). `persons`: the capture's edited persons in the saved image (shotPersons).
+ */
+export function handOverOf(photo: PhotoParams, persons: readonly { box: Rect; params: PersonParams }[], ambient: PersonParams | null): CameraHandOver | null {
+  const amb = ambient && !isNeutralPerson(ambient) ? ambient : null;
+  if (!persons.length && isNeutralPhoto(photo) && !amb) return null;
+  return { photo, persons, ambient: amb };
+}
+
+/**
+ * The edit a shot with beauty set opens with (U6, §5.3): the camera's photo look from the first frame; p0 the 基本模式
+ * ambient person or 原圖, the template 原圖 (a face the camera did not edit starts there). The first face answer gives
+ * each person found their camera params (firstAnswer, §5.4).
+ */
+export function handOverEdit(h: CameraHandOver): EditState {
+  return { v: 2, photo: sanitizePhoto(h.photo), persons: { [P0]: h.ambient ?? neutralPerson() }, template: neutralPerson(), primaryInit: null };
 }
 
 export interface AnswerInput {

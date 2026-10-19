@@ -4,7 +4,7 @@ import { apply, oToV } from '../geometry/view';
 import { blankEyes } from '../tracking/adapter111';
 import type { Face, Geometry, PersonParams } from '../types';
 import { naturalPerson } from './state';
-import { cameraScreenSwap, gpLeftOnLeft, isSplitId, readSide, sanitizeRight, screenLeftIsGpLeft, slotFor, splitOff, splitOn, writeSide } from './sides';
+import { cameraScreenSwap, gpLeftOnLeft, isSplitId, mirrorSides, readSide, sanitizeRight, screenLeftIsGpLeft, slotFor, splitOff, splitOn, writeSide } from './sides';
 
 const eyes = (l: [number, number], r: [number, number]): Face => {
   const pts111 = new Float32Array(222);
@@ -77,6 +77,17 @@ describe('slots (S5 §3.4)', () => {
     expect(splitOff(edited, 'right').values['shape.faceSlim']).toBe(0.9);
     expect(splitOff(edited, 'values').values['shape.faceSlim']).toBe(0.3);
     expect(splitOff(edited, 'values').right).toBeNull();
+  });
+  it('mirrorSides swaps exactly the six split ids and is an involution', () => {
+    const base = writeSide(splitOn(person()), 'shape.jawline', 0.7, 'right');
+    const on = { ...base, values: { ...base.values, 'shape.chin': 0.9 } };
+    const m = mirrorSides(on);
+    expect(m.values['shape.jawline']).toBe(0.7);
+    expect(m.right?.['shape.jawline']).toBe(on.values['shape.jawline']);
+    expect(m.values['shape.chin']).toBe(0.9);
+    expect(mirrorSides(m)).toEqual(on);
+    const off = person();
+    expect(mirrorSides(off)).toBe(off);
   });
   it('sanitizeRight keeps finite split keys clamped to 0..1; nothing left → null', () => {
     expect(sanitizeRight({ 'shape.faceSlim': 2, 'shape.chin': 0.4, 'shape.temple': Number.NaN, 'shape.jawline': 0.25 })).toEqual({

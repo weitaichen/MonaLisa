@@ -1,6 +1,7 @@
 // Pixel helpers for capture: the viewfinder crops the canvas with object-fit: cover, so the saved
 // image is centre-cropped to the same ratio here (on the ImageData, before encoding).
-import type { FaceSeed, Rect as UvRect } from '../types';
+import { mirrorSides } from '../edit/sides';
+import type { FaceSeed, PersonParams, Rect as UvRect } from '../types';
 
 export interface Rect {
   x: number;
@@ -82,4 +83,41 @@ export function shotSeed(seed: { x: number; y: number } | 'all' | null, vw: numb
   const x = (seed.x * vw - r.x) / r.width;
   const y = (seed.y * vh - r.y) / r.height;
   return { x: mirrored ? 1 - x : x, y };
+}
+
+/**
+ * A camera person's box in the saved photo (camera per-person spec §5.3): video UV → shotSeed's centre crop, then
+ * mirrored (x' = 1 − x' − w') when the shot is saved mirrored. Not clamped: a box cut by the crop keeps its true extent.
+ */
+export function shotBox(box: UvRect, vw: number, vh: number, ratio: number, mirrored: boolean): UvRect {
+  const r = centerCropRect(vw, vh, ratio);
+  const x = (box.x * vw - r.x) / r.width;
+  const y = (box.y * vh - r.y) / r.height;
+  const w = (box.w * vw) / r.width;
+  const h = (box.h * vh) / r.height;
+  return { x: mirrored ? 1 - x - w : x, y, w, h };
+}
+
+/**
+ * The capture's edited persons (LiveLoop.capture().persons) as the hand-over gives them to 編輯 (§3.8, §5.3): each box
+ * in the saved photo (shotBox), 左右分開 swapped when saved mirrored (mirrorSides, so the same cheek stays adjusted), and
+ * only the persons whose box centre lies in the picture: one outside it is not in the photo, so it is not handed over
+ * (never counted as a face the editor missed, Review Focus #5).
+ */
+export function shotPersons(
+  persons: readonly { rawBox: UvRect; params: PersonParams }[],
+  vw: number,
+  vh: number,
+  ratio: number,
+  mirrored: boolean,
+): { box: UvRect; params: PersonParams }[] {
+  const out: { box: UvRect; params: PersonParams }[] = [];
+  for (const p of persons) {
+    const box = shotBox(p.rawBox, vw, vh, ratio, mirrored);
+    const cx = box.x + box.w / 2;
+    const cy = box.y + box.h / 2;
+    if (!(cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1)) continue;
+    out.push({ box, params: mirrored ? mirrorSides(p.params) : p.params });
+  }
+  return out;
 }

@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { cameraTapAction, ChipGate, coverTapUv } from '../../app/faceTracks';
 import type { LiveLoop, LiveStats } from '../../app/live';
 import type { LivePersonId } from '../../app/livePersons';
-import type { CameraController, CameraSnapshot, EditState } from '../../types';
+import { LIVE_DETECTOR, LIVE_GROUP } from '../../config/limits';
+import type { CameraController, CameraSnapshot, EditState, Facing } from '../../types';
 import { lensFor, LIVE_PERSONS, type Lens, type PersonInfo } from '../../edit/lens';
 import { cameraScreenSwap } from '../../edit/sides';
 import { cameraEdit, LIVE, neutralPerson, personOf } from '../../edit/state';
@@ -38,6 +39,30 @@ const cameraBody: BodyContext = {
 };
 /** basic-mode notes are announced once per engine bundle, not on every visit */
 let notedBundle: unknown = null;
+
+/** the camera's group path (camera per-person spec §6.6, K17): LIVE_GROUP unless the e2e knob turns it off (§12.2) */
+const liveGroup = (): boolean => LIVE_GROUP && deps.readLiveDebug().group !== false;
+
+/**
+ * The graph the new stream's first detection runs (§6.3): the back camera's group path IMAGE (the fallback VIDEO), the
+ * front camera's solo path VIDEO, each on its facing's detector. Run once the 「正在開啟相機…」 spinner has painted: the
+ * first full-range inference compiles for 1.1–1.3 s on the desktop GPU (§6.1) and blocks the main thread, so a call
+ * inside the tap would freeze the old preview before the spinner shows. When the stream wins the race, its first call
+ * pays the compile instead.
+ */
+function warmAfterPaint(f: Facing): void {
+  requestAnimationFrame(() =>
+    setTimeout(() => {
+      try {
+        const e = svc.get().engine;
+        const tracker = e.state === 'ready' ? e.bundle.tracker : null;
+        tracker?.warm(liveGroup() && f === 'environment' ? 'IMAGE' : 'VIDEO', LIVE_DETECTOR[f]);
+      } catch (err) {
+        reportError(err, 'tracker.warm');
+      }
+    }, 0),
+  );
+}
 
 export function Camera() {
   const look = useStore(app, (s) => s.look);
@@ -180,8 +205,9 @@ export function Camera() {
         persons: cameraSession(),
         getPhoto: () => lookRef.current.photo,
         getPrefs: () => prefsRef.current,
-        // the picture the shutter keeps (captureFrom crops to the same ratio): vignette and grain follow it
+        // the picture the shutter keeps (captureFrom crops to the same ratio): vignette, grain and the group path's views follow it
         getFrame: () => normalizedCropRect(ctrl.video.videoWidth, ctrl.video.videoHeight, RATIO_VALUE[app.get().ratio]),
+        group: liveGroup(),
         onStats,
       });
     } catch (e) {
@@ -225,6 +251,8 @@ export function Camera() {
       p = Promise.reject(e);
     }
     p.catch((e: unknown) => setStartErr(reportError(e, 'camera.start')));
+    // a start straight on the back camera warms its graph behind the spinner (§6.3)
+    if (ctrl.snapshot.facing === 'environment') warmAfterPaint('environment');
   };
 
   const close = () => {
@@ -325,10 +353,13 @@ export function Camera() {
   const flip = () => {
     if (!ctrl) return;
     haptic();
+    const next: Facing = ctrl.snapshot.facing === 'user' ? 'environment' : 'user';
     // another camera, another scene: the session ends before the old stream stops (Review Focus #1, §3.11)
     endCameraSession();
     drag.current = null;
     ctrl.flip().catch((e: unknown) => setStartErr(reportError(e, 'camera.flip')));
+    // the new facing's graph, warmed while its stream opens behind the spinner (§6.3)
+    warmAfterPaint(next);
   };
 
   /** S §2.5: with ≥ 2 shown tracks a tap on a face selects its person (ring, haptic); otherwise the panel collapse toggles */

@@ -1,17 +1,36 @@
 // OWNER: app-glue agent. Live camera loop: rVFC → detect → adapt → render, face easing, auto-tier, debug state.
 // Each tracked face renders its own camera person (camera per-person spec §8): the session (LivePersons) is the
 // caller's, so a loop rebuilt on a new stream or bundle keeps everyone; pause and stop release the tracks into its away
-// pool (§7.5).
-import { LIVE_DETECT_FACES, MAX_RENDER_FACES } from '../config/limits';
+// pool (§7.5). Detection runs one of two paths per stream (§6.3, §6.6): the solo path (VIDEO on the whole frame, v0.5's
+// selfie path, A1) or the group path (IMAGE calls on fixed views of the visible crop), at the cadence of §6.4; the
+// shutter's frame gets its own detection when the last one is older (K13).
+import { EDIT_DETECT_FACES, LIVE_DETECT_FACES, LIVE_DETECTOR, LIVE_GROUP, LIVE_SOLO_AFTER_MS, MAX_LIVE_FACES, MAX_RENDER_FACES } from '../config/limits';
 import { gpLeftOnLeft } from '../edit/sides';
 import { neutralPerson } from '../edit/state';
 import { photoLuts } from '../engine/looks';
-import type { CameraController, Engine, EngineOptions, FaceSeed, Landmarks478, PersonParams, PhotoParams, Prefs, Rect, StillFrame, Tier, Tracker } from '../types';
+import type {
+  CameraController,
+  Engine,
+  EngineOptions,
+  FaceDetectorKind,
+  FaceSeed,
+  Facing,
+  Landmarks478,
+  PersonParams,
+  PhotoParams,
+  Prefs,
+  PxRect,
+  Rect,
+  StillFrame,
+  Tier,
+  Tracker,
+} from '../types';
 import { debugState, reportError } from './debug';
 import { FaceTracks, type CameraSelection, type LiveTrackView } from './faceTracks';
 import { createVideoFrameSource, type FrameInfo, type FrameSource } from './frameSource';
-import { AutoTier, TimeEma, frameCost, nextLowerTier, shouldDetect, skippedFrames } from './liveCore';
+import { AutoTier, DetectCadence, TimeEma, cadenceSample, effectiveEvery, frameCost, nextLowerTier, skippedFrames } from './liveCore';
 import type { LivePersonId, LivePersons } from './livePersons';
+import { layoutViews, mapLandmarks, refreshViews, ViewSchedule, viewScope, type LiveView, type ViewLayout } from './liveViews';
 
 export interface LiveStats {
   fps: number;
@@ -31,6 +50,10 @@ export interface LiveStats {
   target: LivePersonId | null;
   /** the session's version (LivePersons.version): a target or param change re-renders the panel */
   personsVersion: number;
+  /** the detection path (camera per-person spec §6.3, §6.6): VIDEO on the whole frame, or IMAGE calls on the views */
+  path: 'solo' | 'group';
+  /** frames per detection on the last frame (§6.4: 1 with one face or none, tier L 2; the cadence's k with ≥ 2) */
+  every: number;
 }
 
 export interface LiveLoop {
@@ -65,9 +88,12 @@ export interface LiveDeps {
   getPrefs: () => Prefs;
   /**
    * step 2: the picture the shutter keeps, as normalized source UV (the ratio's centre crop, Camera.tsx); read every
-   * frame, so a ratio change moves the vignette at once. Absent → the whole video frame.
+   * frame, so a ratio change moves the vignette at once. Absent → the whole video frame. The group path's views lie
+   * inside it (the visible crop, §6.6).
    */
   getFrame?: () => Rect;
+  /** the group path (§6.6); default LIVE_GROUP. false: every stream runs one VIDEO pass with its facing's detector (option C, §6.3) */
+  group?: boolean;
   onStats?: (s: LiveStats) => void;
 }
 
@@ -99,6 +125,36 @@ let neutral: PersonParams | null = null;
 const neutralOnce = (): PersonParams => (neutral ??= neutralPerson());
 /** §6.3's render order: present edited faces, then present ones, then held ones */
 const renderRank = (v: LiveTrackView): number => (v.present ? (v.edited ? 0 : 1) : 2);
+/** §6.4: T before the camera's own interval is measured */
+const CAMERA_FRAME_MS = 1000 / 30;
+
+/** the visible crop in the frame's px (rounded, inside the frame); the whole frame without one */
+function cropPx(f: Rect | undefined, w: number, h: number): PxRect {
+  if (!f || !(f.w > 0 && f.h > 0) || !Number.isFinite(f.x + f.y + f.w + f.h)) return { x: 0, y: 0, w, h };
+  const x = Math.min(w - 1, Math.max(0, Math.round(f.x * w)));
+  const y = Math.min(h - 1, Math.max(0, Math.round(f.y * h)));
+  return { x, y, w: Math.max(1, Math.min(w - x, Math.round(f.w * w))), h: Math.max(1, Math.min(h - y, Math.round(f.h * h))) };
+}
+
+interface ViewCopy {
+  canvas: OffscreenCanvas | HTMLCanvasElement;
+  ctx: CanvasDrawImage;
+}
+
+/** a view copy's canvas (§6.6 Copies): an OffscreenCanvas, an HTMLCanvasElement where its 2D context is missing; throws without either */
+function createViewCopy(w: number, h: number): ViewCopy {
+  if (typeof OffscreenCanvas !== 'undefined') {
+    const canvas = new OffscreenCanvas(w, h);
+    const ctx = canvas.getContext('2d', { alpha: false }) as CanvasDrawImage | null;
+    if (ctx) return { canvas, ctx };
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d', { alpha: false });
+  if (!ctx) throw new Error('no 2D context for the view copy');
+  return { canvas, ctx };
+}
 
 /**
  * The camera's render input (camera per-person spec §8): every shown track with its eased weight and its own person's
@@ -136,6 +192,10 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
   const fpsEma = new TimeEma(STAT_TAU_MS);
   const detectEma = new TimeEma(STAT_TAU_MS);
   const renderEma = new TimeEma(STAT_TAU_MS);
+  /** §6.4's T: the camera's own frame interval, the EMA of the intervals between frames no detection delayed */
+  const cameraEma = new TimeEma(STAT_TAU_MS);
+  const cadence = new DetectCadence();
+  const schedule = new ViewSchedule();
   const applied: Partial<EngineOptions> = {};
 
   /** grain seed: advanced once per drawn camera frame (moving grain, C §12 #11); redraws and the capture reuse it */
@@ -144,6 +204,26 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
   let compare = false;
   let paused = true;
   let detectedLastFrame = false;
+  /** per stream session (resetSession, §6.3): the detector of both paths, whether the group path may run, the path now */
+  let detector: FaceDetectorKind = 'camera';
+  let group = false;
+  let path: 'solo' | 'group' = 'solo';
+  /** the front camera's group path has shown at most one face since (→ the solo path after LIVE_SOLO_AFTER_MS, K18) */
+  let soloSince: number | null = null;
+  /** frames since the last detection (Infinity: the next frame detects) */
+  let sinceDetect = Infinity;
+  /** frames per detection of the last frame (§6.4) */
+  let every = 1;
+  /** video.currentTime of the last detection and of the last processed frame (K13: the shutter's frame) */
+  let lastDetectMedia = NaN;
+  let lastMedia = NaN;
+  /** the group path's views, memoized on the frame size, the crop in px, the facing and the detector (§6.6) */
+  let layout: ViewLayout | null = null;
+  let layoutKey = '';
+  /** one reused copy canvas per view size (§6.6 Copies) */
+  const copies = new Map<string, ViewCopy>();
+  /** the refresh views of the last group-path detection (debug liveViews) */
+  let viewIds: string[] = [];
   let lastTs: number | null = null;
   let lastPresented: number | null = null;
   let lastDetectTs: number | null = null;
@@ -189,7 +269,7 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
     const h = video.videoHeight;
     const facing = camera.snapshot.facing;
     const geo = `${w}x${h}:${facing}`;
-    if (paused || geo !== geometry) resetSession(geo, now);
+    if (paused || geo !== geometry) resetSession(geo, now, facing);
 
     const prefs = deps.getPrefs();
     const photo = deps.getPhoto();
@@ -199,15 +279,17 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
 
     const interval = lastTs === null ? null : now - lastTs;
 
+    // §6.4: one face or none → every frame (tier L every second, A1); ≥ 2 → every k-th frame
+    every = effectiveEvery(cadence.k, engine.tier, tracks.views().length);
     let detectMs: number | null = null;
-    if (tracker && shouldDetect(engine.tier, detectedLastFrame)) {
+    if (tracker && sinceDetect + 1 >= every) {
       const t0 = performance.now();
-      tracks.detect(detectFaces(tracker), now, w, h);
+      detectOnce(tracker, now, w, h, facing);
       detectMs = performance.now() - t0;
-      detectedLastFrame = true;
-    } else {
-      detectedLastFrame = false;
-    }
+      sinceDetect = 0;
+      lastDetectMedia = video.currentTime;
+    } else sinceDetect++;
+    const detected = detectMs !== null;
     tracks.step(interval ?? 0, now);
 
     const t1 = performance.now();
@@ -222,25 +304,138 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
       lastDetectTs = now;
     }
     renderEma.update(renderMs, interval ?? 0);
+    // §6.4's T: an interval neither this frame's nor the previous frame's detection can have stretched
+    if (interval !== null && interval > 0 && !detected && !detectedLastFrame) cameraEma.update(interval, interval);
+    cadence.update(now, detectEma.value, renderEma.value, cameraEma.value ?? CAMERA_FRAME_MS);
+    detectedLastFrame = detected;
 
     if (prefs.tier === 'auto' && interval !== null) {
-      const cost = frameCost((detectMs ?? 0) + renderMs, interval, skippedFrames(info.presentedFrames, lastPresented));
+      // §6.4: a detection serving `every` frames is sampled amortized over them, without the skipped-frames charge (the
+      // frame it drops is the detection's, which a lower render tier cannot fix)
+      const cost =
+        detectMs !== null && every > 1
+          ? cadenceSample(renderMs, detectMs, every)
+          : frameCost((detectMs ?? 0) + renderMs, interval, skippedFrames(info.presentedFrames, lastPresented));
       if (auto.sample(now, cost, interval)) stepDown();
     }
 
     lastTs = now;
+    lastMedia = video.currentTime;
     lastPresented = info.presentedFrames;
     publish(now, false);
   }
 
-  /** null = no answer (the throw is reported), so a hiccup never drops a track (A5) */
-  function detectFaces(t: Tracker): Landmarks478[] | null {
+  /**
+   * One detection (§6.3, §6.6): the solo path's VIDEO call, or the group path's next view. The front camera moves to the
+   * group path on the solo path's first frame that finds a second face (the next call is the whole view), and back after
+   * LIVE_SOLO_AFTER_MS with at most one face shown (K18); the tracks carry over both ways.
+   */
+  function detectOnce(t: Tracker, now: number, w: number, h: number, facing: Facing): void {
+    if (path === 'solo') {
+      tracks.detect(detectVideo(t), now, w, h);
+      if (group && facing === 'user' && tracks.presentCount() >= 2) {
+        path = 'group';
+        schedule.reset();
+        soloSince = null;
+      }
+      return;
+    }
+    const lay = layoutOf(w, h, facing);
+    const refresh = refreshOf(lay, now);
+    viewIds = refresh.map((v) => v.id);
+    viewCall(t, schedule.next(lay, refresh, tracks.views().length), lay, now, w, h);
+    if (facing !== 'user') return;
+    if (tracks.views().length > 1) soloSince = null;
+    else {
+      soloSince ??= now;
+      if (now - soloSince >= LIVE_SOLO_AFTER_MS) {
+        path = 'solo';
+        soloSince = null;
+        viewIds = [];
+      }
+    }
+  }
+
+  /** the solo path's call: null = no answer (the throw is reported), so a hiccup never drops a track (A5) */
+  function detectVideo(t: Tracker): Landmarks478[] | null {
     try {
-      return t.detectVideo(video, performance.now(), { maxFaces: LIVE_DETECT_FACES });
+      return t.detectVideo(video, performance.now(), { maxFaces: LIVE_DETECT_FACES, detector });
     } catch (err) {
       reportError('live detect', err);
       return null;
     }
+  }
+
+  /**
+   * One group-path call (§6.6): the view copied from the video, the IMAGE call on it, its faces mapped to stream UV and
+   * matched in its scope. The copy and the call share one guard: a throw anywhere in them (no canvas to be had,
+   * drawImage, detectView) is reported and, as a null answer, is no answer (A5: no aging, no drop, the pin kept).
+   */
+  function viewCall(t: Tracker, view: LiveView, lay: ViewLayout, now: number, w: number, h: number): void {
+    let lms: Landmarks478[] | null;
+    try {
+      lms = t.detectView(copyOf(view), { maxFaces: EDIT_DETECT_FACES, detector });
+    } catch (err) {
+      reportError('live detect', err);
+      lms = null;
+    }
+    if (lms === null) tracks.detect(null, now, w, h);
+    else tracks.detect(lms.map((lm) => mapLandmarks(lm, view.rect, w, h)), now, w, h, viewScope(view, lay));
+  }
+
+  /** the view's rect of the current video frame, drawn into its size's reused canvas (unmirrored, §6.6 Copies) */
+  function copyOf(view: LiveView): OffscreenCanvas | HTMLCanvasElement {
+    const { w, h } = view.copy;
+    const key = `${w}x${h}`;
+    let c = copies.get(key);
+    if (!c) {
+      c = createViewCopy(w, h);
+      copies.set(key, c);
+    }
+    const r = view.rect;
+    c.ctx.drawImage(video, r.x, r.y, r.w, r.h, 0, 0, w, h);
+    return c.canvas;
+  }
+
+  /** §6.6: the views of the visible crop (getFrame; the whole frame without it); a new layout drops the old sizes' copies */
+  function layoutOf(w: number, h: number, facing: Facing): ViewLayout {
+    const crop = cropPx(deps.getFrame?.(), w, h);
+    const key = `${w}x${h}:${crop.x},${crop.y},${crop.w},${crop.h}:${facing}:${detector}`;
+    if (!layout || key !== layoutKey) {
+      layout = layoutViews(w, h, crop, facing, detector);
+      layoutKey = key;
+      copies.clear();
+    }
+    return layout;
+  }
+
+  /** §6.6 Schedule: the refresh views of the tracks' boxes predicted at `now` */
+  function refreshOf(lay: ViewLayout, now: number): LiveView[] {
+    const boxes: Rect[] = [];
+    for (const v of tracks.views()) {
+      const b = tracks.predicted(v.id, now);
+      if (b) boxes.push(b);
+    }
+    return refreshViews(lay, boxes);
+  }
+
+  /**
+   * K13: the shutter's frame is newer than the last detection (the cadence, tier L): one solo-path call, or every refresh
+   * view of the current cycle (no scans, §6.6), through the same guarded calls, on the tracks' clock (the frame's media
+   * time past the last processed frame's)
+   */
+  function detectForCapture(t: Tracker): void {
+    if (lastTs === null || !Number.isFinite(lastMedia) || video.currentTime === lastDetectMedia) return;
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    const capNow = lastTs + Math.max(1, (video.currentTime - lastMedia) * 1000);
+    if (path === 'solo') tracks.detect(detectVideo(t), capNow, w, h);
+    else {
+      const lay = layoutOf(w, h, camera.snapshot.facing);
+      for (const v of refreshOf(lay, capNow)) viewCall(t, v, lay, capNow, w, h);
+    }
+    lastDetectMedia = video.currentTime;
+    tracks.step(0, capNow);
   }
 
   function draw(photo: PhotoParams, w: number, h: number): void {
@@ -260,19 +455,32 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
 
   /**
    * New measurement window + fresh face state (start, resume, flip / resolution change): the tracks' persons go to the
-   * away pool, then the session resumes on this facing (another facing ends it; its clock skips the paused span, §7.5)
+   * away pool, then the session resumes on this facing (another facing ends it; its clock skips the paused span, §7.5).
+   * The stream session's detector and path are fixed here (§6.3): 'photo' only on a facing whose LIVE_DETECTOR is it and
+   * once the full-range detector is in, so a download landing mid-stream never rebuilds the graph under the preview;
+   * MAX_LIVE_FACES = 1 has no group path; the back camera starts on it, the front camera on the solo path.
    */
-  function resetSession(geo: string, now: number): void {
+  function resetSession(geo: string, now: number, facing: Facing): void {
     paused = false;
     geometry = geo;
     tracks.reset();
-    persons.resume(now, camera.snapshot.facing);
+    persons.resume(now, facing);
     sides = null;
+    detector = tracker && LIVE_DETECTOR[facing] === 'photo' && tracker.photoDetector === 'full-range' ? 'photo' : 'camera';
+    group = (deps.group ?? LIVE_GROUP) && MAX_LIVE_FACES > 1;
+    path = group && facing === 'environment' ? 'group' : 'solo';
+    cadence.reset();
+    schedule.reset();
+    soloSince = null;
+    sinceDetect = Infinity;
+    lastDetectMedia = NaN;
+    viewIds = [];
     detectedLastFrame = false;
     lastTs = null;
     lastPresented = null;
     lastDetectTs = null;
     fpsEma.reset();
+    cameraEma.reset();
     auto.restart();
   }
 
@@ -348,6 +556,8 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
       gpLeftOnLeft: sides,
       target: persons.target(),
       personsVersion: persons.version,
+      path,
+      every,
     };
     if (dbg) {
       dbg.fps = s.fps;
@@ -359,6 +569,10 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
       dbg.boxes = views.map((v) => ({ id: `t${v.id}`, ...v.box, person: `c${v.person}`, edited: v.edited, view: v.view, seen: v.seen }));
       dbg.selected = persons.all() ? 'all' : ref ? `t${ref.id}` : null;
       dbg.passes = lastPasses;
+      dbg.liveEvery = every;
+      dbg.liveDetector = detector === 'photo' ? 'full-range' : 'short-range';
+      dbg.livePath = path;
+      dbg.liveViews = path === 'group' ? viewIds : [];
       // a self-healing tracker may come back on another delegate ('auto' → CPU fallback)
       if (tracker) dbg.delegate = tracker.delegate;
     }
@@ -421,6 +635,7 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
       frames.cancel();
       clearInterval(watchdog);
       unsubscribe();
+      copies.clear();
       // a loop stopped while live (重拍's loop, a bundle change) hands its people to the away pool as a pause does
       if (!paused) {
         paused = true;
@@ -434,6 +649,8 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
     },
     capture() {
       if (stopped || paused || !haveFrame || !isLive() || !hasVideoFrame()) return null;
+      // K13: the photo's faces drawn on their own landmarks
+      if (tracker) detectForCapture(tracker);
       const prefs = deps.getPrefs();
       const image = engine.renderToImageData(
         {

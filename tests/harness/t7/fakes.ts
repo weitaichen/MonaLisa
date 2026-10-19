@@ -256,6 +256,8 @@ function fakeLiveLoop(d: LiveDeps): LiveLoop {
         gpLeftOnLeft: null,
         target: null,
         personsVersion: 0,
+        path: 'solo' as const,
+        every: 1,
       };
       window.__meiyan && Object.assign(window.__meiyan, s);
       d.onStats?.(s);

@@ -11,10 +11,11 @@ import { reshapeUniforms } from '../engine/passes/reshape';
 import { planFrame } from '../engine/pipeline';
 import { ROSY_MAX_OPACITY, skinMaxima, skinUniformsFor } from '../engine/uniforms';
 import { adapt } from '../tracking/adapter111';
-import type { Landmarks478, PersonParams } from '../types';
+import type { Landmarks478, PersonParams, Rect } from '../types';
 import { liveFrame } from './live';
 import { FaceWeightEaser } from './liveCore';
 import { LivePersons } from './livePersons';
+import type { DetectScope } from './liveViews';
 import { cameraTapAction, ChipGate, coverTapUv, FaceTracks, videoToFrame } from './faceTracks';
 
 const sample = JSON.parse(readFileSync(new URL('../../tests/fixtures/landmarks_sample_face.json', import.meta.url), 'utf8')) as { points: number[] };
@@ -256,6 +257,38 @@ describe('FaceTracks on persons: prediction, the size gate, continuation, evicti
     s.write([vb.person], naturalPerson());
     run(t, 6, () => [A(), B(0.19)], 400);
     for (const v of t.views()) expect([v.edited, v.weight]).toEqual(v.person === vb.person ? [true, 1] : [false, 0]);
+  });
+});
+
+describe('FaceTracks on the group path: a call matches and misses only what its view holds (§6.6)', () => {
+  const scope = (x0: number, x1: number): DetectScope => {
+    const inside = (b: Rect) => b.x >= x0 && b.x + b.w <= x1;
+    return { name: 'tile', view: { x: x0, y: 0, w: x1 - x0, h: 1 }, matchable: inside, missable: inside };
+  };
+  it('a call whose view does not hold a track neither misses nor ages it', () => {
+    const t = new FaceTracks(editedAll());
+    run(t, 5, () => [A(), B()]);
+    for (let i = 0, now = 200; i < 60; i++, now += 33) {
+      t.detect([A()], now, W, H, scope(0, 0.5));
+      t.step(33, now);
+    }
+    expect(t.views()).toHaveLength(2);
+    expect(t.views().find((v) => v.box.x > 0.5)!.present).toBe(true);
+    expect(t.views().find((v) => v.box.x < 0.5)!.view).toBe('tile');
+  });
+  it('a track missed by a view that holds it is held, then dropped', () => {
+    const t = new FaceTracks(editedAll());
+    run(t, 5, () => [A(), B()]);
+    for (let i = 0, now = 200; i < 40; i++, now += 33) {
+      t.detect([A()], now, W, H, scope(0, 1));
+      t.step(33, now);
+    }
+    expect(t.views()).toHaveLength(1);
+  });
+  it('a face cut by the view edge starts no track unless it matches one', () => {
+    const t = new FaceTracks(new LivePersons());
+    t.detect([lmAt(0.5, 0.5, 0.2)], 0, W, H, scope(0, 0.55));
+    expect(t.views()).toHaveLength(0);
   });
 });
 

@@ -11,7 +11,7 @@ import { runTiledExport } from '../media/exportFull';
 import { shouldKeepSource } from '../media/exportPlan';
 import { importPhoto, importPhotoInfo } from '../media/importer';
 import { addEntry, deleteEntry, getEntry, listEntries, updateEntry } from '../store/history';
-import { clearExportCap, consumeExportGuardAtLaunch, exportCapped, loadLook, loadPrefs, readExportDebug, saveLook, savePrefs } from '../store/settings';
+import { clearExportCap, consumeExportGuardAtLaunch, exportCapped, loadLook, loadPrefs, readExportDebug, readLiveDebug, saveLook, savePrefs } from '../store/settings';
 import { UndoStack, type UndoOptions } from '../store/undo';
 import type { PersonSegmenter, PersonSegmenterOptions } from '../tracking/segmenter';
 import type { BodyTracker, BodyTrackerOptions, Tracker, TrackerOptions } from '../types';
@@ -74,6 +74,7 @@ export const deps = {
   exportCapped,
   clearExportCap,
   readExportDebug,
+  readLiveDebug,
   createUndo: <T>(limit?: number, opts?: UndoOptions<T>): UndoLike<T> => new UndoStack<T>(limit, opts),
   startLiveLoop,
   autoTierSession,

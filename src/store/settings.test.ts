@@ -13,6 +13,7 @@ import {
   EXPORT_GUARD_KEY,
   exportCapped,
   hasSavedSettings,
+  LIVE_DEBUG_KEY,
   loadLook,
   loadMakeupPartsSeen,
   loadParams,
@@ -23,6 +24,7 @@ import {
   PREFS_KEY,
   readExportDebug,
   readExportGuard,
+  readLiveDebug,
   sanitizePrefs,
   saveLook,
   saveMakeupPartsSeen,
@@ -487,6 +489,23 @@ describe('export prefs and keys (step 3)', () => {
     expect(exportCapped()).toBe(false);
     expect(readExportDebug()).toEqual({});
     expect(() => clearExportCap()).not.toThrow();
+  });
+});
+
+describe('the live loop test knob (camera per-person spec §12.2: the override of LIVE_GROUP)', () => {
+  it('reads { group: false } from meiyan.debug.live.v1; {} for nothing stored, junk or no storage', () => {
+    expect(LIVE_DEBUG_KEY).toBe('meiyan.debug.live.v1');
+    expect(readLiveDebug()).toEqual({});
+    store.setItem(LIVE_DEBUG_KEY, JSON.stringify({ group: false }));
+    expect(readLiveDebug()).toEqual({ group: false });
+    store.setItem(LIVE_DEBUG_KEY, JSON.stringify({ group: true }));
+    expect(readLiveDebug()).toEqual({ group: true });
+    for (const junk of ['not json', '[false]', 'false', JSON.stringify({ group: 'off' }), JSON.stringify({ path: 'solo' })]) {
+      store.setItem(LIVE_DEBUG_KEY, junk);
+      expect(readLiveDebug()).toEqual({});
+    }
+    stubThrowingGetter();
+    expect(readLiveDebug()).toEqual({});
   });
 });
 

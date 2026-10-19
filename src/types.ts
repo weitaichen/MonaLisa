@@ -891,6 +891,14 @@ export interface DebugState {
   toneBuilds: number;
   /** pass list of the last display frame */
   passes: string[];
+  /** camera: frames per detection on the last frame (camera per-person spec §6.4) */
+  liveEvery?: number;
+  /** camera: the face detector of this stream session (§6.3) */
+  liveDetector?: 'short-range' | 'full-range';
+  /** camera: the detection path (§6.6): VIDEO on the whole frame, or IMAGE calls on the views */
+  livePath?: 'solo' | 'group';
+  /** camera: the group path's refresh views of the last detection ('whole', `t{col},{row}`); [] on the solo path (§6.6) */
+  liveViews?: string[];
 }
 
 declare global {

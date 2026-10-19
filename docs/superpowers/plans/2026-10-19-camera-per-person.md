@@ -1355,7 +1355,7 @@ cd /d/GitSource/MonaLisa && git add src/config src/app/liveCore.ts src/app/liveC
   liveEvery?: number; liveDetector?: 'short-range' | 'full-range'; livePath?: 'solo' | 'group'; liveViews?: string[];
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `faceTracks.test.ts`:
 
@@ -1568,13 +1568,13 @@ describe('the group path in the live loop (§6.3, §6.4, §6.6, K13, K18)', () =
 
 `settings.test.ts`: `readLiveDebug()` reads `{ group: false }` from `meiyan.debug.live.v1`, `{}` for junk or no storage.
 
-- [ ] **Step 2: Run to verify they fail** — `npx vitest run src/app/faceTracks.test.ts src/app/live.test.ts src/store/settings.test.ts` → FAIL (no scope, no group path).
+- [x] **Step 2: Run to verify they fail** — `npx vitest run src/app/faceTracks.test.ts src/app/live.test.ts src/store/settings.test.ts` → FAIL (no scope, no group path).
 
-- [ ] **Step 3: Implement the scope in `FaceTracks.detect`**
+- [x] **Step 3: Implement the scope in `FaceTracks.detect`**
 
 With a `scope`: candidate tracks for every matching rule are those whose predicted box is `scope.matchable`; after matching, a free track is set `present = false` only when `scope.missable(predicted)`; an unmatched, uncontinued detection whose box is not inside `scope.view` whole starts nothing. Every refreshed track records `view = scope?.name ?? 'video'`. `presentCount()` counts present tracks.
 
-- [ ] **Step 4: Implement the paths in `live.ts`**
+- [x] **Step 4: Implement the paths in `live.ts`**
 
 Per stream session (in `resetSession`): `detector = tracker && LIVE_DETECTOR[facing] === 'photo' && tracker.photoDetector === 'full-range' ? 'photo' : 'camera'`; `group = (deps.group ?? LIVE_GROUP) && MAX_LIVE_FACES > 1` (`MAX_LIVE_FACES = 1` still means 選臉 hidden, the smoother bypassed and no group path, §6.3); `path = group && facing === 'environment' ? 'group' : 'solo'`; `cadence.reset()`, `schedule.reset()`, `soloSince = null`, `sinceDetect = Infinity`. The layout is memoized on `w × h`, the crop in px (`deps.getFrame?.()` × w, h, rounded; the whole frame without it), `facing`, `detector`.
 
@@ -1604,16 +1604,16 @@ tracks.step(interval ?? 0, now);
 
 `groupCall`'s refresh list is `refreshViews(layout, tracks.views().map((v) => tracks.predicted(v.id, now)!))`; the copy is a 2D `drawImage(video, rect.x, rect.y, rect.w, rect.h, 0, 0, copy.w, copy.h)` into one reused `OffscreenCanvas` per copy size (an `HTMLCanvasElement` when `OffscreenCanvas` is missing), then `tracker.detectView(copy, { maxFaces: EDIT_DETECT_FACES, detector })`. The copy and the call share one `try`: a throw anywhere in them (no canvas to be had, `drawImage`, `detectView`) is reported (`reportError('live detect', …)`) and fed to `tracks.detect` as `null`, as is a `null` answer (A5: no aging, no drop, the pin kept); only an array is mapped (`mapLandmarks(lm, view.rect, w, h)`) and fed with `viewScope(view, layout)`. After drawing: `cameraEma.update(interval)` when neither this frame nor the previous one detected (start `1000 / 30`); `cadence.update(now, detectEma.value, renderEma.value, cameraEma.value ?? 1000 / 30)`; the auto-tier sample of a detecting frame with `every > 1` is `cadenceSample(renderMs, detectMs, every)` without the skipped-frames charge (`:199-202` otherwise unchanged). `capture()` first runs, when `tracker && video.currentTime !== lastDetectMedia`, one solo detection or every view of the current refresh list (no scans), through the same guarded calls, then `tracks.step(0, capNow)`. `capNow` stays on the frame clock the tracks run on (`FrameInfo.now`; the tests' fake video runs it on `Date.now()`, not `performance.now()`): `capNow = lastTs + max(1, (video.currentTime − lastMedia) × 1000)`, `lastMedia` being `video.currentTime` at the last processed frame. Stats and debug: `LiveStats.path / every`, `dbg.liveEvery = every`, `dbg.liveDetector = detector === 'photo' ? 'full-range' : 'short-range'`, `dbg.livePath`, `dbg.liveViews` (the refresh list's ids, `[]` on the solo path).
 
-- [ ] **Step 5: Implement the knob and the Camera warm-up**
+- [x] **Step 5: Implement the knob and the Camera warm-up**
 
 `settings.ts`: `LIVE_DEBUG_KEY`, `readLiveDebug()` as `readExportDebug` (`:255-264`) does; `deps.ts` exposes it. `Camera.tsx`: the loop gets `group: LIVE_GROUP && deps.readLiveDebug().group !== false`; a helper `warmFor(f: Facing)` calls `bundle?.tracker?.warm(group && f === 'environment' ? 'IMAGE' : 'VIDEO', LIVE_DETECTOR[f])` inside try/catch; `flip()` computes the next facing, calls `endCameraSession()`, `ctrl.flip()`, then schedules `warmFor(next)` once the spinner has painted (`requestAnimationFrame(() => setTimeout(() => warmFor(next), 0))`): the warm-up blocks the main thread (the full-range compile, 1.1–1.3 s on the desktop GPU, §6.1) while `getUserMedia` opens the stream behind 「正在開啟相機…」; a synchronous call inside the tap would freeze the old preview before the spinner shows. When the stream wins the race, the first group-path call pays the compile and the warm-up finds the graph switched (one blank inference). `start()` schedules `warmFor('environment')` the same way after `ctrl.start(…)` when the facing is `'environment'`.
 
-- [ ] **Step 6: Run to verify they pass**
+- [x] **Step 6: Run to verify they pass**
 
 Run: `cd /d/GitSource/MonaLisa && npx vitest run src/app src/store src/ui && npm run typecheck`
 Expected: PASS (the existing tier-L tests still see every second detection with one face).
 
-- [ ] **Step 7: Commit** (CRLF check on `live.ts`, `types.ts`, `deps.ts`, `Camera.tsx`)
+- [x] **Step 7: Commit** (CRLF check on `live.ts`, `types.ts`, `deps.ts`, `Camera.tsx`)
 
 ```bash
 cd /d/GitSource/MonaLisa && git add src/app/faceTracks.ts src/app/faceTracks.test.ts src/app/live.ts src/app/live.test.ts src/types.ts src/store/settings.ts src/store/settings.test.ts src/ui/deps.ts src/ui/screens/Camera.tsx tests/harness/t7/fakes.ts && git commit -m "camera per-person: the group path (IMAGE calls on fixed views), the cadence, the detector per stream session, the capture's forced detection, the flip warm-up" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat

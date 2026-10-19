@@ -266,3 +266,18 @@ export function readExportDebug(): ExportDebugKnob {
   if (failAt === 'decode' || failAt === 'tile' || failAt === 'encode') out.failAt = failAt;
   return out;
 }
+
+// ───────────── the live camera's test knob (camera per-person spec §12.2) ─────────────
+
+export const LIVE_DEBUG_KEY = 'meiyan.debug.live.v1';
+
+/**
+ * e2e knob (works in the production build): `{ group: false }` overrides LIVE_GROUP for the camera (option C, §6.3), the
+ * fallback's own tests. Read when the camera starts a live loop; {} for nothing stored, junk or no storage; never throws
+ */
+export function readLiveDebug(): { group?: boolean } {
+  const r = readJson(LIVE_DEBUG_KEY);
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return {};
+  const { group } = r as Record<string, unknown>;
+  return typeof group === 'boolean' ? { group } : {};
+}

@@ -3,7 +3,8 @@
 // smoother, bypassed at one face), and give each track a camera person: `claim` when it starts, `release` when it is
 // dropped or reset. The A7 auto pick goes to the session (`sync`), which owns the selection; each face's weight eases
 // toward "present and its person edited", its presence (the neighbours' caps, A3) and the any-face weight (the global
-// skin, A2) as before. Pure: no DOM, no GL.
+// skin, A2) as before. On the group path (§6.6) a detection is one view's call: it matches and misses only the tracks
+// its scope says, and every other track is no event for it. Pure: no DOM, no GL.
 import { LOST_HOLD_MS, MAX_LIVE_FACES, TRACK_SIZE_JUMP } from '../config/limits';
 import { boxIoU } from '../detect/faces';
 import { ovalBox } from '../engine/passes/faceCap';
@@ -11,6 +12,7 @@ import { adapt } from '../tracking/adapter111';
 import type { Face, Landmarks478, Rect } from '../types';
 import { FaceWeightEaser } from './liveCore';
 import { type LivePersonId, nearestUnambiguous, reidDistance, type TrackPersons } from './livePersons';
+import type { DetectScope } from './liveViews';
 import { LandmarkSmoother } from './oneEuro';
 
 export type TrackId = number;
@@ -76,6 +78,11 @@ const VELOCITY_TAU_MS = 200;
 const area = (b: Rect) => b.w * b.h;
 const centre = (b: Rect): [number, number] => [b.x + b.w / 2, b.y + b.h / 2];
 const finiteBox = (b: Rect) => b.w > 0 && b.h > 0 && Number.isFinite(b.x + b.y + b.w + b.h);
+/** float slack of a mapped view's edge (UV) */
+const EDGE_EPS = 1e-9;
+/** §6.6: the box lies inside the view whole (a face cut by the view's edge starts no track) */
+const insideView = (v: Rect, b: Rect) =>
+  b.x >= v.x - EDGE_EPS && b.y >= v.y - EDGE_EPS && b.x + b.w <= v.x + v.w + EDGE_EPS && b.y + b.h <= v.y + v.h + EDGE_EPS;
 /** §7.3 item 3: a face whose width differs from the predicted box by more than × TRACK_SIZE_JUMP is someone else */
 const sizeOk = (p: Rect, d: Rect) => Math.max(d.w / p.w, p.w / d.w) <= TRACK_SIZE_JUMP;
 
@@ -101,8 +108,14 @@ export class FaceTracks {
     this.hold = opts.holdMs ?? LOST_HOLD_MS;
   }
 
-  /** a detecting frame. null = no answer: tracks and selection held, every easer eases out (A5); [] = no face */
-  detect(lms: readonly Landmarks478[] | null, tsMs: number, w: number, h: number): void {
+  /**
+   * a detecting frame. null = no answer: tracks and selection held, every easer eases out (A5); [] = no face. `scope`
+   * (the group path, §6.6): one view's call in stream UV; every matching rule considers only the tracks whose predicted
+   * box it can match, a track it leaves unmatched is missed only when it can miss it (every other track is no event:
+   * not missed, not aged), and a face not inside its view whole starts no track. Without it the call is the solo path's
+   * whole frame ('video').
+   */
+  detect(lms: readonly Landmarks478[] | null, tsMs: number, w: number, h: number, scope?: DetectScope): void {
     if (lms === null) {
       for (const t of this.list) t.present = false;
       this.noAnswerSince ??= tsMs;
@@ -132,13 +145,14 @@ export class FaceTracks {
       if (j < 0) unique.push(d);
       else if (!onTrack(unique[j].box) && onTrack(d.box)) unique[j] = d;
     }
-    // §7.3: every rule matches against the predicted boxes, and refuses a pair across the size gate
+    // §7.3: every rule matches against the predicted boxes, and refuses a pair across the size gate; on the group path
+    // only the tracks the call's view can match are candidates (§6.6)
     const pred = new Map<Track, Rect>(this.list.map((t) => [t, this.predict(t, tsMs)]));
-    const free = new Set(this.list);
+    const free = new Set(scope ? this.list.filter((t) => scope.matchable(pred.get(t)!)) : this.list);
     const used = new Set<Det>();
     const pairs: [Track, Det][] = [];
     // greedy by IoU ≥ 0.3
-    const cand = this.list
+    const cand = [...free]
       .flatMap((t) => unique.map((d) => ({ t, d, iou: boxIoU(pred.get(t)!, d.box) })))
       .filter((c) => c.iou >= 0.3 && sizeOk(pred.get(c.t)!, c.d.box))
       .sort((a, b) => b.iou - a.iou);
@@ -184,17 +198,21 @@ export class FaceTracks {
       pairs.push([t, d]);
     }
     // MAX_LIVE_FACES = 1 (v0.3's camera, one person): one track, one face, wherever the face went (S §1.2 item 1)
-    if (this.max === 1 && this.list.length === 1 && unique.length === 1 && pairs.length === 0) {
+    if (this.max === 1 && this.list.length === 1 && unique.length === 1 && pairs.length === 0 && free.has(this.list[0])) {
       const t = this.list[0];
       free.delete(t);
       used.add(unique[0]);
       pairs.push([t, unique[0]]);
     }
-    for (const [t, d] of pairs) this.feed(t, d, tsMs, w, h);
-    for (const t of free) t.present = false;
+    const view = scope?.name ?? 'video';
+    for (const [t, d] of pairs) this.feed(t, d, tsMs, w, h, view);
+    // a track left unmatched is missed; on the group path only by a call whose view can miss it (§6.6)
+    const fed = new Set(pairs.map(([t]) => t));
+    for (const t of this.list) if (!fed.has(t) && (!scope || scope.missable(pred.get(t)!))) t.present = false;
     // §7.3 item 5: unmatched detections start tracks, largest first, each with the person `claim` gives it; when full,
-    // the held track seen longest ago is dropped early (its person released) to make room, and only such a track
-    for (const d of unique.filter((x) => !used.has(x)).sort((a, b) => area(b.box) - area(a.box))) {
+    // the held track seen longest ago is dropped early (its person released) to make room, and only such a track. On
+    // the group path a face cut by the view's edge starts nothing: an overlapping view holds it whole (§6.6)
+    for (const d of unique.filter((x) => !used.has(x) && (!scope || insideView(scope.view, x.box))).sort((a, b) => area(b.box) - area(a.box))) {
       if (this.list.length >= this.max) {
         let oldest: Track | null = null;
         for (const t of this.list) if (!t.present && (!oldest || t.lastSeen < oldest.lastSeen)) oldest = t;
@@ -213,11 +231,11 @@ export class FaceTracks {
         seen: tsMs,
         vx: 0,
         vy: 0,
-        view: 'video',
+        view,
         easer: new FaceWeightEaser(),
         presence: new FaceWeightEaser(),
       };
-      this.feed(t, d, tsMs, w, h);
+      this.feed(t, d, tsMs, w, h, view);
       this.list.push(t);
     }
     // §7.3 item 6: a track missing longer than the hold is dropped and its person released
@@ -244,7 +262,7 @@ export class FaceTracks {
     this.persons.release(t.person, t.box, t.lastSeen);
   }
 
-  private feed(t: Track, d: Det, tsMs: number, w: number, h: number): void {
+  private feed(t: Track, d: Det, tsMs: number, w: number, h: number, view: string): void {
     const dt = tsMs - t.lastSeen;
     if (dt > 0) {
       const [px, py] = centre(t.rawBox);
@@ -257,6 +275,7 @@ export class FaceTracks {
     t.present = true;
     t.lastSeen = tsMs;
     t.seen = tsMs;
+    t.view = view;
     if (t.filter) {
       t.shown = adapt({ points: t.filter.apply(d.lm.points, w, h, tsMs) }, w, h);
       const b = ovalBox(t.shown);
@@ -314,6 +333,13 @@ export class FaceTracks {
       seen: t.seen,
       view: t.view,
     }));
+  }
+
+  /** tracks found by their last call (held ones not counted): the front camera's solo path moves to the group path at 2 (§6.6, K18) */
+  presentCount(): number {
+    let n = 0;
+    for (const t of this.list) if (t.present) n++;
+    return n;
   }
 
   /** §7.2: track `id`'s box predicted at `nowMs`; null when there is no such track */

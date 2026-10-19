@@ -258,16 +258,44 @@ export async function armShotOriginal(page: Page): Promise<void> {
 
 /** after a shot taken armed (armShotOriginal): 預覽's capture against the unprocessed frame (same size, MAD) */
 export async function capturedVsOriginal(page: Page): Promise<{ same: boolean; mad: number }> {
+  const { same, mads } = await capturedRegions(page, [{ x: 0, y: 0, w: 1, h: 1 }]);
+  return { same, mad: mads[0] };
+}
+
+/**
+ * after a shot taken armed (armShotOriginal): 預覽's capture against the unprocessed frame inside each rect (fractions
+ * of the shot, rounded as regionDiff does and clamped to it; MAD, −1 for an empty rect). The camera's preview rects
+ * (camBox) are the shot's: the shot is the preview's crop, mirrored as the preview (camera-group.spec.ts's hand-over).
+ * `same` false (every MAD −1) when the sizes differ.
+ */
+export async function capturedRegions(page: Page, rects: Rect[]): Promise<{ same: boolean; mads: number[] }> {
   await expect.poll(async () => (await debugState(page)).screen).toBe('review');
   await expect.poll(() => page.evaluate(() => !!(window as unknown as { __shotOriginal?: unknown }).__shotOriginal)).toBe(true);
-  return page.locator('canvas[aria-label="拍攝結果"]').evaluate((c: HTMLCanvasElement) => {
+  return page.locator('canvas[aria-label="拍攝結果"]').evaluate((c: HTMLCanvasElement, rects: Rect[]) => {
     const s = (window as unknown as { __shotOriginal: { width: number; height: number; data: Uint8ClampedArray } }).__shotOriginal;
-    const a = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
-    if (c.width !== s.width || c.height !== s.height) return { same: false, mad: -1 };
-    let sum = 0;
-    for (let k = 0; k < a.length; k += 4) for (let ch = 0; ch < 3; ch++) sum += Math.abs(a[k + ch] - s.data[k + ch]);
-    return { same: true, mad: sum / ((a.length / 4) * 3) };
-  });
+    if (c.width !== s.width || c.height !== s.height) return { same: false, mads: rects.map(() => -1) };
+    const W = c.width;
+    const H = c.height;
+    const a = c.getContext('2d')!.getImageData(0, 0, W, H).data;
+    const mads = rects.map((r) => {
+      const rx = Math.round(r.x * W);
+      const ry = Math.round(r.y * H);
+      const x0 = Math.max(0, rx);
+      const y0 = Math.max(0, ry);
+      const x1 = Math.min(W, rx + Math.round(r.w * W));
+      const y1 = Math.min(H, ry + Math.round(r.h * H));
+      let sum = 0;
+      let n = 0;
+      for (let y = y0; y < y1; y++)
+        for (let x = x0; x < x1; x++) {
+          const k = (y * W + x) * 4;
+          for (let ch = 0; ch < 3; ch++) sum += Math.abs(a[k + ch] - s.data[k + ch]);
+          n += 3;
+        }
+      return n ? sum / n : -1;
+    });
+    return { same: true, mads };
+  }, rects);
 }
 
 /** import a fixture through the home screen's picker and wait for the editor */

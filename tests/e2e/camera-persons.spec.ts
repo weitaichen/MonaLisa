@@ -1,6 +1,6 @@
 // E1–E3 (camera per-person spec §12.2) on group.y4m: A above, B and C side by side below (composeGroupCam), front camera.
 import type { Page } from '@playwright/test';
-import { armShotOriginal, camBox, capturedVsOriginal, debugState, dragSlider, expect, grab, hold, mad, regionDiff, selectPerson, test } from './fixtures';
+import { armShotOriginal, camBox, capturedRegions, capturedVsOriginal, debugState, dragSlider, expect, grab, hold, mad, regionDiff, selectPerson, test } from './fixtures';
 
 /** Home → 拍攝 → the live camera with A, B and C found, and the overlays a frame grab would catch hidden (E3 shows the 全部套用 chip again to press it) */
 async function openCamera(page: Page): Promise<{ A: string; B: string; C: string }> {
@@ -74,6 +74,7 @@ test('E1 fresh camera = original: composite only, the preview equals 按住對�
 
 test('E2 per person: B adjusted, then C; each keeps its result; the capture and 編輯 carry B and C, A stays 原圖', async ({ page }) => {
   test.setTimeout(300_000);
+  await armShotOriginal(page);
   const { A, B, C } = await openCamera(page);
   await tap(page, B);
   await natural(page);
@@ -92,7 +93,16 @@ test('E2 per person: B adjusted, then C; each keeps its result; the capture and 
   expect([b2 > 0.5, c2 > 0.5, a2 < 0.3]).toEqual([true, true, true]);
   const persons = new Map((await debugState(page)).boxes.map((x) => [x.id, x.edited]));
   expect([persons.get(A), persons.get(B), persons.get(C)]).toEqual([false, true, true]);
+  // capture (U3): 預覽 shows B and C adjusted and A at 原圖, against the unprocessed frame handed to 編輯; each face's
+  // preview rect is its rect in the shot (the preview's crop, mirrored as the preview)
+  const rects = await Promise.all([B, C, A].map(async (id) => (await camBox(page, id)).rect));
+  await page.evaluate(() => ((window as unknown as { __armOriginal: boolean }).__armOriginal = true));
   await page.getByRole('button', { name: '拍照' }).click();
+  const shot = await capturedRegions(page, rects);
+  console.log(`E2 capture vs the unprocessed frame: ${JSON.stringify(shot)} (B, C, A)`);
+  expect(shot.same).toBe(true);
+  const [b3, c3, a3] = shot.mads;
+  expect([b3 > 0.5, c3 > 0.5, a3 >= 0 && a3 < 0.3]).toEqual([true, true, true]);
   await page.getByRole('button', { name: '編輯' }).click();
   await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 90_000 });
   await expect.poll(async () => (await debugState(page)).faces, { timeout: 60_000 }).toBe(3);

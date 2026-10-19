@@ -5,8 +5,9 @@
 // first face answer on preAnswerCache, S §7).
 import { addFaceScan, aspectFits, boxScore, buildCache, cachedFits, noFaceCache, plainScans, poseBox, rematchByIoU, shortScan, withBodies, withFaces, withMoreFaces } from '../detect/cache';
 import { adaptCached, EMPTY_PREPARED, type PreparedFaces } from '../detect/faces';
-import { primaryOf, seedPrimary } from '../detect/persons';
+import { matchHandOver, primaryOf, seedPrimary } from '../detect/persons';
 import { cropConstrain, cropValid, isIdentity } from '../geometry/view';
+import { stableKey } from '../store/undo';
 import type { BodyDetections, CachedBody, CameraHandOver, DetectionCache, EditState, FaceSeed, HistoryEntry, LiquifyFrame, PersonId, PersonParams, PhotoParams, Rect } from '../types';
 import { editFromLegacy, mergeLegacy } from './legacy';
 import { sanitizeStrokes } from './liquify';
@@ -167,6 +168,11 @@ export interface AnswerInput {
    * short-range record keeps it: the completion still owes that up-frame a look. null / absent keeps the cache's
    */
   detector?: 'full-range' | 'short-range' | null;
+  /**
+   * the camera hand-over's persons (EditorSource.handOver: each edited camera person's box in the photo's UV and params),
+   * for the photo's first answer only, as faceSeed (camera per-person spec §5.4). null / absent / empty: none
+   */
+  handOver?: CameraHandOver['persons'] | null;
 }
 export interface Answer {
   detect: DetectionCache;
@@ -174,6 +180,11 @@ export interface Answer {
   rebase: (e: EditState) => EditState;
   /** persons were renamed or reset by a rematch: show the cache-dropped toast */
   dropped: boolean;
+  /**
+   * with a hand-over: how many camera persons this answer found no face for (dropped, never given another face; the
+   * editor's toast, camera per-person spec §3.8). Absent without one
+   */
+  handOverMissed?: number;
 }
 
 const LOCAL_BODY = (k: string) => k.startsWith('body.') && k !== 'body.legs';
@@ -236,9 +247,12 @@ function staleFirst(e: EditState, rename: Readonly<Record<PersonId, PersonId | n
  *   own local 美體 values) and its nine local 美體 values over b0's person's (it keeps its face values); a person the
  *   rematch renamed holds a stored person's params and takes neither part (S §5.3 R2);
  * - a dropped cache is rematched by face-box IoU (S §5.3): the open's rematch, or the one the cache carries ({} too:
- *   `dropped`, the reset toast). The persons no answer can match go first (knownOnly, R1).
- * The one-shot inputs (v1Body, rematch, faceSeed) belong to the photo's first answer only: a later answer passes null
- * for them. A cache's own pending rematch is read from it (and dropped from the cache), first answer or not.
+ *   `dropped`, the reset toast). The persons no answer can match go first (knownOnly, R1);
+ * - a camera hand-over (camera per-person spec §5.4): each camera person matched to a face (matchHandOver) gives that
+ *   face's person its params, after the rules above; the primary keeps p0 instead when the user edited before this
+ *   answer. Unmatched camera persons are dropped and counted (`handOverMissed`, the editor's toast).
+ * The one-shot inputs (v1Body, rematch, faceSeed, handOver) belong to the photo's first answer only: a later answer
+ * passes null for them. A cache's own pending rematch is read from it (and dropped from the cache), first answer or not.
  */
 export function firstAnswer(a: AnswerInput): Answer {
   // a later scan in another up-frame (a sideways photo, S §3.6) appends its quarter: the cache only grows. A short-range
@@ -295,13 +309,34 @@ export function firstAnswer(a: AnswerInput): Answer {
   const rename = stale ? rematchByIoU(stale, cache) : null;
   /** the persons the rematch renamed: each holds a stored person's params now, which the hand-over never touches (R2) */
   const restored = new Set(Object.values(rename ?? {}).filter((to): to is PersonId => to !== null));
+  // the camera hand-over (camera per-person spec §5.4): each camera person matched to a face of this answer (an obstacle
+  // matches nothing), its params for that face's person; the rest are dropped and counted (no face at all: every one)
+  const handOver = a.handOver?.length ? a.handOver : null;
+  const match = handOver ? matchHandOver(handOver.map((p) => p.box), cache.faces) : null;
+  const camera: Record<PersonId, PersonParams> = {};
+  for (const [i, face] of match?.pairs ?? []) {
+    const owner = cache.persons.find((p) => p.face === face);
+    if (owner) camera[owner.id] = handOver![i].params;
+  }
+  /**
+   * §5.4 item 2: each matched person takes the camera params, except the primary when the user edited before this
+   * answer (p0 differs from the template, the preset aside: possible only while the detection waited), which keeps p0 as
+   * assignPersons gave it, so no edit is lost
+   */
+  const withCamera = (result: EditState, out: EditState): EditState => {
+    const cam = Object.keys(camera);
+    if (!cam.length) return result;
+    const p0 = out.persons[P0] ?? out.template;
+    const p0Edited = stableKey({ ...p0, preset: null }) !== stableKey({ ...out.template, preset: null });
+    return withPersons(result, p0Edited ? cam.filter((id) => id !== primary) : cam, (_, id) => camera[id]);
+  };
   const rebase = (e: EditState): EditState => {
     // the look goes back on p0 first, so a 美體 cache's body person and a v1 body take the same hand-over below
     let out = knownOnly(holder ? handBack(e, holder.id) : e, a.detect, stale);
     if (rename) out = renamePersons(staleFirst(out, rename), rename);
     const assigned = assignPersons(out, ids, primary);
     // b0's person is the primary: it takes the whole look (assignPersons)
-    if (!b0 || !split) return assigned;
+    if (!b0 || !split) return withCamera(assigned, out);
     // the A13 hand-over: each part of the look merged over the person's own params from before this answer (a person
     // new to the edit: the template)
     const look = out.persons[P0] ?? out.primaryInit ?? out.template;
@@ -309,9 +344,9 @@ export function firstAnswer(a: AnswerInput): Answer {
     const hand: Record<PersonId, PersonParams> = {};
     if (!restored.has(primary)) hand[primary] = withLocalBody(look, own(primary));
     if (!restored.has(b0.id)) hand[b0.id] = withLocalBody(own(b0.id), look);
-    return withPersons(assigned, Object.keys(hand), (_, id) => hand[id]);
+    return withCamera(withPersons(assigned, Object.keys(hand), (_, id) => hand[id]), out);
   };
-  return { detect: cache, rebase, dropped: stale !== null };
+  return { detect: cache, rebase, dropped: stale !== null, ...(match ? { handOverMissed: match.missed } : {}) };
 }
 
 /**

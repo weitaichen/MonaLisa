@@ -1,4 +1,5 @@
-// Persons from faces and bodies (S §3.4 P4, §2.3): pairing, the primary, the camera seed and the photo hit test.
+// Persons from faces and bodies (S §3.4 P4, §2.3): pairing, the primary, the camera seed, the camera hand-over's match
+// (camera per-person spec §5.4) and the photo hit test.
 // Pure and resolution-free (normalized O-space; iso distances divide y by the aspect).
 import { fieldAt } from '../body/cpuWarp';
 import { SEED_BOX_PAD } from '../config/limits';
@@ -6,6 +7,7 @@ import { maskCoversFace } from '../ui/faceProtectModel';
 import type { BodyField, Face, PersonId, PersonInfoCached, PersonMask, Pose33, Rect } from '../types';
 import { maskHit } from './bodyHit';
 import { boxScore, poseBox } from './cache';
+import { boxIoU } from './faces';
 
 export interface PairFace {
   id: string;
@@ -123,6 +125,51 @@ export function seedPrimary(seed: { x: number; y: number }, faces: readonly { id
     }
   }
   return best;
+}
+
+/** a camera box and an editor face of one person by box overlap (camera per-person spec §5.4 item 1) */
+const HANDOVER_IOU = 0.3;
+
+/**
+ * The camera hand-over's boxes (each edited camera person in the photo's UV) → the editor's faces (camera per-person
+ * spec §5.4, K14): pairs by box IoU ≥ 0.3, the best first; then, for the boxes left, by the padded-centre rule of
+ * seedPrimary (a face whose box padded by SEED_BOX_PAD holds the box's centre), the nearest first; one to one, ties in
+ * the input order (boxes, then faces). A box left over is missed: its person is dropped, never given another face.
+ * `pairs`: [box index, face id], the IoU pairs first.
+ */
+export function matchHandOver(boxes: readonly Rect[], faces: readonly { id: string; box: Rect }[]): { pairs: readonly [number, string][]; missed: number } {
+  const usedB = new Set<number>();
+  const usedF = new Set<string>();
+  const pairs: [number, string][] = [];
+  const take = (cand: { i: number; f: string; k: number }[]) => {
+    // Array.prototype.sort is stable: equal keys keep the order they were listed in (boxes, then faces)
+    cand.sort((a, b) => a.k - b.k);
+    for (const c of cand) {
+      if (usedB.has(c.i) || usedF.has(c.f)) continue;
+      usedB.add(c.i);
+      usedF.add(c.f);
+      pairs.push([c.i, c.f]);
+    }
+  };
+  const byIoU: { i: number; f: string; k: number }[] = [];
+  boxes.forEach((b, i) => {
+    for (const f of faces) {
+      const iou = boxIoU(b, f.box);
+      if (iou >= HANDOVER_IOU) byIoU.push({ i, f: f.id, k: -iou });
+    }
+  });
+  take(byIoU);
+  const byCentre: { i: number; f: string; k: number }[] = [];
+  boxes.forEach((b, i) => {
+    if (usedB.has(i)) return;
+    const c: [number, number] = [b.x + b.w / 2, b.y + b.h / 2];
+    for (const f of faces) {
+      if (usedF.has(f.id) || !inside(pad(f.box, SEED_BOX_PAD), c)) continue;
+      byCentre.push({ i, f: f.id, k: Math.hypot(f.box.x + f.box.w / 2 - c[0], f.box.y + f.box.h / 2 - c[1]) });
+    }
+  });
+  take(byCentre);
+  return { pairs, missed: boxes.length - pairs.length };
 }
 
 export interface HitCtx {

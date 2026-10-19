@@ -685,6 +685,41 @@ describe('firstAnswer (S §3.3 item 4, §5.3 answer-time rows, C2)', () => {
     // without 重置 the stored edit keeps what 0.4.0 saved (an entry keeps its look)
     expect(a.rebase(o.edit).persons.f1).toEqual(naturalPerson());
   });
+
+  describe('firstAnswer with a camera hand-over (camera per-person spec §5.4)', () => {
+    const at = (cx: number, w: number) => ({ x: cx - w / 2, y: 0.4 - w / 2, w, h: w });
+    const nat = naturalPerson();
+    const ref = personFromPreset('refined', 1);
+    const opened = handOverEdit({ photo: defaultPhoto(), persons: [], ambient: null });
+    it('each matched face takes its camera person’s params; the seed names the primary; an unmatched person is counted', () => {
+      const a = firstAnswer({ ...base, prepared: two, faceSeed: { x: 0.7, y: 0.4 }, handOver: [{ box: at(0.3, 0.2), params: nat }, { box: at(0.71, 0.1), params: ref }, { box: at(0.95, 0.05), params: nat }] });
+      const e = a.rebase(opened);
+      expect([a.detect.primary, e.persons.f0, e.persons.f1, a.handOverMissed]).toEqual(['f1', nat, ref, 1]);
+      expect(e.photo).toEqual(defaultPhoto());
+    });
+    it('an edit made before the answer (p0 ≠ the template) stays with the primary; the others still take theirs', () => {
+      const touched = withPersons(opened, ['p0'], (p) => ({ ...p, values: { ...p.values, 'skin.smooth': 0.8 }, preset: 'custom' }));
+      const a = firstAnswer({ ...base, prepared: two, faceSeed: { x: 0.7, y: 0.4 }, handOver: [{ box: at(0.3, 0.2), params: nat }, { box: at(0.71, 0.1), params: ref }] });
+      const e = a.rebase(touched);
+      expect(e.persons.f1.values['skin.smooth']).toBe(0.8);
+      expect(e.persons.f0).toEqual(nat);
+    });
+    it('no face in the answer: every camera person is missed, p0 stays as the edit opened', () => {
+      const a = firstAnswer({ ...base, prepared: prepareFaces([], 1000, 1000), handOver: [{ box: at(0.3, 0.2), params: nat }] });
+      expect(a.handOverMissed).toBe(1);
+      expect(a.rebase(opened).persons).toEqual({ p0: neutralPerson() });
+    });
+    it('a camera box on an obstacle (a face the cap dropped) matches nothing; every undo state takes the same mapping', () => {
+      const eleven = prepareFaces(Array.from({ length: 11 }, (_, i) => lmAt(0.05 + i * 0.09, 0.5, i === 10 ? 0.05 : 0.07)), 1000, 1000);
+      expect(eleven.obstacles).toHaveLength(1);
+      const a = firstAnswer({ ...base, prepared: eleven, handOver: [{ box: eleven.obstacles[0].box, params: nat }, { box: eleven.faces[0].box, params: ref }] });
+      expect(a.handOverMissed).toBe(1);
+      const older = withPersons(opened, ['p0'], (p) => ({ ...p, values: { ...p.values, 'skin.smooth': 0.3 }, preset: 'custom' }));
+      const owner = a.detect.persons.find((p) => p.face === eleven.faces[0].id)!.id;
+      expect(a.rebase(opened).persons[owner]).toEqual(ref);
+      expect(Object.keys(a.rebase(older).persons)).toEqual(Object.keys(a.rebase(opened).persons));
+    });
+  });
 });
 
 /** a pose whose face points sit on the face's own landmarks (a perfect pair); poseOnFace of src/detect/cache.test.ts */

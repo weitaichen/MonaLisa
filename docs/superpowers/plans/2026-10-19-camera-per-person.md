@@ -1816,7 +1816,7 @@ cd /d/GitSource/MonaLisa && git add src/types.ts src/ui/imaging.ts src/ui/imagin
   export function zoomCrop(box: Rect, width: number, height: number): PxRect; // side min(long edge, box.w × width / HANDOVER_ZOOM_FACE), centred, moved inside, clipped to the image
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `persons.test.ts`:
 
@@ -1926,13 +1926,13 @@ describe('createStillSession: the hand-over retries (camera per-person spec §5.
 });
 ```
 
-- [ ] **Step 2: Run to verify they fail** — `npx vitest run src/detect/persons.test.ts src/edit/migrate.test.ts src/app/still.test.ts` → FAIL.
+- [x] **Step 2: Run to verify they fail** — `npx vitest run src/detect/persons.test.ts src/edit/migrate.test.ts src/app/still.test.ts` → FAIL.
 
-- [ ] **Step 3: Implement `matchHandOver` and the `firstAnswer` hand-over**
+- [x] **Step 3: Implement `matchHandOver` and the `firstAnswer` hand-over**
 
 `matchHandOver`: candidate pairs `(i, face)` with `boxIoU ≥ 0.3`, sorted by IoU descending (stable), taken greedily one to one; then for the boxes left, every unused face whose box padded by `SEED_BOX_PAD` holds the box centre, sorted by centre distance ascending (stable), greedily; `missed = boxes.length − pairs.length`. `firstAnswer`: when `a.handOver?.length`, compute `matchHandOver(a.handOver.map((p) => p.box), cache.faces)` once; `camera: Record<PersonId, PersonParams>` maps each paired face's owner (`cache.persons.find((p) => p.face === faceId)`) to the params. Inside `rebase`, after `assignPersons` and the A13 hand-over (on both of its `return` paths), apply `withPersons(result, ids, (_, id) => camera[id])` to every `camera` id, except the primary when the user edited before this answer: `p0Edited = stableKey({ ...p0, preset: null }) !== stableKey({ ...template, preset: null })` with `p0 = out.persons[P0] ?? out.template` (§5.4 item 2: `assignPersons` already gave the primary `p0`). `Answer.handOverMissed = missed` (`a.handOver.length` when the answer has no face).
 
-- [ ] **Step 4: Implement the retries in `still.ts`**
+- [x] **Step 4: Implement the retries in `still.ts`**
 
 `detectOnce(tracker, bitmap, w, h, seed, boxes)`; `createStillSession` passes `opts.handOver ?? []`. The rule, replacing `detectFaces` (`:515-539`):
 
@@ -1969,19 +1969,21 @@ return { prepared: held.length ? prepareWith(base, held, width, height) : first,
 
 `dbg.detectRetries` counts one per answer that ran any retry. `cropCanvas(bitmap, r)` draws the rect into an `OffscreenCanvas(r.w, r.h)` (a document canvas without it). `zoomCrop`: `side = round(min(long, b.w × width / HANDOVER_ZOOM_FACE))`, `w = min(side, width)`, `h = min(side, height)`, `x = clamp(round(cx·width − side / 2), 0, width − w)`, likewise `y`.
 
-- [ ] **Step 5: Wire the editor**
+- [x] **Step 5: Wire the editor**
 
 `Editor.tsx:815`: `handOver: !useCache && !answered.current ? (source.handOver?.map((p) => p.box) ?? null) : null` beside `faceSeed`; `:831`: `handOver: first ? (source.handOver ?? null) : null`; `applyAnswer` (`:735-739`) pushes `` `${a.handOverMissed} 位人物在照片中未偵測到臉部，未帶入相機效果` `` to `notices` when `first && a.handOverMissed`.
 
-- [ ] **Step 6: Run the unit tests** — `npx vitest run src/detect src/edit src/app src/ui && npm run typecheck` → PASS.
+(Executed with one adaptation, 2026-10-20: the no-face toast (`Editor.tsx:848`, 「未偵測到臉部，臉型、美妝與膚質工具不會套用」) was shown right after `applyAnswer` and took the one toast slot (`state.ts` `toast`), so with no face in the photo it overwrote the hand-over's toast at once (§11 "Editor finds no face … toast with n"). It now leads the answer's notices (`applyAnswer(a, first, lead)`), same condition and timing, and the notices after it follow 3.4 s apart.)
 
-- [ ] **Step 7: Update `original.spec.ts`'s camera test (changed on purpose, §12.2)**
+- [x] **Step 6: Run the unit tests** — `npx vitest run src/detect src/edit src/app src/ui && npm run typecheck` → PASS.
+
+- [x] **Step 7: Update `original.spec.ts`'s camera test (changed on purpose, §12.2)**
 
 Split it: (a) **nothing set** — open the camera, change nothing, shoot, 編輯: `passes` `['composite']`, export MAD 0 against `__shotOriginal` (today's assertions); (b) **a camera look** — 一鍵 › 自然 and 美白 100 as today, the preview and the capture differ from the frame (today's assertions), then 編輯: the first answer's person at the face has `磨皮` equal to 自然's (read the 美膚 › 磨皮 slider), `美白` reads 100, and `passes` include more than `composite`. Add (c) **reload**: `STYLED_LOOK` stored, open the camera: `passes` of the live frame never include `mask`, `makeup` or `reshape` (the stored person part is not applied, K15).
 
-- [ ] **Step 8: Run** — `npm run build && npx playwright test tests/e2e/original.spec.ts tests/e2e/camera.spec.ts --project chromium && npx playwright test tests/e2e/camera-group.spec.ts --project chromium-group` → PASS.
+- [x] **Step 8: Run** — `npm run build && npx playwright test tests/e2e/original.spec.ts tests/e2e/camera.spec.ts --project chromium && npx playwright test tests/e2e/camera-group.spec.ts --project chromium-group` → PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 cd /d/GitSource/MonaLisa && git add src/config src/detect/persons.ts src/detect/persons.test.ts src/edit/migrate.ts src/edit/migrate.test.ts src/app/still.ts src/app/still.test.ts src/ui/screens/Editor.tsx tests/e2e/original.spec.ts && git commit -m "camera per-person: 編輯 gives each person found their camera params (IoU, padded centre, zoomed retry), drops the rest with a notice" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat

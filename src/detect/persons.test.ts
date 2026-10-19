@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { adapt } from '../tracking/adapter111';
 import type { BodyField, PersonMask, Pose33 } from '../types';
 import { prepareFaces } from './faces';
-import { hitPerson, pairCost, pairPersons, primaryOf, seedPrimary } from './persons';
+import { hitPerson, matchHandOver, pairCost, pairPersons, primaryOf, seedPrimary } from './persons';
 
 const fx = (n: string) => JSON.parse(readFileSync(new URL(`../../tests/fixtures/${n}`, import.meta.url), 'utf8'));
 const group = fx('group_faces.landmarks.json') as { width: number; height: number; faces: number[][] };
@@ -112,5 +112,22 @@ describe('hitPerson (S §2.3)', () => {
     expect(hitPerson([0.1, 0.9], { ...ctx, bodies })).toBe('b1');
     expect(hitPerson([0.9, 0.9], { ...ctx, bodies })).toBe('b0');
     expect(hitPerson([0.9, 0.9], { ...ctx, bodies: [{ person: 'b2', mask: null, box: { x: 0.8, y: 0.8, w: 0.15, h: 0.15 } }] })).toBe('b2');
+  });
+});
+
+describe('matchHandOver (camera per-person spec §5.4, K14)', () => {
+  const f = (id: string, x: number) => ({ id, box: { x, y: 0.3, w: 0.1, h: 0.12 } });
+  const faces = [f('f0', 0.1), f('f1', 0.4), f('f2', 0.7)];
+  it('pairs by IoU ≥ 0.3 (best first), then by the padded centre (nearest first), one to one; the rest are missed', () => {
+    const r = matchHandOver([{ x: 0.11, y: 0.3, w: 0.1, h: 0.12 }, { x: 0.43, y: 0.33, w: 0.04, h: 0.05 }, { x: 0.9, y: 0.3, w: 0.05, h: 0.06 }], faces);
+    expect(r).toEqual({ pairs: [[0, 'f0'], [1, 'f1']], missed: 1 });
+  });
+  it('two camera persons on one face: the better IoU takes it, the other is missed, never given another face', () => {
+    const r = matchHandOver([{ x: 0.42, y: 0.3, w: 0.1, h: 0.12 }, { x: 0.4, y: 0.3, w: 0.1, h: 0.12 }], faces);
+    expect(r).toEqual({ pairs: [[1, 'f1']], missed: 1 });
+  });
+  it('ties keep the input order (boxes, then faces)', () => {
+    const r = matchHandOver([{ x: 0.1, y: 0.3, w: 0.1, h: 0.12 }], [f('a', 0.1), f('b', 0.1)]);
+    expect(r.pairs).toEqual([[0, 'a']]);
   });
 });

@@ -10,7 +10,7 @@ import { applyRatio, IDENTITY_GEOMETRY, rotateLeft, snapCrop } from '../geometry
 import { spotWindowGrowth } from '../media/exportPlan';
 import { adapt } from '../tracking/adapter111';
 import type { BeautyParams, Geometry, Landmarks478, PhotoParams, StillFrame } from '../types';
-import { createStillSession, detectStill, sameDisplayFrame, type StillSession } from './still';
+import { createStillSession, detectStill, sameDisplayFrame, zoomCrop, type StillSession } from './still';
 import { faceOf, fakeEngine, fakeTracker, makeBodyField, makeFace, makeLandmarks, stubRaf, weightOf } from './testFakes';
 
 vi.mock('../tracking/adapter111', () => ({
@@ -933,5 +933,79 @@ describe('createStillSession: the camera seed in no full-range face (D2, step-1 
     expect(createStillSession(fakeEngine(), short, bitmap()).detector).toBe('short-range');
     expect(createStillSession(fakeEngine(), full, bitmap(), { faces: cached() }).detector).toBeNull();
     expect(createStillSession(fakeEngine(), null, bitmap()).detector).toBeNull();
+  });
+});
+
+describe('createStillSession: the hand-over retries (camera per-person spec §5.4, K21)', () => {
+  beforeEach(() => {
+    // a face at (lm0.x, lm0.y) with radius lm0.z (a fraction of the width), square in pixels: mapLandmarks moves it like a real face
+    vi.mocked(adapt).mockImplementation((l, w, h) => {
+      const f = makeFace(0, l.points[0]);
+      for (let i = 0; i < 36; i++) {
+        f.oval[i * 2] = l.points[0] + l.points[2] * Math.cos((i / 36) * 2 * Math.PI);
+        f.oval[i * 2 + 1] = l.points[1] + l.points[2] * (w / h) * Math.sin((i / 36) * 2 * Math.PI);
+      }
+      return f;
+    });
+    vi.stubGlobal(
+      'OffscreenCanvas',
+      class {
+        constructor(
+          public width: number,
+          public height: number,
+        ) {}
+        getContext() {
+          return { drawImage: vi.fn() };
+        }
+      },
+    );
+  });
+  afterEach(() => {
+    vi.mocked(adapt).mockImplementation(() => makeFace(7));
+  });
+  const face = (x: number, y: number, r: number) => {
+    const l = makeLandmarks();
+    l.points.set([x, y, r], 0);
+    return l;
+  };
+  const far = { x: 0.59375, y: 0.3, w: 0.0625, h: 0.046875 }; // 96 px wide, centre x 960 px
+  const xs = (s: StillSession) => s.faces.map((f) => f.box.x + f.box.w / 2);
+  it('a box no full-range face holds gets one full-range detection on a crop of side box width / 0.25; the face holding its centre joins', () => {
+    const bmp = bitmap();
+    const tracker = fakeTracker();
+    tracker.photoDetector = 'full-range';
+    tracker.detectImage.mockImplementation((img) => (img === bmp ? [face(0.25, 0.5, 0.15)] : [face(0.5, 0.5, 0.125)]));
+    const s = createStillSession(fakeEngine(), tracker, bmp, { handOver: [far] });
+    const crop = tracker.detectImage.mock.calls[1][0] as unknown as { width: number; height: number };
+    expect([crop.width, crop.height]).toEqual([384, 384]);
+    expect(tracker.detectImage.mock.calls[1][1]).toEqual({ maxFaces: EDIT_DETECT_FACES });
+    expect(xs(s)).toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.625, 6)]);
+  });
+  it('zoomCrop moves the crop inside the image at an edge', () => {
+    expect(zoomCrop({ x: 0.97, y: 0.97, w: 0.02, h: 0.015 }, 1536, 2048)).toEqual({ x: 1536 - 123, y: 2048 - 123, w: 123, h: 123 });
+  });
+  it('a box over a quarter of the long edge and the faceSeed share one short-range pass (the crop would be the whole image)', () => {
+    const bmp = bitmap();
+    const tracker = fakeTracker();
+    tracker.photoDetector = 'full-range';
+    tracker.detectImage.mockImplementation((_img, o) => (o.detector === 'camera' ? [face(0.25, 0.5, 0.15), face(0.75, 0.5, 0.2)] : [face(0.25, 0.5, 0.15)]));
+    const big = { x: 0.55, y: 0.4, w: 0.4, h: 0.3 }; // 614 px ≥ 0.25 × 2048
+    const s = createStillSession(fakeEngine(), tracker, bmp, { handOver: [big], faceSeed: { x: 0.75, y: 0.5 } });
+    expect(tracker.detectImage.mock.calls.map((c) => c[1])).toEqual([{ maxFaces: EDIT_DETECT_FACES }, { maxFaces: EDIT_DETECT_FACES, detector: 'camera' }]);
+    expect(xs(s)).toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.75, 6)]);
+  });
+  it('nothing more runs when every seed is found; a box its zoomed retry misses is left out (firstAnswer counts it)', () => {
+    const bmp = bitmap();
+    const found = fakeTracker();
+    found.photoDetector = 'full-range';
+    found.detectImage.mockImplementation(() => [face(0.25, 0.5, 0.15)]);
+    createStillSession(fakeEngine(), found, bmp, { handOver: [{ x: 0.2, y: 0.45, w: 0.1, h: 0.075 }] });
+    expect(found.detectImage).toHaveBeenCalledTimes(1);
+    const missed = fakeTracker();
+    missed.photoDetector = 'full-range';
+    missed.detectImage.mockImplementation((img) => (img === bmp ? [face(0.25, 0.5, 0.15)] : []));
+    const s = createStillSession(fakeEngine(), missed, bmp, { handOver: [far] });
+    expect(missed.detectImage).toHaveBeenCalledTimes(2);
+    expect(xs(s)).toEqual([expect.closeTo(0.25, 6)]);
   });
 });

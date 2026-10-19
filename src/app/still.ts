@@ -1,15 +1,16 @@
 // OWNER: app-glue agent. Editor session for one still image: detect once, render on demand (rAF-coalesced).
 // v0.4 (S §3.4 S1): every selectable face of the photo (cache order f0…) plus the obstacles; the caller builds the
 // frame (src/edit/frame.ts buildFrame), each face carrying its own 瘦臉 limit (A6).
-import { EDIT_DETECT_FACES } from '../config/limits';
-import { adaptCached, prepareFaces, prepareWith, type PreparedFaces } from '../detect/faces';
+import { EDIT_DETECT_FACES, HANDOVER_ZOOM_FACE } from '../config/limits';
+import { adaptCached, prepareFaces, prepareWith, type PreparedFace, type PreparedFaces } from '../detect/faces';
 import { seedPrimary } from '../detect/persons';
 import { photoLuts } from '../engine/looks';
 import { IDENTITY_GEOMETRY, snapCrop, viewSize } from '../geometry/view';
 import type { TileInputBase } from '../media/exportFull';
 import { faceBoundsFor, spotBounds, type TileBounds } from '../media/exportPlan';
-import type { BodyField, CachedFace, CachedObstacle, Engine, Face, Geometry, LiquifyField, Rect, RenderInput, RenderStats, Size, StillFrame, Tracker } from '../types';
+import type { BodyField, CachedFace, CachedObstacle, Engine, Face, Geometry, Landmarks478, LiquifyField, PxRect, Rect, RenderInput, RenderStats, Size, StillFrame, Tracker } from '../types';
 import { debugState, reportError } from './debug';
+import { mapLandmarks } from './liveViews';
 
 export interface SessionFace {
   id: string;
@@ -152,6 +153,12 @@ export interface StillSessionOptions {
    * that hold it (D2, step-1 spec §6.5). null / absent: none (an import, 全部, a later answer).
    */
   faceSeed?: { x: number; y: number } | null;
+  /**
+   * The camera hand-over's boxes (O-space, EditorSource.handOver: each edited camera person's face), for the photo's
+   * first answer only: a box no full-range face holds is retried, zoomed or short-range (camera per-person spec §5.4,
+   * K21). null / absent: none.
+   */
+  handOver?: readonly Rect[] | null;
 }
 
 /** prepareExport re-waits after a loss + restore during its wait at most this often (repeated cycles cannot loop) */
@@ -170,7 +177,7 @@ export function createStillSession(
   const detected =
     opts.faces !== undefined
       ? fromCache(opts.faces, opts.obstacles ?? [], width, height)
-      : detectOnce(tracker, bitmap, width, height, opts.faceSeed ?? null);
+      : detectOnce(tracker, bitmap, width, height, opts.faceSeed ?? null, opts.handOver ?? []);
   // window.__meiyan.face describes whatever is on screen: the photo now (the live loop is stopped)
   const dbg = debugState();
   if (dbg) {
@@ -483,7 +490,7 @@ export interface StillDetection {
  * bound one's) and the debug state keeps describing what is on screen; `detectCalls` counts it like any answer.
  */
 export function detectStill(tracker: Tracker, bitmap: ImageBitmap): StillDetection {
-  const d = detectOnce(tracker, bitmap, bitmap.width, bitmap.height, null);
+  const d = detectOnce(tracker, bitmap, bitmap.width, bitmap.height, null, []);
   return { faces: d.faces, obstacles: d.obstacles, dropped: d.dropped, faceKnown: d.known, detector: d.detector };
 }
 
@@ -500,48 +507,137 @@ function fromCache(faces: readonly CachedFace[], obstacles: readonly CachedObsta
 }
 
 /**
- * One face answer (step-1 spec §6.5). BlazeFace full-range misses a face that fills the frame or is cut off by its edge
- * (a close-up, a forehead cut at the brows, a face partly past a side), which the camera's short-range detector finds.
- * So the short-range detector is asked once more when the full-range answer
- * - has no usable face (none that prepareFaces keeps): its answer is taken when it has a face;
- * - or holds no face whose padded box (SEED_BOX_PAD) holds a camera hand-over's seed, a sign that it missed the face
- *   the camera was beautifying (D2): the faces of the short-range answer that hold the seed are added, each in place of
- *   any full-range face on its head (faces.ts prepareWith, sameHead: their landmarks nearly coincide, however the two
- *   detectors box that head), and the union is numbered afresh. This retry is an extra pass over an answer that has
- *   faces: if it throws, the full-range answer stands.
- * Otherwise full-range faces are never merged with a short-range pass: that would cost every photo a second graph rebuild
- * and inference (§6.5). The tracker given may be upTracker's, so a sideways scan retries the same way.
+ * The zoomed hand-over retry's crop (camera per-person spec §5.4, K21), in the width × height image's px: a square of
+ * side min(long edge, box width / HANDOVER_ZOOM_FACE) centred on the box, moved inside the image and clipped to it.
  */
-function detectFaces(tracker: Tracker, bitmap: ImageBitmap, width: number, height: number, seed: { x: number; y: number } | null): { prepared: PreparedFaces; detector: 'full-range' | 'short-range' } {
+export function zoomCrop(box: Rect, width: number, height: number): PxRect {
+  const side = Math.max(1, Math.round(Math.min(Math.max(width, height), (box.w * width) / HANDOVER_ZOOM_FACE)));
+  const w = Math.min(side, width);
+  const h = Math.min(side, height);
+  const clamp = (v: number, hi: number) => Math.max(0, Math.min(hi, v));
+  return {
+    x: clamp(Math.round((box.x + box.w / 2) * width - side / 2), width - w),
+    y: clamp(Math.round((box.y + box.h / 2) * height - side / 2), height - h),
+    w,
+    h,
+  };
+}
+
+/** `r` of the bitmap copied 1:1 for one detection: an OffscreenCanvas, a document canvas where its 2D context is missing */
+function cropCanvas(bitmap: ImageBitmap, r: PxRect): OffscreenCanvas | HTMLCanvasElement {
+  if (typeof OffscreenCanvas !== 'undefined') {
+    const canvas = new OffscreenCanvas(r.w, r.h);
+    const ctx = canvas.getContext('2d') as CanvasDrawImage | null;
+    if (ctx) {
+      ctx.drawImage(bitmap, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+      return canvas;
+    }
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = r.w;
+  canvas.height = r.h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('no 2D context for the hand-over crop');
+  ctx.drawImage(bitmap, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+  return canvas;
+}
+
+const centreOf = (b: Rect) => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 });
+
+/**
+ * One face answer (step-1 spec §6.5, camera per-person spec §5.4). BlazeFace full-range misses a face that fills the
+ * frame or is cut off by its edge (a close-up, a forehead cut at the brows, a face partly past a side), which the
+ * camera's short-range detector finds, and a face under its ~9 % floor, which the camera hands over down to 3 % (K17).
+ * A seed is missed when its point lies in no padded full-range face box (SEED_BOX_PAD): the camera's face seed, and the
+ * centre of each camera hand-over box (`boxes`, the photo's first answer only). The retries, each at most once:
+ * 1. no usable face (none that prepareFaces keeps): the short-range answer is taken whole when it has a face. A throw
+ *    propagates (detectOnce: unsure, so the bounded re-detect asks again);
+ * 2. the seeds still missed: the face seed (when the answer has faces) and every box a quarter of the long edge wide or
+ *    more (its crop would be the whole image: a large face full-range missed) share one short-range pass, the one of 1
+ *    if it ran; its faces that hold any of those seeds are added (D2). Each smaller box gets one full-range detection
+ *    on its zoomCrop, its faces mapped back to the photo's UV (mapLandmarks), and the one nearest the box's centre whose
+ *    padded box holds it is added (K21). A throw in either keeps the answer (that seed stays missed: firstAnswer counts
+ *    a box's person, the face seed routes as an import's, C6).
+ * The faces added join the answer through prepareWith, each in place of any face on its head (sameHead: their landmarks
+ * nearly coincide, however the detectors box that head), under prepareFaces' rules (MIN_FACE_FRAC, the cap, display
+ * order and ids). Otherwise full-range faces are never merged with a short-range pass: that would cost every photo a
+ * second graph rebuild and inference (§6.5). The tracker given may be upTracker's, so a sideways scan retries the same way.
+ */
+function detectFaces(
+  tracker: Tracker,
+  bitmap: ImageBitmap,
+  width: number,
+  height: number,
+  seed: { x: number; y: number } | null,
+  boxes: readonly Rect[],
+): { prepared: PreparedFaces; detector: 'full-range' | 'short-range' } {
   const raw = tracker.detectImage(bitmap, { maxFaces: EDIT_DETECT_FACES });
-  const first = prepareFaces(raw, width, height);
+  let base: readonly Landmarks478[] = raw;
+  let first = prepareFaces(raw, width, height);
   // what that detection ran (read right after it, synchronously: the same answer the switch to IMAGE got)
   const detector = tracker.photoDetector;
   if (detector !== 'full-range') return { prepared: first, detector };
-  const seedMissed = first.faces.length > 0 && seed !== null && seedPrimary(seed, first.faces) === null;
-  if (first.faces.length > 0 && !seedMissed) return { prepared: first, detector };
-  const dbg = debugState();
-  if (dbg) dbg.detectRetries = (dbg.detectRetries ?? 0) + 1;
-  let retry: PreparedFaces;
-  try {
-    retry = prepareFaces(tracker.detectImage(bitmap, { maxFaces: EDIT_DETECT_FACES, detector: 'camera' }), width, height);
-  } catch (err) {
-    // a face answer that found nobody fails with its retry (detectOnce: unsure, so the bounded re-detect asks again);
-    // one with faces stands, the seed then routing as an import's does (C6)
-    if (!seedMissed) throw err;
-    reportError('still detect retry', err);
-    return { prepared: first, detector };
+  // one per answer that runs any retry (counted before it runs, so a retry that throws counts too)
+  let counted = false;
+  const count = () => {
+    if (counted) return;
+    counted = true;
+    const dbg = debugState();
+    if (dbg) dbg.detectRetries = (dbg.detectRetries ?? 0) + 1;
+  };
+  let short: Landmarks478[] | null = null;
+  const runShort = (): Landmarks478[] => {
+    if (short) return short;
+    count();
+    return (short = tracker.detectImage(bitmap, { maxFaces: EDIT_DETECT_FACES, detector: 'camera' }));
+  };
+  // 1. no usable face: the short-range answer, taken whole when it has one
+  if (!first.faces.length) {
+    const r = prepareFaces(runShort(), width, height);
+    if (r.faces.length) {
+      base = short!;
+      first = r;
+    }
   }
-  if (!seedMissed) return { prepared: retry.faces.length > 0 ? retry : first, detector };
-  const held = retry.faces.filter((f) => seedPrimary(seed!, [f]) !== null);
-  if (!held.length) return { prepared: first, detector };
-  return { prepared: prepareWith(raw, held, width, height), detector };
+  // 2. the seeds still missed
+  const missed = (pt: { x: number; y: number }) => seedPrimary(pt, first.faces) === null;
+  const long = Math.max(width, height);
+  const lost = boxes.filter((b) => missed(centreOf(b)));
+  const big = lost.filter((b) => b.w * width >= HANDOVER_ZOOM_FACE * long);
+  const small = lost.filter((b) => b.w * width < HANDOVER_ZOOM_FACE * long);
+  const pointMissed = !!seed && first.faces.length > 0 && missed(seed);
+  const held: PreparedFace[] = [];
+  if (pointMissed || big.length) {
+    try {
+      const r = prepareFaces(runShort(), width, height).faces;
+      // each face once, however many seeds it holds
+      for (const pt of [...(pointMissed && seed ? [seed] : []), ...big.map(centreOf)]) for (const f of r) if (seedPrimary(pt, [f]) !== null && !held.includes(f)) held.push(f);
+    } catch (err) {
+      // an extra pass over an answer that has faces (or a box retry after 1 answered): the answer stands
+      reportError('still detect retry', err);
+    }
+  }
+  for (const b of small) {
+    const c = centreOf(b);
+    const d = (f: PreparedFace) => Math.hypot(f.box.x + f.box.w / 2 - c.x, f.box.y + f.box.h / 2 - c.y);
+    try {
+      const crop = zoomCrop(b, width, height);
+      count();
+      const lms = tracker.detectImage(cropCanvas(bitmap, crop), { maxFaces: EDIT_DETECT_FACES }).map((l) => mapLandmarks(l, crop, width, height));
+      const hit = prepareFaces(lms, width, height).faces.filter((f) => seedPrimary(c, [f]) !== null);
+      if (hit.length) held.push(hit.reduce((x, y) => (d(x) <= d(y) ? x : y)));
+    } catch (err) {
+      // that box stays missed (firstAnswer counts its person for the toast)
+      reportError('still detect zoomed retry', err);
+    }
+  }
+  return { prepared: held.length ? prepareWith(base, held, width, height) : first, detector };
 }
 
-function detectOnce(tracker: Tracker | null, bitmap: ImageBitmap, width: number, height: number, seed: { x: number; y: number } | null): Detected {
+function detectOnce(tracker: Tracker | null, bitmap: ImageBitmap, width: number, height: number, seed: { x: number; y: number } | null, boxes: readonly Rect[]): Detected {
   if (!tracker) return { faces: [], obstacles: [], dropped: { ...NO_DROPS }, known: true, detector: null };
   try {
-    const { prepared: p, detector } = detectFaces(tracker, bitmap, width, height, seed);
+    const { prepared: p, detector } = detectFaces(tracker, bitmap, width, height, seed, boxes);
     const dbg = debugState();
     if (dbg) dbg.detectCalls++;
     return { faces: p.faces, obstacles: p.obstacles, dropped: p.dropped, known: true, detector };

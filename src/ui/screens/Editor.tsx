@@ -716,7 +716,8 @@ export function Editor({ source }: { source: EditorSource }) {
           if (!unmounted.current) toast(text, 3200);
         }, i * 3400);
     });
-  const applyAnswer = (a: ReturnType<typeof firstAnswer>, first: boolean) => {
+  /** `lead`: what this answer's session says before its notices (the no-face toast), so it does not overwrite them */
+  const applyAnswer = (a: ReturnType<typeof firstAnswer>, first: boolean, lead: readonly string[] = []) => {
     // (before the rebase) this answer brings the photo's first faces: a first answer, a 基本模式 merge (A15), a re-detect
     // or a sideways scan after a faceless output. What the editor draws changed (v1: 0.3 drew faces[0], 0.4 the primary;
     // otherwise the faces now take 美型, 美妝 and their own 磨皮), so the saved thumbnail is owed (S §5.2)
@@ -732,7 +733,10 @@ export function Editor({ source }: { source: EditorSource }) {
     );
     const persons = a.detect.persons.length;
     // a rematch says so whenever it runs (a first answer, or the merge into a 美體 cache that carried it, S §7)
-    const notices = a.dropped || (first && source.cacheDropped) ? ['已重新偵測臉部，部分人物的設定已重設'] : [];
+    const notices = [...lead, ...(a.dropped || (first && source.cacheDropped) ? ['已重新偵測臉部，部分人物的設定已重設'] : [])];
+    // the camera persons the photo's first answer found no face for (after the retries) were dropped (camera per-person
+    // spec §3.8, K14)
+    if (first && a.handOverMissed) notices.push(`${a.handOverMissed} 位人物在照片中未偵測到臉部，未帶入相機效果`);
     // over cap / too small only with the strip; the first group photo ever adds the hint (S §1.1 item 11, §2.6). A later
     // answer says what a first answer says when it brings the photo's first faces (once: the hint is taken for good)
     if (first || firstFaces) notices.push(...answerNotices(a.detect, persons, persons >= 2 && takePersonsHint()));
@@ -813,6 +817,9 @@ export function Editor({ source }: { source: EditorSource }) {
               // a camera shot's seed, with the photo's first answer (D2: the short-range detector is asked for its face
               // when full-range holds none that contains it)
               faceSeed: !useCache && !answered.current && source.faceSeed !== 'all' ? source.faceSeed : null,
+              // the camera persons' boxes, with the photo's first answer (a box no full-range face holds is retried,
+              // zoomed or short-range: camera per-person spec §5.4, K21)
+              handOver: !useCache && !answered.current ? (source.handOver?.map((p) => p.box) ?? null) : null,
             }),
         );
         // a tracker that could not answer is not "no face": no answer until the re-detect gives a real one
@@ -821,6 +828,10 @@ export function Editor({ source }: { source: EditorSource }) {
           // while no face answer could come, S §7: this answer merges into it, its body primary handing over as A13 says)
           const first = !answered.current;
           answered.current = true;
+          // only a fresh answer says 「未偵測到臉部」 (a reopened no-face photo shows no toast, S §8.4, nor does its
+          // completion, §6.5, nor the scan that asks an up-frame again once full-range is in: its short-range "nobody" said
+          // so already). It leads the answer's notices, so the hand-over's dropped persons are said after it (§3.8)
+          const noFace = !!tracker && !unsure && !again && !s.faces.length;
           applyAnswer(
             firstAnswer({
               detect: cache,
@@ -829,12 +840,15 @@ export function Editor({ source }: { source: EditorSource }) {
               v1Body: first ? source.v1Body : null,
               rematch: first ? source.rematch : null,
               faceSeed: first ? source.faceSeed : null,
+              // the camera persons (camera per-person spec §5.4): each found face takes its camera person's params
+              handOver: first ? (source.handOver ?? null) : null,
               // the up-frame this detection ran in (0 for the first one): appended to faceScans
               quarter: q,
               // a short-range stand-in for the full-range detector marks the cache (§6.5)
               detector: s.detector,
             }),
             first,
+            noFace ? ['未偵測到臉部，臉型、美妝與膚質工具不會套用'] : [],
           );
           // answered: the scan is done. (A tracker that could not answer keeps it pending, so the bounded re-detect
           // retries it in U, and the scan effect does not start another one for every new session)
@@ -843,9 +857,6 @@ export function Editor({ source }: { source: EditorSource }) {
         sessionRef.current = s;
         setBound({ s, engine: target, unsure });
         setScanning(false);
-        // only a fresh answer says so (a reopened no-face photo shows no toast, S §8.4, nor does its completion, §6.5, nor
-        // the scan that asks an up-frame again once full-range is in: its short-range "nobody" said so already)
-        if (tracker && !unsure && !useCache && !again && !s.faces.length) toast('未偵測到臉部，臉型、美妝與膚質工具不會套用', 3200);
       } catch (e) {
         setFatal(reportError(e, 'createStillSession'));
       }

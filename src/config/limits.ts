@@ -47,6 +47,12 @@ export const LOST_HOLD_MS = 1000;
 export const ONE_EURO = { minCutoff: 0.05, beta: 80, dCutoff: 1.0 } as const;
 /** seed → face match: the face box padded by this fraction must contain the seed */
 export const SEED_BOX_PAD = 0.25;
+/**
+ * the editor's zoomed hand-over retry (camera per-person spec §5.4, K21): a camera person no full-range face holds gets
+ * one full-range detection on a crop of side box width / this (the face a quarter of the crop, far over the detector's
+ * ~9 % floor, §6.1); a box this wide of the long edge or more (the crop would be the whole image) takes the short-range pass
+ */
+export const HANDOVER_ZOOM_FACE = 0.25;
 /** camera re-identification (camera per-person spec §7.4, K7): an away person is claimed only this long after last seen, on the session clock */
 export const REID_GRACE_MS = 4000;
 /** camera re-identification (§7.4, K7): the new centre within this many of the person's last box widths of their last centre */

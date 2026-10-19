@@ -1012,7 +1012,7 @@ cd /d/GitSource/MonaLisa && git add src/ui/cameraSession.ts src/ui/cameraSession
   // testFakes.ts FakeTracker: detectView: vi.fn(() => { clock?.work(t.cost); return t.unusable ? null : t.face ? faces() : []; }); warm: vi.fn()
   ```
 
-- [ ] **Step 1: Write the failing tests** (inside the full-range describe, `tracker.test.ts:478`, reusing `makeWith`, `sent`, `shape`, `FULL`)
+- [x] **Step 1: Write the failing tests** (inside the full-range describe, `tracker.test.ts:478`, reusing `makeWith`, `sent`, `shape`, `FULL`)
 
 ```ts
 it("detectVideo with detector 'photo' runs the photo bundle in VIDEO, switching once; the default stays the camera bundle", async () => {
@@ -1086,21 +1086,21 @@ it('warm never throws: a closed tracker or a throwing inference is a no-op (note
 });
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `cd /d/GitSource/MonaLisa && npx vitest run src/tracking/tracker.test.ts`
 Expected: FAIL — `t.detectView` / `t.warm is not a function`; VIDEO never carries the photo model.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `setMode(m, n, detector)` (`:403-404`): `want = detector === 'photo' && fullRange() ? 'photo' : 'camera'` for both modes (the photo bundle in VIDEO is used only by the fallback, §6.3). `detectVideo` passes `o.detector ?? 'camera'`; `detectImage` passes `o.detector ?? 'photo'`; `ImageInput` adds `OffscreenCanvas` (`imageSize` already reads `width/height`). `warm` follows `detectImage`'s guards (`closed`, `usable()`), runs `setMode`, then `detect(blank)` or `detectForVideo(blank, ts)` with `ts = lastTs + 1` bookkeeping as `detectVideo` does; a throw goes through `failed('warm', e)` and is swallowed. The blank is a cached `OffscreenCanvas(64, 64)` (a 2D-cleared canvas). `detectView` runs `detectVideo`'s guards in its order (`closed` → null; an empty view → null; `!usable()` → null; `needsRebuild` within `REBUILD_INTERVAL_MS` of the last rebuild → null), then `detectImage`'s body (`setMode('IMAGE', clampFaces(o.maxFaces), o.detector)`, `detect(view)`, `succeeded`; a throw is rethrown through `failed('detectView', e)`). Replacement instances still start on the camera bundle (`:319-323`, unchanged; the next call switches). `upTracker` forwards `detectView: (v, o) => t.detectView(v, o)` and `warm: (m, d) => t.warm(m, d)`; the fakes gain both (Interfaces), and so do the `Tracker` literals of `upFrame.test.ts` (`tsconfig.json` type-checks tests).
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `cd /d/GitSource/MonaLisa && npx vitest run src/tracking src/geometry src/app && npm run typecheck`
 Expected: PASS (the existing "the camera never carries a model" test at `:588` still passes: the VIDEO default is `'camera'`).
 
-- [ ] **Step 5: Commit** (CRLF check on `tracker.ts`, `types.ts`, `testFakes.ts`)
+- [x] **Step 5: Commit** (CRLF check on `tracker.ts`, `types.ts`, `testFakes.ts`)
 
 ```bash
 cd /d/GitSource/MonaLisa && git add src/tracking/tracker.ts src/tracking/tracker.test.ts src/types.ts src/geometry/upFrame.ts src/geometry/upFrame.test.ts src/app/testFakes.ts tests/harness/t7/fakes.ts && git commit -m "camera per-person: tracker runs the photo bundle in VIDEO on request, detects on an OffscreenCanvas, detectView (IMAGE with the live guards), warm(mode, detector)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat

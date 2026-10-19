@@ -177,6 +177,8 @@ describe('the U image (DOM half, a recording 2D context)', () => {
           seen.push(image, opts.maxFaces);
           return [{ points: inU } satisfies Landmarks478];
         },
+        detectView: () => null,
+        warm() {},
         close: vi.fn(),
       };
       expect(upTracker(t, 0)).toBe(t);
@@ -207,6 +209,8 @@ describe('the U image (DOM half, a recording 2D context)', () => {
           seen.push(opts);
           return [];
         },
+        detectView: () => null,
+        warm() {},
         close: vi.fn(),
       };
       const u = upTracker(t, 1);
@@ -217,5 +221,24 @@ describe('the U image (DOM half, a recording 2D context)', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('upTracker forwards detectView and warm to the tracker as they are (the live path, which never runs sideways)', () => {
+    const view = { width: 720, height: 720 } as unknown as OffscreenCanvas;
+    const answer = [{ points: new Float32Array(478 * 3) } satisfies Landmarks478];
+    const t: Tracker = {
+      delegate: 'GPU',
+      photoDetector: 'full-range',
+      detectVideo: () => null,
+      detectImage: () => [],
+      detectView: vi.fn(() => answer),
+      warm: vi.fn(),
+      close: vi.fn(),
+    };
+    const u = upTracker(t, 2);
+    expect(u.detectView(view, { maxFaces: 12, detector: 'photo' })).toBe(answer);
+    expect(t.detectView).toHaveBeenCalledWith(view, { maxFaces: 12, detector: 'photo' });
+    u.warm('IMAGE', 'photo');
+    expect(t.warm).toHaveBeenCalledWith('IMAGE', 'photo');
   });
 });

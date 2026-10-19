@@ -661,4 +661,105 @@ describe('createTracker: the full-range photo detector (BlazeFace full-range for
       { model: 'camera', runningMode: 'VIDEO', numFaces: LIVE_DETECT_FACES },
     ]);
   });
+
+  // v0.6 camera per person (spec §6.3, §6.6): the back camera's detector in VIDEO, the group path's views, warm-up
+  it("detectVideo with detector 'photo' runs the photo bundle in VIDEO, switching once; the default stays the camera bundle", async () => {
+    const t = await makeWith(() => FULL);
+    const lm = last();
+    t.detectVideo(video, 1, { maxFaces: LIVE_DETECT_FACES, detector: 'photo' });
+    t.detectVideo(video, 2, { maxFaces: LIVE_DETECT_FACES, detector: 'photo' });
+    expect(sent(lm).map(shape)).toEqual([{ model: 'photo', runningMode: 'VIDEO', numFaces: LIVE_DETECT_FACES }]);
+    t.detectVideo(video, 3, ONE);
+    expect(sent(lm).map(shape).at(-1)).toEqual({ model: 'camera', runningMode: 'VIDEO', numFaces: LIVE_DETECT_FACES });
+  });
+
+  it('detectImage takes an OffscreenCanvas (a group-path view)', async () => {
+    const t = await makeWith(() => FULL);
+    const c = new OffscreenCanvas(720, 720);
+    expect(t.detectImage(c, { maxFaces: EDIT_DETECT_FACES })).toHaveLength(1);
+    expect(last().detect).toHaveBeenCalledWith(c);
+  });
+
+  it('detectView: IMAGE on a view with the live guards: null while the rebuild throttle holds or the instance is dead (detectImage says [] there), [] for no face', async () => {
+    const { REBUILD_INTERVAL_MS } = await load();
+    const t = await makeWith(() => FULL);
+    const lm = last();
+    const v = new OffscreenCanvas(720, 720);
+    const o = { maxFaces: EDIT_DETECT_FACES, detector: 'photo' } as const;
+    expect(t.detectView(v, o)).toHaveLength(1);
+    expect(lm.detect).toHaveBeenCalledWith(v);
+    expect(sent(lm).map(shape).at(-1)).toEqual({ model: 'photo', runningMode: 'IMAGE', numFaces: EDIT_DETECT_FACES });
+    lm.detect.mockImplementation(() => {
+      throw new Error('Graph has errors');
+    });
+    expect(() => t.detectView(v, o)).toThrow(); // failure 1
+    expect(() => t.detectView(v, o)).toThrow(); // the immediate rebuild, failure 2
+    expect(t.detectView(v, o)).toBeNull(); // throttled: no inference, no answer
+    expect(lm.detect).toHaveBeenCalledTimes(3);
+    lm.detect.mockImplementation(() => ({ faceLandmarks: [] }));
+    vi.advanceTimersByTime(REBUILD_INTERVAL_MS);
+    expect(t.detectView(v, o)).toEqual([]);
+    lm.canvas!.lose(false); // found by the poll: the instance is retired and replaced
+    expect(t.detectView(v, o)).toBeNull();
+    expect(t.detectImage(image, { maxFaces: EDIT_DETECT_FACES })).toEqual([]);
+  });
+
+  it('detectView answers null for an empty view or a closed tracker, without an inference', async () => {
+    const t = await makeWith(() => FULL);
+    const lm = last();
+    expect(t.detectView(new OffscreenCanvas(0, 720), { maxFaces: EDIT_DETECT_FACES, detector: 'photo' })).toBeNull();
+    t.close();
+    expect(t.detectView(new OffscreenCanvas(720, 720), { maxFaces: EDIT_DETECT_FACES, detector: 'photo' })).toBeNull();
+    expect(lm.detect).not.toHaveBeenCalled();
+    expect(lm.setOptions).not.toHaveBeenCalled();
+  });
+
+  it("a replacement made while full-range VIDEO ran starts on the camera bundle; the next detectVideo with detector 'photo' switches it back", async () => {
+    const t = await makeWith(() => FULL);
+    t.detectVideo(video, 1, { maxFaces: LIVE_DETECT_FACES, detector: 'photo' });
+    last().canvas!.lose(true);
+    await vi.advanceTimersByTimeAsync(500);
+    const second = last();
+    expect(second.opts.baseOptions.modelAssetBuffer).toBe(CAMERA);
+    t.detectVideo(video, 2, { maxFaces: LIVE_DETECT_FACES, detector: 'photo' });
+    expect(sent(second).map(shape)).toEqual([{ model: 'photo', runningMode: 'VIDEO', numFaces: LIVE_DETECT_FACES }]);
+  });
+
+  it.each([
+    ['IMAGE', 'photo', { model: 'photo', runningMode: 'IMAGE', numFaces: EDIT_DETECT_FACES }, 'detect'],
+    // the graph holds the photo bundle from the detectImage below, so going back to VIDEO carries the camera bundle
+    ['VIDEO', 'camera', { model: 'camera', runningMode: 'VIDEO', numFaces: LIVE_DETECT_FACES }, 'detectForVideo'],
+    ['VIDEO', 'photo', { model: 'photo', runningMode: 'VIDEO', numFaces: LIVE_DETECT_FACES }, 'detectForVideo'],
+  ] as const)('warm(%s, %s) switches the graph and runs one call on a 64 × 64 blank canvas', async (mode, det, want, call) => {
+    const t = await makeWith(() => FULL);
+    const lm = last();
+    if (mode === 'VIDEO' && det === 'camera') t.detectImage(image, { maxFaces: 8 }); // leave VIDEO first
+    t.warm(mode, det);
+    expect(sent(lm).map(shape).at(-1)).toEqual(want);
+    const arg = lm[call].mock.calls.at(-1)![0] as FakeCanvas;
+    expect([arg.width, arg.height]).toEqual([64, 64]);
+  });
+
+  it('warm in VIDEO keeps the timestamps strictly increasing for the live loop that follows', async () => {
+    const t = await makeWith(() => FULL);
+    const lm = last();
+    t.warm('VIDEO', 'camera'); // before any frame
+    t.detectVideo(video, 5000, ONE);
+    t.warm('VIDEO', 'camera');
+    t.detectVideo(video, 5000, ONE);
+    const ts = lm.detectForVideo.mock.calls.map((c) => c[1] as number);
+    expect(ts).toHaveLength(4);
+    expect(ts.every((x) => Number.isFinite(x))).toBe(true);
+    for (let i = 1; i < ts.length; i++) expect(ts[i]).toBeGreaterThan(ts[i - 1]);
+  });
+
+  it('warm never throws: a closed tracker or a throwing inference is a no-op (noted once)', async () => {
+    const t = await makeWith(() => FULL);
+    last().detect.mockImplementation(() => {
+      throw new Error('graph');
+    });
+    expect(() => t.warm('IMAGE', 'photo')).not.toThrow();
+    t.close();
+    expect(() => t.warm('VIDEO', 'camera')).not.toThrow();
+  });
 });

@@ -10,7 +10,10 @@
 // engine/faceBundle.ts), which finds the small faces of a group photo the short-range detector misses.
 // The photo bundle is assembled from the camera bundle and opts.fullRangeDetector right before each switch
 // to it and not kept: MediaPipe copies every model buffer it is given. A photo may also ask for the camera
-// bundle (detector 'camera'): the retry for a face the full-range detector misses (step-1 spec §6.5).
+// bundle (detector 'camera'): the retry for a face the full-range detector misses (step-1 spec §6.5). The
+// camera may ask for the photo bundle in VIDEO (detector 'photo': the back camera's one pass when the group path is
+// off, v0.6 spec §6.3); its group path runs IMAGE calls on copied views (detectView, §6.6), and warm() moves a
+// graph's one-time GPU warm-up behind the camera's spinner.
 // The model travels in the mode switch's own setOptions, so switching costs no extra rebuild. Instances
 // are created on the camera model: building on the photo model only moves the full-range graph's
 // one-time GPU warm-up (about 1.2 s on desktop D3D11) from the first photo to the camera start.
@@ -30,7 +33,7 @@
 import { FaceLandmarker, FilesetResolver, type FaceLandmarkerOptions } from '@mediapipe/tasks-vision';
 import { EDIT_DETECT_FACES, LIVE_DETECT_FACES } from '../config/limits';
 import { withFaceDetector } from '../engine/faceBundle';
-import type { Delegate, Landmarks478, Tracker, TrackerOptions, TrackerState } from '../types';
+import type { Delegate, FaceDetectorKind, Landmarks478, Tracker, TrackerOptions, TrackerState } from '../types';
 
 const N_POINTS = 478;
 /** CPU-path frame copy is capped here; the model crops the face to 256² anyway. */
@@ -52,8 +55,10 @@ export const SELF_RETRY_ATTEMPTS = 8;
 export const MAX_ESCALATIONS = 3;
 /** Distinct errors logged per tracker. */
 const MAX_LOGGED = 8;
+/** warm()'s blank input, px per side (v0.6 spec §6.3) */
+const WARM_EDGE = 64;
 
-type ImageInput = ImageBitmap | HTMLCanvasElement | HTMLImageElement;
+type ImageInput = ImageBitmap | HTMLCanvasElement | HTMLImageElement | OffscreenCanvas;
 type Fileset = Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>;
 
 /** Every face with a full 478-point set, in MediaPipe's result order; [] for none. */
@@ -114,6 +119,15 @@ function copyFrame(copy: FrameCopy, video: HTMLVideoElement): OffscreenCanvas | 
   }
   copy.ctx.drawImage(video, 0, 0, w, h);
   return copy.canvas;
+}
+
+/** warm()'s input: a WARM_EDGE² canvas whose 2D context leaves it cleared (opaque black) */
+function createBlank(): OffscreenCanvas | HTMLCanvasElement {
+  const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(WARM_EDGE, WARM_EDGE) : document.createElement('canvas');
+  canvas.width = WARM_EDGE;
+  canvas.height = WARM_EDGE;
+  canvas.getContext('2d', { alpha: false });
+  return canvas;
 }
 
 interface Instance {
@@ -256,6 +270,8 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
   );
 
   let frameCopy = inst.delegate === 'CPU' ? createFrameCopy() : null;
+  /** warm()'s input, made on its first call */
+  let blank: OffscreenCanvas | HTMLCanvasElement | null = null;
   let lastTs = -Infinity;
   let mode: 'VIDEO' | 'IMAGE' = 'VIDEO';
   /** the bundle of the current graph (every instance is built on the camera's) */
@@ -399,9 +415,10 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
   // Every mode, count or model change rebuilds the graph, and the first inference after a rebuild is slow on the
   // GPU delegate (~1 s in desktop Chromium). Switching back to VIDEO lazily, on the next
   // detectVideo, keeps back-to-back photo detections from paying that twice. After a failure the
-  // same-mode setOptions is the rebuild that clears the poisoned graph.
-  const setMode = (m: 'VIDEO' | 'IMAGE', n: number, detector: 'photo' | 'camera' = 'photo') => {
-    let want: ModelKind = m === 'IMAGE' && detector === 'photo' && fullRange() ? 'photo' : 'camera';
+  // same-mode setOptions is the rebuild that clears the poisoned graph. `detector` picks the bundle in either mode
+  // (the photo bundle in VIDEO: the back camera with the group path off, v0.6 spec §6.3).
+  const setMode = (m: 'VIDEO' | 'IMAGE', n: number, detector: FaceDetectorKind) => {
+    let want: ModelKind = detector === 'photo' && fullRange() ? 'photo' : 'camera';
     // the bytes to switch to (null: the graph already holds `want`); the photo bundle is assembled only for a switch
     let buffer: Uint8Array | null = null;
     if (want === 'photo' && model !== 'photo') {
@@ -435,7 +452,7 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
       return inst.delegate;
     },
 
-    detectVideo(video: HTMLVideoElement, tsMs: number, o: { maxFaces: number }): Landmarks478[] | null {
+    detectVideo(video: HTMLVideoElement, tsMs: number, o: { maxFaces: number; detector?: FaceDetectorKind }): Landmarks478[] | null {
       // MPI 5152: an empty frame gives "ROI width and height must be > 0" and poisons the graph.
       if (closed || video.readyState < 2 || video.videoWidth <= 0 || video.videoHeight <= 0) return null;
       // VIDEO mode requires strictly increasing timestamps (rVFC can repeat a mediaTime).
@@ -445,7 +462,7 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
       // a persistent error must not rebuild the graph every frame
       if (needsRebuild && performance.now() - lastRebuildAt < REBUILD_INTERVAL_MS) return null;
       try {
-        setMode('VIDEO', clampFaces(o.maxFaces));
+        setMode('VIDEO', clampFaces(o.maxFaces), o.detector ?? 'camera');
         const frame = inst.delegate === 'CPU' && frameCopy ? copyFrame(frameCopy, video) : video;
         return succeeded(toLandmarksAll(inst.landmarker.detectForVideo(frame, ts).faceLandmarks));
       } catch (e) {
@@ -457,7 +474,7 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
       return fullRange() ? ('full-range' as const) : ('short-range' as const);
     },
 
-    detectImage(image: ImageInput, o: { maxFaces: number; detector?: 'photo' | 'camera' }): Landmarks478[] {
+    detectImage(image: ImageInput, o: { maxFaces: number; detector?: FaceDetectorKind }): Landmarks478[] {
       if (closed) return [];
       const [w, h] = imageSize(image);
       if (w <= 0 || h <= 0) return [];
@@ -468,6 +485,43 @@ export async function createTracker(opts: TrackerOptions): Promise<Tracker> {
         return succeeded(toLandmarksAll(inst.landmarker.detect(image).faceLandmarks));
       } catch (e) {
         throw failed('detectImage', e);
+      }
+    },
+
+    // detectImage's call under detectVideo's guards (the live loop's group path, v0.6 spec §6.6): null, not [], when
+    // there is no answer, so the loop holds its tracks (A5)
+    detectView(view: OffscreenCanvas | HTMLCanvasElement, o: { maxFaces: number; detector: FaceDetectorKind }): Landmarks478[] | null {
+      if (closed) return null;
+      // MPI 5152: an empty input poisons the graph
+      if (view.width <= 0 || view.height <= 0) return null;
+      if (!usable()) return null;
+      // a persistent error must not rebuild the graph on every view
+      if (needsRebuild && performance.now() - lastRebuildAt < REBUILD_INTERVAL_MS) return null;
+      try {
+        setMode('IMAGE', clampFaces(o.maxFaces), o.detector);
+        return succeeded(toLandmarksAll(inst.landmarker.detect(view).faceLandmarks));
+      } catch (e) {
+        throw failed('detectView', e);
+      }
+    },
+
+    warm(m: 'VIDEO' | 'IMAGE', detector: FaceDetectorKind): void {
+      if (closed || !usable()) return;
+      try {
+        setMode(m, m === 'IMAGE' ? EDIT_DETECT_FACES : LIVE_DETECT_FACES, detector);
+        blank ??= createBlank();
+        if (m === 'IMAGE') {
+          inst.landmarker.detect(blank);
+        } else {
+          // the live loop's clock (live.ts passes performance.now()), kept strictly increasing as detectVideo does
+          const now = performance.now();
+          const ts = now > lastTs ? now : lastTs + 1;
+          lastTs = ts;
+          inst.landmarker.detectForVideo(blank, ts);
+        }
+        succeeded(undefined);
+      } catch (e) {
+        failed('warm', e); // noted once; the next call rebuilds the graph
       }
     },
 

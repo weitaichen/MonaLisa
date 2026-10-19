@@ -491,7 +491,7 @@ export async function installFakes(deps: Deps, defaults: { params: BeautyParams;
     createTracker: async () => {
       await sleep(150);
       if (flag('tracker') === 'fail') throw new Error('FaceLandmarker: GPU and CPU delegates both failed');
-      return { delegate: 'GPU', photoDetector: 'short-range', detectVideo: () => null, detectImage: () => [], close() {} } satisfies Tracker;
+      return { delegate: 'GPU', photoDetector: 'short-range', detectVideo: () => null, detectImage: () => [], detectView: () => null, warm() {}, close() {} } satisfies Tracker;
     },
     // pose=fail (download fails) · none (no person) · slow (download stalls at 40 %)
     loadPoseModel: async (_variant: string, onProgress?: (p: EngineAssetsProgress) => void) => {

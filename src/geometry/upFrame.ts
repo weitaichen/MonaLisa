@@ -165,6 +165,9 @@ export function upTracker(t: Tracker, q: Quarter): Tracker {
         c.width = c.height = 0;
       }
     },
+    // the live loop's calls, never sideways: as they are
+    detectView: (view, opts) => t.detectView(view, opts),
+    warm: (mode, detector) => t.warm(mode, detector),
     close: () => t.close(),
   };
 }

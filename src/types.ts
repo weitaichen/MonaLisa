@@ -506,6 +506,12 @@ export interface BodyTrackerOptions {
   outputMask?: boolean;
 }
 
+/**
+ * The face detector of a detection: 'photo' runs what Tracker.photoDetector says (BlazeFace full-range once it is
+ * there), 'camera' the camera bundle's short-range detector (v0.6 spec §6.3).
+ */
+export type FaceDetectorKind = 'photo' | 'camera';
+
 export interface Tracker {
   /** Delegate of the current graph; re-read it on onStateChange('ok'): a rebuild under 'auto' may fall back to CPU. */
   readonly delegate: Delegate;
@@ -513,16 +519,30 @@ export interface Tracker {
    * VIDEO mode; tsMs must be strictly increasing. null = no answer (closed, frame not ready, tracker unusable, rebuild
    * throttled); [] = a completed inference without a face (A5). `maxFaces` is required (clamped to 1…EDIT_DETECT_FACES)
    * and travels with the mode in one setOptions: options are sticky, and every change rebuilds the graph. Throws on
-   * inference failure: the tracker rebuilds its graph on the next call.
+   * inference failure: the tracker rebuilds its graph on the next call. `detector`: 'camera' (default), or 'photo' for
+   * the back camera's one VIDEO pass when the group path is off (v0.6 spec §6.3).
    */
-  detectVideo(video: HTMLVideoElement, tsMs: number, opts: { maxFaces: number }): Landmarks478[] | null;
+  detectVideo(video: HTMLVideoElement, tsMs: number, opts: { maxFaces: number; detector?: FaceDetectorKind }): Landmarks478[] | null;
   /**
    * IMAGE mode on the same instance; the next detectVideo switches back. [] = no face, or not known (recovering /
    * unusable): callers keep the health check (editorModel.ts detectSession). Throws as detectVideo. `detector`:
    * 'photo' (default) runs what photoDetector says; 'camera' the camera's short-range detector, the retry for a face the
    * full-range one misses (a close-up, a face cut off by the frame's edge; app/still.ts, step-1 spec §6.5).
    */
-  detectImage(image: ImageBitmap | HTMLCanvasElement | HTMLImageElement, opts: { maxFaces: number; detector?: 'photo' | 'camera' }): Landmarks478[];
+  detectImage(image: ImageBitmap | HTMLCanvasElement | HTMLImageElement | OffscreenCanvas, opts: { maxFaces: number; detector?: FaceDetectorKind }): Landmarks478[];
+  /**
+   * The group path's IMAGE call (v0.6 spec §6.6) with the live path's guards: null = no answer (closed, an empty view, the
+   * instance unusable or being replaced, the rebuild throttle), as detectVideo; [] = a completed inference without a
+   * face. Throws as detectVideo. detectImage answers [] in those cases (its callers keep a health check), which the live
+   * loop would take for "no face" and drop every track after LOST_HOLD_MS (A5).
+   */
+  detectView(view: OffscreenCanvas | HTMLCanvasElement, opts: { maxFaces: number; detector: FaceDetectorKind }): Landmarks478[] | null;
+  /**
+   * Switch the graph to `mode` (count: IMAGE EDIT_DETECT_FACES, VIDEO LIVE_DETECT_FACES) and `detector`'s bundle, then run
+   * one call on a 64 × 64 blank canvas, so a graph's one-time GPU warm-up (the full-range compile) lands behind the
+   * camera's spinner instead of on a live frame (v0.6 spec §6.3). Never throws; a no-op when closed or unusable.
+   */
+  warm(mode: 'VIDEO' | 'IMAGE', detector: FaceDetectorKind): void;
   /**
    * The detector a 'photo' detection runs now: 'full-range' once TrackerOptions.fullRangeDetector has one (and the photo
    * bundle could be assembled), else 'short-range', the camera's (a 'camera' retry would then repeat the same detection).

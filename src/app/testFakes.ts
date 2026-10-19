@@ -270,12 +270,14 @@ export interface FakeTracker extends Tracker {
   face: boolean;
   /** faces per detection */
   count: number;
-  /** detectVideo answers null (no answer) while set */
+  /** detectVideo and detectView answer null (no answer) while set */
   unusable: boolean;
-  /** simulated cost of each detect call, ms */
+  /** simulated cost of each live detect call (detectVideo, detectView), ms */
   cost: number;
   detectVideo: ReturnType<typeof vi.fn<Tracker['detectVideo']>>;
   detectImage: ReturnType<typeof vi.fn<Tracker['detectImage']>>;
+  detectView: ReturnType<typeof vi.fn<Tracker['detectView']>>;
+  warm: ReturnType<typeof vi.fn<Tracker['warm']>>;
 }
 
 export function fakeTracker(clock?: { work(ms: number): void }, face = true, count = 1): FakeTracker {
@@ -293,6 +295,12 @@ export function fakeTracker(clock?: { work(ms: number): void }, face = true, cou
       return t.face ? faces() : [];
     }),
     detectImage: vi.fn(() => (t.face ? faces() : [])),
+    detectView: vi.fn(() => {
+      clock?.work(t.cost);
+      if (t.unusable) return null;
+      return t.face ? faces() : [];
+    }),
+    warm: vi.fn(),
     close: vi.fn(),
   };
   return t as unknown as FakeTracker;

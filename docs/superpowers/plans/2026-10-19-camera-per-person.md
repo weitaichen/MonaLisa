@@ -10,9 +10,19 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-19-camera-per-person-design.md` (cited as §n; K/U/A ids are its decisions). Contract documents: `2026-10-12-v04-roadmap.md` (RM) and `2026-10-12-face-person-select-design.md` (S). The spec's `file:line` anchors were taken at `4728133`; where they disagree with the code (e.g. `limits.ts:177/186` — `MAX_LIVE_FACES` is at `limits.ts:30`, `LIVE_DETECT_FACES` at `:39`, `MAX_RENDER_FACES` at `:20`), the cites in this plan are the current lines and win.
 
+**Reconciliation (2026-10-19, before execution).** Checked against the tree at `1978218` (`4728133` plus this plan and its spec: no code changed since the plan was written; `npm test` 122 files, 2204 tests, green). Corrected in place:
+- Base commit `1978218`, not `4728133` (Global Constraints).
+- Anchors that were off: `CameraFaceMarker.test.tsx`'s `view` and `mount` are `:126-138` (was `:139-140`, Task 3); `original.spec.ts`'s camera test is `:156-249` and its stored-look poll `:200-202` (was `:158-249`, `:192-194`; Tasks 4, 11); `camera-group.spec.ts`'s first test is `:26-101` and its marker check `:31-44` (was `:25-108`, `:28-40`; Tasks 4, 9); `firstAnswer` runs to `migrate.ts:310` (Task 11); the camera-look describe of `settings.test.ts` is `:323-390` (Task 4).
+- Task 4: `Camera.tsx` declares `ready`, `faceNote` and `faceOff` (`:317-320`) after `binding` (`:315`); `lensOf` and `keepDrag` read them now, so they move above it (a `const` read before its line throws).
+- Task 5: `src/geometry/upFrame.test.ts:172, :202` build `Tracker` literals, and `tsconfig.json` type-checks tests, so they gain `detectView` and `warm` with the interface.
+- Task 12: `camBox` is today's `camGeom` (`camera-group.spec.ts:7-23`) renamed; the `chromium` project's `testIgnore` is a RegExp, as `chromium-group`'s `testMatch` is.
+- Tasks 12, 15, 16: `npm run build` before each targeted Playwright run (global setup refuses a missing `dist/`; a stale one tests old code).
+- Commits: each Commit step stages the files it lists; the message is `v0.6 camera task <N>: <short title>` (fixes: `v0.6 camera task <N> fix: …`), a blank line, then the `Co-Authored-By` line, written to a new file and committed with `git commit -F`; this replaces the `-m` lines shown. Local only.
+- Not a change: Task 8's e2e knob `meiyan.debug.live.v1` is §12.2's "test-only override" of `LIVE_GROUP`, a debug key like `meiyan.debug.export.v1`; §9's "no other key" is about settings and UI flags.
+
 ## Global Constraints
 
-- Branch `feat/meiyan-pwa`, HEAD `4728133`; every commit is **local** (no push, no deploy). Version stays **0.5.0** until Task 17, which bumps it to 0.6.0 and writes the RM §15 release notes (K16, §13). The advance Codex review (U7), the clean-clone gate (project memory) and the push are the release step after Task 18, outside this plan.
+- Branch `feat/meiyan-pwa`, base `1978218` (the code of `4728133`); every commit is **local** (no push, no deploy). Version stays **0.5.0** until Task 17, which bumps it to 0.6.0 and writes the RM §15 release notes (K16, §13). The advance Codex review (U7), the clean-clone gate (project memory) and the push are the release step after Task 18, outside this plan.
 - Windows Git Bash: pipe every git command through `| cat`. Use absolute paths or `cd /d/GitSource/MonaLisa &&`.
 - **Line endings are preserved.** CRLF files touched here: `src/app/live.ts`, `src/app/testFakes.ts`, `src/types.ts`, `src/tracking/tracker.ts`, `src/ui/state.ts`, `src/ui/flows.ts`, `src/ui/deps.ts`, `src/ui/panelModel.ts`, `src/ui/theme.css`, `src/ui/screens/Camera.tsx`, `src/ui/screens/Review.tsx`, `src/ui/components/BeautyPanel.tsx`, `src/bench/main.ts`. Every other touched file is LF; new files are LF. Before each commit run the check below on the task's files; it must print `ok` for CRLF files and `lf` for LF files:
   `node -e "for (const f of process.argv.slice(1)) { const t = require('fs').readFileSync(f, 'utf8'); const crlf = (t.match(/\r\n/g) || []).length, lf = (t.match(/(?<!\r)\n/g) || []).length; console.log(f, crlf && lf ? 'MIXED ' + lf : crlf ? 'ok' : 'lf'); }" <files…>`
@@ -49,7 +59,7 @@
 | `src/ui/screens/Camera.tsx` | lens over the target, writes through the session, 全部套用 copy, session end, warm-up, hint, hand-over | 3, 4, 8, 9, 10 |
 | `src/ui/components/CameraFaceMarker.tsx`, `src/ui/theme.css` | brackets per face, dot on the target, dimming | 3, 9 |
 | `src/store/settings.ts`, `src/ui/deps.ts` | K15 (`person` no longer read, written neutral); hint flag; live debug knob | 4, 8, 9 |
-| `src/tracking/tracker.ts`, `src/types.ts`, `src/geometry/upFrame.ts`, `src/app/testFakes.ts`, `tests/harness/t7/fakes.ts` | `detectVideo` `detector`; `detectImage(OffscreenCanvas)`; `detectView` (the group path's IMAGE call with the live guards); `warm(mode, detector)`; `CameraHandOver`; debug fields | 3, 5, 8, 10 |
+| `src/tracking/tracker.ts`, `src/types.ts`, `src/geometry/upFrame.ts`, `src/geometry/upFrame.test.ts`, `src/app/testFakes.ts`, `tests/harness/t7/fakes.ts` | `detectVideo` `detector`; `detectImage(OffscreenCanvas)`; `detectView` (the group path's IMAGE call with the live guards); `warm(mode, detector)`; `CameraHandOver`; debug fields | 3, 5, 8, 10 |
 | `src/app/liveViews.ts` (new, pure) | §6.6 views of a crop, assignment, schedule, view → stream UV mapping, call scope | 6 |
 | `src/app/liveCore.ts` | §6.4 cadence: `detectEvery`, `DetectCadence`, `effectiveEvery`, `cadenceSample` | 7 |
 | `src/ui/imaging.ts`, `src/edit/sides.ts` | `shotBox`, `shotPersons`; `mirrorSides` restored | 10 |
@@ -783,7 +793,7 @@ describe('the live loop on persons (camera per-person spec §8, §7.5)', () => {
 
 (`editedAll(p)` in this file is the faceTracks helper above with `p` instead of 自然; import `LivePersons`, `liveFrame`, `LiveTrackView`, `makeFace`, `naturalPerson`, `neutralPerson`.)
 
-`src/ui/components/CameraFaceMarker.test.tsx:139-140`: `view(id, x, selected)` builds `{ id, person: id, box, rawBox, weight: 1, presence: 1, edited: false, selected, present: true, seen: 0, view: 'video' }`; the ring is `{ person, at }`.
+`src/ui/components/CameraFaceMarker.test.tsx:126-138`: `view(id, x, selected)` builds `{ id, person: id, box, rawBox, weight: 1, presence: 1, edited: false, selected, present: true, seen: 0, view: 'video' }`; the ring is `{ person, at }`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -843,9 +853,9 @@ cd /d/GitSource/MonaLisa && git add src/config src/app/faceTracks.ts src/app/fac
 **Files:**
 - Modify: `src/ui/cameraSession.ts`; Create: `src/ui/cameraSession.test.ts`
 - Modify: `src/ui/screens/Camera.tsx:41-90` (lens, setEdit), `:128-138` (onStats), `:440-448` (SliderRow), `:468-480` (BeautyPanel) — CRLF
-- Modify: `src/store/settings.ts:49-78` (K15), `src/store/settings.test.ts:323-380`
+- Modify: `src/store/settings.ts:49-78` (K15), `src/store/settings.test.ts:323-390`
 - Modify: `src/ui/state.ts:72-73, :84-85` (comments only) — CRLF
-- Modify: `tests/e2e/camera-group.spec.ts:25-108` (changed on purpose, §12.2), `tests/e2e/original.spec.ts:192-194, :247-248`
+- Modify: `tests/e2e/camera-group.spec.ts:26-101` (changed on purpose, §12.2), `tests/e2e/original.spec.ts:200-202, :247-248`
 
 **Interfaces:**
 - Consumes: Task 1 `LivePersons.edit / editTargets / panelParams / setAmbient`; Task 2 `LensOptions.camera`, `CAMERA_NO_FACE_NOTE`; Task 3 `cameraSession`, `LiveStats.personsVersion`.
@@ -946,6 +956,7 @@ Expected: FAIL — `beginDrag` not exported; the stored person still read.
 - `cameraSession.ts`: the four functions of the Interfaces block.
 - `settings.ts`: `sanitizeLook(raw)` returns `{ photo: sanitizePhoto(r.photo), person: neutralPerson() }`; `saveLook` writes it; the legacy migration (`:71-73`) writes `sanitizeLook(look)`. Doc comment cites K15 and §9.
 - `Camera.tsx`:
+  - `state`, `ready`, `faceNote` and `faceOff` (`:316-320`) move above `binding` (`:315`): `lensOf` and `keepDrag` read them, and a `const` read before its declaration throws.
   - `const session = cameraSession();` `const drag = useRef<CameraDrag | null>(null);` a `personsTick` state set from `onStats` (`s.personsVersion`) so a target or param change re-renders the panel; `setEdit` bumps it too, so a write re-renders the panel whether or not a loop is running (基本模式 before the stream is live included).
   - `lensOf(l)`: `basic = !!bundle?.basic`; person = `basic ? session.ambient : panelPerson(session, drag.current)`; `lensFor(cameraEdit(l.photo, person), { kind: 'person', id: LIVE }, livePersons, LIVE, { camera: { shown: shownFaces, all: cameraAll, noFace: !basic && ready && shownFaces === 0, target: drag.current?.lead ?? session.target() } })`. `noFace` does not read `trackerHealth`: with no shown face there is no target, so a person slider would write nobody and snap back; while the tracker restarts its badge (`Camera.tsx:422-426`) says why, and the strip note waits for a face as §3.6 says.
   - Every render, right after `binding = sliderFor(lensOf(look), …)`: `drag.current = keepDrag(drag.current, ready && !collapsed && !faceOff ? (binding?.key ?? null) : null)`. `SliderRow` drops its own drag without `onCommit` whenever its key changes or it unmounts (`Slider.tsx:104-110`); this is the same render, so a dropped drag never writes again (Review Focus #3). When `keepDrag` drops a drag, compute `binding` again before rendering (its lens then keys and reads the session's target, not the dropped drag's lead), so the row and the next `beginDrag` agree on the key. `close()` and `flip()` also set `drag.current = null`.
@@ -961,7 +972,7 @@ Expected: PASS; typecheck 0.
 - [ ] **Step 5: Update the e2e specs changed on purpose**
 
 `tests/e2e/camera-group.spec.ts` (first test): after the three faces are found, 一鍵 › 自然 now edits and pins the auto target (the largest, A); 美白 / 銳化 to 0 as before. Tap B: `selected` is B; B is 原圖 until edited, so apply 一鍵 › 自然 to B and set 美白 / 銳化 back to 0 (the preset's photo part re-applies them to the whole frame; the same `ArrowLeft` loop as `:50-56`), then assert `regionDiff(original, beautified, gb.rect).inside > 0.5` (B adjusted), the same `> 0.5` for A (A keeps its result, U3), and `< 0.3` for C (untouched). 全部套用: the chip copies B's params to everyone, so C's region now differs (`> 0.5`); a tap on C turns it off and selects C, and C's region still differs (nobody reverts). The hand-over part (B selected → 編輯 selects B) is unchanged.
-`tests/e2e/original.spec.ts`: the poll at `:192-194` reads `JSON.parse(localStorage.getItem('meiyan.look.v1')).photo.values['skin.whiten']` (`1`) and `person.preset.id` (`'original'`); `:248` expects `'original'`.
+`tests/e2e/original.spec.ts`: the poll at `:200-202` reads `JSON.parse(localStorage.getItem('meiyan.look.v1')).photo.values['skin.whiten']` (`1`) and `person.preset.id` (`'original'`); `:248` expects `'original'`.
 
 - [ ] **Step 6: Run the camera e2e specs**
 
@@ -981,7 +992,7 @@ cd /d/GitSource/MonaLisa && git add src/ui/cameraSession.ts src/ui/cameraSession
 **Files:**
 - Modify: `src/tracking/tracker.ts:56` (`ImageInput`), `:399-431` (`setMode`), `:438-472` (`detectVideo`, `detectImage`), add `detectView` after `detectImage` and `warm` before `close` — CRLF
 - Modify: `src/types.ts:509-532` (`Tracker`) — CRLF; add `export type FaceDetectorKind = 'photo' | 'camera';`
-- Modify: `src/geometry/upFrame.ts:149-170` (`upTracker` forwards `detectView` and `warm`), `src/app/testFakes.ts:261-293` (`detectView`, `warm`) — CRLF, `tests/harness/t7/fakes.ts:481` (`detectView: () => null, warm() {}`)
+- Modify: `src/geometry/upFrame.ts:149-170` (`upTracker` forwards `detectView` and `warm`), `src/geometry/upFrame.test.ts:172-181, :202-211` (its two `Tracker` literals gain `detectView: () => null, warm() {}`), `src/app/testFakes.ts:261-293` (`detectView`, `warm`) — CRLF, `tests/harness/t7/fakes.ts:481` (`detectView: () => null, warm() {}`)
 - Test: `src/tracking/tracker.test.ts`
 
 **Interfaces:**
@@ -1082,7 +1093,7 @@ Expected: FAIL — `t.detectView` / `t.warm is not a function`; VIDEO never carr
 
 - [ ] **Step 3: Implement**
 
-`setMode(m, n, detector)` (`:403-404`): `want = detector === 'photo' && fullRange() ? 'photo' : 'camera'` for both modes (the photo bundle in VIDEO is used only by the fallback, §6.3). `detectVideo` passes `o.detector ?? 'camera'`; `detectImage` passes `o.detector ?? 'photo'`; `ImageInput` adds `OffscreenCanvas` (`imageSize` already reads `width/height`). `warm` follows `detectImage`'s guards (`closed`, `usable()`), runs `setMode`, then `detect(blank)` or `detectForVideo(blank, ts)` with `ts = lastTs + 1` bookkeeping as `detectVideo` does; a throw goes through `failed('warm', e)` and is swallowed. The blank is a cached `OffscreenCanvas(64, 64)` (a 2D-cleared canvas). `detectView` runs `detectVideo`'s guards in its order (`closed` → null; an empty view → null; `!usable()` → null; `needsRebuild` within `REBUILD_INTERVAL_MS` of the last rebuild → null), then `detectImage`'s body (`setMode('IMAGE', clampFaces(o.maxFaces), o.detector)`, `detect(view)`, `succeeded`; a throw is rethrown through `failed('detectView', e)`). Replacement instances still start on the camera bundle (`:319-323`, unchanged; the next call switches). `upTracker` forwards `detectView: (v, o) => t.detectView(v, o)` and `warm: (m, d) => t.warm(m, d)`; the fakes gain both (Interfaces).
+`setMode(m, n, detector)` (`:403-404`): `want = detector === 'photo' && fullRange() ? 'photo' : 'camera'` for both modes (the photo bundle in VIDEO is used only by the fallback, §6.3). `detectVideo` passes `o.detector ?? 'camera'`; `detectImage` passes `o.detector ?? 'photo'`; `ImageInput` adds `OffscreenCanvas` (`imageSize` already reads `width/height`). `warm` follows `detectImage`'s guards (`closed`, `usable()`), runs `setMode`, then `detect(blank)` or `detectForVideo(blank, ts)` with `ts = lastTs + 1` bookkeeping as `detectVideo` does; a throw goes through `failed('warm', e)` and is swallowed. The blank is a cached `OffscreenCanvas(64, 64)` (a 2D-cleared canvas). `detectView` runs `detectVideo`'s guards in its order (`closed` → null; an empty view → null; `!usable()` → null; `needsRebuild` within `REBUILD_INTERVAL_MS` of the last rebuild → null), then `detectImage`'s body (`setMode('IMAGE', clampFaces(o.maxFaces), o.detector)`, `detect(view)`, `succeeded`; a throw is rethrown through `failed('detectView', e)`). Replacement instances still start on the camera bundle (`:319-323`, unchanged; the next call switches). `upTracker` forwards `detectView: (v, o) => t.detectView(v, o)` and `warm: (m, d) => t.warm(m, d)`; the fakes gain both (Interfaces), and so do the `Tracker` literals of `upFrame.test.ts` (`tsconfig.json` type-checks tests).
 
 - [ ] **Step 4: Run to verify they pass**
 
@@ -1092,7 +1103,7 @@ Expected: PASS (the existing "the camera never carries a model" test at `:588` s
 - [ ] **Step 5: Commit** (CRLF check on `tracker.ts`, `types.ts`, `testFakes.ts`)
 
 ```bash
-cd /d/GitSource/MonaLisa && git add src/tracking/tracker.ts src/tracking/tracker.test.ts src/types.ts src/geometry/upFrame.ts src/app/testFakes.ts tests/harness/t7/fakes.ts && git commit -m "camera per-person: tracker runs the photo bundle in VIDEO on request, detects on an OffscreenCanvas, detectView (IMAGE with the live guards), warm(mode, detector)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat
+cd /d/GitSource/MonaLisa && git add src/tracking/tracker.ts src/tracking/tracker.test.ts src/types.ts src/geometry/upFrame.ts src/geometry/upFrame.test.ts src/app/testFakes.ts tests/harness/t7/fakes.ts && git commit -m "camera per-person: tracker runs the photo bundle in VIDEO on request, detects on an OffscreenCanvas, detectView (IMAGE with the live guards), warm(mode, detector)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat
 ```
 
 ---
@@ -1617,7 +1628,7 @@ cd /d/GitSource/MonaLisa && git add src/app/faceTracks.ts src/app/faceTracks.tes
 - Modify: `src/ui/theme.css:2717-2750` (`.cam-bracket`, `.cam-marker.dim`) — CRLF
 - Modify: `src/store/settings.ts:169-179` (hint), `src/store/settings.test.ts`
 - Modify: `src/ui/screens/Camera.tsx:128-138, :396-404` — CRLF
-- Modify: `tests/e2e/camera-group.spec.ts:28-40` (the marker's node count)
+- Modify: `tests/e2e/camera-group.spec.ts:31-44` (the marker's node count)
 
 **Interfaces:**
 - Produces:
@@ -1672,7 +1683,7 @@ it('no brackets with one face or under 全部套用 (no dot either); dim puts th
 
 `MarkerNodes` gains `showBrackets(boxes: Map<TrackId, PxBox> | null)`: one `<i class="cam-bracket">` per track id holding four corner `<i class="br tl|tr|bl|br-r">` children made once, styles written through `set()` (only on change), nodes of vanished ids removed, all hidden when `null`. Brackets show while `views.length >= 2 && !all`; the rAF loop keeps running while brackets, the dot or the ring show (`:121`). The root is `<div class={\`cam-marker${dim ? ' dim' : ''}\`}>`. CSS: `.cam-bracket` is the editor's `.face-box` corner shape (`theme.css:2668-2687`) at `opacity: .4`; `.cam-marker.dim { opacity: .3 }`. `Camera.tsx`: `dim={photoScoped(sel, lensOf(look))}`; in `onStats`, the first time `s.faces >= 2` in this mount, `if (takeCameraPersonsHint()) toast('點選畫面中的臉，可個別調整', 3200)`.
 
-- [ ] **Step 4: Update `camera-group.spec.ts:28-40`**: the marker holds one dot plus one bracket per face: `expect(marker).toEqual({ nodes: 4, most: 4, dots: 1 })`.
+- [ ] **Step 4: Update `camera-group.spec.ts:31-44`**: the marker holds one dot plus one bracket per face: `expect(marker).toEqual({ nodes: 4, most: 4, dots: 1 })`.
 
 - [ ] **Step 5: Run** — `npx vitest run src/ui src/store && npm run typecheck && npm run build && npx playwright test tests/e2e/camera-group.spec.ts --project chromium-group` → PASS.
 
@@ -1781,10 +1792,10 @@ cd /d/GitSource/MonaLisa && git add src/types.ts src/ui/imaging.ts src/ui/imagin
 **Files:**
 - Modify: `src/config/limits.ts` (`HANDOVER_ZOOM_FACE`)
 - Modify: `src/detect/persons.ts` (after `seedPrimary`, `:113-126`), `src/detect/persons.test.ts`
-- Modify: `src/edit/migrate.ts:129-157` (`AnswerInput.handOver`, `Answer.handOverMissed`), `:223-295` (`firstAnswer`), `src/edit/migrate.test.ts`
+- Modify: `src/edit/migrate.ts:129-157` (`AnswerInput.handOver`, `Answer.handOverMissed`), `:223-310` (`firstAnswer`), `src/edit/migrate.test.ts`
 - Modify: `src/app/still.ts:135-155` (`StillSessionOptions.handOver`), `:170-173`, `:502-552` (`detectFaces`, `detectOnce`), `src/app/still.test.ts`
 - Modify: `src/ui/screens/Editor.tsx:735-739, :813-836`
-- Modify: `tests/e2e/original.spec.ts:158-249` (the camera hand-over test split in two)
+- Modify: `tests/e2e/original.spec.ts:156-249` (the camera hand-over test split in two)
 
 **Interfaces:**
 - Consumes: Task 10 `CameraHandOver`, `EditorSource.handOver`; Task 6 `mapLandmarks`; Task 5 `detectImage(OffscreenCanvas)`.
@@ -1980,7 +1991,7 @@ cd /d/GitSource/MonaLisa && git add src/config src/detect/persons.ts src/detect/
 - Modify: `scripts/gen-y4m.mjs` (layouts, `composeCells`, the move timeline, JPEG decode, CLI `--layout`, `--move`; `main` becomes async), `scripts/gen-group-fixture.mjs:127-144` (export `launch`)
 - Modify: `tests/harness/t5/group-fixtures.test.mjs` (layout and timeline checks)
 - Modify: `tests/e2e/global-setup.ts:19-33`, `playwright.config.ts:35-64`, `LICENSES/NOTICE.txt:80`
-- Modify: `tests/e2e/fixtures.ts` (`uprightCamera(page)`, `cpuDelegate(page: Page, delegate: string = 'CPU')`, `camBox(page, id, mirrored = true): Promise<{ point: { x; y }; rect: Rect }>` moved from `camera-group.spec.ts:7-23`, which then imports it)
+- Modify: `tests/e2e/fixtures.ts` (`uprightCamera(page)`, `cpuDelegate(page: Page, delegate: string = 'CPU')`, `camBox(page, id, mirrored = true): Promise<{ point: { x; y }; rect: Rect }>`: today's `camGeom` at `camera-group.spec.ts:7-23`, renamed and given the `mirrored` flag; that spec then imports it)
 
 **Interfaces:**
 - Produces (gen-y4m.mjs):
@@ -2060,11 +2071,11 @@ it('composeFitWidthBoxes(TEN_FACES): ten boxes 9–13 % of the frame width, bott
 
 - [ ] **Step 4: Wire the setup and the projects**
 
-`global-setup.ts`: one stale-checked entry per clip (inputs: `scripts/gen-y4m.mjs`, `scripts/gen-group-fixture.mjs`, and `sample_face.png` / `group_faces.png` / `ten_faces.jpg`). `playwright.config.ts`: `chromium` ignores `camera-(group|persons|groups|back|identity).spec.ts`; `chromium-group` matches `/camera-(group|persons)\.spec\.ts/`; new projects, each with its own `--use-file-for-fake-video-capture`: `chromium-upright-row3` (`testMatch: 'camera-groups.spec.ts'`, `grep: /@row3/`), `chromium-upright-far10` (`grep: /@far10/`), `chromium-selfie-group` (`grep: /@selfie/`), `chromium-group10` (`camera-back.spec.ts`), `chromium-group-move` (`camera-identity.spec.ts`). `fixtures.ts`: `uprightCamera(page)` (an init script that rewrites `getUserMedia`'s video constraint to `width: { ideal: 1080 }, height: { ideal: 1920 }`), `cpuDelegate(page: Page, delegate: string = 'CPU')` (`meiyan.prefs.v1` `{ delegate }` when unset), `camBox(page, id)` (the client point and frame-relative rect of a debug box, mirrored on the front camera, from `camera-group.spec.ts:7-23`, which now imports it). `NOTICE.txt`: the new clips are modified derivatives of `sample_face.png` (and of `ten_faces.jpg` / `group_faces.png`), generated, not committed.
+`global-setup.ts`: one stale-checked entry per clip (inputs: `scripts/gen-y4m.mjs`, `scripts/gen-group-fixture.mjs`, and `sample_face.png` / `group_faces.png` / `ten_faces.jpg`). `playwright.config.ts`: `chromium`'s `testIgnore` becomes the RegExp `/camera-(group|persons|groups|back|identity)\.spec\.ts/`; `chromium-group` matches `/camera-(group|persons)\.spec\.ts/`; new projects, each with its own `--use-file-for-fake-video-capture`: `chromium-upright-row3` (`testMatch: 'camera-groups.spec.ts'`, `grep: /@row3/`), `chromium-upright-far10` (`grep: /@far10/`), `chromium-selfie-group` (`grep: /@selfie/`), `chromium-group10` (`camera-back.spec.ts`), `chromium-group-move` (`camera-identity.spec.ts`). `fixtures.ts`: `uprightCamera(page)` (an init script that rewrites `getUserMedia`'s video constraint to `width: { ideal: 1080 }, height: { ideal: 1920 }`), `cpuDelegate(page: Page, delegate: string = 'CPU')` (`meiyan.prefs.v1` `{ delegate }` when unset), `camBox(page, id)` (the client point and frame-relative rect of a debug box, mirrored on the front camera, from `camera-group.spec.ts:7-23`, which now imports it). `NOTICE.txt`: the new clips are modified derivatives of `sample_face.png` (and of `ten_faces.jpg` / `group_faces.png`), generated, not committed.
 
 - [ ] **Step 5: Generate and check**
 
-Run: `cd /d/GitSource/MonaLisa && npx vitest run tests/harness/t5/group-fixtures.test.mjs && npx playwright test tests/e2e/home.spec.ts --project chromium`
+Run: `cd /d/GitSource/MonaLisa && npx vitest run tests/harness/t5/group-fixtures.test.mjs && npm run build && npx playwright test tests/e2e/home.spec.ts --project chromium`
 Expected: PASS; `tests/fixtures/` holds the five new clips (global setup printed one line each with its size).
 
 - [ ] **Step 6: Commit**
@@ -2512,7 +2523,7 @@ describe('camera per-person verdicts (camera per-person spec §10)', () => {
   - `rowJG`: jitter (static clip, 2 s) and lag (pan clip, 4 s) of the group path's IMAGE landmarks through the app smoother, refreshed by the whole view and by a tile holding the face, beside MediaPipe's own numFaces-1 VIDEO smoothing on the same frames (as `jitterLag`, `:671-717`); PJ1G rows per refresh kind.
 - `bench-multiface.mjs`: `--upright` appends `upright=1` to the page URL; `--option-c <ms>` appends `optionC=<ms>`, which `rowLF` passes to `lfRows` as PGN's longest-frame bound (absent → that condition is not judged). Both flags, and `--option-c`'s value, are taken out of the row ids the way `--video` and its value are (`bench-multiface.mjs:14`), so `--upright … LF` runs row `LF` only.
 
-- [ ] **Step 4: Run** — `npx vitest run src/bench && npm run typecheck && npx playwright test tests/e2e/bench.spec.ts --project chromium` → PASS (the bench page still mounts its sections).
+- [ ] **Step 4: Run** — `npx vitest run src/bench && npm run typecheck && npm run build && npx playwright test tests/e2e/bench.spec.ts --project chromium` → PASS (the bench page still mounts its sections).
 
 - [ ] **Step 5: Commit**
 
@@ -2540,7 +2551,7 @@ Expected: PASS, `PB mean ≤ 1 ms` printed. Over → profile (no limit changes, 
 
 - [ ] **Step 2: PGR (recall), CPU three runs, GPU three runs**
 
-Run: `npx playwright test --project chromium-upright-row3 --project chromium-upright-far10 --project chromium-selfie-group --repeat-each 3 --grep-invert @bench`
+Run: `npm run build && npx playwright test --project chromium-upright-row3 --project chromium-upright-far10 --project chromium-selfie-group --repeat-each 3 --grep-invert @bench`
 then `PGR_DELEGATE=auto npx playwright test --project chromium-upright-row3 --project chromium-upright-far10 --project chromium-selfie-group --repeat-each 3 --grep-invert @bench --headed`
 Expected: every group-path E4 test passes 3 of 3 on each delegate.
 
@@ -2557,7 +2568,7 @@ Expected: verdict rows printed per delegate; PGN, PJ1G pass; PLB ≤ 33 ms; PGS 
 
 - [ ] **Step 4: Apply the allowed fixes, or the fallback**
 
-A failing desktop gate first gets the fix §10 names, measured again (one change at a time, its numbers in the `limits.ts` comment): PGR → `DETECTOR_FLOOR` margin (`camera: 0.10`, `photo: 0.07`), then the schedule (`LIVE_SCAN_EVERY = 3`); PGN → `LIVE_SCAN_EVERY`, the cadence constants; PJ1G → a group-path smoother constant `ONE_EURO_GROUP` (`minCutoff 0.025`, then `beta 160`; `FaceTracks` uses it for tracks refreshed on the group path). Still failing → `export const LIVE_GROUP = false;` with the failing gate and its numbers in the comment, then re-run Task 14's option-C tests and E4b's option-C test (they must pass), and write spec §16 item 1's outcome (the gate, by how much, the fallback floors back ≥ ~9 % / front ≥ ~12 % for the release notes). PLB failing → `LIVE_DETECTOR.environment = 'camera'`.
+A failing desktop gate first gets the fix §10 names, measured again (one change at a time, its numbers in the `limits.ts` comment): PGR → `DETECTOR_FLOOR` margin (`camera: 0.10`, `photo: 0.07`), then the schedule (`LIVE_SCAN_EVERY = 3`); PGN → `LIVE_SCAN_EVERY`, the cadence constants; PJ1G → a group-path smoother constant `ONE_EURO_GROUP` (`minCutoff 0.025`, then `beta 160`; `FaceTracks` uses it for tracks refreshed on the group path). Still failing → `export const LIVE_GROUP = false;` with the failing gate and its numbers in the comment, then `npm run build` and re-run Task 14's option-C tests and E4b's option-C test (they must pass), and write spec §16 item 1's outcome (the gate, by how much, the fallback floors back ≥ ~9 % / front ≥ ~12 % for the release notes). PLB failing → `LIVE_DETECTOR.environment = 'camera'`.
 
 - [ ] **Step 5: PL2 on the solo path**
 

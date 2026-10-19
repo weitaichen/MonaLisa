@@ -108,7 +108,7 @@ describe('constructors', () => {
   });
   it('cameraEdit / lookOf round-trip the camera look through the one person "live"', () => {
     const look = { photo: defaultPhoto(), person: naturalPerson() };
-    const e = cameraEdit(look);
+    const e = cameraEdit(look.photo, look.person);
     expect(Object.keys(e.persons)).toEqual(['live']);
     expect(lookOf(e)).toEqual(look);
   });

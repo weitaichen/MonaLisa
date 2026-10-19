@@ -76,7 +76,7 @@ export function Camera() {
   // 左／右 follow the tracked face through the preview mirror (S5 §3.4): a front ↔ back flip, or the face turned upside
   // down, re-maps the side chips on the next render (S5 §7)
   const livePersons: PersonInfo[] = [{ ...LIVE_PERSONS[0], screenSwap: cameraScreenSwap(snap?.facing ?? 'user', gpLeft) }];
-  const lensOf = (l: typeof look) => lensFor(cameraEdit(l), { kind: 'person', id: LIVE }, livePersons, LIVE);
+  const lensOf = (l: typeof look) => lensFor(cameraEdit(l.photo, l.person), { kind: 'person', id: LIVE }, livePersons, LIVE);
   const setEdit = (e: EditState) => setLook(lookOf(e));
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;

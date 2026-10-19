@@ -199,8 +199,11 @@ export const MIXED = '各人不同';
 export const BANDS_NOTE = '增高、長腿會拉伸整排畫面，套用於整張照片';
 export const legsAnchorNote = (n: number): string => `長腿以人物 ${n} 的腿長為準，套用於整張照片`;
 
-/** ≥ 2 persons: the person / photo distinction shows (labels, badges, notes, strip) */
-export const multiPerson = (lens: Lens): boolean => lens.persons.length >= 2;
+/** the camera's person items name the target this way in their aria (camera per-person spec §3.2, §3.12) */
+export const CAMERA_TARGET = '選取的人物';
+
+/** ≥ 2 persons (the camera: ≥ 2 faces shown, Lens.multi): the person / photo distinction shows (labels, badges, notes, strip) */
+export const multiPerson = (lens: Lens): boolean => lens.multi;
 /** a person's number: position in the cache's display order + 1, never derived from the id (S §2.1) */
 export const personNumber = (lens: Lens, id: PersonId): number => lens.persons.findIndex((p) => p.id === id) + 1;
 /** slider identity: a person switch must reset the drag state and the double-tap timer (S §2.4) */
@@ -215,9 +218,13 @@ export interface PersonNote {
 /**
  * S §2.4: a body-only person on a face tab. 美體 has bodyNoteFor; 濾鏡 / 調節 / 裁切 are photo-level; 全部 has no person note.
  * A photo without a face has none either: the all-skin exception wins on 美膚 / 一鍵, and 美型 / 美妝 show the
- * Editor's photo-level faceNote.
+ * Editor's photo-level faceNote. The camera with no face shown (Lens.personOff, camera per-person spec §3.6) notes it on
+ * every face tab, 美型 and 美妝 dimmed whole.
  */
 export function personNote(tab: TabId, lens: Lens): PersonNote | null {
+  if (lens.personOff) {
+    return tab === 'skin' || tab === 'shape' || tab === 'makeup' || tab === 'preset' ? { text: lens.personOff, dim: tab === 'shape' || tab === 'makeup' } : null;
+  }
   if (!multiPerson(lens) || lens.noFace || lens.sel.kind !== 'person' || tab === 'body' || tab === 'filter' || tab === 'adjust' || tab === 'crop') return null;
   const id = lens.sel.id;
   const me = lens.persons.find((p) => p.id === id);
@@ -264,8 +271,11 @@ const isPhotoItem = (id: ParamId): boolean => paramDef(id).scope === 'photo';
 /** photo-level as the user sees it: the photo scope, plus 磨皮 / 紅潤 in a photo without a face (all skin, RM §3.3) */
 const photoLike = (lens: Lens, id: ParamId): boolean => isPhotoItem(id) || (lens.noFace && (id === 'skin.smooth' || id === 'skin.rosy'));
 const badged = (lens: Lens, item: PanelItem): PanelItem => (multiPerson(lens) ? { ...item, badge: PHOTO_BADGE } : item);
-/** ≥ 2 persons: a person item the selected person (or no 全部 target) can use; else no slider, never one that snaps back */
-const usable = (lens: Lens, id: ParamId): boolean => !multiPerson(lens) || lens.applies(id).ok;
+/**
+ * ≥ 2 persons: a person item the selected person (or no 全部 target) can use; the camera with no face shown: a photo
+ * item only (personOff). Else no slider, never one that snaps back
+ */
+const usable = (lens: Lens, id: ParamId): boolean => (!multiPerson(lens) && !lens.personOff) || lens.applies(id).ok;
 
 /**
  * Gate of one 美體 item. 增高 / 背景保護 / 原圖 need no detection, so only 'unsupported' turns them off, plus
@@ -1057,7 +1067,9 @@ export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext, sk
       if (cur === 'custom') {
         items.push({ key: 'custom', label: '自訂', visual: { kind: 'icon', icon: 'custom' }, selected: true, hasValue: false, action: { type: 'custom' }, ...ENABLED });
       }
-      return items;
+      // the camera with no face shown: a preset's person part has nobody to go to (camera per-person spec §3.6)
+      const off = lens.personOff;
+      return off ? items.map((it) => gated(it, { ok: false, reason: off })) : items;
     }
     case 'skin':
     case 'shape': {
@@ -1072,9 +1084,9 @@ export function itemsFor(lens: Lens, sel: PanelSelection, body?: BodyContext, sk
           ...ENABLED,
         };
         const it = photoLike(lens, d.id) ? badged(lens, item) : item;
-        // 美膚 gates per item (美白 / 銳化 stay usable for a body-only person); 美型 keeps the whole-strip dimming of
-        // personNote, as v0.3 did for a photo without a face
-        return multiPerson(lens) && sel.tab === 'skin' ? gated(it, lens.applies(d.id)) : it;
+        // 美膚 gates per item (美白 / 銳化 stay usable for a body-only person, or in the camera with no face shown); 美型
+        // keeps the whole-strip dimming of personNote, as v0.3 did for a photo without a face
+        return (multiPerson(lens) || lens.personOff) && sel.tab === 'skin' ? gated(it, lens.applies(d.id)) : it;
       });
       const items: PanelItem[] = [
         RESET_ITEM(),
@@ -1271,11 +1283,17 @@ function paramBinding(lens: Lens, id: ParamId): SliderBinding {
   return { key: d.id, param: d.id, label: d.label, bidirectional: d.bidirectional, value: g.value, mixed: g.mixed, defaultValue: d.default, apply: (l, v) => l.set(d.id, v) };
 }
 
-/** ≥ 2 persons: the key carries the selection, photo items read 「· 整張照片」, aria names the target (S §2.4, A9) */
+/**
+ * ≥ 2 persons: the key carries the selection, photo items read 「· 整張照片」, aria names the target (S §2.4, A9). The
+ * camera (≥ 2 faces shown): the key carries the target person, aria reads 「選取的人物」 or, under 全部套用, 「全部」
+ * (camera per-person spec §3.2)
+ */
 function decorate(b: SliderBinding, lens: Lens, photo: boolean): SliderBinding {
   if (!multiPerson(lens)) return b;
-  const who = photo ? PHOTO_SCOPE : lens.sel.kind === 'all' ? '全部' : `人物 ${personNumber(lens, lens.sel.id)}`;
-  return { ...b, key: `${selKey(lens)}:${b.key}`, label: photo ? `${b.label} · ${PHOTO_SCOPE}` : b.label, aria: `${b.label}，${who}` };
+  const cam = lens.camera;
+  const who = photo ? PHOTO_SCOPE : lens.sel.kind === 'all' || cam?.all ? '全部' : cam ? CAMERA_TARGET : `人物 ${personNumber(lens, lens.sel.id)}`;
+  const prefix = cam ? `c${cam.target ?? '-'}` : selKey(lens);
+  return { ...b, key: `${prefix}:${b.key}`, label: photo ? `${b.label} · ${PHOTO_SCOPE}` : b.label, aria: `${b.label}，${who}` };
 }
 
 /** `skin`: the 膚質 context (editor only); a tone slider needs it and an open toneGate */
@@ -1287,6 +1305,8 @@ export function sliderFor(lens: Lens, sel: PanelSelection, body?: BodyContext, s
         const b = lookSlider(lens.look());
         return b && decorate(b, lens, true);
       }
+      // the camera with no face shown: every preset is off, so 程度 is too (camera per-person spec §3.6)
+      if (lens.personOff) return null;
       const { ref, mixed } = lens.preset();
       const link = edit.photo.presetLink;
       const id = ref === null ? (link?.id ?? null) : ref !== 'custom' && !mixed ? ref.id : null;

@@ -131,9 +131,12 @@ export function withPersons(edit: EditState, ids: readonly PersonId[], f: (p: Pe
   return { ...edit, persons };
 }
 
-/** the camera's edit: one person, 'live' (RM §3.7) */
-export function cameraEdit(look: CameraLook): EditState {
-  return { v: 2, photo: look.photo, persons: { [LIVE]: look.person }, template: look.person, primaryInit: null };
+/**
+ * the camera's edit: one person, 'live' (RM §3.7), holding the target's params (`person`) over the frame's photo look
+ * (camera per-person spec §3.2): the panel edits one person at a time through it
+ */
+export function cameraEdit(photo: PhotoParams, person: PersonParams): EditState {
+  return { v: 2, photo, persons: { [LIVE]: person }, template: person, primaryInit: null };
 }
 
 export function lookOf(edit: EditState): CameraLook {

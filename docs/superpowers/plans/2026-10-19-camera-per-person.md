@@ -434,7 +434,7 @@ cd /d/GitSource/MonaLisa && git add src/config/limits.ts src/config/limits.test.
   export const CAMERA_TARGET = '選取的人物';
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `src/edit/lens.test.ts` (add; `one` is the file's existing selection helper; import `CAMERA_NO_FACE_NOTE` and `type LensOptions` from `./lens`, `personOf` from `./state`):
 
@@ -499,23 +499,23 @@ describe('the camera panel (camera per-person spec §3.2, §3.6)', () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cd /d/GitSource/MonaLisa && npx vitest run src/edit/lens.test.ts src/edit/state.test.ts src/ui/panelModel.test.ts`
 Expected: FAIL — `CAMERA_NO_FACE_NOTE` / `CAMERA_TARGET` not exported, `multi` undefined, labels without the camera rule.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 - `cameraEdit(photo, person)` at `state.ts:113-116`; `lookOf` unchanged. Update the two call sites (`Camera.tsx:79`, `lens.test.ts:157`).
 - `lens.ts` `baseLensFor`: `camera = opts.camera ?? null`; `multi = camera ? camera.shown >= 2 : persons.length >= 2`; `photoToo = sel.kind === 'all' || !!camera?.all || !multi` (replaces `:120`); `personOff = camera?.noFace ? CAMERA_NO_FACE_NOTE : null`; while `personOff`: `targets(id)` of a person item and `faceTargets()` are `[]`, and `applies(id)` of a person item is `no(personOff)` (checked before the existing rules; `lens.noFace` stays false, so 磨皮 never becomes an all-skin item in the camera). `withFaceDetail` passes `multi`, `camera`, `personOff` through.
 - `panelModel.ts`: `multiPerson = (lens) => lens.multi`; `personNote` returns `{ text: lens.personOff, dim: tab === 'shape' || tab === 'makeup' }` for `skin | shape | makeup | preset` while `lens.personOff` (before its other rules); `usable = (lens, id) => (!multiPerson(lens) && !lens.personOff) || lens.applies(id).ok`; the 美膚 gate at `:1077` applies when `multiPerson(lens) || lens.personOff`; every preset item at `:1048-1058` is `gated(…, { ok: false, reason: lens.personOff })` while `personOff`; the 程度 slider (`:1290-1296`) returns `null` while `personOff`; `decorate`: `who = photo ? PHOTO_SCOPE : lens.sel.kind === 'all' || lens.camera?.all ? '全部' : lens.camera ? CAMERA_TARGET : \`人物 ${personNumber(lens, lens.sel.id)}\``, key prefix `lens.camera ? \`c${lens.camera.target ?? '-'}\` : selKey(lens)`.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cd /d/GitSource/MonaLisa && npx vitest run src/edit src/ui && npm run typecheck`
 Expected: all PASS (the editor's existing lens / panel tests unchanged); typecheck 0.
 
-- [ ] **Step 5: Commit** (CRLF check on `src/ui/panelModel.ts`, `src/ui/screens/Camera.tsx`)
+- [x] **Step 5: Commit** (CRLF check on `src/ui/panelModel.ts`, `src/ui/screens/Camera.tsx`)
 
 ```bash
 cd /d/GitSource/MonaLisa && git add src/edit/state.ts src/edit/state.test.ts src/edit/lens.ts src/edit/lens.test.ts src/ui/panelModel.ts src/ui/panelModel.test.ts src/ui/screens/Camera.tsx && git commit -m "camera per-person: the camera lens option (≥ 2-face labels and aria, ⊘ rule, no-face gate); cameraEdit(photo, person)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat

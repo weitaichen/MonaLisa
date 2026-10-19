@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { applyPreset, LIP_SHADES, setFilter, setParam, setShade, SPLIT_IDS } from '../engine/params';
 import type { BeautyParams, EditState, PersonParams } from '../types';
 import { editFromLegacy, legacyProjection, splitLegacy } from './legacy';
-import { LIVE_PERSONS, lensFor, NO_BODY_NOTE, NO_FACE_NOTE, P0_INFO, type PersonInfo } from './lens';
+import { CAMERA_NO_FACE_NOTE, LIVE_PERSONS, lensFor, type LensOptions, NO_BODY_NOTE, NO_FACE_NOTE, P0_INFO, type PersonInfo } from './lens';
 import { splitOn } from './sides';
-import { assignPersons, cameraEdit, defaultPhoto, emptyShades, LIVE, lookOf, naturalPerson, neutralPerson, neutralPhoto, personFromPreset } from './state';
+import { assignPersons, cameraEdit, defaultPhoto, emptyShades, LIVE, lookOf, naturalPerson, neutralPerson, neutralPhoto, personFromPreset, personOf } from './state';
 import { TONE_COPY } from './toneCopy';
 
 const three: PersonInfo[] = [
@@ -154,7 +154,7 @@ describe('one person p0 is v0.3 (parity of every op through the projection)', ()
 describe('the camera lens: one person, live (RM §3.7)', () => {
   it('writes the live person and the photo through lookOf; 長腿 never anchors (no body in the camera)', () => {
     const look = splitLegacy(applyPreset('glow', 0.5));
-    const l = lensFor(cameraEdit(look), one(LIVE), LIVE_PERSONS, LIVE);
+    const l = lensFor(cameraEdit(look.photo, look.person), one(LIVE), LIVE_PERSONS, LIVE);
     expect(l.applies('shape.chin').ok).toBe(true);
     const e = lookOf(l.set('shape.chin', 0.7));
     expect(e.person.values['shape.chin']).toBe(0.7);
@@ -162,6 +162,33 @@ describe('the camera lens: one person, live (RM §3.7)', () => {
     expect(e.photo).toBe(look.photo);
     expect(lookOf(l.set('skin.whiten', 1)).photo.values['skin.whiten']).toBe(1);
     expect(l.set('body.legs', 0.5).photo.legsAnchor).toBeNull();
+  });
+});
+
+describe('the camera lens (camera per-person spec §3.2, §3.6)', () => {
+  const photo = { ...neutralPhoto(), values: { ...neutralPhoto().values, 'skin.whiten': 0.8 } };
+  const cam = (shown: number, all = false, noFace = false): LensOptions => ({ camera: { shown, all, noFace, target: 1 } });
+  const lens = (o: LensOptions) => lensFor(cameraEdit(photo, naturalPerson()), one(LIVE), LIVE_PERSONS, LIVE, o);
+  it('≥ 2 faces shown: ⊘ resets the target only; the photo items too under 全部套用 or with < 2 faces', () => {
+    for (const [o, whiten] of [[cam(2), 0.8], [cam(2, true), 0], [cam(1), 0]] as const) {
+      const e = lens(o).resetGroup('skin');
+      expect(e.photo.values['skin.whiten']).toBe(whiten);
+      expect(personOf(e, LIVE).values['skin.smooth']).toBe(neutralPerson().values['skin.smooth']);
+    }
+    expect([lens(cam(2)).multi, lens(cam(1)).multi]).toEqual([true, false]);
+  });
+  it('no face shown: person items write nothing and say why; photo items still write', () => {
+    const l = lens(cam(0, false, true));
+    expect(l.personOff).toBe(CAMERA_NO_FACE_NOTE);
+    expect([l.targets('skin.smooth'), l.faceTargets()]).toEqual([[], []]);
+    expect(l.applies('shape.eyeEnlarge')).toEqual({ ok: false, reason: CAMERA_NO_FACE_NOTE });
+    expect(l.set('skin.smooth', 0.9)).toBe(l.edit);
+    expect(l.set('skin.whiten', 1).photo.values['skin.whiten']).toBe(1);
+    expect(l.applyPreset('natural', 1).persons).toBe(l.edit.persons);
+  });
+  it('without the camera option nothing changes: multi follows the persons, no personOff', () => {
+    const l = lensFor(cameraEdit(photo, naturalPerson()), one(LIVE), LIVE_PERSONS, LIVE);
+    expect([l.multi, l.camera, l.personOff]).toEqual([false, null, null]);
   });
 });
 

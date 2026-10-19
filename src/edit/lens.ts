@@ -27,6 +27,8 @@ import { TONE_COPY } from './toneCopy';
 export const NO_FACE_NOTE = '這位人物未偵測到臉部，臉部效果不適用';
 export const NO_BODY_NOTE = '這位人物未偵測到身體，僅能使用增高、長腿';
 export const NO_FACE_PHOTO_NOTE = '未偵測到臉部，臉型與美妝不會套用';
+/** the camera with a working tracker and no face shown: person items are off, photo items stay (camera per-person spec §3.6, K11) */
+export const CAMERA_NO_FACE_NOTE = '未偵測到臉部，對準人臉後即可調整';
 
 export interface PersonInfo {
   id: PersonId;
@@ -35,9 +37,25 @@ export interface PersonInfo {
   /** face-detail spec §3.4: the person's GPUPixel-left half shows on the right of the screen (翻轉, camera mirror) */
   screenSwap?: boolean;
 }
+/**
+ * The camera's faces as the panel sees them (camera per-person spec §3.2, §3.6). The camera lens is one person, 'live',
+ * holding the target's params; this says how many faces are shown, so the ≥ 2-persons rules follow the faces in view.
+ */
+export interface CameraLensInfo {
+  /** faces shown (found, or held after a miss) */
+  shown: number;
+  /** 全部套用 is on: person items write everyone in view, and ⊘ also resets the tab's photo items */
+  all: boolean;
+  /** a working tracker shows no face: person items write nothing and say CAMERA_NO_FACE_NOTE */
+  noFace: boolean;
+  /** the camera person the sliders edit (slider identity: a target change resets the drag state); null for none */
+  target: number | null;
+}
 export interface LensOptions {
   /** paramAvailability of a body item for that person's measure (absent → available) */
   available?(person: PersonId, id: ParamId): boolean;
+  /** the camera's faces (absent in the editor) */
+  camera?: CameraLensInfo;
 }
 export interface Lens {
   readonly edit: EditState;
@@ -45,6 +63,12 @@ export interface Lens {
   readonly persons: readonly PersonInfo[];
   readonly primary: PersonId;
   readonly noFace: boolean;
+  /** the person / photo distinction shows: ≥ 2 persons, or in the camera ≥ 2 faces shown (camera per-person spec §3.2) */
+  readonly multi: boolean;
+  /** LensOptions.camera; null in the editor */
+  readonly camera: CameraLensInfo | null;
+  /** why person items write nothing (the camera with no face shown, §3.6); null when they may */
+  readonly personOff: string | null;
   /** person ids a person item writes; [] for photo items and refusals */
   targets(id: ParamId): PersonId[];
   /** the persons presets, shades and 無 write */
@@ -116,16 +140,24 @@ function baseLensFor(edit: EditState, sel: Selection, persons: readonly PersonIn
   const isBody = (id: ParamId) => paramDef(id).group === 'body';
   const isPhoto = (id: ParamId) => paramDef(id).scope === 'photo';
   const applicable = (p: PersonInfo, id: ParamId) => (isBody(id) ? p.body && (opts.available?.(p.id, id) ?? true) : p.face);
-  /** ⊘ also resets the tab's photo items only under 全部 or with fewer than 2 persons (RM §2.1, r2) */
-  const photoToo = sel.kind === 'all' || persons.length < 2;
+  const camera = opts.camera ?? null;
+  const multi = camera ? camera.shown >= 2 : persons.length >= 2;
+  /**
+   * ⊘ also resets the tab's photo items only under 全部 or with fewer than 2 persons (RM §2.1, r2); in the camera
+   * under 全部套用 or with fewer than 2 faces shown (camera per-person spec §3.2)
+   */
+  const photoToo = sel.kind === 'all' || !!camera?.all || !multi;
+  /** the camera with no face shown: every person item and face target is off (§3.6); lens.noFace stays false, so no all-skin 磨皮 */
+  const personOff = camera?.noFace ? CAMERA_NO_FACE_NOTE : null;
 
   function targets(id: ParamId): PersonId[] {
-    if (isPhoto(id)) return [];
+    if (isPhoto(id) || personOff) return [];
     if (!isBody(id) && noFace) return ALL_SKIN.has(id) ? [primary] : [];
     if (sel.kind === 'person') return selected && applicable(selected, id) ? [selected.id] : [];
     return order.filter((pid) => applicable(info.get(pid)!, id));
   }
   function faceTargets(): PersonId[] {
+    if (personOff) return [];
     if (noFace) return [primary];
     if (sel.kind === 'person') return selected?.face ? [selected.id] : [];
     return order.filter((pid) => info.get(pid)!.face);
@@ -152,6 +184,9 @@ function baseLensFor(edit: EditState, sel: Selection, persons: readonly PersonIn
     persons,
     primary,
     noFace,
+    multi,
+    camera,
+    personOff,
     targets,
     faceTargets,
     get(id) {
@@ -175,7 +210,9 @@ function baseLensFor(edit: EditState, sel: Selection, persons: readonly PersonIn
       return withPersons(edit, targets(id), (p) => ({ ...p, values: { ...p.values, [id]: val }, preset: isBody(id) ? p.preset : 'custom' }));
     },
     applies(id) {
-      if (isPhoto(id) || targets(id).length) return OK;
+      if (isPhoto(id)) return OK;
+      if (personOff) return no(personOff);
+      if (targets(id).length) return OK;
       if (!isBody(id) && noFace) return no(paramDef(id).group === 'tone' ? TONE_COPY.noFace : NO_FACE_PHOTO_NOTE);
       if (selected && isBody(id) && selected.body) return no('此照片無法使用這個效果');
       return no(isBody(id) ? NO_BODY_NOTE : NO_FACE_NOTE);

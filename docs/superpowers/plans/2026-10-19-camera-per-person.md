@@ -2014,7 +2014,7 @@ cd /d/GitSource/MonaLisa && git add src/config src/detect/persons.ts src/detect/
   Clips: `upright_row3.y4m`, `upright_far10.y4m`, `selfie_group.y4m` (8 static frames each, about 25 MB), `group10.y4m` (`--src tests/fixtures/ten_faces.jpg`, `composeFitWidth`, 30 frames), `group_move.y4m` (`--move`, 540 frames, about 187 MB). All gitignored (`.gitignore` already has `tests/fixtures/*.y4m`).
   `group_move` timeline (deviation from §12.3, recorded in Task 16: the spec's 16 s clip ends with B standing where C starts, so its loop seam would hand B's track to C; this one returns to its first frame): 0–2 s still (A, B, C at `GROUP_CAM` × 0.5); 2–3.5 s C removed; 3.5–5.5 s C back at +0.2 FW; 5.5–7 s B and C swap (about 1.1 C face widths per second, C drawn behind B, hidden ~0.3 s); 7–8.5 s still; 8.5–10 s swap back the same way; 10–11 s still; 11–16.5 s C removed (5.5 s, over `REID_GRACE_MS`); 16.5–18 s still. ±0.5 px of seeded shift per frame on every face.
 
-- [ ] **Step 1: Write the failing tests** (`group-fixtures.test.mjs`, new describe `upright and move clips (camera per-person spec §12.3)`)
+- [x] **Step 1: Write the failing tests** (`group-fixtures.test.mjs`, new describe `upright and move clips (camera per-person spec §12.3)`)
 
 ```js
 const FH = 722 / 619; // sample_face.png's face height over its width (SAMPLE_FACE, the oval box)
@@ -2069,22 +2069,24 @@ it('composeFitWidthBoxes(TEN_FACES): ten boxes 9–13 % of the frame width, bott
 });
 ```
 
-- [ ] **Step 2: Run** — `npx vitest run tests/harness/t5/group-fixtures.test.mjs` → FAIL (exports missing).
+- [x] **Step 2: Run** — `npx vitest run tests/harness/t5/group-fixtures.test.mjs` → FAIL (exports missing).
 
-- [ ] **Step 3: Implement the generator**
+- [x] **Step 3: Implement the generator**
 
 `composeCells` resamples `GROUP6.crop` of `sample_face.png` into each cell (`size = round(fw · long · crop.w / SAMPLE_FACE.fw)`), shifting the source rect by `offset × crop.w / size` for the sub-pixel placement, mirrored per face, on `backdropColour(png)`. The move clip composes `GROUP_CAM`'s A, B, C tiles (`groupCamTiles()`) at half scale on the photo's background per frame from `moveAt(f / 30)` (C drawn before B, so B covers it), then `shiftFrame` by `rng(seed)` ±0.5 px and `rgbToI420`. JPEG sources decode in headless Chromium through `launch()` (exported from `gen-group-fixture.mjs`; dynamic `import('@playwright/test')` only on that path). CLI: `--layout upright_row3|upright_far10|selfie_group`, `--move`, `--seed <n>`.
 
-- [ ] **Step 4: Wire the setup and the projects**
+- [x] **Step 4: Wire the setup and the projects**
 
 `global-setup.ts`: one stale-checked entry per clip (inputs: `scripts/gen-y4m.mjs`, `scripts/gen-group-fixture.mjs`, and `sample_face.png` / `group_faces.png` / `ten_faces.jpg`). `playwright.config.ts`: `chromium`'s `testIgnore` becomes the RegExp `/camera-(group|persons|groups|back|identity)\.spec\.ts/`; `chromium-group` matches `/camera-(group|persons)\.spec\.ts/`; new projects, each with its own `--use-file-for-fake-video-capture`: `chromium-upright-row3` (`testMatch: 'camera-groups.spec.ts'`, `grep: /@row3/`), `chromium-upright-far10` (`grep: /@far10/`), `chromium-selfie-group` (`grep: /@selfie/`), `chromium-group10` (`camera-back.spec.ts`), `chromium-group-move` (`camera-identity.spec.ts`). `fixtures.ts`: `uprightCamera(page)` (an init script that rewrites `getUserMedia`'s video constraint to `width: { ideal: 1080 }, height: { ideal: 1920 }`), `cpuDelegate(page: Page, delegate: string = 'CPU')` (`meiyan.prefs.v1` `{ delegate }` when unset), `camBox(page, id)` (the client point and frame-relative rect of a debug box, mirrored on the front camera, from `camera-group.spec.ts:7-23`, which now imports it). `NOTICE.txt`: the new clips are modified derivatives of `sample_face.png` (and of `ten_faces.jpg` / `group_faces.png`), generated, not committed.
 
-- [ ] **Step 5: Generate and check**
+- [x] **Step 5: Generate and check**
 
 Run: `cd /d/GitSource/MonaLisa && npx vitest run tests/harness/t5/group-fixtures.test.mjs && npm run build && npx playwright test tests/e2e/home.spec.ts --project chromium`
 Expected: PASS; `tests/fixtures/` holds the five new clips (global setup printed one line each with its size).
 
-- [ ] **Step 6: Commit**
+(Executed with these adaptations, 2026-10-20. Added beyond the interfaces above, each with a test: `composeMove(png)` (a moveAt state → the move clip's RGB frame before its shift, so the draw order is tested), `cBehind` true during the two swaps only (C drawn first then; no overlap otherwise), `groupCamTiles(scale = 1)` (the move clip's half scale; unchanged at 1), the exports `LAYOUTS` and `UPRIGHT_FRAMES`, and a NOTICE check that names the five clips. `composeFitWidthBoxes` uses the layout's nominal `fw`, `cx`, `cy`, not the whole-px cell, since the test's 1e-6 bound needs it (a 0.09 face's rounded cell is 0.08996 wide). In global setup `face.y4m` keeps its two inputs, so a change to `gen-group-fixture.mjs` alone does not rebuild it. face.y4m and group.y4m came out byte-identical to the previous build. Global setup printed the upright clips at 24.9 MB each, group10 at 41.5 MB and group_move at 186.6 MB. A throwaway smoke spec, not committed, showed: every clip reaches the page at its size (1080×1920 via `uprightCamera`, 1280×720, 640×360); `cpuDelegate` gives `delegate` CPU; on the front camera `selfie_group` reached 5 faces on the group path within 4 s. On `group_move` (front, CPU, unedited persons) the ids followed B and C through each swap, but when the motion stopped at 7 s two new persons took the final places. The old tracks were held about 22 px behind for under a second, then dropped. This is faceTracks behaviour, not the clip; Task 14's E5 should watch for it.)
+
+- [x] **Step 6: Commit**
 
 ```bash
 cd /d/GitSource/MonaLisa && git add scripts/gen-y4m.mjs scripts/gen-group-fixture.mjs tests/harness/t5/group-fixtures.test.mjs tests/e2e/global-setup.ts playwright.config.ts tests/e2e/fixtures.ts tests/e2e/camera-group.spec.ts LICENSES/NOTICE.txt && git commit -m "camera per-person: upright group clips, group10 and group_move, and their Playwright projects" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat

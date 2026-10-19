@@ -180,6 +180,63 @@ export async function debugState(page: Page): Promise<DebugState> {
   return d;
 }
 
+/**
+ * a camera debug box (unmirrored video UV) → its client point (the box centre) and its rect in fractions of the
+ * preview frame. The front camera's preview is mirrored (the default); the back camera's is not (`mirrored` false).
+ */
+export async function camBox(page: Page, id: string, mirrored = true): Promise<{ point: { x: number; y: number }; rect: Rect }> {
+  const b = (await debugState(page)).boxes.find((x) => x.id === id)!;
+  return page.evaluate(
+    ({ b, mirrored }) => {
+      const c = document.querySelector('.cam-stage canvas') as HTMLCanvasElement;
+      const v = document.querySelector('video') as HTMLVideoElement;
+      const r = c.getBoundingClientRect();
+      const s = Math.max(r.width / v.videoWidth, r.height / v.videoHeight);
+      const fx = (u: number) => (r.width - v.videoWidth * s) / 2 + (mirrored ? 1 - u : u) * v.videoWidth * s;
+      const fy = (y: number) => (r.height - v.videoHeight * s) / 2 + y * v.videoHeight * s;
+      const x0 = fx(mirrored ? b.x + b.w : b.x);
+      const x1 = fx(mirrored ? b.x : b.x + b.w);
+      return {
+        point: { x: r.left + (x0 + x1) / 2, y: r.top + fy(b.y + b.h / 2) },
+        rect: { x: x0 / r.width, y: fy(b.y) / r.height, w: (x1 - x0) / r.width, h: (fy(b.y + b.h) - fy(b.y)) / r.height },
+      };
+    },
+    { b, mirrored },
+  );
+}
+
+/**
+ * The camera asks for an upright 1080×1920 stream (camera per-person spec §12.2 E4): Chrome's fake camera otherwise
+ * centre-crops a portrait clip to the app's landscape request (media/camera.ts cameraConstraints: 1920×1080, §6.1). An
+ * init script: call before page.goto.
+ */
+export async function uprightCamera(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const md = navigator.mediaDevices;
+    if (!md) return;
+    const getUserMedia = md.getUserMedia.bind(md);
+    md.getUserMedia = (c?: MediaStreamConstraints) => {
+      if (!c?.video) return getUserMedia(c);
+      const video = { ...(typeof c.video === 'object' ? c.video : {}), width: { ideal: 1080 }, height: { ideal: 1920 } };
+      return getUserMedia({ ...c, video });
+    };
+  });
+}
+
+/**
+ * Run MediaPipe on `delegate` (CPU by default: SwiftShader's GPU path runs many landmark inferences far slower, §12.2):
+ * `meiyan.prefs.v1` `{ delegate }` while the prefs are unset. An init script: call before page.goto.
+ */
+export async function cpuDelegate(page: Page, delegate: string = 'CPU'): Promise<void> {
+  await page.addInitScript((d: string) => {
+    try {
+      if (localStorage.getItem('meiyan.prefs.v1') === null) localStorage.setItem('meiyan.prefs.v1', JSON.stringify({ delegate: d }));
+    } catch {
+      // storage blocked: the app runs on its default delegate
+    }
+  }, delegate);
+}
+
 /** import a fixture through the home screen's picker and wait for the editor */
 export async function importFixture(page: Page, path: string): Promise<void> {
   await page.goto('/');

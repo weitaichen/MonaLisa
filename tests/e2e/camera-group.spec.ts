@@ -1,26 +1,8 @@
 // The camera with three faces (S §8.4): group.y4m shows A, B and C (gen-y4m from group_faces.png), inside the 3:4
 // preview: A above, B and C side by side below it (composeGroupCam).
 import type { Page } from '@playwright/test';
-import { debugState, expect, grab, hold, regionDiff, test } from './fixtures';
+import { camBox, debugState, expect, grab, hold, regionDiff, test } from './fixtures';
 
-/** a camera debug box (unmirrored video UV) → client px and → a rect in fractions of the preview frame */
-async function camGeom(page: Page, id: string) {
-  const b = (await debugState(page)).boxes.find((x) => x.id === id)!;
-  return page.evaluate((b) => {
-    const c = document.querySelector('.cam-stage canvas') as HTMLCanvasElement;
-    const v = document.querySelector('video') as HTMLVideoElement;
-    const r = c.getBoundingClientRect();
-    const s = Math.max(r.width / v.videoWidth, r.height / v.videoHeight);
-    const fx = (u: number) => (r.width - v.videoWidth * s) / 2 + (1 - u) * v.videoWidth * s; // the front camera preview is mirrored
-    const fy = (y: number) => (r.height - v.videoHeight * s) / 2 + y * v.videoHeight * s;
-    const x0 = fx(b.x + b.w);
-    const x1 = fx(b.x);
-    return {
-      point: { x: r.left + (x0 + x1) / 2, y: r.top + fy(b.y + b.h / 2) },
-      rect: { x: x0 / r.width, y: fy(b.y) / r.height, w: (x1 - x0) / r.width, h: (fy(b.y + b.h) - fy(b.y)) / r.height },
-    };
-  }, b);
-}
 /** every toast text shown from now on (the camera hint lasts 3.2 s, the 3-face poll can outlive it) */
 const watchToasts = (page: Page) =>
   page.evaluate(() => {
@@ -90,7 +72,7 @@ test('three faces, one person at a time: 自然 edits and pins the largest (A); 
   await page.addStyleTag({ content: '.cam-marker, .all-chip, .badge { display: none !important; }' });
   // tap B: B selected, and 原圖 until edited (the panel reads B); 一鍵 › 自然 on B, whose photo part re-applies 美白 /
   // 銳化 to the whole frame, so they go back to 0
-  const gb = await camGeom(page, B);
+  const gb = await camBox(page, B);
   await page.mouse.click(gb.point.x, gb.point.y);
   await expect.poll(async () => (await debugState(page)).selected).toBe(B);
   await page.getByRole('tab', { name: '一鍵' }).click();
@@ -104,8 +86,8 @@ test('three faces, one person at a time: 自然 edits and pins the largest (A); 
   await page.waitForTimeout(400);
   const original = await grab(frame);
   await release();
-  const ga = await camGeom(page, largest);
-  const gc = await camGeom(page, C);
+  const ga = await camBox(page, largest);
+  const gc = await camBox(page, C);
   expect(regionDiff(original, beautified, gb.rect).inside, 'B adjusted').toBeGreaterThan(0.5);
   expect(regionDiff(original, beautified, ga.rect).inside, 'A keeps its result (U3)').toBeGreaterThan(0.5);
   expect(regionDiff(original, beautified, gc.rect).inside, 'C untouched').toBeLessThan(0.3);
@@ -125,7 +107,7 @@ test('three faces, one person at a time: 自然 edits and pins the largest (A); 
   await page.waitForTimeout(500);
   expect(regionDiff(original, await grab(frame), gc.rect).inside, 'C keeps the copy').toBeGreaterThan(0.5);
   // hand-over: B selected, shutter → 編輯 → the editor selects the person whose face holds the seed (B)
-  const gb2 = await camGeom(page, B);
+  const gb2 = await camBox(page, B);
   await page.mouse.click(gb2.point.x, gb2.point.y);
   await expect.poll(async () => (await debugState(page)).selected).toBe(B);
   await page.getByRole('button', { name: '拍照' }).click();

@@ -6,7 +6,24 @@ import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import { describe, expect, it } from 'vitest';
 import { ELEVEN_FACES, GROUP_FACES, groupFace, SMALL_FACES, smallFaceCell, TEN_FACES } from '../../../scripts/gen-group-fixture.mjs';
-import { composeFitWidth, composeGroupCam, GROUP_CAM, groupCamTiles, PREVIEW_34, resampleRgb, rng, shiftFrame } from '../../../scripts/gen-y4m.mjs';
+import {
+  composeCells,
+  composeFitWidth,
+  composeFitWidthBoxes,
+  composeGroupCam,
+  composeMove,
+  GROUP_CAM,
+  groupCamTiles,
+  MOVE,
+  moveAt,
+  PREVIEW_34,
+  resampleRgb,
+  rng,
+  SELFIE_GROUP,
+  shiftFrame,
+  UPRIGHT_FAR10,
+  UPRIGHT_ROW3,
+} from '../../../scripts/gen-y4m.mjs';
 
 const fx = (n) => join(import.meta.dirname, '..', '..', 'fixtures', n);
 /** a JPEG's [width, height] from its first SOFn marker */
@@ -248,5 +265,93 @@ describe('gen-y4m helpers', () => {
     if (!existsSync(fx('group.y4m'))) return;
     const head = readFileSync(fx('group.y4m')).subarray(0, 40).toString('ascii');
     expect(head.startsWith('YUV4MPEG2 W1280 H720')).toBe(true);
+  });
+});
+
+describe('upright and move clips (camera per-person spec §12.3)', () => {
+  const FH = 722 / 619; // sample_face.png's face height over its width (SAMPLE_FACE, the oval box)
+  const px = (f) => ({ x: f.cx * 1080, y: f.cy * 1920, w: f.fw * 1920 });
+  const inCrop34 = (f) => {
+    const p = px(f);
+    return p.x - p.w / 2 >= 0 && p.x + p.w / 2 <= 1080 && p.y - (p.w * FH) / 2 >= 240 && p.y + (p.w * FH) / 2 <= 1680;
+  };
+  const rowsOf = (L) =>
+    [...new Set(L.faces.map((f) => f.cy))]
+      .sort((a, b) => a - b)
+      .map((cy) => L.faces.filter((f) => f.cy === cy).sort((a, b) => a.cx - b.cx));
+  const gaps = (row) => row.slice(1).map((f, i) => (px(f).x - px(row[i]).x) / ((px(f).w + px(row[i]).w) / 2));
+
+  it('UPRIGHT_ROW3: three faces at 6.5 % of the long edge (125 px), centres 2.7 FW apart, at mid-height, inside the 3:4 crop', () => {
+    expect(UPRIGHT_ROW3.faces.map((f) => Math.round(px(f).w))).toEqual([125, 125, 125]);
+    expect(gaps(rowsOf(UPRIGHT_ROW3)[0]).map((g) => +g.toFixed(1))).toEqual([2.7, 2.7]);
+    expect(UPRIGHT_ROW3.faces.every((f) => f.cy === 0.5 && inCrop34(f))).toBe(true);
+  });
+  it('UPRIGHT_FAR10: ten faces at 3–4 % (58–77 px) in two rows of five, centres 2.7 FW apart, rows 1.6 face heights apart', () => {
+    expect(UPRIGHT_FAR10.faces.every((f) => f.fw >= 0.03 && f.fw <= 0.04 && inCrop34(f))).toBe(true);
+    const rows = rowsOf(UPRIGHT_FAR10);
+    expect(rows.map((r) => r.length)).toEqual([5, 5]);
+    for (const r of rows) for (const g of gaps(r)) expect(g).toBeCloseTo(2.7, 1);
+    const fh = (UPRIGHT_FAR10.faces.reduce((s, f) => s + px(f).w, 0) / 10) * FH;
+    expect((px(rows[1][0]).y - px(rows[0][0]).y) / fh).toBeCloseTo(1.6, 1);
+  });
+  it('SELFIE_GROUP: two near faces at 14 % and 16 % in the lower half, three at 6–8 % in a row behind them, all whole', () => {
+    const [back, near] = rowsOf(SELFIE_GROUP);
+    expect([near.map((f) => f.fw), back.map((f) => f.fw)]).toEqual([
+      [0.14, 0.16],
+      [0.06, 0.07, 0.08],
+    ]);
+    expect(near.every((f) => f.cy > 0.5) && back.every((f) => f.cy < near[0].cy)).toBe(true);
+    for (const g of [...gaps(near), ...gaps(back)]) expect(g).toBeCloseTo(2.7, 0);
+    expect(SELFIE_GROUP.faces.every(inCrop34)).toBe(true);
+  });
+  it('composeCells is deterministic for a seed; another seed moves the faces by sub-pixel offsets', () => {
+    const png = PNG.sync.read(readFileSync(fx('sample_face.png')));
+    const a = composeCells(png, UPRIGHT_ROW3, 1);
+    const again = composeCells(png, UPRIGHT_ROW3, 1);
+    expect(a.every((v, i) => v === again[i])).toBe(true);
+    const b = composeCells(png, UPRIGHT_ROW3, 2);
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d = Math.max(d, Math.abs(a[i] - b[i]));
+    expect(d).toBeGreaterThan(0);
+  });
+  it('moveAt: C gone 2–3.5 s and 11–16.5 s, back at +0.2 FW at 3.5 s, swapped at 7–8.5 s, home at 10 s; the loop seam is continuous', () => {
+    const fwC = groupCamTiles().find((t) => t.name === 'C').fw / 2;
+    expect([moveAt(2.5).C, moveAt(12).C, moveAt(16.4).C]).toEqual([null, null, null]);
+    expect(moveAt(4).C.x - moveAt(1).C.x).toBeCloseTo(0.2 * fwC, 1);
+    expect(moveAt(7.5).C.x).toBeCloseTo(moveAt(1).B.x, 1);
+    expect(moveAt(7.5).B.x).toBeCloseTo(moveAt(1).C.x, 1);
+    expect(moveAt(10.5)).toEqual(moveAt(0.5));
+    expect(moveAt(17.99)).toEqual(moveAt(0));
+  });
+  it('composeMove: A, B and C at half composeGroupCam scale on the photo background, C absent while away, drawn behind B in the swaps', () => {
+    const png = PNG.sync.read(readFileSync(fx('group_faces.png')));
+    const frame = composeMove(png);
+    const bg = [png.data[0], png.data[1], png.data[2]];
+    const at = (rgb, p) => {
+      const o = (Math.round(p.y) * MOVE.width + Math.round(p.x)) * 3;
+      return [rgb[o], rgb[o + 1], rgb[o + 2]];
+    };
+    const still = frame(moveAt(1));
+    expect(still.length).toBe(MOVE.width * MOVE.height * 3);
+    for (const k of ['A', 'B', 'C']) expect(at(still, moveAt(1)[k]), `face ${k}`).not.toEqual(bg);
+    expect(at(still, { x: 0, y: 0 })).toEqual(bg);
+    expect(at(frame(moveAt(2.5)), moveAt(1).C), 'C away').toEqual(bg);
+    // mid swap C's tile overlaps B's face: B covers it while C is behind
+    const m = moveAt(6.25);
+    expect(m.cBehind).toBe(true);
+    expect(Math.abs(m.C.x - m.B.x)).toBeLessThan((0.3 * groupCamTiles().find((t) => t.name === 'C').fw) / 2);
+    const alone = frame({ ...m, C: null });
+    expect(at(frame(m), m.B)).toEqual(at(alone, m.B));
+    expect(at(frame({ ...m, cBehind: false }), m.B)).not.toEqual(at(alone, m.B));
+    expect([moveAt(1).cBehind, moveAt(7.5).cBehind, moveAt(9).cBehind]).toEqual([false, false, true]);
+  });
+  it('composeFitWidthBoxes(TEN_FACES): ten boxes 9–13 % of the frame width, bottom-aligned as composeFitWidth draws them', () => {
+    const boxes = composeFitWidthBoxes(TEN_FACES);
+    expect(boxes).toHaveLength(10);
+    expect(boxes.every((b) => b.w >= 0.09 - 1e-6 && b.w <= 0.13 + 1e-6 && b.y >= 0 && b.y + b.h <= 1)).toBe(true);
+  });
+  it('NOTICE lists the generated clips as modified derivatives (Apache-2.0 §4(b))', () => {
+    const notice = readFileSync(join(import.meta.dirname, '..', '..', '..', 'LICENSES', 'NOTICE.txt'), 'utf8');
+    for (const clip of ['upright_row3.y4m', 'upright_far10.y4m', 'selfie_group.y4m', 'group10.y4m', 'group_move.y4m']) expect(notice).toContain(clip);
   });
 });

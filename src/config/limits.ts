@@ -1,6 +1,7 @@
 // Every number Phase 0 can change (step-1 spec §3.5, §6.3). A fallback is a one-line change here, committed together
 // with the measurements (spec §6.4). iPhone numbers need a preview deploy, which only happens with the user's go-ahead:
 // until then these defaults ship (RM §12 decision).
+import type { FaceDetectorKind, Facing } from '../types';
 
 /**
  * selectable faces per photo (§6.3 PD1, PR1, PE1, PM1). 10 since 2026-10-18 (S §6.7, the user's cap: at most ten
@@ -58,6 +59,20 @@ export const REID_AMBIGUITY = 1.25;
 export const TRACK_SIZE_JUMP = 1.5;
 /** camera session clock (§7.5, K8): a pause longer than this without a live frame forgets everyone away and the remembered selection */
 export const LIVE_IDLE_MAX_MS = 60_000;
+/** the camera's group path (camera per-person spec §6.6, K17): IMAGE calls on the whole view and zoomed tiles; false ships option C (§6.3) if a desktop gate fails (§10) */
+export const LIVE_GROUP = true;
+/** the face detector of each facing's paths (§6.3): the front camera stays on short-range (no bundle switch into a group scene), the back camera full-range */
+export const LIVE_DETECTOR: Record<Facing, FaceDetectorKind> = { user: 'camera', environment: 'photo' };
+/** the smallest face the group path finds, as a fraction of the stream frame's long edge (§6.6, K17, K19): back camera 3 %, front-camera group scenes 5 % */
+export const LIVE_FACE_FLOOR: Record<Facing, number> = { user: 0.05, environment: 0.03 };
+/** each detector's floor over its view's long edge, with margin (§6.1: short-range ~12 %, full-range ~9 %); sizes the tiles and their overlap (§6.6) */
+export const DETECTOR_FLOOR: Record<FaceDetectorKind, number> = { camera: 0.11, photo: 0.08 };
+/** every LIVE_SCAN_EVERY-th group-path call scans the next tile no track needs (§6.6) */
+export const LIVE_SCAN_EVERY = 4;
+/** the front camera returns from the group path to the solo path after this long with at most one face shown (§6.6, K18) */
+export const LIVE_SOLO_AFTER_MS = 5000;
+/** the group path's whole view is copied at most this many px on its long edge (§6.6) */
+export const LIVE_VIEW_MAX_EDGE = 1280;
 /** 瘦臉 limit layer edge with ≥ 2 selectable faces (§4.7) */
 export const PROTECT_WINDOW = 128;
 /**

@@ -1140,7 +1140,7 @@ cd /d/GitSource/MonaLisa && git add src/tracking/tracker.ts src/tracking/tracker
   export class ViewSchedule { next(layout: ViewLayout, refresh: readonly LiveView[], tracked: number): LiveView; reset(): void }
   ```
 
-- [ ] **Step 1: Write the failing tests** (`src/app/liveViews.test.ts`)
+- [x] **Step 1: Write the failing tests** (`src/app/liveViews.test.ts`)
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -1235,21 +1235,21 @@ describe('ViewSchedule (§6.6)', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `cd /d/GitSource/MonaLisa && npx vitest run src/app/liveViews.test.ts`
 Expected: FAIL — `Cannot find module './liveViews'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `layoutViews`: `side = min(round(LIVE_FACE_FLOOR[facing] / DETECTOR_FLOOR[detector] × max(frameW, frameH)), min(crop.w, crop.h))`, `overlap = DETECTOR_FLOOR[detector] × max(crop.w, crop.h)`. Per axis of length `L`: `n = side >= L ? 1 : max(2, ceil((L − overlap) / (side − overlap)))`, positions `round(i × (L − side) / (n − 1))` from the crop's origin (`n = 1` → 0); tiles row-major (`t${col},${row}`), copied at native size. Whole: `rect = crop`, `copy` = crop scaled by `min(1, LIVE_VIEW_MAX_EDGE / max(crop.w, crop.h))`, rounded. `holdsWhole` compares the box in frame px with the rect. `isLarge`: `box.w × frame.w ≥ 1.25 × DETECTOR_FLOOR[detector] × max(crop.w, crop.h)`. `tileFor`: among tiles holding the box whole, the nearest centre. `refreshViews`: `[whole, …tiles (raster order) that are tileFor of a small box]`. `viewScope`: tile → matchable = missable = holds whole; whole → matchable = holds whole, missable = `isLarge(pred) || !tiles.some(holds whole)`. `ViewSchedule.next`: call count `c` (from 1); when `c % LIVE_SCAN_EVERY === 0`, `tracked < MAX_LIVE_FACES` and some tile is not a refresh view, return the next such tile in raster order after the last scanned one (wrapping); otherwise the refresh view after the last refresh view returned (by id in list order, wrapping; the first call returns `refresh[0]`). `mapLandmarks`: `x' = (rect.x + x · rect.w) / frameW`, `y' = (rect.y + y · rect.h) / frameH`, `z' = z · rect.w / frameW`, into a new `Float32Array`.
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `cd /d/GitSource/MonaLisa && npx vitest run src/app/liveViews.test.ts src/config && npm run typecheck`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /d/GitSource/MonaLisa && git add src/config src/app/liveViews.ts src/app/liveViews.test.ts && git commit -m "camera per-person: the group path's views (whole view and zoomed tiles of the visible crop), assignment, schedule and mapping" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat

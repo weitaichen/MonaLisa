@@ -30,7 +30,7 @@ import { FaceTracks, type CameraSelection, type LiveTrackView } from './faceTrac
 import { createVideoFrameSource, type FrameInfo, type FrameSource } from './frameSource';
 import { AutoTier, DetectCadence, TimeEma, cadenceSample, effectiveEvery, frameCost, nextLowerTier, skippedFrames } from './liveCore';
 import type { LivePersonId, LivePersons } from './livePersons';
-import { layoutViews, mapLandmarks, refreshViews, ViewSchedule, viewScope, type LiveView, type ViewLayout } from './liveViews';
+import { holdsWhole, layoutViews, mapLandmarks, refreshViews, ViewSchedule, viewScope, type LiveView, type ViewLayout } from './liveViews';
 
 export interface LiveStats {
   fps: number;
@@ -327,13 +327,14 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
 
   /**
    * One detection (§6.3, §6.6): the solo path's VIDEO call, or the group path's next view. The front camera moves to the
-   * group path on the solo path's first frame that finds a second face (the next call is the whole view), and back after
-   * LIVE_SOLO_AFTER_MS with at most one face shown (K18); the tracks carry over both ways.
+   * group path on the solo path's first frame that finds a second face in view (the next call is the whole view), and
+   * back after LIVE_SOLO_AFTER_MS with at most one face shown (K18); the tracks carry over both ways.
    */
   function detectOnce(t: Tracker, now: number, w: number, h: number, facing: Facing): void {
     if (path === 'solo') {
       tracks.detect(detectVideo(t), now, w, h);
-      if (group && facing === 'user' && tracks.presentCount() >= 2) {
+      // presentCount first: a lone selfie's frame pays nothing more (A1)
+      if (group && facing === 'user' && tracks.presentCount() >= 2 && presentInView(layoutOf(w, h, facing)) >= 2) {
         path = 'group';
         schedule.reset();
         soloSince = null;
@@ -354,6 +355,18 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
         viewIds = [];
       }
     }
+  }
+
+  /**
+   * The solo path's found tracks that the visible crop holds whole: the faces the group path can keep (§6.6: a face
+   * outside the crop is not in view; the whole view matches only what it holds whole, and one cut by its edge starts
+   * nothing). The solo path's VIDEO call sees the whole frame, so a face beside the crop would otherwise start a group
+   * path that drops it within LOST_HOLD_MS and returns to solo LIVE_SOLO_AFTER_MS later, over and over (A1, K18).
+   */
+  function presentInView(lay: ViewLayout): number {
+    let n = 0;
+    for (const v of tracks.views()) if (v.present && holdsWhole(lay.whole, v.box, lay)) n++;
+    return n;
   }
 
   /** the solo path's call: null = no answer (the throw is reported), so a hiccup never drops a track (A5) */

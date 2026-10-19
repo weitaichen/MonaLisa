@@ -335,7 +335,10 @@ export class FaceTracks {
     }));
   }
 
-  /** tracks found by their last call (held ones not counted): the front camera's solo path moves to the group path at 2 (§6.6, K18) */
+  /**
+   * tracks found by their last call (held ones not counted): the front camera's solo path moves to the group path at 2
+   * the visible crop holds whole (§6.6, K18; live.ts counts those only past this cheap check)
+   */
   presentCount(): number {
     let n = 0;
     for (const t of this.list) if (t.present) n++;

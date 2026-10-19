@@ -720,6 +720,26 @@ describe('the group path in the live loop (§6.3, §6.4, §6.6, K13, K18)', () =
     expect(loop.tracks().map((t) => t.person)).toEqual([p]);
     loop.stop();
   });
+  it('the front camera: a second face the visible crop does not hold whole never starts the group path (A1, K18, §6.6); a crop that holds it does', () => {
+    let frame = normalizedCropRect(1280, 720, 3 / 4); // x 0.289–0.711
+    const { tracker, loop } = setup({ frame: () => frame });
+    xs = [0.5, 0.1]; // the 0.5 face inside the crop; the 0.1 face (box x −0.1–0.3) outside it but for a sliver cut by its edge
+    tracker!.detectVideo.mockImplementation(() => xs.map(lmX));
+    viewDetect(tracker!, () => xs);
+    const paths = new Set<string | undefined>();
+    for (let t = 0; t < 10_000; t += 100) {
+      vi.advanceTimersByTime(100);
+      paths.add(dbg()!.livePath);
+    }
+    expect([...paths]).toEqual(['solo']);
+    expect(tracker!.detectView).not.toHaveBeenCalled();
+    expect(loop.tracks()).toHaveLength(2); // the solo path's VIDEO call still tracks both on the whole frame
+    frame = whole();
+    vi.advanceTimersByTime(100);
+    expect(dbg()!.livePath).toBe('group');
+    expect(loop.tracks()).toHaveLength(2);
+    loop.stop();
+  });
   it('one face never leaves the solo path (A1): detectVideo every frame with the camera bundle, never detectView', () => {
     const { tracker, loop } = setup();
     vi.advanceTimersByTime(33 * 300 + 1);

@@ -1588,7 +1588,8 @@ if (tracker && sinceDetect + 1 >= every) {
   const t0 = performance.now();
   if (path === 'solo') {
     tracks.detect(detectVideo(tracker), now, w, h); // { maxFaces: LIVE_DETECT_FACES, detector }
-    if (group && facing === 'user' && tracks.presentCount() >= 2) { path = 'group'; schedule.reset(); }
+    // only found tracks the visible crop holds whole count (§6.6): VIDEO sees the whole frame, the group path only the crop
+    if (group && facing === 'user' && tracks.presentCount() >= 2 && presentInView(layout) >= 2) { path = 'group'; schedule.reset(); }
   } else {
     groupCall(tracker, now, w, h);                  // schedule.next → copy the view → detectView → mapLandmarks → tracks.detect(…, viewScope)
     if (facing === 'user') {

@@ -33,6 +33,8 @@ describe('limits (S §3.5)', () => {
     expect(L.LIVE_FACE_FLOOR).toEqual({ user: 0.05, environment: 0.03 });
     expect(L.DETECTOR_FLOOR).toEqual({ camera: 0.11, photo: 0.08 });
     expect([L.LIVE_SCAN_EVERY, L.LIVE_SOLO_AFTER_MS, L.LIVE_VIEW_MAX_EDGE]).toEqual([4, 5000, 1280]);
+    // camera per-person spec §6.4 (K6): the detection cadence keeps ≥ 24 fps on average, face updates ≥ 5 Hz
+    expect([L.LIVE_MIN_FPS, L.LIVE_MAX_DETECT_EVERY]).toEqual([24, 6]);
   });
   it('keeps the invariants the engine relies on', () => {
     expect(L.MAX_EDIT_FACES).toBeLessThanOrEqual(L.MAX_RENDER_FACES);

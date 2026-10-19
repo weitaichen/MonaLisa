@@ -73,6 +73,10 @@ export const LIVE_SCAN_EVERY = 4;
 export const LIVE_SOLO_AFTER_MS = 5000;
 /** the group path's whole view is copied at most this many px on its long edge (§6.6) */
 export const LIVE_VIEW_MAX_EDGE = 1280;
+/** with ≥ 2 faces the camera skips detections so the preview averages at least this many fps (camera per-person spec §6.4, K6) */
+export const LIVE_MIN_FPS = 24;
+/** …but detects at least every this-many frames: face updates ≥ 5 Hz at 30 fps (§6.4, K6) */
+export const LIVE_MAX_DETECT_EVERY = 6;
 /** 瘦臉 limit layer edge with ≥ 2 selectable faces (§4.7) */
 export const PROTECT_WINDOW = 128;
 /**

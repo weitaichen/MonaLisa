@@ -1275,7 +1275,7 @@ cd /d/GitSource/MonaLisa && git add src/config src/app/liveViews.ts src/app/live
   export function cadenceSample(renderMs: number, detectMs: number, every: number): number;
   ```
 
-- [ ] **Step 1: Write the failing tests** (`liveCore.test.ts`)
+- [x] **Step 1: Write the failing tests** (`liveCore.test.ts`)
 
 ```ts
 describe('detection cadence (camera per-person spec §6.4, K6)', () => {
@@ -1313,13 +1313,13 @@ describe('detection cadence (camera per-person spec §6.4, K6)', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify they fail** — `npx vitest run src/app/liveCore.test.ts` → FAIL (`detectEvery` not exported).
+- [x] **Step 2: Run to verify they fail** — `npx vitest run src/app/liveCore.test.ts` → FAIL (`detectEvery` not exported).
 
-- [ ] **Step 3: Implement** — `detectEvery` is the formula of the test name (`Tmin = max(1000 / LIVE_MIN_FPS, 1.25 × frameMs)`; a non-finite input or `Tmin ≤ frameMs` → 1). `DetectCadence.update`: with a `null` D or R the candidate is the current `k`; a candidate different from `k` starts a timer (restarted when the candidate's direction changes) and is applied once it held `CADENCE_UP_MS` (rising) or `CADENCE_DOWN_MS` (falling). `effectiveEvery` and `cadenceSample` as the tests state.
+- [x] **Step 3: Implement** — `detectEvery` is the formula of the test name (`Tmin = max(1000 / LIVE_MIN_FPS, 1.25 × frameMs)`; a non-finite input or `Tmin ≤ frameMs` → 1). `DetectCadence.update`: with a `null` D or R the candidate is the current `k`; a candidate different from `k` starts a timer (restarted when the candidate's direction changes) and is applied once it held `CADENCE_UP_MS` (rising) or `CADENCE_DOWN_MS` (falling). `effectiveEvery` and `cadenceSample` as the tests state.
 
-- [ ] **Step 4: Run to verify they pass** — `npx vitest run src/app/liveCore.test.ts src/config && npm run typecheck` → PASS.
+- [x] **Step 4: Run to verify they pass** — `npx vitest run src/app/liveCore.test.ts src/config && npm run typecheck` → PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /d/GitSource/MonaLisa && git add src/config src/app/liveCore.ts src/app/liveCore.test.ts && git commit -m "camera per-person: the detection cadence (≥ 24 fps on average, face updates ≥ 5 Hz) with its hysteresis" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat

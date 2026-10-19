@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   AUTO_TIER,
   AutoTier,
+  DetectCadence,
   FACE_EASE_MS,
   FaceWeightEaser,
   TimeEma,
+  cadenceSample,
+  detectEvery,
+  effectiveEvery,
   frameCost,
   nextLowerTier,
   shouldDetect,
@@ -159,5 +163,39 @@ describe('frame scheduling decisions', () => {
     expect(frameCost(36, 66, 1)).toBe(66); // we missed a frame
     expect(frameCost(50, 33, 1)).toBe(50);
     expect(frameCost(12, null, 3)).toBe(12);
+  });
+});
+
+describe('detection cadence (camera per-person spec §6.4, K6)', () => {
+  const T = 1000 / 30;
+  it('detectEvery: k = clamp(⌈(D + R − T) / (T_min − T)⌉, 1, 6), T_min = max(1000 / 24, 1.25 T)', () => {
+    expect(detectEvery(30, 5, T)).toBe(1);   // front, 3 faces
+    expect(detectEvery(64, 5, T)).toBe(5);   // back, 10 faces, GPU
+    expect(detectEvery(82, 5, T)).toBe(6);   // CPU (7, clamped)
+    expect(detectEvery(5, 3, T)).toBe(1);
+    expect(detectEvery(64, 5, 66.7)).toBe(1);  // a 15 fps camera: T_min = 1.25 T
+    expect(detectEvery(120, 5, 66.7)).toBe(4);
+  });
+  it('DetectCadence: a rising k applies after 500 ms, a falling one after 1500 ms; reset → 1', () => {
+    const c = new DetectCadence();
+    expect(c.update(0, 64, 5, T)).toBe(1);
+    expect(c.update(499, 64, 5, T)).toBe(1);
+    expect(c.update(500, 64, 5, T)).toBe(5);
+    expect(c.update(600, 20, 5, T)).toBe(5);
+    expect(c.update(2099, 20, 5, T)).toBe(5);
+    expect(c.update(2100, 20, 5, T)).toBe(1);
+    expect(c.update(2200, null, null, T)).toBe(1);
+    c.update(2300, 64, 5, T);
+    c.update(2800, 64, 5, T);
+    c.reset();
+    expect(c.k).toBe(1);
+  });
+  it('effectiveEvery: one face or none → every frame (tier L: every second, as v0.5); ≥ 2 faces → max(k, tier L ? 2 : 1)', () => {
+    expect([effectiveEvery(4, 'H', 1), effectiveEvery(4, 'H', 0), effectiveEvery(4, 'L', 1)]).toEqual([1, 1, 2]);
+    expect([effectiveEvery(5, 'L', 2), effectiveEvery(1, 'L', 2), effectiveEvery(1, 'M', 3)]).toEqual([5, 2, 1]);
+  });
+  it('the auto-tier sample of a detecting frame at k > 1 is R + D / k', () => {
+    expect(cadenceSample(5, 64, 5)).toBeCloseTo(17.8, 6);
+    expect(cadenceSample(5, 64, 1)).toBe(69);
   });
 });

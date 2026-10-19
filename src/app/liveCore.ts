@@ -1,5 +1,6 @@
 // Pure pieces of the live loop (no DOM, no GL) so they can be unit-tested with fake timers:
 // face-weight easing, time-based EMA, the auto-tier state machine and per-frame scheduling decisions.
+import { LIVE_MAX_DETECT_EVERY, LIVE_MIN_FPS } from '../config/limits';
 import type { Tier } from '../types';
 
 /** spec §5: landmark effects fade in/out over ~150 ms on face gain/loss. */
@@ -140,6 +141,84 @@ export function skippedFrames(presented: number | null, lastPresented: number | 
 /** Tier L detects every second frame and reuses the last landmarks in between. */
 export function shouldDetect(tier: Tier, detectedLastFrame: boolean): boolean {
   return tier !== 'L' || !detectedLastFrame;
+}
+
+/** the cadence's hysteresis (camera per-person spec §6.4): a k that rises applies after it held this long… */
+export const CADENCE_UP_MS = 500;
+/** …one that falls after this long */
+export const CADENCE_DOWN_MS = 1500;
+
+/**
+ * Detect every k-th frame with ≥ 2 faces (camera per-person spec §6.4, K6): the fewest skipped detections that keep the
+ * average frame time `(D + R + (k − 1) T) / k` within `T_min = max(1000 / LIVE_MIN_FPS, 1.25 T)`, i.e.
+ * `k = clamp(⌈(D + R − T) / (T_min − T)⌉, 1, LIVE_MAX_DETECT_EVERY)`. D is the detection cost per call, R the render
+ * cost, T the camera's own frame interval (ms). A non-finite input → 1.
+ */
+export function detectEvery(detectMs: number, renderMs: number, frameMs: number): number {
+  if (!Number.isFinite(detectMs) || !Number.isFinite(renderMs) || !Number.isFinite(frameMs)) return 1;
+  const tMin = Math.max(1000 / LIVE_MIN_FPS, 1.25 * frameMs);
+  if (tMin <= frameMs) return 1;
+  const k = Math.ceil((detectMs + renderMs - frameMs) / (tMin - frameMs));
+  return Math.min(LIVE_MAX_DETECT_EVERY, Math.max(1, k));
+}
+
+/**
+ * The cadence with its hysteresis (§6.4): feed the EMAs once per frame; a candidate k different from the current one
+ * applies once it held CADENCE_UP_MS (rising) or CADENCE_DOWN_MS (falling). The timer restarts when the candidate's
+ * direction changes and stops when the candidate equals k again; a null D or R (nothing measured yet) keeps k.
+ */
+export class DetectCadence {
+  private cur = 1;
+  private since: number | null = null;
+  private dir = 0;
+
+  get k(): number {
+    return this.cur;
+  }
+
+  update(nowMs: number, detectMs: number | null, renderMs: number | null, frameMs: number): number {
+    const next = detectMs === null || renderMs === null ? this.cur : detectEvery(detectMs, renderMs, frameMs);
+    if (next === this.cur) {
+      this.since = null;
+      this.dir = 0;
+      return this.cur;
+    }
+    const dir = next > this.cur ? 1 : -1;
+    if (this.since === null || dir !== this.dir) {
+      this.since = nowMs;
+      this.dir = dir;
+    }
+    if (nowMs - this.since >= (dir > 0 ? CADENCE_UP_MS : CADENCE_DOWN_MS)) {
+      this.cur = next;
+      this.since = null;
+      this.dir = 0;
+    }
+    return this.cur;
+  }
+
+  /** resetSession (§6.4): k = 1, nothing pending */
+  reset(): void {
+    this.cur = 1;
+    this.since = null;
+    this.dir = 0;
+  }
+}
+
+/**
+ * Frames per detection (§6.4): one face or none → every frame, as v0.5 (A1; tier L every second, `shouldDetect`);
+ * ≥ 2 faces → the cadence's k, at least 2 on tier L.
+ */
+export function effectiveEvery(k: number, tier: Tier, shownFaces: number): number {
+  const floor = tier === 'L' ? 2 : 1;
+  return shownFaces <= 1 ? floor : Math.max(k, floor);
+}
+
+/**
+ * The auto-tier sample of a detecting frame (§6.4): `R + D / k`, the detection amortized over the k frames it serves
+ * (the frame it drops is the detection's, which a lower render tier cannot fix). k = 1 → R + D.
+ */
+export function cadenceSample(renderMs: number, detectMs: number, every: number): number {
+  return renderMs + detectMs / Math.max(1, every);
 }
 
 function clamp01(v: number): number {

@@ -33,7 +33,7 @@
 - New copy, verbatim (§3.12): `點選畫面中的臉，可個別調整` (toast, 3.2 s, once per install, key `meiyan.hint.camPersons.v1`); `未偵測到臉部，對準人臉後即可調整` (panel note); `{label}，選取的人物` (slider aria); `{n} 位人物在照片中未偵測到臉部，未帶入相機效果` (editor toast, 3.2 s). Existing copy reused: `{label} · 整張照片`, `{label}，整張照片`, `{label}，全部`.
 - Anti-goals hold in every task: A1 (the front-camera single-face selfie runs v0.5's solo path: VIDEO, short-range, a detection every frame), A2 (an ambiguous identity is always a new person at 原圖), A3 (nobody edited + neutral photo look → the composite pass alone).
 - Unit tests run under Vitest's node environment (`vitest.config.ts`); DOM and `OffscreenCanvas` are stubbed in tests as the existing tests do (`tracker.test.ts:52-75`, `CameraFaceMarker.test.tsx`).
-- Execution order: Tasks 3 and 4 change the camera's behaviour together. Between Task 3's commit and Task 4's, `tests/e2e/camera-group.spec.ts` and the camera test of `tests/e2e/original.spec.ts` are expected to fail (the panel still writes `look.person`, which the loop no longer reads); unit tests and typecheck stay green after every task. Run Task 4 right after Task 3. Likewise the camera test of `original.spec.ts` fails between Task 10 (a shot with a camera look now opens with it) and Task 11 (which rewrites that test).
+- Execution order: Tasks 3 and 4 change the camera's behaviour together. Between Task 3's commit and Task 4's, `tests/e2e/camera-group.spec.ts` and the camera test of `tests/e2e/original.spec.ts` are expected to fail (the panel still writes `look.person`, which the loop no longer reads); unit tests and typecheck stay green after every task. Run Task 4 right after Task 3. Likewise the camera test of `original.spec.ts` fails between Task 10 (a shot with a camera look now opens with it) and Task 11 (which rewrites that test). The camera test of `tests/e2e/adjust.spec.ts` (`:240-311` after the fix; `:239-310` at Task 10's commit), which expected the shot to open at 原圖 without the camera's 調節 and 質感, turns red at Task 10's commit too and is rewritten in Task 10's fix commit (changed on purpose, U6, §3.8), so it is not red after Task 10.
 
 ## Review Focus
 
@@ -65,7 +65,7 @@
 | `src/ui/imaging.ts`, `src/edit/sides.ts` | `shotBox`, `shotPersons`; `mirrorSides` restored | 10 |
 | `src/edit/migrate.ts`, `src/detect/persons.ts`, `src/app/still.ts`, `src/ui/screens/Editor.tsx`, `src/ui/screens/Review.tsx`, `src/ui/state.ts`, `src/ui/flows.ts` | the hand-over: `handOverOf`, `handOverEdit`, `matchHandOver`, `firstAnswer` hand-over, the zoomed retry, the toast | 10, 11 |
 | `scripts/gen-y4m.mjs`, `scripts/gen-group-fixture.mjs`, `tests/e2e/global-setup.ts`, `playwright.config.ts`, `LICENSES/NOTICE.txt` | upright clips, `group10.y4m`, `group_move.y4m`, their projects | 12 |
-| `tests/e2e/camera-persons.spec.ts`, `camera-groups.spec.ts`, `camera-back.spec.ts`, `camera-identity.spec.ts` (new); `camera-group.spec.ts`, `camera.spec.ts`, `original.spec.ts`, `fixtures.ts` | E1–E5 and the specs changed on purpose | 4, 11, 13, 14 |
+| `tests/e2e/camera-persons.spec.ts`, `camera-groups.spec.ts`, `camera-back.spec.ts`, `camera-identity.spec.ts` (new); `camera-group.spec.ts`, `camera.spec.ts`, `original.spec.ts`, `adjust.spec.ts`, `fixtures.ts` | E1–E5 and the specs changed on purpose | 4, 10, 11, 13, 14 |
 | `src/bench/multiFace.ts`, `src/bench/report.ts`, `src/bench/main.ts`, `scripts/bench-multiface.mjs` | rows L (extended), LF, GS, WB, JG and their verdicts | 3, 15 |
 | `docs/superpowers/specs/…` | measurements, gate outcomes, supersession pointers | 16 |
 | `package.json`, `package-lock.json`, `src/ui/updateModel.test.ts`, `docs/superpowers/specs/2026-10-12-v04-roadmap.md` (§15) | 0.6.0 and its release notes (K16) | 17 |
@@ -1707,6 +1707,7 @@ cd /d/GitSource/MonaLisa && git add src/ui/components/CameraFaceMarker.tsx src/u
 - Modify: `src/edit/migrate.ts` (after `importEdit`, `:125-127`), `src/edit/migrate.test.ts`
 - Modify: `src/ui/state.ts:19-28, :30-59` — CRLF; `src/ui/flows.ts:18-20` — CRLF
 - Modify: `src/ui/screens/Camera.tsx:224-250` — CRLF; `src/ui/screens/Review.tsx:87-96` — CRLF
+- Modify (review fix): `tests/e2e/adjust.spec.ts:240-311` (`:239-310` before the fix; changed on purpose, U6, §3.8, §12.2): its camera test sets 暗角 100, 顆粒 100 and 質感 CCD, so the shot hands that photo look over; after 編輯 it expects 暗角 and 顆粒 at 100, the 調節 tab dot, 質感 CCD selected, and keeps the reload check of `meiyan.look.v1`
 
 **Interfaces:**
 - Consumes: Task 3 `LiveLoop.capture().persons`; Task 1 `isNeutralPerson`, `isNeutralPhoto`.

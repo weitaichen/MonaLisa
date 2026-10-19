@@ -1,6 +1,7 @@
 // 調節 and 質感 end to end (v0.4 step-2 spec §8.3): every 調節 item moves the right statistic in the editor; ⊘, ↶ and
 // the dots; the colour tracks and the lead chip; 一鍵 › 質感 in the strip, in the export and after a reopen; the camera's
-// 調節 tab, 暗角, CCD, moving grain, the hand-over to 編輯 (at 原圖) and the persisted camera look.
+// 調節 tab, 暗角, CCD, moving grain, the hand-over to 編輯 (with the camera's 調節 and 質感, camera per-person U6) and the
+// persisted camera look.
 import type { Locator, Page } from '@playwright/test';
 import { debugState, decodeDataUrl, dragSlider, expect, grab, mad, meanLuma, SAMPLE_FACE, settled, shot, test, type Pixels } from './fixtures';
 
@@ -236,7 +237,7 @@ test('editor: every 調節 item, ⊘ / ↶ / dots, 質感 in the strip and the e
   expect(mad(before, await settled(frame)), 'the reopened edit draws the same 質感 and 調節').toBeLessThan(2);
 });
 
-test('camera: 調節 tab, 暗角, CCD, moving grain; shot → 編輯 opens at 原圖 without them; the camera look persists', async ({ page }) => {
+test('camera: 調節 tab, 暗角, CCD, moving grain; shot → 編輯 opens with the camera 調節 and 質感; the camera look persists', async ({ page }) => {
   test.setTimeout(240_000);
   await page.goto('/');
   await page.getByRole('button', { name: /拍攝/ }).click();
@@ -282,8 +283,8 @@ test('camera: 調節 tab, 暗角, CCD, moving grain; shot → 編輯 opens at �
   const g2 = await grab(frame);
   expect(mad(g1, g2)).toBeGreaterThan(Math.max(1.5, 3 * jitter));
 
-  // shutter → review → 編輯: the shot opens at 原圖 (2026-10-18, 「全部都原圖，包括相機拍的」): the camera's 調節 and
-  // 質感 stay in the camera
+  // shutter → review → 編輯: a camera with beauty set hands its photo look over (camera per-person U6, §3.8; changed on
+  // purpose from 2026-10-18's 「全部都原圖，包括相機拍的」): the editor opens with the camera's 調節 and 質感
   await page.waitForTimeout(400); // the persisted look is debounced 300 ms
   await page.getByRole('button', { name: '拍照' }).click();
   await expect.poll(async () => (await debugState(page)).screen).toBe('review');
@@ -292,14 +293,14 @@ test('camera: 調節 tab, 暗角, CCD, moving grain; shot → 編輯 opens at �
   await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 30_000 });
   await tab(page, '調節').click();
   await option(page, '暗角').click();
-  await expect(slider).toHaveAttribute('aria-valuenow', '0');
+  await expect(slider).toHaveAttribute('aria-valuenow', '100');
   await option(page, '顆粒').click();
-  await expect(slider).toHaveAttribute('aria-valuenow', '0');
-  await expect(tab(page, '調節').locator('.tab-dot')).toHaveCount(0);
+  await expect(slider).toHaveAttribute('aria-valuenow', '100');
+  await expect(tab(page, '調節').locator('.tab-dot')).toHaveCount(1);
   await tab(page, '一鍵').click();
   if ((await page.getByRole('button', { name: '質感', exact: true }).getAttribute('aria-pressed')) !== 'true')
     await page.getByRole('button', { name: '質感', exact: true }).click();
-  await expect(option(page, '無')).toHaveAttribute('aria-selected', 'true');
+  await expect(option(page, 'CCD')).toHaveAttribute('aria-selected', 'true');
 
   // after a reload the camera look (meiyan.look.v1) still holds 調節 and 質感
   await page.reload();

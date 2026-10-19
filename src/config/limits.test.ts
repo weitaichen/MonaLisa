@@ -23,6 +23,8 @@ describe('limits (S §3.5)', () => {
     // PR1 (S §6.3, §6.6): the faster carrier ships. Bench R, 2026-10-18 desktop, 8 faces at 2048: UBO 4.4–4.8 ms,
     // texture 11.8–12.3 ms
     expect(L.FACE_TABLE_CARRIER).toBe('ubo');
+    // camera per-person spec §7.3–§7.5 (K7, K8): re-identification gates, the track size gate, the idle limit
+    expect([L.REID_GRACE_MS, L.REID_DIST, L.REID_SIZE, L.REID_AMBIGUITY, L.TRACK_SIZE_JUMP, L.LIVE_IDLE_MAX_MS]).toEqual([4000, 1.5, 1.5, 1.25, 1.5, 60_000]);
   });
   it('keeps the invariants the engine relies on', () => {
     expect(L.MAX_EDIT_FACES).toBeLessThanOrEqual(L.MAX_RENDER_FACES);

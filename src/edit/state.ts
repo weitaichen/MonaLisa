@@ -82,6 +82,27 @@ export function neutralPhoto(): PhotoParams {
   return presetPhoto('original');
 }
 
+let neutralPersonValues: Record<PersonParamId, number> | null = null;
+let neutralPhotoValues: Record<PhotoParamId, number> | null = null;
+
+/**
+ * a person who draws nothing (camera per-person spec §3.3): every value at 原圖's (within 1e-6) and 左右分開 off. Shades
+ * and the preset never count (a shade is never picked without a value). ⊘ on 美型 and 一鍵 › 原圖 both set `right` to
+ * null, so a person edited back to neutral is neutral again; 左右分開 switched on alone is kept.
+ */
+export function isNeutralPerson(p: PersonParams): boolean {
+  if (p.right !== null) return false;
+  const n = (neutralPersonValues ??= neutralPerson().values);
+  return PERSON_IDS.every((id) => Math.abs(p.values[id] - n[id]) < 1e-6);
+}
+
+/** the photo look sets nothing (camera per-person spec §3.8): every value at 原圖's (within 1e-6), no filter, no 質感, no 增高 band; the preset link never counts */
+export function isNeutralPhoto(p: PhotoParams): boolean {
+  if (p.filterId !== 'none' || p.look !== null || p.heightBand !== null) return false;
+  const n = (neutralPhotoValues ??= neutralPhoto().values);
+  return PHOTO_IDS.every((id) => Math.abs(p.values[id] - n[id]) < 1e-6);
+}
+
 /** the camera look nobody has set (a fresh install, or an upgrader who never changed the camera): 原圖 (2026-10-18; 0.3 and 0.4.0 started the camera at 自然) */
 export function neutralLook(): CameraLook {
   return { photo: neutralPhoto(), person: neutralPerson() };

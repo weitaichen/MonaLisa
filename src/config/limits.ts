@@ -45,6 +45,18 @@ export const LOST_HOLD_MS = 1000;
 export const ONE_EURO = { minCutoff: 0.05, beta: 80, dCutoff: 1.0 } as const;
 /** seed → face match: the face box padded by this fraction must contain the seed */
 export const SEED_BOX_PAD = 0.25;
+/** camera re-identification (camera per-person spec §7.4, K7): an away person is claimed only this long after last seen, on the session clock */
+export const REID_GRACE_MS = 4000;
+/** camera re-identification (§7.4, K7): the new centre within this many of the person's last box widths of their last centre */
+export const REID_DIST = 1.5;
+/** camera re-identification (§7.4, K7): the new box width within × this of the person's last */
+export const REID_SIZE = 1.5;
+/** camera re-identification (§7.4, K7): another candidate within × this of the best distance → nobody (a new person at 原圖, A2) */
+export const REID_AMBIGUITY = 1.25;
+/** camera track matching (§7.3 item 3): a pair whose width differs from the predicted box by more than × this is refused */
+export const TRACK_SIZE_JUMP = 1.5;
+/** camera session clock (§7.5, K8): a pause longer than this without a live frame forgets everyone away and the remembered selection */
+export const LIVE_IDLE_MAX_MS = 60_000;
 /** 瘦臉 limit layer edge with ≥ 2 selectable faces (§4.7) */
 export const PROTECT_WINDOW = 128;
 /**

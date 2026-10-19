@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { applyPreset, neutralValue, PARAM_DEFS, paramDef, SHADE_PARTS, SHADES, SPLIT_IDS } from '../engine/params';
+import { applyPreset, LIP_SHADES, neutralValue, PARAM_DEFS, paramDef, SHADE_PARTS, SHADES, SPLIT_IDS } from '../engine/params';
 import { cropConstrain, cropValid, flipView, IDENTITY_GEOMETRY, rotateLeft } from '../geometry/view';
 import type { EditState, Geometry, ParamId, PersonParams, Stroke } from '../types';
 import { legacyProjection } from './legacy';
 import { lensFor, P0_INFO } from './lens';
+import { splitOn } from './sides';
 import {
   assignPersons,
   cameraEdit,
@@ -16,6 +17,8 @@ import {
   editSetGeometry,
   emptyShades,
   isEditStateRecord,
+  isNeutralPerson,
+  isNeutralPhoto,
   lookOf,
   matchesPhotoLink,
   naturalPerson,
@@ -118,9 +121,23 @@ describe('constructors', () => {
     expect(c.persons.f0).not.toBe(a.persons.f0);
     expect(c.photo).toBe(a.photo);
   });
+  it('isNeutralPerson: values at 原圖 and 左右分開 off; shades and the preset never count. isNeutralPhoto: values, filter, 質感, band', () => {
+    expect(isNeutralPerson(neutralPerson())).toBe(true);
+    // a shade is never picked without a value (lens.setShade sets MAKEUP_PICK_DEFAULT), so a shade alone draws nothing
+    expect(isNeutralPerson({ ...neutralPerson(), preset: 'custom', shades: { ...emptyShades(), lip: LIP_SHADES[0].id } })).toBe(true);
+    expect(isNeutralPerson(naturalPerson())).toBe(false);
+    expect(isNeutralPerson({ ...neutralPerson(), right: { 'shape.faceSlim': 0.3 } })).toBe(false);
+    // 左右分開 switched on before any value moved: kept (else the session would write it back to null and the switch would not stick)
+    expect(isNeutralPerson(splitOn(neutralPerson()))).toBe(false);
+    expect(isNeutralPhoto(neutralPhoto())).toBe(true);
+    expect(isNeutralPhoto({ ...neutralPhoto(), presetLink: null })).toBe(true);
+    expect(isNeutralPhoto(defaultPhoto())).toBe(false);
+    expect(isNeutralPhoto({ ...neutralPhoto(), filterId: 'warm' })).toBe(false);
+    expect(isNeutralPhoto({ ...neutralPhoto(), look: { id: 'film', amount: 0.5 } })).toBe(false);
+  });
 });
 
-const edit0 = (over: Partial<EditState> = {}): EditState => ({
+const edit0 =(over: Partial<EditState> = {}): EditState => ({
   v: 2,
   photo: defaultPhoto(),
   persons: { p0: { ...naturalPerson(), values: { ...naturalPerson().values, 'shape.eyeEnlarge': 0.8 }, preset: 'custom' } },

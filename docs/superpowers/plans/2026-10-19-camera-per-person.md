@@ -131,7 +131,7 @@
   }
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `src/edit/state.test.ts` (add; import `isNeutralPerson`, `isNeutralPhoto`, `emptyShades`, `defaultPhoto`, `naturalPerson`, `neutralPerson`, `neutralPhoto` from `./state`, `splitOn` from `./sides`, `LIP_SHADES` from `../engine/params`):
 
@@ -372,12 +372,12 @@ describe('LivePersons: selection (§7.6, K9) and 全部套用 (§3.4, K10)', () 
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cd /d/GitSource/MonaLisa && npx vitest run src/app/livePersons.test.ts src/edit/state.test.ts src/config/limits.test.ts`
 Expected: FAIL — `Cannot find module './livePersons'`, `isNeutralPerson is not a function`, the limits row undefined.
 
-- [ ] **Step 3: Implement the constants, the two predicates and `LivePersons`**
+- [x] **Step 3: Implement the constants, the two predicates and `LivePersons`**
 
 `limits.ts`: the six constants of the Interfaces block, each with a one-line doc comment citing §7.3/§7.4/§7.5 (K7, K8).
 
@@ -398,12 +398,12 @@ Expected: FAIL — `Cannot find module './livePersons'`, `isNeutralPerson is not
 - `pause(now)`: `pausedAt ??= now`. `resume(now, facing)`: a known facing ≠ `facing` → `clear()` first; the session opens with `facing`; a pending pause of more than `LIVE_IDLE_MAX_MS` clears the pool and `returnTo`, a shorter one adds the span to every pool `lastSeen`.
 - `clear()`: everything back to a new session (ids from 1, selection `'auto'`, 全部套用 off, ambient `neutralPerson()`), closed until `resume`.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cd /d/GitSource/MonaLisa && npx vitest run src/app/livePersons.test.ts src/edit/state.test.ts src/config/limits.test.ts && npm run typecheck`
 Expected: all PASS; typecheck exits 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /d/GitSource/MonaLisa && git add src/config/limits.ts src/config/limits.test.ts src/edit/state.ts src/edit/state.test.ts src/app/livePersons.ts src/app/livePersons.test.ts && git commit -m "camera per-person: LivePersons, the camera session model (claim, release, selection, 全部套用, away pool, session clock)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat

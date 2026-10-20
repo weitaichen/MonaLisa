@@ -2515,7 +2515,7 @@ cd /d/GitSource/MonaLisa && git add tests/e2e/camera-groups.spec.ts tests/e2e/ca
   export function pj1gVerdict(rms: number, rms1: number, lag: number, lag1: number): 'pass' | 'fail'; // RMS ≤ max(0.4, 1.25 × rms1) and lag ≤ 1.25 × lag1
   ```
 
-- [ ] **Step 1: Write the failing tests** (`report.test.ts`)
+- [x] **Step 1: Write the failing tests** (`report.test.ts`)
 
 ```ts
 describe('camera per-person verdicts (camera per-person spec §10)', () => {
@@ -2540,9 +2540,9 @@ describe('camera per-person verdicts (camera per-person spec §10)', () => {
 });
 ```
 
-- [ ] **Step 2: Run** — `npx vitest run src/bench/report.test.ts` → FAIL.
+- [x] **Step 2: Run** — `npx vitest run src/bench/report.test.ts` → FAIL.
 
-- [ ] **Step 3: Implement the verdicts and the rows**
+- [x] **Step 3: Implement the verdicts and the rows**
 
 - `report.ts`: the constants, `pgnVerdict`, `pj1gVerdict`, `lfRows` (LF values: `fps`, `longest_ms`, `max_gap_ms`, `every`, `min_face_hz`, `views`, `detect_p50_ms`, `render_p50_ms`, `faces`; PGS / PWB rows are built by their rows with `PGS_MAX_MS`, `PWB_MAX_MS`).
 - `multiFace.ts`:
@@ -2554,13 +2554,15 @@ describe('camera per-person verdicts (camera per-person spec §10)', () => {
   - `rowJG`: jitter (static clip, 2 s) and lag (pan clip, 4 s) of the group path's IMAGE landmarks through the app smoother, refreshed by the whole view and by a tile holding the face, beside MediaPipe's own numFaces-1 VIDEO smoothing on the same frames (as `jitterLag`, `:671-717`); PJ1G rows per refresh kind.
 - `bench-multiface.mjs`: `--upright` appends `upright=1` to the page URL; `--option-c <ms>` appends `optionC=<ms>`, which `rowLF` passes to `lfRows` as PGN's longest-frame bound (absent → that condition is not judged). Both flags, and `--option-c`'s value, are taken out of the row ids the way `--video` and its value are (`bench-multiface.mjs:14`), so `--upright … LF` runs row `LF` only.
 
-- [ ] **Step 4: Run** — `npx vitest run src/bench && npm run typecheck && npm run build && npx playwright test tests/e2e/bench.spec.ts --project chromium` → PASS (the bench page still mounts its sections).
+- [x] **Step 4: Run** — `npx vitest run src/bench && npm run typecheck && npm run build && npx playwright test tests/e2e/bench.spec.ts --project chromium` → PASS (the bench page still mounts its sections).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /d/GitSource/MonaLisa && git add src/bench/report.ts src/bench/report.test.ts src/bench/multiFace.ts scripts/bench-multiface.mjs && git commit -m "camera per-person: bench rows L (counts 1/3/10, both detectors, view calls), LF, GS, WB, JG and the PGN / PLB / PGS / PWB / PJ1G verdicts" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat
 ```
+
+(Executed with these adaptations, 2026-10-20. Pure parts beyond the three functions above, each in `report.ts` with a test seen to fail first: `summarizeLf` (LF's frame numbers from the per-frame `__meiyan` samples, `LfSample`: fps over the span, the longest interval, the max gap = the most camera frames one processed frame stood for by `presentedFrames` × the camera's own interval, the median interval of samples one frame apart; k and the faces by median, the most common cycle; each box shown ≥ 1 s: its distinct `seen` values over the span it was shown); `gsRows` (the GS row, then a PGS row per `livePath` change with the longest interval ending within ±1 s); `wbRows` (a WB row per flip, PWB on the cold one); `jitterRms` and `lagMs` (rows J and J2's formulas, with the frame's aspect where J has 16/9); `jgRows` (PJ1G per refresh kind); `viewCallRows` (row L's view calls). `LiveRun` gains an optional `detector`: L configs name it (`GPU camera numFaces 10`), and PL2 and PL1 come from the camera detector's runs only (the existing L tests, without a detector, are unchanged). `LfRun` gains an optional `tier` (the auto tier at the end). `pgnVerdict` fails when no face's rate was measured. LF's `detect_p50_ms` is the p50 of every answered detection in the window (the loop's D), timed by a wrapper around the tracker, and `render_p50_ms` that of `engine.render`, timed by a Proxy around the engine; with one face three calls in four are the whole view, so PLB reads the whole view's p50 as §10 asks. LF, GS and WB run the app's 3:4 crop as `getFrame` (Camera.tsx), the auto tier (reset per run) and the tracker warmed as `warmAfterPaint` does; LFC returns its LF row only (option C is PGN's comparison, not a gate). `--upright`: `cameraVideo` asks for 1080 × 1920; LF, LFC, GS and WB use the app's `createCamera()`, which asks for 1920 × 1080 itself, so with `upright=1` the page wraps `getUserMedia` as `fixtures.ts` `uprightCamera` does, and the LF, LFC and GS configs end with the stream's size, so a run shows that `--upright` took effect. GS: a 2 s loop with `group: false` first (on the front camera option C is the solo path's VIDEO call, the same graph), so the move is measured on a running graph and a warm engine, then 6 s with the group path; on a still clip only the move solo → group happens. WB: the app's flip, not a bare start: per delegate one loop on the front camera, `flip()` and right after it `warm()` (`warm_ms`), `first_ms` from `live` to the end of the first render, `first_detect_ms` that frame's call; a cold flip, back to the front camera, then a warm one; `page_cold` says whether the GPU's full-range compile was still to come (WB alone on a fresh page). JG: three trackers per delegate (MediaPipe's numFaces 1, its numFaces-3 raw reference as in J2, the group path's), the whole frame as the crop; `tile` is the tile `tileFor` gives the followed face's last box, and a face no tile holds whole gives that kind n/a (`face.y4m`'s face, 29 % of the long edge: a large face, which the whole view refreshes in the app). PJ1G judges the jitter always and the lag only where it moved. For Task 16: `face.y4m` repeats one identical frame, so its jitter is 0 for the app and for MediaPipe alike (S §6.2 J uses `group_noise.y4m` for that reason); the still clip that makes PJ1G's jitter mean something is `group_noise.y4m`. Smoke runs through a headless SwiftShader driver (scratch, not committed; the timings mean nothing): every new row ran without a page error. LF, LFC and WB on `face.y4m`; LF and GS with `--upright --option-c 300` on `upright_far10` (1080x1920, 10 faces on both delegates, PGN judged; GS: no change, 0 faces, as K18 says); GS with `--upright` on `selfie_group` (solo → group at 2.4 s); JG on `group_pan` (tile `t2,0`); L on `face.y4m` (12 VIDEO rows, 8 view-call rows, PL2 per delegate from the camera rows; SwiftShader's "GPU" PL2 fails at Δp50 13.7 ms, its CPU passes at 2.6 ms; Task 16 measures PL2 on the desktop GPU). The app's own `@bench` E4 on the same machine gives 5.7 fps where LF's CPU row gives 4.7 (磨皮, 大眼, 瘦臉 and 口紅 against 自然): the rows run the loop as the app does.)
 
 ---
 

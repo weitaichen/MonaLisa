@@ -15,7 +15,7 @@ import type { Landmarks478, PersonParams, Rect } from '../types';
 import { liveFrame } from './live';
 import { FaceWeightEaser } from './liveCore';
 import { LivePersons } from './livePersons';
-import type { DetectScope } from './liveViews';
+import { layoutViews, viewScope, type DetectScope } from './liveViews';
 import { cameraTapAction, ChipGate, coverTapUv, FaceTracks, videoToFrame } from './faceTracks';
 
 const sample = JSON.parse(readFileSync(new URL('../../tests/fixtures/landmarks_sample_face.json', import.meta.url), 'utf8')) as { points: number[] };
@@ -289,6 +289,35 @@ describe('FaceTracks on the group path: a call matches and misses only what its 
     const t = new FaceTracks(new LivePersons());
     t.detect([lmAt(0.5, 0.5, 0.2)], 0, W, H, scope(0, 0.55));
     expect(t.views()).toHaveLength(0);
+  });
+  it('a face that stops near the crop edge keeps its person: the whole view matches a track predicted across the edge (E5, group_move.y4m)', () => {
+    // the 3:4 crop of 1280 × 720 (x 0.289–0.711), the front camera's views; a face 0.14 wide walks right at the clip's
+    // swap speed and stops 0.03 inside the crop's right edge; a whole-view call every 460 ms (SwiftShader's cadence)
+    const l = layoutViews(W, H, { x: 370, y: 0, w: 540, h: 720 }, 'user', 'camera');
+    const whole = viewScope(l.whole, l);
+    const t = new FaceTracks(editedAll());
+    const at = (ms: number) => Math.min(0.611, 0.45 + 0.000144 * ms);
+    let p: number | null = null;
+    for (let ms = 0; ms <= 3220; ms += 460) {
+      t.detect([lmAt(at(ms), 0.5, 0.14)], ms, W, H, whole);
+      t.step(460, ms);
+      p ??= t.views()[0].person;
+    }
+    expect(t.views().map((v) => [v.person, v.present])).toEqual([[p, true]]);
+  });
+  it('a face cut by the crop edge stays one track: the tile at that edge matches it, not a second person (detector.spec.ts D2)', () => {
+    // D2's face B: 0.155 wide, its top above the frame (the box clamps to y 0), the front camera's crop x 0.289–0.711;
+    // the box's centre jitters with the clamped height, so the predicted box dips above the crop; the whole view three
+    // calls in four, the scan of t0,0 (y 0–540 px, from the crop's top) every fourth (LIVE_SCAN_EVERY)
+    const l = layoutViews(W, H, { x: 370, y: 0, w: 540, h: 720 }, 'user', 'camera');
+    const [whole, tile] = [viewScope(l.whole, l), viewScope(l.tiles[0], l)];
+    const t = new FaceTracks(new LivePersons());
+    for (let i = 0, ms = 0; i < 80; i++, ms += 40) {
+      t.detect([lmAt(0.63, 0.03 + 0.004 * Math.sin(i * 1.3), 0.155)], ms, W, H, i % 4 === 3 ? tile : whole);
+      t.step(40, ms);
+    }
+    expect(t.views()[0].rawBox.y).toBe(0); // the detection is cut by the frame's top edge
+    expect(t.views()).toHaveLength(1);
   });
 });
 

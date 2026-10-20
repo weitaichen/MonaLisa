@@ -106,20 +106,35 @@ export function refreshViews(layout: ViewLayout, boxes: readonly Rect[]): LiveVi
   return [layout.whole, ...layout.tiles.filter((t) => needed.has(t))];
 }
 
+/** the view holds the box (stream UV) whole once it is clipped to the visible crop (frame px); false when no part is in the crop */
+function holdsInCrop(view: LiveView, box: Rect, layout: ViewLayout): boolean {
+  const { w, h } = layout.frame;
+  const c = layout.crop;
+  const r = view.rect;
+  const x0 = Math.max(box.x * w, c.x);
+  const y0 = Math.max(box.y * h, c.y);
+  const x1 = Math.min((box.x + box.w) * w, c.x + c.w);
+  const y1 = Math.min((box.y + box.h) * h, c.y + c.h);
+  return x0 < x1 && y0 < y1 && x0 >= r.x && y0 >= r.y && x1 <= r.x + r.w && y1 <= r.y + r.h;
+}
+
 /**
- * §6.6 Mapping and matching: a tile matches and misses what it holds whole (a face cut by its edge is the overlapping
- * tile's); the whole view matches what it holds whole and misses large tracks and tracks no tile holds (a track out of
- * the crop leaves within LOST_HOLD_MS). Every other track is no event for the call.
+ * §6.6 Mapping and matching: a view matches the tracks whose predicted box, clipped to the visible crop, it holds whole
+ * (the whole view: every track partly in view). A face cut by a tile's edge is the overlapping tile's; one cut by the
+ * crop's edge (it stops near it while its velocity carries the prediction past; the frame's edge cuts it) is no view's
+ * to hold whole, so the views at that edge match it, else the call misses it and its face starts a new person (A2; E5,
+ * detector.spec.ts D2). A tile misses what it holds whole; the whole view misses large tracks and tracks no tile holds (a
+ * track out of the crop leaves within LOST_HOLD_MS). Every other track is no event for the call.
  */
 export function viewScope(view: LiveView, layout: ViewLayout): DetectScope {
   const { w, h } = layout.frame;
   const uv = { x: view.rect.x / w, y: view.rect.y / h, w: view.rect.w / w, h: view.rect.h / h };
-  const holds = (pred: Rect) => holdsWhole(view, pred, layout);
-  if (view.kind === 'tile') return { name: view.id, view: uv, matchable: holds, missable: holds };
+  const matchable = (pred: Rect) => holdsInCrop(view, pred, layout);
+  if (view.kind === 'tile') return { name: view.id, view: uv, matchable, missable: (pred) => holdsWhole(view, pred, layout) };
   return {
     name: view.id,
     view: uv,
-    matchable: holds,
+    matchable,
     missable: (pred) => isLarge(pred, layout) || !layout.tiles.some((t) => holdsWhole(t, pred, layout)),
   };
 }

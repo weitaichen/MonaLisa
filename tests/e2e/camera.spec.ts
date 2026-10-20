@@ -105,3 +105,14 @@ test('camera: gate → live beautified preview with face → panel → slider �
   await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 30_000 });
   await shot(page, '08-review-to-editor');
 });
+
+test('A1: a lone selfie stays on the solo path: one short-range VIDEO pass on every frame', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: /拍攝/ }).click();
+  await page.getByRole('button', { name: '點擊開啟相機' }).click();
+  await expect.poll(async () => (await debugState(page)).face, { timeout: 90_000, intervals: [500] }).toBe(true);
+  for (let i = 0; i < 20; i++) {
+    expect(await debugState(page)).toMatchObject({ livePath: 'solo', liveEvery: 1, liveDetector: 'short-range' });
+    await page.waitForTimeout(250);
+  }
+});

@@ -81,6 +81,24 @@ describe('assignment, scope and mapping (§6.6)', () => {
     expect(viewScope(l.whole, l).missable(box(0.5, 0.05, 0.05))).toBe(true); // above the crop
     expect(holdsWhole(t00, box(0.6, 0.5, 0.05), l)).toBe(false);
   });
+  it('a view matches the predicted boxes it holds whole once clipped to the crop: across the crop edge yes, wholly out of it no, cut by a tile edge only in the neighbour', () => {
+    const top = 240 / 1920; // the crop's top edge
+    const across = box(0.5, top, 0.2); // large, half above the crop
+    const smallAcross = box(0.2, top, 0.05); // small, no tile holds it whole
+    expect(viewScope(l.whole, l).missable(across)).toBe(true);
+    expect(viewScope(l.whole, l).matchable(across)).toBe(true);
+    expect(viewScope(l.whole, l).missable(smallAcross)).toBe(true);
+    expect(viewScope(l.whole, l).matchable(smallAcross)).toBe(true);
+    expect(viewScope(l.whole, l).matchable(box(0.5, 0.05, 0.05))).toBe(false); // wholly above the crop
+    // the crop's edge cuts it, not t0,0's: t0,0 (x 0–720 px, from the crop's top) matches it, and still misses only
+    // what it holds whole
+    expect(viewScope(l.tiles[0], l).matchable(smallAcross)).toBe(true);
+    expect(viewScope(l.tiles[0], l).missable(smallAcross)).toBe(false);
+    // cut by t0,0's right edge (720 px) inside the crop: t1,0 (x 360–1080) holds it whole
+    const cut = box(720 / 1080, 0.3, 0.05);
+    expect(viewScope(l.tiles[0], l).matchable(cut)).toBe(false);
+    expect(viewScope(l.tiles[1], l).matchable(cut)).toBe(true);
+  });
   it('mapLandmarks: view-normalized x, y → stream UV by the rect; z scaled by the rect width over the frame width', () => {
     const lm = { points: new Float32Array(478 * 3) };
     lm.points.set([0.5, 0.5, 0.1], 0);

@@ -2260,7 +2260,7 @@ cd /d/GitSource/MonaLisa && git add tests/e2e/camera-persons.spec.ts tests/e2e/f
 **Interfaces:**
 - Consumes: `uprightCamera`, `cpuDelegate`, `camBox`; debug `livePath`, `liveDetector`, `liveEvery`, `boxes`, `selected`, `fps`; the knob `meiyan.debug.live.v1`.
 
-- [ ] **Step 1: Write the tests**
+- [x] **Step 1: Write the tests**
 
 `tests/e2e/fixtures.ts` (add, beside `camBox`, so the three new files share them):
 
@@ -2465,10 +2465,31 @@ test('E5 identity: C away 1.5 s → the same person; B and C swap → each id fo
 });
 ```
 
-- [ ] **Step 2: Run** — `npm run build && npx playwright test --project chromium-upright-row3 --project chromium-upright-far10 --project chromium-selfie-group --project chromium-group10 --project chromium-group-move && npx playwright test tests/e2e/camera.spec.ts --project chromium`
+- [x] **Step 2: Run** — `npm run build && npx playwright test --project chromium-upright-row3 --project chromium-upright-far10 --project chromium-selfie-group --project chromium-group10 --project chromium-group-move && npx playwright test tests/e2e/camera.spec.ts --project chromium`
 Expected: all pass; the option-C test prints `option C faces: N`. A failure of an E4 group-path test is a PGR failure: do not loosen it here, carry it to Task 16.
 
-- [ ] **Step 3: Commit**
+(Executed with these adaptations, 2026-10-20. The `@bench` variant is in `camera-groups.spec.ts`, tagged `@far10 @bench`. E4b option C: `liveEvery` must exceed tier L's floor (2 at tier L, else 1). With ten faces SwiftShader may step the auto tier down to L, which alone makes `liveEvery` 2, so the `> 1` above passed with the cadence broken. Measured: `liveEvery` 6 at tier H, 9.6 fps, detection 86 ms. E5: `cpuDelegate(page)`, for the reason §12.2 gives the 10-face tests. On SwiftShader's GPU path three faces cost about 100 ms a call (k = 6, about two whole-view calls a second), and C's track was dropped (`LOST_HOLD_MS`) while B hid it. E5 also gets three test fixes: the swap polls return null while either person is not shown (the `of(…)!` above threw and ended the poll at once); the long-absence wait is 3 s, not 4.5 s; and `back` is checked before use. The 3 s wait: C's track is held `LOST_HOLD_MS` after C leaves at 11 s, so two boxes show only from about 12 s to C's return at 16.5 s, and a 4.5 s wait raced the return. The short absence shows two for at most 0.5 s.
+**Code fix (a deviation, Task 8's code):** in `viewScope` (`liveViews.ts`, `holdsInCrop`) a view now matches the tracks whose predicted box it holds whole once the box is clipped to the visible crop. Before, it matched only the boxes it held whole unclipped. For the whole view this means every track partly in view. A tile also matches a box cut by the crop's edge where that edge is the tile's own. A box cut by a tile's edge inside the crop is still that tile's neighbour's. What a view misses is unchanged.
+Cause, logged by throwaway probes (not committed). On `group_move` (GPU path): when the swap stops, B and C stand 0.03–0.1 UV inside the crop's edges, and the velocity carries their predicted boxes past them. No view then holds them whole. The whole view already missed large tracks it could not match, so it missed these, and both faces started new persons (Task 12's note). The same rule made Task 13's red `detector.spec.ts` D2 (CPU). Face B is cut by the frame's top edge, so its box clamps to y 0 and the jitter takes its prediction above the frame. Before: a new person on every whole-view call, 6 faces. With the whole view fixed alone: tile `t0,0`'s scans kept a second track on B, 3 faces, 5 of 5 runs alone and in the full run. After: 2 faces, D2 passes 3 of 3 on both delegates.
+Tests, each seen to fail on the code before it:
+- `liveViews.test.ts`: the whole view matches a box across the crop's edge but not one wholly outside it; tile `t0,0` matches a box cut by the crop's top edge but not one cut by its own right edge, which `t1,0` matches; a tile still misses only what it holds whole.
+- `faceTracks.test.ts`: a face that stops 0.03 inside the crop's edge, with a whole-view call every 460 ms, keeps its person.
+- `faceTracks.test.ts`: D2's face, cut by the frame's top edge, under the whole view three calls in four and `t0,0` every fourth, stays one track: 6 tracks on the pre-task code, 5 with only the whole view fixed.
+Review Focus #2 still passes. §6.6 says "matched … against the predicted boxes of the tracks the view holds whole"; the boxes are now clipped to the crop first. Task 16 carries this to the spec. E5 passes on CPU without the fix too (2 of 2): at 25 fps and k = 1 the prediction barely overshoots.
+Runs on CPU, SwiftShader, on the final code: every E4, E4b and E5 test passed 3 of 3 (also 3 of 3 for E4 and E4b and 5 of 5 for E5 with the whole view fixed alone), and A1 and `camera.spec.ts`'s camera test passed. The selfie logged only `group`: the solo path finds both near faces on its first detection, before the first sample. Option C finds 0 of `upright_far10`'s faces: the number §16 quotes. Each new test was shown to fail against a deliberate break (built, run, reverted, not committed; on the code with the whole view fixed alone):
+- a lone face moving to the group path → A1 fails at `livePath`;
+- the back camera starting on the solo path → E4 row3 fails at `livePath`, far10 at 0 faces, E4b at 10 faces instead of 3;
+- back-camera taps mapped as mirrored → every "each tappable" check selects the wrong face;
+- the `meiyan.debug.live.v1` knob ignored → both option-C tests;
+- the cadence's k ignored → E4b option C (after the tier-L fix);
+- edited persons never pooled → E5's "C back under the same person";
+- `REID_GRACE_MS` at 60 s → E5's new person at C's place.
+The full `npm run test:e2e`, run twice:
+- With the whole view fixed alone: 205 passed, 3 skipped, 1 failed (D2, CPU, 3 faces). The tile rule above fixed it.
+- On the final code: 205 passed, 3 skipped, 1 failed, `shape-makeup.spec.ts:419` (美妝 and 左右分開 in the camera). Its 美瞳 change was 1.86 in all six runs (two full, three alone, and this one), while its frame-to-frame jitter baseline read 0.70 here and 0.00 in the five others, so the bound `4 × jitter` rose above 1.86. It passed 3 of 3 alone. It runs one face on the front camera's solo path, which never calls `viewScope`. `npm test`: 125 files, 2326 tests, green; `npm run typecheck` clean.
+**For Task 16 (not loosened here):** with the tiles removed (the whole view only), E4's back-camera tests still pass. On `upright_row3` and `upright_far10` the whole-view IMAGE call (the 3:4 crop, copied at 960 × 1280) finds every face at 3–4 %, while option C's full-frame VIDEO pass finds none of far10's. Only the selfie test needs the tiles: without them it finds 2 of 5 faces. With the back camera on the solo path (option C), full-range VIDEO found all three of `upright_row3`'s 6.5 % faces; §12.3 expected it to miss them.)
+
+- [x] **Step 3: Commit**
 
 ```bash
 cd /d/GitSource/MonaLisa && git add tests/e2e/camera-groups.spec.ts tests/e2e/camera-back.spec.ts tests/e2e/camera-identity.spec.ts tests/e2e/camera.spec.ts && git commit -m "camera per-person: e2e E4 (upright group shots), E4b, E5 (identity) and the one-face solo check" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat

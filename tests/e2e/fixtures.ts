@@ -205,6 +205,30 @@ export async function camBox(page: Page, id: string, mirrored = true): Promise<{
   );
 }
 
+/** the camera screen, opened and live (front camera) */
+export async function open(page: Page): Promise<void> {
+  await page.goto('/');
+  await page.getByRole('button', { name: /拍攝/ }).click();
+  await page.getByRole('button', { name: '點擊開啟相機' }).click();
+  await expect.poll(async () => (await debugState(page)).cameraState, { timeout: 120_000 }).toBe('live');
+}
+
+/** flip to the back camera; resolves at its first live frame (Date.now()) */
+export async function flipBack(page: Page): Promise<number> {
+  await page.getByRole('button', { name: '切換鏡頭' }).click();
+  await expect.poll(async () => (await debugState(page)).cameraState, { timeout: 30_000, intervals: [50] }).not.toBe('live');
+  await expect
+    .poll(async () => {
+      const d = await debugState(page);
+      return d.cameraState === 'live' && d.fps > 0;
+    }, { timeout: 60_000, intervals: [50] })
+    .toBe(true);
+  return Date.now();
+}
+
+/** what is left of `ms` since `t0` (at least 1 ms): a poll timeout counted from an earlier moment */
+export const within = (t0: number, ms: number): number => Math.max(1, ms - (Date.now() - t0));
+
 /**
  * The camera asks for an upright 1080×1920 stream (camera per-person spec §12.2 E4): Chrome's fake camera otherwise
  * centre-crops a portrait clip to the app's landscape request (media/camera.ts cameraConstraints: 1920×1080, §6.1). An

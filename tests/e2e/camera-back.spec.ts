@@ -1,5 +1,6 @@
-// E4b (camera per-person spec §12.2): the landscape ten-face regression (K20), group path and option C.
-import { camBox, cpuDelegate, debugState, expect, flipBack, liveGroup, open, test } from './fixtures';
+// E4b (camera per-person spec §12.2): the landscape ten-face regression (K20), 合照模式 on (the group path) and off
+// (option C, the default, K22).
+import { camBox, cpuDelegate, debugState, expect, flipBack, groupModeButton, open, setGroupMode, test } from './fixtures';
 
 /**
  * the faces composeFitWidth puts inside the 3:4 crop (x 370–910 of 1280). The scripts are untyped .mjs, imported
@@ -13,11 +14,11 @@ async function facesInView(): Promise<number> {
   return composeFitWidthBoxes(TEN_FACES).filter((b) => b.x >= 370 / 1280 && b.x + b.w <= 910 / 1280).length;
 }
 
-test('E4b back camera, the landscape ten-face clip: every face inside the visible crop found and tappable', async ({ page }) => {
+test('E4b back camera, 合照模式 on, the landscape ten-face clip: every face inside the visible crop found and tappable', async ({ page }) => {
   const inView = await facesInView();
   await cpuDelegate(page);
-  await liveGroup(page, true); // the group path, asked for: LIVE_GROUP ships false (2026-10-22, PGN failed, §10)
   await open(page);
+  await setGroupMode(page, true);
   await flipBack(page);
   await expect.poll(async () => (await debugState(page)).faces, { timeout: 30_000 }).toBe(inView);
   for (const b of (await debugState(page)).boxes) {
@@ -27,10 +28,10 @@ test('E4b back camera, the landscape ten-face clip: every face inside the visibl
   }
 });
 
-test('E4b option C (LIVE_GROUP off): ten faces, full-range VIDEO, the cadence skips', async ({ page }) => {
+test('E4b option C (合照模式 off, the default): ten faces, full-range VIDEO, the cadence skips', async ({ page }) => {
   await cpuDelegate(page);
-  await liveGroup(page, false);
   await open(page);
+  await expect(groupModeButton(page)).toHaveAttribute('aria-pressed', 'false');
   await flipBack(page);
   await expect.poll(async () => (await debugState(page)).faces, { timeout: 60_000 }).toBe(10);
   expect((await debugState(page)).liveDetector).toBe('full-range');

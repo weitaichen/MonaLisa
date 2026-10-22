@@ -7,11 +7,11 @@
 // optionC=GPU:<ms>,CPU:<ms>); on a phone the rows take a picked photo.
 import { FaceLandmarker, FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import { debugState } from '../app/debug';
-import { type LiveLoop, resetAutoTierSession, startLiveLoop } from '../app/live';
+import { type LiveLoop, liveRoute, resetAutoTierSession, startLiveLoop } from '../app/live';
 import { LivePersons } from '../app/livePersons';
 import { layoutViews, type LiveView, mapLandmarks, tileFor } from '../app/liveViews';
 import { LandmarkSmoother } from '../app/oneEuro';
-import { EDIT_DETECT_FACES, LIVE_DETECT_FACES, LIVE_DETECTOR, LIVE_GROUP } from '../config/limits';
+import { EDIT_DETECT_FACES, LIVE_DETECT_FACES, LIVE_DETECTOR } from '../config/limits';
 import { neutralPerson, neutralPhoto } from '../edit/state';
 import { ENGINE_PATHS, loadEngineAssets, loadPhotoDetector, loadPoseModel } from '../engine/assets';
 import { withFaceDetector } from '../engine/faceBundle';
@@ -892,7 +892,7 @@ function appCamera(): CameraController {
   return createCamera();
 }
 
-/** the app's default prefs (store/settings.ts DEFAULT_PREFS): the auto tier */
+/** the app's default prefs (store/settings.ts DEFAULT_PREFS): the auto tier, 合照模式 off (runLoop's phases set it) */
 const LIVE_PREFS: Prefs = {
   mirrorOnSave: true,
   tier: 'auto',
@@ -902,6 +902,7 @@ const LIVE_PREFS: Prefs = {
   installHintDismissed: true,
   exportFormat: 'jpeg',
   exportSize: 'full',
+  groupMode: false,
 };
 const NEUTRAL_PHOTO = neutralPhoto();
 
@@ -995,8 +996,9 @@ function sampleFrames(video: HTMLVideoElement): { samples: LfSample[]; stop(): v
 
 /**
  * The live loop as the app runs it (Camera.tsx: the camera session, the photo look, the prefs, the 3:4 crop as
- * getFrame) for each phase in turn (a phase: a loop with or without the group path, for `ms`), on the timed tracker and
- * engine, sampled on every frame from the first loop's start (t0) to the last one's stop.
+ * getFrame), one loop through every phase in turn (a phase: 合照模式 on or off, `group`, for `ms`; a change of phase is
+ * the toggle tapped mid-stream, K22), on the timed tracker and engine, sampled on every frame from the loop's start (t0)
+ * to its stop.
  */
 async function runLoop(
   camera: CameraController,
@@ -1011,25 +1013,26 @@ async function runLoop(
   const eng = timedEngine(engine, renders);
   const video = camera.video;
   let sampler: ReturnType<typeof sampleFrames> | null = null;
+  let prefs: Prefs = { ...LIVE_PREFS, groupMode: phases[0]?.group ?? false };
   const t0 = performance.now();
   try {
-    for (const p of phases) {
-      const loop = startLiveLoop({
-        camera,
-        engine: eng,
-        tracker,
-        persons,
-        getPhoto: () => NEUTRAL_PHOTO,
-        getPrefs: () => LIVE_PREFS,
-        getFrame: () => normalizedCropRect(video.videoWidth, video.videoHeight, APP_RATIO),
-        group: p.group,
-      });
-      sampler ??= sampleFrames(video);
-      try {
+    const loop = startLiveLoop({
+      camera,
+      engine: eng,
+      tracker,
+      persons,
+      getPhoto: () => NEUTRAL_PHOTO,
+      getPrefs: () => prefs,
+      getFrame: () => normalizedCropRect(video.videoWidth, video.videoHeight, APP_RATIO),
+    });
+    sampler = sampleFrames(video);
+    try {
+      for (const p of phases) {
+        prefs = { ...prefs, groupMode: p.group };
         await sleep(p.ms);
-      } finally {
-        loop.stop();
       }
+    } finally {
+      loop.stop();
     }
   } finally {
     sampler?.stop();
@@ -1073,7 +1076,8 @@ export async function rowLF(group: boolean): Promise<MultiRow[]> {
       try {
         resetAutoTierSession();
         // Camera.tsx warmAfterPaint: the back camera's first graph (the full-range compile) lands before the first frame
-        t.warm(group ? 'IMAGE' : 'VIDEO', LIVE_DETECTOR.environment);
+        const first = liveRoute('environment', group);
+        t.warm(first.mode, first.detector);
         if (t.photoDetector === 'full-range') fullRangeRan = true;
         const r = await runLoop(camera, engine, t, editedSession(), [{ group, ms: LF_WARM_MS + LF_MEASURE_MS }]);
         const from = r.t0 + LF_WARM_MS;
@@ -1100,17 +1104,17 @@ export async function rowLF(group: boolean): Promise<MultiRow[]> {
   return out;
 }
 
-/** row GS: the solo path alone first (its VIDEO graph and the engine warm), then the loop that may take the group path */
+/** row GS: 合照模式 off first (the solo path's VIDEO graph and the engine warm), then turned on */
 const GS_SOLO_MS = 2000;
 const GS_GROUP_MS = 6000;
 
 /**
- * GS (camera per-person spec §12.4, PGS): the front camera's move between its paths (§6.6, K18), GPU then CPU, as row LF
- * runs the loop (selfie_group.y4m with --upright: the two near faces start the group path). A first loop without the
- * group path runs the solo path's VIDEO call (the same graph, the camera bundle at LIVE_DETECT_FACES) for 2 s, so the
- * move is measured on a running graph and a warm engine, not on the tracker's first inferences; then a loop with it for
- * 6 s. For each livePath change, the longest frame within ±1 s (report.ts gsRows). With a still clip the group path keeps
- * its faces, so only the move to it is measured.
+ * GS (camera per-person spec §12.4, PGS): the front camera's move between its paths when 合照模式 is turned on
+ * mid-stream (§6.6, K22), GPU then CPU, as row LF runs the loop (selfie_group.y4m with --upright). With the mode off the
+ * solo path's VIDEO call runs (the camera bundle at LIVE_DETECT_FACES) for 2 s, so the move is measured on a running
+ * graph and a warm engine, not on the tracker's first inferences; then the mode is turned on, on the same loop, for 6 s.
+ * For each livePath change, the longest frame within ±1 s (report.ts gsRows). (Until K22 the move was K18's, on the
+ * second face; measured 2026-10-22 as two loops, the second starting on the solo path.)
  */
 export async function rowGS(): Promise<MultiRow[]> {
   const engine = createEngine(document.createElement('canvas'), { mirror: true, matchGpupixel: false, showLandmarks: false });
@@ -1166,9 +1170,9 @@ async function firstFrom(calls: readonly Timed[], from: number, ms: number): Pro
 /**
  * WB (camera per-person spec §12.4, PWB): the first back-camera frame after a flip, GPU then CPU, each on a fresh
  * tracker under one live loop, as the app flips: the front camera's solo path runs, then `flip()` and right after it
- * warm('IMAGE', 'photo') (Camera.tsx's warm-up: on the GPU the page's first full-range graph compiles there, warm_ms),
- * then the time from `live` to the end of the first rendered frame (first_ms; that frame's group-path call:
- * first_detect_ms). A cold flip, back to the front camera, then a warm one. The GPU's cold flip is the page's first
+ * the warm-up of liveRoute (Camera.tsx's: with 合照模式 off, the default, warm('VIDEO', 'photo'); on, warm('IMAGE',
+ * 'photo'); on the GPU the page's first full-range graph compiles there, warm_ms), then the time from `live` to the end
+ * of the first rendered frame (first_ms; that frame's detection: first_detect_ms). A cold flip, back to the front camera, then a warm one. The GPU's cold flip is the page's first
  * full-range work only on a fresh page with WB run alone (page_cold says so).
  */
 export async function rowWB(): Promise<MultiRow[]> {
@@ -1213,7 +1217,8 @@ export async function rowWB(): Promise<MultiRow[]> {
           });
           const flipped = camera.flip();
           const w0 = performance.now();
-          t.warm(LIVE_GROUP ? 'IMAGE' : 'VIDEO', LIVE_DETECTOR.environment);
+          const route = liveRoute('environment', LIVE_PREFS.groupMode);
+          t.warm(route.mode, route.detector);
           const warmMs = performance.now() - w0;
           if (t.photoDetector === 'full-range') fullRangeRan = true;
           await flipped;

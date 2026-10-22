@@ -65,18 +65,17 @@ export const REID_AMBIGUITY = 1.25;
 export const TRACK_SIZE_JUMP = 1.5;
 /** camera session clock (§7.5, K8): a pause longer than this without a live frame forgets everyone away and the remembered selection */
 export const LIVE_IDLE_MAX_MS = 60_000;
-/**
- * the camera's group path (camera per-person spec §6.6, K17): IMAGE calls on the whole view and zoomed tiles. false
- * since 2026-10-22, so option C ships (§6.3: one VIDEO pass over the whole frame per facing, faces from about 9 % of
- * the long edge on the back camera, 12 % on the front), because the desktop gate PGN failed (§10, §16 item 1). Row LF on
- * upright_far10 (10 faces at 3–4 %), i7-14700 / UHD 770, headed Chrome: GPU 19.8 fps, slowest face 1.2 Hz, longest
- * frame 250 ms; CPU 21.2 fps, 2.4 Hz, 217 ms; the limits are ≥ 24 fps, every face ≥ 5 Hz and no frame longer than option
- * C's at 10 faces (row LFC on group10: 167 ms GPU, 150 ms CPU). The whole view finds all ten faces, so each call ran 5–10
- * landmark inferences (detection p50 151 ms GPU, 123 ms CPU) and k stayed at LIVE_MAX_DETECT_EVERY. §10's fixes did not
- * help: LIVE_SCAN_EVERY 8 (no scans run at 10 faces) 21.6 / 21.4 fps, 1.3 / 2.4 Hz, 267 / 200 ms; LIVE_MAX_DETECT_EVERY
- * 12: 21.7 / 20.7 fps, 0.7 / 1.2 Hz, 323 / 384 ms. PGR (E4: 3 of 3 per fixture and delegate), PJ1G and PLB passed.
- */
-export const LIVE_GROUP = false;
+// The camera's group path (camera per-person spec §6.6, K17: IMAGE calls on the whole view and zoomed tiles) runs while
+// the user's 合照模式 is on (Prefs.groupMode, K22, §6.3: a runtime choice, off by default); off, every stream runs
+// option C (one VIDEO pass over the whole frame per facing: faces from about 9 % of the long edge on the back camera,
+// 12 % on the front). Off by default because the desktop gate PGN failed (§10): row LF on upright_far10 (10 faces at
+// 3–4 %), i7-14700 / UHD 770, headed Chrome: GPU 19.8 fps, slowest face 1.2 Hz, longest frame 250 ms; CPU 21.2 fps,
+// 2.4 Hz, 217 ms; the limits are ≥ 24 fps, every face ≥ 5 Hz and no frame longer than option C's at 10 faces (row LFC on
+// group10: 167 ms GPU, 150 ms CPU). The whole view finds all ten faces, so each call ran 5–10 landmark inferences
+// (detection p50 151 ms GPU, 123 ms CPU) and k stayed at LIVE_MAX_DETECT_EVERY. §10's fixes did not help:
+// LIVE_SCAN_EVERY 8 (no scans run at 10 faces) 21.6 / 21.4 fps, 1.3 / 2.4 Hz, 267 / 200 ms; LIVE_MAX_DETECT_EVERY 12:
+// 21.7 / 20.7 fps, 0.7 / 1.2 Hz, 323 / 384 ms. PGR (E4: 3 of 3 per fixture and delegate), PJ1G and PLB passed: it finds
+// the far faces, at that cost in smoothness, which is what 合照模式 trades.
 /** the face detector of each facing's paths (§6.3): the front camera stays on short-range (no bundle switch into a group scene), the back camera full-range */
 export const LIVE_DETECTOR: Record<Facing, FaceDetectorKind> = { user: 'camera', environment: 'photo' };
 /** the smallest face the group path finds, as a fraction of the stream frame's long edge (§6.6, K17, K19): back camera 3 %, front-camera group scenes 5 % */
@@ -85,8 +84,6 @@ export const LIVE_FACE_FLOOR: Record<Facing, number> = { user: 0.05, environment
 export const DETECTOR_FLOOR: Record<FaceDetectorKind, number> = { camera: 0.11, photo: 0.08 };
 /** every LIVE_SCAN_EVERY-th group-path call scans the next tile no track needs (§6.6) */
 export const LIVE_SCAN_EVERY = 4;
-/** the front camera returns from the group path to the solo path after this long with at most one face shown (§6.6, K18) */
-export const LIVE_SOLO_AFTER_MS = 5000;
 /** the group path's whole view is copied at most this many px on its long edge (§6.6) */
 export const LIVE_VIEW_MAX_EDGE = 1280;
 /** with ≥ 2 faces the camera skips detections so the preview averages at least this many fps (camera per-person spec §6.4, K6) */

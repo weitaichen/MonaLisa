@@ -1,22 +1,7 @@
 // The camera with three faces (S §8.4): group.y4m shows A, B and C (gen-y4m from group_faces.png), inside the 3:4
 // preview: A above, B and C side by side below it (composeGroupCam).
 import type { Page } from '@playwright/test';
-import { camBox, debugState, expect, grab, hold, regionDiff, test } from './fixtures';
-
-/** every toast text shown from now on (the camera hint lasts 3.2 s, the 3-face poll can outlive it) */
-const watchToasts = (page: Page) =>
-  page.evaluate(() => {
-    const w = window as unknown as { __toasts: string[] };
-    w.__toasts = [];
-    const scan = () => {
-      for (const el of document.querySelectorAll('.toast')) {
-        const t = (el.textContent ?? '').trim();
-        if (t && w.__toasts.at(-1) !== t) w.__toasts.push(t);
-      }
-    };
-    new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true });
-  });
-const toastsSeen = (page: Page): Promise<string[]> => page.evaluate(() => (window as unknown as { __toasts: string[] }).__toasts);
+import { camBox, debugState, expect, grab, hold, regionDiff, test, toastsSeen, watchToasts } from './fixtures';
 const byX = async (page: Page) => [...(await debugState(page)).boxes].sort((a, b) => b.x - a.x).map((b) => b.id); // mirrored: screen left → right
 
 /** a photo-level look of zero (美白, 銳化 to 0), so an untouched face is untouched pixel for pixel */

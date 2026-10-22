@@ -21,6 +21,7 @@ export const DEFAULT_PREFS: Prefs = {
   installHintDismissed: false,
   exportFormat: 'jpeg',
   exportSize: 'full',
+  groupMode: false,
 };
 
 const TIERS: readonly Prefs['tier'][] = ['auto', 'H', 'M', 'L'];
@@ -86,7 +87,7 @@ export function sanitizePrefs(raw: unknown): Prefs {
   const out: Prefs = { ...DEFAULT_PREFS };
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
   const r = raw as Record<string, unknown>;
-  const bool = (k: 'mirrorOnSave' | 'matchGpupixel' | 'showLandmarks' | 'installHintDismissed') => {
+  const bool = (k: 'mirrorOnSave' | 'matchGpupixel' | 'showLandmarks' | 'installHintDismissed' | 'groupMode') => {
     const v = r[k];
     if (typeof v === 'boolean') out[k] = v;
   };
@@ -94,6 +95,7 @@ export function sanitizePrefs(raw: unknown): Prefs {
   bool('matchGpupixel');
   bool('showLandmarks');
   bool('installHintDismissed');
+  bool('groupMode');
   if (TIERS.includes(r.tier as Prefs['tier'])) out.tier = r.tier as Prefs['tier'];
   if (DELEGATES.includes(r.delegate as Prefs['delegate'])) out.delegate = r.delegate as Prefs['delegate'];
   if (FORMATS.includes(r.exportFormat as ExportFormat)) out.exportFormat = r.exportFormat as ExportFormat;
@@ -193,6 +195,31 @@ export function takeCameraPersonsHint(): boolean {
   return readJson(CAM_PERSONS_HINT_KEY) !== undefined;
 }
 
+/** UI flags of 合照模式 (camera per-person spec K22, §3.1, §9), not settings */
+export const GROUP_MODE_ON_KEY = 'meiyan.hint.groupModeOn.v1';
+export const GROUP_MODE_HINT_KEY = 'meiyan.hint.groupMode.v1';
+
+/** a one-time flag: true the first time (and only if the flag stuck, as takePersonsHint), then false */
+function takeOnce(key: string): boolean {
+  if (readJson(key) !== undefined) return false;
+  writeJson(key, 1);
+  return readJson(key) !== undefined;
+}
+
+/** 合照模式 turned on for the first time: 「遠處的人也能點選，人多時預覽可能較不順」 once per install (K22) */
+export function takeGroupModeOnToast(): boolean {
+  return takeOnce(GROUP_MODE_ON_KEY);
+}
+
+/**
+ * ≥ 2 faces shown with 合照模式 off: the hint that it lets far people be selected, once per install (K22); never once
+ * the mode was turned on here (its first-on toast taken: the user has found it)
+ */
+export function takeGroupModeHint(): boolean {
+  if (readJson(GROUP_MODE_ON_KEY) !== undefined) return false;
+  return takeOnce(GROUP_MODE_HINT_KEY);
+}
+
 // ───────────── full-resolution export: crash breadcrumb, cap and test knob (step-3 spec §3.7) ─────────────
 
 export const EXPORT_GUARD_KEY = 'meiyan.exportGuard.v1';
@@ -276,20 +303,4 @@ export function readExportDebug(): ExportDebugKnob {
   if (typeof slowMs === 'number' && Number.isFinite(slowMs) && slowMs > 0) out.slowMs = slowMs;
   if (failAt === 'decode' || failAt === 'tile' || failAt === 'encode') out.failAt = failAt;
   return out;
-}
-
-// ───────────── the live camera's test knob (camera per-person spec §12.2) ─────────────
-
-export const LIVE_DEBUG_KEY = 'meiyan.debug.live.v1';
-
-/**
- * e2e knob (works in the production build): `{ group }` overrides LIVE_GROUP for the camera: false runs option C (§6.3),
- * the fallback's own tests; true the group path (§6.6), its own tests since LIVE_GROUP ships false (2026-10-22, PGN
- * failed, §10). Read when the camera starts a live loop; {} for nothing stored, junk or no storage; never throws
- */
-export function readLiveDebug(): { group?: boolean } {
-  const r = readJson(LIVE_DEBUG_KEY);
-  if (!r || typeof r !== 'object' || Array.isArray(r)) return {};
-  const { group } = r as Record<string, unknown>;
-  return typeof group === 'boolean' ? { group } : {};
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { EDIT_DETECT_FACES, LIVE_DETECT_FACES, LIVE_SOLO_AFTER_MS, LOST_HOLD_MS } from '../config/limits';
+import { EDIT_DETECT_FACES, LIVE_DETECT_FACES, LOST_HOLD_MS } from '../config/limits';
 import { splitLegacy } from '../edit/legacy';
 import { defaultPhoto, naturalPerson, neutralPerson } from '../edit/state';
 import { applyPreset } from '../engine/params';
@@ -9,7 +9,7 @@ import { normalizedCropRect } from '../ui/imaging';
 import type { LiveTrackView } from './faceTracks';
 import { AUTO_TIER, FACE_EASE_MS } from './liveCore';
 import { LivePersons } from './livePersons';
-import { type LiveDeps, type LiveStats, autoTierSession, liveFrame, resetAutoTierSession, startLiveLoop } from './live';
+import { type LiveDeps, type LiveStats, autoTierSession, liveFrame, liveRoute, resetAutoTierSession, startLiveLoop } from './live';
 import {
   type FakeTracker,
   FakeVideo,
@@ -51,8 +51,6 @@ function setup(
     facing?: Facing;
     /** LiveDeps.getFrame */
     frame?: () => Rect;
-    /** LiveDeps.group */
-    group?: boolean;
     /** the tracker's full-range detector is in before the loop starts */
     fullRange?: boolean;
   } = {},
@@ -73,7 +71,6 @@ function setup(
     getPhoto: () => look.photo,
     getPrefs: () => p,
     getFrame: opts.frame,
-    group: opts.group,
     onStats: (s) => stats.push(s),
   };
   const loop = startLiveLoop(deps);
@@ -545,11 +542,10 @@ describe('rVFC watchdog', () => {
 
 describe('the live loop on persons (camera per-person spec §8, §7.5)', () => {
   const fresh = () => new LivePersons();
-  // the two-face tests run the group path off: they check the loop on persons over VIDEO detections, which the front
-  // camera's second face would otherwise move to the group path (K18; its own describe below)
+  // 合照模式 off (the default prefs): the loop on persons over VIDEO detections; the group path has its own describe below
   it('each face renders its own person: the edited one at its params, the untouched one at 原圖 and weight 0', () => {
     const persons = fresh();
-    const { engine, loop } = setup({ faces: 2, persons, group: false });
+    const { engine, loop } = setup({ faces: 2, persons });
     vi.advanceTimersByTime(300);
     const right = loop.tracks().find((v) => v.box.x > 0.5)!;
     persons.write([right.person], naturalPerson());
@@ -600,9 +596,9 @@ describe('the live loop on persons (camera per-person spec §8, §7.5)', () => {
   });
   it.each([true, false])('Review Focus #1: a flip (session ended first: %s) never hands a front-camera person to the back camera', (ended) => {
     const persons = fresh();
-    // the group path off: the back camera's stream stays on VIDEO, where the fake answers faces (the session is what
-    // this checks; the group path's own back-camera start is tested below)
-    const { camera, loop } = setup({ persons, group: false });
+    // 合照模式 off: the back camera's stream stays on VIDEO, where the fake answers faces (the session is what this
+    // checks; the group path's own back-camera start is tested below)
+    const { camera, loop } = setup({ persons });
     vi.advanceTimersByTime(300);
     persons.write([loop.tracks()[0].person], naturalPerson());
     if (ended) persons.clear();
@@ -614,7 +610,7 @@ describe('the live loop on persons (camera per-person spec §8, §7.5)', () => {
   });
   it('select pins a person; capture hands over every edited person in view and the seed of the target, or all', () => {
     const persons = fresh();
-    const { loop } = setup({ faces: 2, persons, group: false });
+    const { loop } = setup({ faces: 2, persons });
     vi.advanceTimersByTime(600);
     const right = loop.tracks().find((t) => t.box.x > 0.5)!;
     expect(loop.hitTest(right.box.x + right.box.w / 2, 0.5, 0.01, 0.01)).toBe(right.person);
@@ -632,7 +628,7 @@ describe('the live loop on persons (camera per-person spec §8, §7.5)', () => {
   });
   it('debug: boxes carry c{n} and edited; selected is the target track; passes are the last frame’s; LiveStats.target is emitted at once', () => {
     const persons = fresh();
-    const { loop, stats, engine } = setup({ faces: 2, persons, group: false });
+    const { loop, stats, engine } = setup({ faces: 2, persons });
     engine.render.mockImplementation((i) => ({ cpuMs: 0, width: i.width, height: i.height, passes: ['composite'] }));
     vi.advanceTimersByTime(600);
     const d = dbg()!;
@@ -676,8 +672,20 @@ function viewDetect(t: FakeTracker, xs: () => readonly number[], clock?: { work(
 }
 const whole = (): Rect => ({ x: 0, y: 0, w: 1, h: 1 });
 
-describe('the group path in the live loop (§6.3, §6.4, §6.6, K13, K18)', () => {
-  // LIVE_GROUP is false since 2026-10-22 (PGN failed, spec §10): every group-path test asks for it (deps.group true)
+describe('liveRoute: the path and graph of a stream by 合照模式 and facing (camera per-person spec §6.3, K22)', () => {
+  it('off: one VIDEO pass over the whole frame on the facing’s detector (the solo path; option C on the back camera)', () => {
+    expect(liveRoute('user', false)).toEqual({ path: 'solo', mode: 'VIDEO', detector: 'camera' });
+    expect(liveRoute('environment', false)).toEqual({ path: 'solo', mode: 'VIDEO', detector: 'photo' });
+  });
+  it('on: the group path’s IMAGE calls on both cameras, on the facing’s detector (no wait for a second face, K18 replaced)', () => {
+    expect(liveRoute('user', true)).toEqual({ path: 'group', mode: 'IMAGE', detector: 'camera' });
+    expect(liveRoute('environment', true)).toEqual({ path: 'group', mode: 'IMAGE', detector: 'photo' });
+  });
+});
+
+describe('the group path in the live loop (§6.3, §6.4, §6.6, K13, K22)', () => {
+  // 合照模式 (prefs.groupMode, K22) picks the path: off by default (option C), on in every group-path test
+  const on = { groupMode: true };
   let xs: number[];
   let orig: typeof adapt | undefined;
   beforeEach(() => {
@@ -689,8 +697,8 @@ describe('the group path in the live loop (§6.3, §6.4, §6.6, K13, K18)', () =
   afterEach(() => {
     vi.mocked(adapt).mockImplementation(orig!);
   });
-  it('the back camera starts on the group path: IMAGE calls on the views at EDIT_DETECT_FACES with the full-range detector', () => {
-    const { tracker, loop } = setup({ facing: 'environment', frame: whole, fullRange: true, group: true });
+  it('合照模式 on: the back camera starts on the group path: IMAGE calls on the views at EDIT_DETECT_FACES with the full-range detector', () => {
+    const { tracker, loop } = setup({ facing: 'environment', frame: whole, fullRange: true, prefs: on });
     viewDetect(tracker!, () => xs);
     vi.advanceTimersByTime(1000);
     expect(tracker!.detectVideo).not.toHaveBeenCalled();
@@ -701,30 +709,22 @@ describe('the group path in the live loop (§6.3, §6.4, §6.6, K13, K18)', () =
     expect(loop.tracks()).toHaveLength(2);
     loop.stop();
   });
-  it('the front camera: solo until a second face, then group; solo again LIVE_SOLO_AFTER_MS after the group thins to one; persons carry over', () => {
-    const { tracker, loop } = setup({ frame: whole, group: true });
+  it('合照模式 on: the front camera runs the group path from its first frame, one face included, and stays on it (K22 replaces K18’s wait and return)', () => {
+    const { tracker, loop } = setup({ frame: whole, prefs: on });
     xs = [0.25];
-    tracker!.detectVideo.mockImplementation(() => xs.map(lmX));
     viewDetect(tracker!, () => xs);
     vi.advanceTimersByTime(500);
-    expect([dbg()!.livePath, tracker!.detectView.mock.calls.length]).toEqual(['solo', 0]);
-    const p = loop.tracks()[0].person;
-    xs = [0.25, 0.75];
-    vi.advanceTimersByTime(100);
+    expect(tracker!.detectVideo).not.toHaveBeenCalled();
+    expect(tracker!.detectView.mock.calls[0][1]).toEqual({ maxFaces: EDIT_DETECT_FACES, detector: 'camera' });
+    expect(dbg()).toMatchObject({ livePath: 'group', liveDetector: 'short-range' });
+    expect(loop.tracks()).toHaveLength(1);
+    vi.advanceTimersByTime(10_000);
     expect(dbg()!.livePath).toBe('group');
-    expect(loop.tracks().some((t) => t.person === p)).toBe(true);
-    xs = [0.25];
-    vi.advanceTimersByTime(LIVE_SOLO_AFTER_MS + 500); // the 0.75 track drops after LOST_HOLD_MS, then the 5 s count
-    expect(dbg()!.livePath).toBe('group');
-    vi.advanceTimersByTime(1100);
-    expect(dbg()!.livePath).toBe('solo');
-    expect(loop.tracks().map((t) => t.person)).toEqual([p]);
+    expect(tracker!.detectVideo).not.toHaveBeenCalled();
     loop.stop();
   });
-  it('the front camera: a second face the visible crop does not hold whole never starts the group path (A1, K18, §6.6); a crop that holds it does', () => {
-    let frame = normalizedCropRect(1280, 720, 3 / 4); // x 0.289–0.711
-    const { tracker, loop } = setup({ frame: () => frame, group: true });
-    xs = [0.5, 0.1]; // the 0.5 face inside the crop; the 0.1 face (box x −0.1–0.3) outside it but for a sliver cut by its edge
+  it('合照模式 off: a second face never moves the front camera to the group path (the user’s choice, K22)', () => {
+    const { tracker, loop } = setup({ frame: whole });
     tracker!.detectVideo.mockImplementation(() => xs.map(lmX));
     viewDetect(tracker!, () => xs);
     const paths = new Set<string | undefined>();
@@ -734,35 +734,73 @@ describe('the group path in the live loop (§6.3, §6.4, §6.6, K13, K18)', () =
     }
     expect([...paths]).toEqual(['solo']);
     expect(tracker!.detectView).not.toHaveBeenCalled();
-    expect(loop.tracks()).toHaveLength(2); // the solo path's VIDEO call still tracks both on the whole frame
-    frame = whole();
-    vi.advanceTimersByTime(100);
-    expect(dbg()!.livePath).toBe('group');
     expect(loop.tracks()).toHaveLength(2);
     loop.stop();
   });
-  it('one face never leaves the solo path (A1): detectVideo every frame with the camera bundle, never detectView', () => {
-    const { tracker, loop } = setup({ group: true });
+  it('one face with 合照模式 off never leaves the solo path (A1): detectVideo every frame with the camera bundle, never detectView', () => {
+    const { tracker, loop } = setup();
     vi.advanceTimersByTime(33 * 300 + 1);
     expect(tracker!.detectVideo).toHaveBeenCalledTimes(300);
     expect(tracker!.detectVideo.mock.calls.every((c) => c[2].detector === 'camera' && c[2].maxFaces === LIVE_DETECT_FACES)).toBe(true);
     expect(tracker!.detectView).not.toHaveBeenCalled();
     loop.stop();
   });
-  it('LIVE_GROUP off (deps.group false): option C, VIDEO on every facing with LIVE_DETECTOR’s bundle', () => {
-    const back = setup({ facing: 'environment', group: false, fullRange: true });
+  it('合照模式 off (the default prefs): option C, VIDEO on every facing with LIVE_DETECTOR’s bundle', () => {
+    const back = setup({ facing: 'environment', fullRange: true });
     vi.advanceTimersByTime(200);
     expect(back.tracker!.detectVideo.mock.calls.at(-1)![2]).toEqual({ maxFaces: LIVE_DETECT_FACES, detector: 'photo' });
     expect(back.tracker!.detectView).not.toHaveBeenCalled();
+    expect(dbg()).toMatchObject({ livePath: 'solo', liveDetector: 'full-range', liveViews: [] });
     back.loop.stop();
     back.video.halt();
-    const front = setup({ group: false });
+    const front = setup();
     vi.advanceTimersByTime(200);
     expect(front.tracker!.detectVideo.mock.calls.at(-1)![2]).toEqual({ maxFaces: LIVE_DETECT_FACES, detector: 'camera' });
     front.loop.stop();
   });
+  it.each(['user', 'environment'] as const)(
+    'toggling 合照模式 mid-stream (%s) moves the path on the next frame, both ways; every track keeps its person, every person their params, nobody swapped',
+    (facing) => {
+      const persons = new LivePersons();
+      const { tracker, loop, setPrefs } = setup({ facing, frame: whole, fullRange: true, persons });
+      tracker!.detectVideo.mockImplementation(() => xs.map(lmX));
+      viewDetect(tracker!, () => xs);
+      vi.advanceTimersByTime(500);
+      expect(dbg()!.livePath).toBe('solo');
+      const byX = () => Object.fromEntries(loop.tracks().map((t) => [Math.round((t.box.x + t.box.w / 2) * 4) / 4, t.person]));
+      const before = byX();
+      const left = before[0.25];
+      const right = before[0.75];
+      expect([left, right].every((id) => id !== undefined)).toBe(true);
+      loop.select(right);
+      persons.edit(naturalPerson());
+      const check = () => {
+        expect(byX()).toEqual(before);
+        expect(persons.params(right)).toEqual(naturalPerson());
+        expect(persons.edited(left)).toBe(false);
+        expect(loop.selection()).toBe(right);
+        expect(loop.tracks().every((t) => t.present)).toBe(true);
+      };
+      const views = tracker!.detectView.mock.calls.length;
+      setPrefs({ groupMode: true });
+      vi.advanceTimersByTime(34);
+      expect(dbg()!.livePath).toBe('group');
+      expect(dbg()!.liveViews![0]).toBe('whole');
+      expect(tracker!.detectView.mock.calls.length).toBeGreaterThan(views);
+      vi.advanceTimersByTime(2000);
+      check();
+      const videos = tracker!.detectVideo.mock.calls.length;
+      setPrefs({ groupMode: false });
+      vi.advanceTimersByTime(34);
+      expect(dbg()).toMatchObject({ livePath: 'solo', liveViews: [] });
+      expect(tracker!.detectVideo.mock.calls.length).toBeGreaterThan(videos);
+      vi.advanceTimersByTime(2000);
+      check();
+      loop.stop();
+    },
+  );
   it('the detector is fixed per stream session: a full-range download landing mid-stream is used from the next session', () => {
-    const { tracker, camera, loop } = setup({ facing: 'environment', frame: whole, group: true });
+    const { tracker, camera, loop } = setup({ facing: 'environment', frame: whole, prefs: on });
     viewDetect(tracker!, () => xs);
     vi.advanceTimersByTime(200);
     expect(tracker!.detectView.mock.calls.at(-1)![1].detector).toBe('camera');
@@ -776,7 +814,7 @@ describe('the group path in the live loop (§6.3, §6.4, §6.6, K13, K18)', () =
     loop.stop();
   });
   it('cadence: two faces and a 64 ms detection skip frames (every 5 at R 5 ms); one face detects every frame', () => {
-    const { tracker, engine, clock, loop } = setup({ facing: 'environment', frame: whole, group: true });
+    const { tracker, engine, clock, loop } = setup({ facing: 'environment', frame: whole, prefs: on });
     viewDetect(tracker!, () => xs, clock, 64);
     engine.cost = 5;
     vi.advanceTimersByTime(3000);
@@ -797,7 +835,7 @@ describe('the group path in the live loop (§6.3, §6.4, §6.6, K13, K18)', () =
     expect(solo.tracker!.detectVideo.mock.calls.length).toBe(n + 1);
     solo.loop.stop();
     solo.video.halt();
-    const group = setup({ facing: 'environment', frame: whole, group: true });
+    const group = setup({ facing: 'environment', frame: whole, prefs: on });
     viewDetect(group.tracker!, () => xs);
     vi.advanceTimersByTime(500);
     group.video.currentTime += 1 / 30; // a frame newer than the last detection
@@ -808,7 +846,7 @@ describe('the group path in the live loop (§6.3, §6.4, §6.6, K13, K18)', () =
   });
   it('Review Focus #2: a ratio change on the group path drops the faces outside the new crop within LOST_HOLD_MS and keeps the others', () => {
     let frame = whole();
-    const { tracker, loop } = setup({ facing: 'environment', frame: () => frame, group: true });
+    const { tracker, loop } = setup({ facing: 'environment', frame: () => frame, prefs: on });
     xs = [0.25, 0.5];
     viewDetect(tracker!, () => xs);
     vi.advanceTimersByTime(500);
@@ -820,7 +858,7 @@ describe('the group path in the live loop (§6.3, §6.4, §6.6, K13, K18)', () =
   });
   it('Review Focus #4: an IMAGE call that throws, then no answer (null: an instance being replaced, the rebuild throttle), holds every track, person and the pin; drawing goes on; detection resumes on the same persons', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    const { tracker, engine, loop } = setup({ facing: 'environment', frame: whole, group: true });
+    const { tracker, engine, loop } = setup({ facing: 'environment', frame: whole, prefs: on });
     viewDetect(tracker!, () => xs);
     vi.advanceTimersByTime(500);
     const before = loop.tracks().map((t) => t.person).sort();
@@ -847,7 +885,7 @@ describe('the group path in the live loop (§6.3, §6.4, §6.6, K13, K18)', () =
 
 describe('live loop on face tracks (S §3.3 Live camera, §3.4 T4)', () => {
   it('LiveStats.faces counts the shown tracks', () => {
-    const { stats, loop } = setup({ faces: 2, group: false }); // VIDEO detections (the group path is tested above)
+    const { stats, loop } = setup({ faces: 2 }); // VIDEO detections, 合照模式 off (the group path is tested above)
     vi.advanceTimersByTime(600);
     expect(stats.at(-1)!.faces).toBe(2);
     loop.stop();

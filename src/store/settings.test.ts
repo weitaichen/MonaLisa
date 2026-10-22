@@ -13,8 +13,9 @@ import {
   EXPORT_DEBUG_KEY,
   EXPORT_GUARD_KEY,
   exportCapped,
+  GROUP_MODE_HINT_KEY,
+  GROUP_MODE_ON_KEY,
   hasSavedSettings,
-  LIVE_DEBUG_KEY,
   loadLook,
   loadMakeupPartsSeen,
   loadParams,
@@ -25,7 +26,6 @@ import {
   PREFS_KEY,
   readExportDebug,
   readExportGuard,
-  readLiveDebug,
   sanitizePrefs,
   saveLook,
   saveMakeupPartsSeen,
@@ -33,6 +33,8 @@ import {
   savePrefs,
   SEEN_MAKEUP_PARTS_KEY,
   takeCameraPersonsHint,
+  takeGroupModeHint,
+  takeGroupModeOnToast,
   takePersonsHint,
   VERSION_KEY,
   writeExportGuard,
@@ -221,6 +223,7 @@ describe('loadPrefs / savePrefs', () => {
       installHintDismissed: true,
       exportFormat: 'png',
       exportSize: 'standard',
+      groupMode: true,
     };
     savePrefs(p);
     expect([...store.map.keys()]).toEqual([PREFS_KEY]);
@@ -512,20 +515,48 @@ describe('export prefs and keys (step 3)', () => {
   });
 });
 
-describe('the live loop test knob (camera per-person spec §12.2: the override of LIVE_GROUP)', () => {
-  it('reads { group: false } from meiyan.debug.live.v1; {} for nothing stored, junk or no storage', () => {
-    expect(LIVE_DEBUG_KEY).toBe('meiyan.debug.live.v1');
-    expect(readLiveDebug()).toEqual({});
-    store.setItem(LIVE_DEBUG_KEY, JSON.stringify({ group: false }));
-    expect(readLiveDebug()).toEqual({ group: false });
-    store.setItem(LIVE_DEBUG_KEY, JSON.stringify({ group: true }));
-    expect(readLiveDebug()).toEqual({ group: true });
-    for (const junk of ['not json', '[false]', 'false', JSON.stringify({ group: 'off' }), JSON.stringify({ path: 'solo' })]) {
-      store.setItem(LIVE_DEBUG_KEY, junk);
-      expect(readLiveDebug()).toEqual({});
+describe('合照模式 (camera per-person spec K22): a camera setting in meiyan.prefs.v1, off by default', () => {
+  it('is off by default and for prefs saved before it existed (0.6.0 without the field); on round-trips', () => {
+    expect(DEFAULT_PREFS.groupMode).toBe(false);
+    expect(loadPrefs().groupMode).toBe(false);
+    store.setItem(PREFS_KEY, JSON.stringify({ mirrorOnSave: false, tier: 'M', delegate: 'CPU', exportFormat: 'png' }));
+    expect(loadPrefs()).toEqual({ ...DEFAULT_PREFS, mirrorOnSave: false, tier: 'M', delegate: 'CPU', exportFormat: 'png', groupMode: false });
+    savePrefs({ ...loadPrefs(), groupMode: true });
+    expect(loadPrefs().groupMode).toBe(true);
+    expect((JSON.parse(store.getItem(PREFS_KEY)!) as Prefs).groupMode).toBe(true);
+    savePrefs({ ...loadPrefs(), groupMode: false });
+    expect(loadPrefs().groupMode).toBe(false);
+  });
+
+  it('a wrongly-typed value is off; the other fields are kept', () => {
+    for (const v of ['true', 1, null, {}, []]) {
+      store.setItem(PREFS_KEY, JSON.stringify({ tier: 'H', groupMode: v }));
+      expect(loadPrefs()).toEqual({ ...DEFAULT_PREFS, tier: 'H' });
     }
+  });
+
+  it('the first turn-on toast is true exactly once per install, under its own key', () => {
+    expect(GROUP_MODE_ON_KEY).toBe('meiyan.hint.groupModeOn.v1');
+    expect(takeCameraPersonsHint()).toBe(true);
+    expect(takeGroupModeOnToast()).toBe(true);
+    expect(store.getItem(GROUP_MODE_ON_KEY)).not.toBeNull();
+    expect(takeGroupModeOnToast()).toBe(false);
+  });
+
+  it('the 合照模式 hint is true exactly once per install, and never once the mode was turned on (its toast taken)', () => {
+    expect(GROUP_MODE_HINT_KEY).toBe('meiyan.hint.groupMode.v1');
+    expect(takeGroupModeHint()).toBe(true);
+    expect(takeGroupModeHint()).toBe(false);
+    store.clear();
+    expect(takeGroupModeOnToast()).toBe(true);
+    expect(takeGroupModeHint()).toBe(false);
+  });
+
+  it('both are false when storage drops writes or throws (private mode would repeat them in every camera session)', () => {
+    vi.spyOn(store, 'setItem').mockImplementation(() => undefined);
+    expect([takeGroupModeOnToast(), takeGroupModeHint()]).toEqual([false, false]);
     stubThrowingGetter();
-    expect(readLiveDebug()).toEqual({});
+    expect([takeGroupModeOnToast(), takeGroupModeHint()]).toEqual([false, false]);
   });
 });
 

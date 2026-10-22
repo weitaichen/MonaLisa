@@ -786,6 +786,13 @@ export interface Prefs {
   exportFormat: ExportFormat;
   /** 設定 › 輸出解析度 (step 3): the stored choice; a block shows 標準 without changing it */
   exportSize: ExportSize;
+  /**
+   * the camera's 合照模式 (camera per-person spec K22, §6.3): on → both cameras run the group path (§6.6: far and small
+   * faces of upright group shots are found, the preview may be less smooth with many people); off (the default, and
+   * prefs saved before it existed) → one VIDEO pass over the whole frame per facing (the solo path; option C on the back
+   * camera)
+   */
+  groupMode: boolean;
 }
 
 export interface HistoryEntry {

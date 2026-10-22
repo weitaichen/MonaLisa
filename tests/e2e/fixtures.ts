@@ -261,14 +261,33 @@ export async function cpuDelegate(page: Page, delegate: string = 'CPU'): Promise
   }, delegate);
 }
 
+/** the camera's 合照模式 toggle in its top bar (camera per-person spec K22): a toggle button, aria-pressed */
+export const groupModeButton = (page: Page): Locator => page.getByRole('button', { name: '合照模式', exact: true });
+
 /**
- * The camera's group path on or off whatever LIVE_GROUP ships (camera per-person spec §12.2's test-only override,
- * `meiyan.debug.live.v1 { group }`): on for the group path's own tests since LIVE_GROUP is false (2026-10-22, PGN failed,
- * §10), off for option C's. A later call wins. An init script: call before page.goto.
+ * 合照模式 on or off as the user does it, a tap on the camera's toggle (a camera setting, kept in meiyan.prefs.v1): on
+ * runs the group path on both cameras, off (the default) one VIDEO pass (K22). The live loop moves on its next frame
  */
-export async function liveGroup(page: Page, on: boolean): Promise<void> {
-  await page.addInitScript((group: boolean) => localStorage.setItem('meiyan.debug.live.v1', JSON.stringify({ group })), on);
+export async function setGroupMode(page: Page, on: boolean): Promise<void> {
+  const b = groupModeButton(page);
+  if ((await b.getAttribute('aria-pressed')) !== String(on)) await b.click();
+  await expect(b).toHaveAttribute('aria-pressed', String(on));
 }
+
+/** every toast text shown from now on (a hint lasts 3.2 s, a face-count poll can outlive it); call after page.goto */
+export const watchToasts = (page: Page): Promise<void> =>
+  page.evaluate(() => {
+    const w = window as unknown as { __toasts: string[] };
+    w.__toasts = [];
+    const scan = () => {
+      for (const el of document.querySelectorAll('.toast')) {
+        const t = (el.textContent ?? '').trim();
+        if (t && w.__toasts.at(-1) !== t) w.__toasts.push(t);
+      }
+    };
+    new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+export const toastsSeen = (page: Page): Promise<string[]> => page.evaluate(() => (window as unknown as { __toasts: string[] }).__toasts);
 
 /**
  * The unprocessed frame the camera hands to 編輯 (grabOriginalFrame: createImageBitmap of a 2D canvas), copied to

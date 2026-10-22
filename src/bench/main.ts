@@ -112,6 +112,7 @@ const prefs: Prefs = {
   installHintDismissed: true,
   exportFormat: 'jpeg',
   exportSize: 'full',
+  groupMode: false,
 };
 
 let mode: Mode = 'skin+shape';

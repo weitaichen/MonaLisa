@@ -1,10 +1,11 @@
 // OWNER: app-glue agent. Live camera loop: rVFC → detect → adapt → render, face easing, auto-tier, debug state.
 // Each tracked face renders its own camera person (camera per-person spec §8): the session (LivePersons) is the
 // caller's, so a loop rebuilt on a new stream or bundle keeps everyone; pause and stop release the tracks into its away
-// pool (§7.5). Detection runs one of two paths per stream (§6.3, §6.6): the solo path (VIDEO on the whole frame, v0.5's
-// selfie path, A1) or the group path (IMAGE calls on fixed views of the visible crop), at the cadence of §6.4; the
-// shutter's frame gets its own detection when the last one is older (K13).
-import { EDIT_DETECT_FACES, LIVE_DETECT_FACES, LIVE_DETECTOR, LIVE_GROUP, LIVE_SOLO_AFTER_MS, MAX_LIVE_FACES, MAX_RENDER_FACES } from '../config/limits';
+// pool (§7.5). Detection runs one of two paths (§6.3, §6.6), the one 合照模式 picks (prefs.groupMode, K22, read every
+// frame): the solo path (VIDEO on the whole frame, v0.5's selfie path, A1; option C on the back camera) or the group path
+// (IMAGE calls on fixed views of the visible crop), at the cadence of §6.4; the shutter's frame gets its own detection
+// when the last one is older (K13).
+import { EDIT_DETECT_FACES, LIVE_DETECT_FACES, LIVE_DETECTOR, MAX_LIVE_FACES, MAX_RENDER_FACES } from '../config/limits';
 import { gpLeftOnLeft } from '../edit/sides';
 import { neutralPerson } from '../edit/state';
 import { photoLuts } from '../engine/looks';
@@ -30,7 +31,7 @@ import { FaceTracks, type CameraSelection, type LiveTrackView } from './faceTrac
 import { createVideoFrameSource, type FrameInfo, type FrameSource } from './frameSource';
 import { AutoTier, DetectCadence, TimeEma, cadenceSample, effectiveEvery, frameCost, nextLowerTier, skippedFrames } from './liveCore';
 import type { LivePersonId, LivePersons } from './livePersons';
-import { holdsWhole, layoutViews, mapLandmarks, refreshViews, ViewSchedule, viewScope, type LiveView, type ViewLayout } from './liveViews';
+import { layoutViews, mapLandmarks, refreshViews, ViewSchedule, viewScope, type LiveView, type ViewLayout } from './liveViews';
 
 export interface LiveStats {
   fps: number;
@@ -85,6 +86,7 @@ export interface LiveDeps {
   persons: LivePersons;
   /** the photo look (濾鏡, 調節, 質感, 美白, 銳化: the whole frame, K2) */
   getPhoto: () => PhotoParams;
+  /** read every frame: the engine options, the tier, and 合照模式 (`groupMode`: the path, liveRoute, K22) */
   getPrefs: () => Prefs;
   /**
    * step 2: the picture the shutter keeps, as normalized source UV (the ratio's centre crop, Camera.tsx); read every
@@ -92,8 +94,6 @@ export interface LiveDeps {
    * inside it (the visible crop, §6.6).
    */
   getFrame?: () => Rect;
-  /** the group path (§6.6); default LIVE_GROUP. false: every stream runs one VIDEO pass with its facing's detector (option C, §6.3) */
-  group?: boolean;
   onStats?: (s: LiveStats) => void;
 }
 
@@ -182,6 +182,18 @@ export function liveFrame(
   };
 }
 
+/**
+ * The path and graph of a stream (camera per-person spec §6.3, K22): 合照模式 on → the group path, IMAGE calls on the
+ * views of §6.6, on either camera from its first frame; off → the solo path, one VIDEO pass over the whole frame (v0.5's
+ * selfie path on the front camera, option C on the back). Either path runs the facing's detector (LIVE_DETECTOR: a
+ * mode switch between the paths, never a bundle switch). MAX_LIVE_FACES = 1 has no group path. The camera warms the
+ * graph a new stream's first detection runs with it (Camera.tsx warmAfterPaint); the loop takes its path from it.
+ */
+export function liveRoute(facing: Facing, groupMode: boolean): { path: 'solo' | 'group'; mode: 'VIDEO' | 'IMAGE'; detector: FaceDetectorKind } {
+  const group = groupMode && MAX_LIVE_FACES > 1;
+  return { path: group ? 'group' : 'solo', mode: group ? 'IMAGE' : 'VIDEO', detector: LIVE_DETECTOR[facing] };
+}
+
 export function startLiveLoop(deps: LiveDeps): LiveLoop {
   const { camera, engine, tracker, persons } = deps;
   const video = camera.video;
@@ -204,12 +216,10 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
   let compare = false;
   let paused = true;
   let detectedLastFrame = false;
-  /** per stream session (resetSession, §6.3): the detector of both paths, whether the group path may run, the path now */
+  /** per stream session (resetSession, §6.3): the detector of both paths */
   let detector: FaceDetectorKind = 'camera';
-  let group = false;
+  /** the path 合照模式 picked, synced every frame (syncPath, K22) */
   let path: 'solo' | 'group' = 'solo';
-  /** the front camera's group path has shown at most one face since (→ the solo path after LIVE_SOLO_AFTER_MS, K18) */
-  let soloSince: number | null = null;
   /** frames since the last detection (Infinity: the next frame detects) */
   let sinceDetect = Infinity;
   /** frames per detection of the last frame (§6.4) */
@@ -273,6 +283,7 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
 
     const prefs = deps.getPrefs();
     const photo = deps.getPhoto();
+    syncPath(liveRoute(facing, prefs.groupMode).path);
     syncOptions(prefs, facing === 'user');
     syncTier(prefs.tier);
     ensureLuts(photo);
@@ -326,47 +337,29 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
   }
 
   /**
-   * One detection (§6.3, §6.6): the solo path's VIDEO call, or the group path's next view. The front camera moves to the
-   * group path on the solo path's first frame that finds a second face in view (the next call is the whole view), and
-   * back after LIVE_SOLO_AFTER_MS with at most one face shown (K18); the tracks carry over both ways.
+   * 合照模式 toggled (K22): the stream moves to the path it picks on this frame, and this frame detects on it (the group
+   * path's first call is the whole view). The tracks carry over both ways (their boxes are in stream UV), so every
+   * person keeps their params and selection; the solo path's VIDEO graph finds the faces again on its first call (a held
+   * track is continued, §7.3 item 4). One graph rebuild on a live frame, the mode switch (PGS, §10).
    */
+  function syncPath(want: 'solo' | 'group'): void {
+    if (want === path) return;
+    path = want;
+    schedule.reset();
+    viewIds = [];
+    sinceDetect = Infinity;
+  }
+
+  /** One detection (§6.3, §6.6): the solo path's VIDEO call, or the group path's next view */
   function detectOnce(t: Tracker, now: number, w: number, h: number, facing: Facing): void {
     if (path === 'solo') {
       tracks.detect(detectVideo(t), now, w, h);
-      // presentCount first: a lone selfie's frame pays nothing more (A1)
-      if (group && facing === 'user' && tracks.presentCount() >= 2 && presentInView(layoutOf(w, h, facing)) >= 2) {
-        path = 'group';
-        schedule.reset();
-        soloSince = null;
-      }
       return;
     }
     const lay = layoutOf(w, h, facing);
     const refresh = refreshOf(lay, now);
     viewIds = refresh.map((v) => v.id);
     viewCall(t, schedule.next(lay, refresh, tracks.views().length), lay, now, w, h);
-    if (facing !== 'user') return;
-    if (tracks.views().length > 1) soloSince = null;
-    else {
-      soloSince ??= now;
-      if (now - soloSince >= LIVE_SOLO_AFTER_MS) {
-        path = 'solo';
-        soloSince = null;
-        viewIds = [];
-      }
-    }
-  }
-
-  /**
-   * The solo path's found tracks that the visible crop holds whole: the faces the group path can keep (§6.6: a face
-   * outside the crop is not in view; the whole view matches only what it holds whole, and one cut by its edge starts
-   * nothing). The solo path's VIDEO call sees the whole frame, so a face beside the crop would otherwise start a group
-   * path that drops it within LOST_HOLD_MS and returns to solo LIVE_SOLO_AFTER_MS later, over and over (A1, K18).
-   */
-  function presentInView(lay: ViewLayout): number {
-    let n = 0;
-    for (const v of tracks.views()) if (v.present && holdsWhole(lay.whole, v.box, lay)) n++;
-    return n;
   }
 
   /** the solo path's call: null = no answer (the throw is reported), so a hiccup never drops a track (A5) */
@@ -469,9 +462,9 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
   /**
    * New measurement window + fresh face state (start, resume, flip / resolution change): the tracks' persons go to the
    * away pool, then the session resumes on this facing (another facing ends it; its clock skips the paused span, §7.5).
-   * The stream session's detector and path are fixed here (§6.3): 'photo' only on a facing whose LIVE_DETECTOR is it and
-   * once the full-range detector is in, so a download landing mid-stream never rebuilds the graph under the preview;
-   * MAX_LIVE_FACES = 1 has no group path; the back camera starts on it, the front camera on the solo path.
+   * The stream session's detector is fixed here (§6.3): 'photo' only on a facing whose LIVE_DETECTOR is it and once the
+   * full-range detector is in, so a download landing mid-stream never rebuilds the graph under the preview. The path is
+   * 合照模式's, synced on every frame (syncPath).
    */
   function resetSession(geo: string, now: number, facing: Facing): void {
     paused = false;
@@ -480,11 +473,8 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
     persons.resume(now, facing);
     sides = null;
     detector = tracker && LIVE_DETECTOR[facing] === 'photo' && tracker.photoDetector === 'full-range' ? 'photo' : 'camera';
-    group = (deps.group ?? LIVE_GROUP) && MAX_LIVE_FACES > 1;
-    path = group && facing === 'environment' ? 'group' : 'solo';
     cadence.reset();
     schedule.reset();
-    soloSince = null;
     sinceDetect = Infinity;
     lastDetectMedia = NaN;
     viewIds = [];

@@ -373,6 +373,7 @@ export function prefs(over: Partial<Prefs> = {}): Prefs {
     installHintDismissed: false,
     exportFormat: 'jpeg',
     exportSize: 'full',
+    groupMode: false,
     ...over,
   };
 }

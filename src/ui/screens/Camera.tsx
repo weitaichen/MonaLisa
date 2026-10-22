@@ -3,15 +3,14 @@
 // 美體 is photo-only for now (body research report P1): the tab is shown with every item off and a note.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { cameraTapAction, ChipGate, coverTapUv } from '../../app/faceTracks';
-import type { LiveLoop, LiveStats } from '../../app/live';
+import { liveRoute, type LiveLoop, type LiveStats } from '../../app/live';
 import type { LivePersonId } from '../../app/livePersons';
-import { LIVE_DETECTOR, LIVE_GROUP } from '../../config/limits';
 import type { CameraController, CameraSnapshot, EditState, Facing } from '../../types';
 import { lensFor, LIVE_PERSONS, type Lens, type PersonInfo } from '../../edit/lens';
 import { handOverOf } from '../../edit/migrate';
 import { cameraScreenSwap } from '../../edit/sides';
 import { cameraEdit, LIVE, neutralPerson, personOf } from '../../edit/state';
-import { takeCameraPersonsHint } from '../../store/settings';
+import { takeCameraPersonsHint, takeGroupModeHint, takeGroupModeOnToast } from '../../store/settings';
 import { cameraErrorCopy } from '../cameraErrors';
 import { beginDrag, cameraSession, endCameraSession, keepDrag, panelPerson, writePerson, type CameraDrag } from '../cameraSession';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
@@ -24,12 +23,13 @@ import { Status } from '../components/Status';
 import { reportError } from '../debug';
 import { deps } from '../deps';
 import { openInEditor, pickPhoto } from '../flows';
+import { GROUP_MODE_LABEL, groupSceneHints, toggleGroupMode, warmsOnStart } from '../groupMode';
 import { Icon } from '../icons';
 import { cropImageData, grabOriginalFrame, normalizedCropRect, shotPersons, shotSeed } from '../imaging';
 import { CAMERA_BODY, INITIAL_SELECTION, makeupNote, photoScoped, sliderFor, type BodyContext, type PanelSelection } from '../panelModel';
 import { haptic, isStandalone } from '../platform';
 import { ensureEngine, getCamera, stopCamera, svc } from '../services';
-import { app, go, RATIO_VALUE, RATIOS, setLook, TIMERS, toast } from '../state';
+import { app, go, RATIO_VALUE, RATIOS, setLook, setPrefs, TIMERS, toast } from '../state';
 import { useStore } from '../store';
 import { requestLut, useAdjustFailureNotice, useHold, useLutLoader } from './hooks';
 
@@ -42,12 +42,10 @@ const cameraBody: BodyContext = {
 /** basic-mode notes are announced once per engine bundle, not on every visit */
 let notedBundle: unknown = null;
 
-/** the camera's group path (camera per-person spec §6.6, K17): LIVE_GROUP unless the e2e knob sets it (§12.2: off for option C's tests, on for the group path's own since LIVE_GROUP is false) */
-const liveGroup = (): boolean => deps.readLiveDebug().group ?? LIVE_GROUP;
-
 /**
- * The graph the new stream's first detection runs (§6.3): the back camera's group path IMAGE (the fallback VIDEO), the
- * front camera's solo path VIDEO, each on its facing's detector. Run once the 「正在開啟相機…」 spinner has painted: the
+ * The graph the new stream's first detection runs (§6.3, liveRoute): 合照模式 on, the group path's IMAGE; off, one VIDEO
+ * pass (the front camera's solo path, the back camera's option C); each on its facing's detector. Run once the
+ * 「正在開啟相機…」 spinner has painted: the
  * first full-range inference compiles for 1.1–1.3 s on the desktop GPU (§6.1) and blocks the main thread, so a call
  * inside the tap would freeze the old preview before the spinner shows. When the stream wins the race, its first call
  * pays the compile instead.
@@ -58,7 +56,8 @@ function warmAfterPaint(f: Facing): void {
       try {
         const e = svc.get().engine;
         const tracker = e.state === 'ready' ? e.bundle.tracker : null;
-        tracker?.warm(liveGroup() && f === 'environment' ? 'IMAGE' : 'VIDEO', LIVE_DETECTOR[f]);
+        const r = liveRoute(f, app.get().prefs.groupMode);
+        tracker?.warm(r.mode, r.detector);
       } catch (err) {
         reportError(err, 'tracker.warm');
       }
@@ -96,8 +95,10 @@ export function Camera() {
   const [ring, setRing] = useState<{ person: LivePersonId; at: number } | null>(null);
   /** shown tracks, from LiveStats: redraws the marker when the count changes */
   const [shownFaces, setShownFaces] = useState(0);
-  /** this mount already saw ≥ 2 faces: the one-time hint (§3.1) is asked for once, not on every stats tick */
+  /** this mount already saw ≥ 2 faces: the one-time hints (§3.1, K22) are asked for once, not on every stats tick */
   const sawGroup = useRef(false);
+  /** the second one-time hint, shown after the first (groupSceneHints) */
+  const hintTimer = useRef(0);
   /** LiveStats.gpLeftOnLeft: the tracked face's halves on the unmirrored frame (the 左／右 chips, S5 §3.4) */
   const [gpLeft, setGpLeft] = useState<boolean | null>(null);
 
@@ -193,10 +194,16 @@ export function Camera() {
       // the target or someone's params changed (a tap, a re-identification, the auto pick): the panel re-reads (§3.2)
       setPersonsTick(s.personsVersion);
       setChip(chipGate.current.update(s.faces, app.get().cameraAll, performance.now()));
-      // the first time ≥ 2 faces are shown: 「點選畫面中的臉，可個別調整」 once per install (§3.1, K12)
+      // ≥ 2 faces shown: 「點選畫面中的臉，可個別調整」 the first time (§3.1, K12), then, with 合照模式 off, that it lets
+      // far people be selected (K22); each once per install, the second after the first
       if (s.faces >= 2 && !sawGroup.current) {
         sawGroup.current = true;
-        if (takeCameraPersonsHint()) toast('點選畫面中的臉，可個別調整', 3200);
+        const [first, next] = groupSceneHints(app.get().prefs.groupMode, { persons: takeCameraPersonsHint, groupMode: takeGroupModeHint });
+        if (first) toast(first, 3200);
+        if (next)
+          hintTimer.current = window.setTimeout(() => {
+            if (!app.get().prefs.groupMode && app.get().screen.name === 'camera') toast(next, 3200);
+          }, 3400);
       }
       if (s.face === lastFace) return;
       lastFace = s.face;
@@ -216,7 +223,6 @@ export function Camera() {
         getPrefs: () => prefsRef.current,
         // the picture the shutter keeps (captureFrom crops to the same ratio): vignette, grain and the group path's views follow it
         getFrame: () => normalizedCropRect(ctrl.video.videoWidth, ctrl.video.videoHeight, RATIO_VALUE[app.get().ratio]),
-        group: liveGroup(),
         onStats,
       });
     } catch (e) {
@@ -238,7 +244,13 @@ export function Camera() {
     };
   }, [ctrl, bundle, live]);
 
-  useEffect(() => () => clearInterval(countTimer.current), []);
+  useEffect(
+    () => () => {
+      clearInterval(countTimer.current);
+      clearTimeout(hintTimer.current);
+    },
+    [],
+  );
 
   const hold = useHold((on) => {
     try {
@@ -260,8 +272,8 @@ export function Camera() {
       p = Promise.reject(e);
     }
     p.catch((e: unknown) => setStartErr(reportError(e, 'camera.start')));
-    // a start straight on the back camera warms its graph behind the spinner (§6.3)
-    if (ctrl.snapshot.facing === 'environment') warmAfterPaint('environment');
+    // a start straight on the back camera, or on the front camera with 合照模式 on, warms its graph behind the spinner (§6.3)
+    if (warmsOnStart(ctrl.snapshot.facing, app.get().prefs.groupMode)) warmAfterPaint(ctrl.snapshot.facing);
   };
 
   const close = () => {
@@ -363,6 +375,16 @@ export function Camera() {
     haptic();
     const i = TIMERS.indexOf(timer);
     app.set({ timer: TIMERS[(i + 1) % TIMERS.length] });
+  };
+  /**
+   * 合照模式 (K22): a camera setting (prefs, remembered across launches); the live loop reads it on its next frame and
+   * moves to the path it picks, keeping every person (liveRoute, live.ts syncPath). The first turn-on explains the trade
+   */
+  const toggleGroup = () => {
+    haptic();
+    const r = toggleGroupMode(app.get().prefs.groupMode, takeGroupModeOnToast);
+    setPrefs({ groupMode: r.groupMode });
+    if (r.toast) toast(r.toast, 3200);
   };
   const flip = () => {
     if (!ctrl) return;
@@ -487,6 +509,12 @@ export function Camera() {
               {timer ? `${timer}s` : '關'}
             </span>
           </button>
+          {/* 基本模式 finds no face, so there is no path to pick */}
+          {!bundle?.basic && (
+            <button type="button" class={`chip-btn${prefs.groupMode ? ' on' : ''}`} aria-pressed={prefs.groupMode} onClick={toggleGroup}>
+              <span>{GROUP_MODE_LABEL}</span>
+            </button>
+          )}
         </div>
         <IconButton icon="flip" label="切換鏡頭" onClick={flip} disabled={!live || count !== null} />
       </div>

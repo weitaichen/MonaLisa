@@ -27,8 +27,9 @@ describe('limits (S §3.5)', () => {
     expect(L.FACE_TABLE_CARRIER).toBe('ubo');
     // camera per-person spec §7.3–§7.5 (K7, K8): re-identification gates, the track size gate, the idle limit
     expect([L.REID_GRACE_MS, L.REID_DIST, L.REID_SIZE, L.REID_AMBIGUITY, L.TRACK_SIZE_JUMP, L.LIVE_IDLE_MAX_MS]).toEqual([4000, 1.5, 1.5, 1.25, 1.5, 60_000]);
-    // camera per-person spec §6.3, §6.6 (K17, K18): the group path, its detectors, floors and schedule
-    expect(L.LIVE_GROUP).toBe(true);
+    // camera per-person spec §6.3, §6.6 (K17, K18): the group path, its detectors, floors and schedule. The group path
+    // is off since 2026-10-22: its desktop gate PGN failed (spec §10, §16 item 1), so option C ships (K17's fallback)
+    expect(L.LIVE_GROUP).toBe(false);
     expect(L.LIVE_DETECTOR).toEqual({ user: 'camera', environment: 'photo' });
     expect(L.LIVE_FACE_FLOOR).toEqual({ user: 0.05, environment: 0.03 });
     expect(L.DETECTOR_FLOOR).toEqual({ camera: 0.11, photo: 0.08 });

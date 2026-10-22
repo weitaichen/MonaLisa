@@ -1,9 +1,11 @@
 // E4 (camera per-person spec §12.2, gate PGR, K17, K20): ordinary group shots held upright, 1080 × 1920 clips.
-import { camBox, cpuDelegate, debugState, expect, flipBack, open, test, uprightCamera, within } from './fixtures';
+import { camBox, cpuDelegate, debugState, expect, flipBack, liveGroup, open, test, uprightCamera, within } from './fixtures';
 
 test.beforeEach(async ({ page }) => {
   await uprightCamera(page);
   await cpuDelegate(page, process.env.PGR_DELEGATE ?? 'CPU');
+  // the group path's gate (PGR): asked for, since LIVE_GROUP ships false (2026-10-22, PGN failed, §10)
+  await liveGroup(page, true);
 });
 
 for (const [tag, n] of [
@@ -25,7 +27,7 @@ for (const [tag, n] of [
 }
 
 test('E4 option C on the same layout: one full-range VIDEO pass, the faces it finds recorded for §16 @far10', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('meiyan.debug.live.v1', JSON.stringify({ group: false })));
+  await liveGroup(page, false);
   await open(page);
   await flipBack(page);
   await page.waitForTimeout(5000);

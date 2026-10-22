@@ -2577,19 +2577,19 @@ cd /d/GitSource/MonaLisa && git add src/bench/report.ts src/bench/report.test.ts
 **Interfaces:**
 - Consumes: every row of Task 15, Task 14's E4 tests.
 
-- [ ] **Step 1: PB, the bookkeeping benchmark**
+- [x] **Step 1: PB, the bookkeeping benchmark**
 
 `src/app/faceTracks.bench.test.ts`: `it.runIf(process.env.BENCH)('PB: matching + re-identification + smoother at 10 faces ≤ 1 ms per detection', …)` — a `FaceTracks` on an edited session, 10 `lmAt` faces jittered ±0.002, 50 warm-up and 1000 timed `detect` + `step` calls; `expect(mean).toBeLessThanOrEqual(1)`, the mean printed.
 Run: `cd /d/GitSource/MonaLisa && BENCH=1 npx vitest run src/app/faceTracks.bench.test.ts`
 Expected: PASS, `PB mean ≤ 1 ms` printed. Over → profile (no limit changes, §10 PB).
 
-- [ ] **Step 2: PGR (recall), CPU three runs, GPU three runs**
+- [x] **Step 2: PGR (recall), CPU three runs, GPU three runs**
 
 Run: `npm run build && npx playwright test --project chromium-upright-row3 --project chromium-upright-far10 --project chromium-selfie-group --repeat-each 3 --grep-invert @bench`
 then `PGR_DELEGATE=auto npx playwright test --project chromium-upright-row3 --project chromium-upright-far10 --project chromium-selfie-group --repeat-each 3 --grep-invert @bench --headed`
 Expected: every group-path E4 test passes 3 of 3 on each delegate.
 
-- [ ] **Step 3: PGN, PLB, PJ1G, PGS, PWB on the desktop GPU (headed Chrome) and CPU**
+- [x] **Step 3: PGN, PLB, PJ1G, PGS, PWB on the desktop GPU (headed Chrome) and CPU**
 
 Run, in this order, each on a fresh page (`tests/fixtures/group_pan.y4m` is gitignored and made by no setup: if missing, `node scripts/gen-y4m.mjs --src tests/fixtures/group_faces.png --out tests/fixtures/group_pan.y4m --pan 0.5`, as step 1 made it):
 `node scripts/bench-multiface.mjs --video tests/fixtures/group10.y4m LFC` (option C at 10 faces: each delegate's `longest_ms` is that delegate's PGN bound),
@@ -2600,24 +2600,34 @@ Run, in this order, each on a fresh page (`tests/fixtures/group_pan.y4m` is giti
 `node scripts/bench-multiface.mjs --video tests/fixtures/face.y4m WB` (PWB).
 Expected: verdict rows printed per delegate; PGN, PJ1G pass; PLB ≤ 33 ms; PGS ≤ 250 ms and PWB ≤ 300 ms are reported (no limits line for them, §10).
 
-- [ ] **Step 4: Apply the allowed fixes, or the fallback**
+- [x] **Step 4: Apply the allowed fixes, or the fallback**
 
 A failing desktop gate first gets the fix §10 names, measured again (one change at a time, its numbers in the `limits.ts` comment): PGR → `DETECTOR_FLOOR` margin (`camera: 0.10`, `photo: 0.07`), then the schedule (`LIVE_SCAN_EVERY = 3`); PGN → `LIVE_SCAN_EVERY`, the cadence constants; PJ1G → a group-path smoother constant `ONE_EURO_GROUP` (`minCutoff 0.025`, then `beta 160`; `FaceTracks` uses it for tracks refreshed on the group path). Still failing → `export const LIVE_GROUP = false;` with the failing gate and its numbers in the comment, then `npm run build` and re-run Task 14's option-C tests and E4b's option-C test (they must pass), and write spec §16 item 1's outcome (the gate, by how much, the fallback floors back ≥ ~9 % / front ≥ ~12 % for the release notes). PLB failing → `LIVE_DETECTOR.environment = 'camera'`.
 
-- [ ] **Step 5: PL2 on the solo path**
+- [x] **Step 5: PL2 on the solo path**
 
 Run: `node scripts/bench-multiface.mjs --video tests/fixtures/face.y4m L`
 Expected: a `PL2` row per delegate for the `camera` detector with `verdict pass` (desktop 2026-10-19: Δp50 3.3 ms GPU, 1.6 ms CPU, limit 5).
 
-- [ ] **Step 6: Record**
+- [x] **Step 6: Record**
 
 Spec §6.1: "Plan measurements (date, machine)" with every printed row (L, LF, LFC, GS, WB, JG, PB) and the E4 run counts; §10: the outcome per desktop gate, and that PLB is read from row LF (it needs the live render, which row L does not run); §12.2/§12.3/§12.4 and §6.3: the five deviations (E4b counts the faces inside the visible crop; `group_move` is 18 s and returns to its first frame; the `@bench` 10-face variant runs on `upright_far10`, since on the group path `group10`'s 3:4 crop shows fewer than ten faces; the group path calls `detectView`, `detectImage` with the live path's guards, because `detectImage` answers `[]` for an unusable tracker and A5 needs a null there; row JG's still clip is `tile_face.y4m`, a §12.3 clip of its own, since on `group_noise.y4m` no tile holds the face MediaPipe's numFaces-1 graph follows); §16 only if a gate failed. The iPhone rows (PLN, PM1c, and PL2 / PJ1 / PJ2 on the phone) need the preview deploy after the push and are not measured here (§10, §16's closing paragraph). RM §2.4 and §3.7, S §0.1 (camera row), §1.2 item 4 and §2.5: one line each pointing to this spec. (The RM §15 0.6.0 release notes and `package.json` are Task 17, written from these outcomes.)
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cd /d/GitSource/MonaLisa && git add src/app/faceTracks.bench.test.ts src/config/limits.ts docs/superpowers/specs && git commit -m "camera per-person: desktop gates (PGR, PGN, PJ1G, PL2, PB) measured and recorded; spec pointers" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat
 ```
+
+(Executed 2026-10-22. **Outcome: PGN failed on both delegates, so `LIVE_GROUP = false` ships (K17's fallback).** Every number is in spec §6.1's "Plan measurements (2026-10-22)" and §10's outcome table, and §16 item 1 has the outcome for the user. In short: PB 0.38–0.41 ms (limit 1). PGR 12 of 12 on CPU and 12 of 12 headed on the GPU (a probe read `delegate: 'GPU'`, ANGLE UHD 770); option C found 0 of `upright_far10`'s faces. LFC: longest frame 166.8 ms GPU, 150.1 ms CPU, the PGN bounds. PGN on `upright_far10`: 19.8 / 21.2 fps, slowest face 1.2 / 2.4 Hz, longest frame 250.2 / 216.9 ms (GPU / CPU), fail. The allowed fixes, one at a time (each reverted after its run): `LIVE_SCAN_EVERY` 8 (a no-op at ten faces, no scans run) and `LIVE_MAX_DETECT_EVERY` 12. Both still failed. The cause: the whole view finds all ten faces, so each call runs 5–10 landmark inferences, 120–150 ms. PJ1G passed (CPU whole view 2 of 3; its failing run was 0.4 against MediaPipe's 0.2, just over the limit). PLB 23.3 / 22.6 ms, PGS 183.5 / 50.2 ms, PWB 74.5 / 55.1 ms (and 70.1 / 32.8 ms on a second run; after the switch to `LIVE_GROUP = false`, option C's flip read 73.0 / 37.7 ms). **Step 5's expectation was not met on the GPU.** PL2 passed in 1 of 5 runs there: Δp50 5.1 (loaded), 4.3, 7.3, 7.0 and 5.2 ms. It passed 5 of 5 on the CPU (2.0–5.0 ms). A1's own comparison, numFaces 10 against v0.5's 3, is −0.7 to +1.2 ms GPU and −0.1 to +0.8 ms CPU in every run, so the selfie is no slower than v0.5. The excess over the limit is numFaces 3's own cost over 1 (3.9–6.6 ms GPU today; 3.4 on 2026-10-19). No limit was changed: PL2 is not a desktop gate (§10), and its fallback `MAX_LIVE_FACES = 1` would turn per-person settings off, so it waits for the iPhone row and the user (spec §10, §16 item 1). A logger recorded the other processes' CPU every 5 s through every bench run (scratch, not committed), and the spec marks the loaded runs.
+Adaptations:
+- **The fallback keeps the group path tested** (Step 4 says only "then `npm run build` and re-run Task 14's option-C tests"). With `LIVE_GROUP = false` the group-path unit tests in `live.test.ts` (nine `setup` calls in its group-path describe) and E4 / E4b's group-path tests would test option C instead and fail. So they ask for the group path. The unit tests pass `deps.group: true`. The e2e tests use the §12.2 knob, now two-way: `meiyan.debug.live.v1 { group: true }`, through `fixtures.ts` `liveGroup(page, on)`, which the option-C tests use with false. `Camera.tsx` `liveGroup()` reads `readLiveDebug().group ?? LIVE_GROUP` (was `LIVE_GROUP && … !== false`), and `settings.ts`'s doc says so. Seen red first: `limits.test.ts` pins `LIVE_GROUP` false, and failed on the old value. The six group-path tests of `live.test.ts` failed with `LIVE_GROUP = false` until they passed `group: true`. E4 row3, selfie and E4b's group test failed after a build with the knob set but `Camera.tsx` unchanged (`livePath` 'solo'; 10 faces, not 3), and passed after the change.
+- Files beyond the list: `src/config/limits.test.ts`, `src/app/live.test.ts`, `src/ui/screens/Camera.tsx`, `src/store/settings.ts` (a doc comment only), `tests/e2e/fixtures.ts`, `tests/e2e/camera-groups.spec.ts`, `tests/e2e/camera-back.spec.ts`. `LIVE_SCAN_EVERY` and `LIVE_MAX_DETECT_EVERY` stay at 4 and 6, so their pins in `limits.test.ts` are unchanged.
+- §6.3 also records Task 14's `viewScope` fix (a view matches the boxes it holds whole once they are clipped to the visible crop), as Task 14's note asked. With the five listed deviations that makes six. The summary (摘要 item 4) gains one line on the outcome.
+- E4's far10 group test was flaky, failing in 2 of its 8 runs after the change. It failed once in a 4-project run (the other five tests passed) and once in a `--repeat-each 2` run; then 5 of 5 alone. Both failures were in `camBox`: `boxes.find` found no box with the id the test had read from `debugState` just before, so a track id changed while the test was clicking (TypeError reading `x`). Not chased further, since the group path no longer ships; Step 2's 24 runs passed.
+- The full `npm run test:e2e` with `LIVE_GROUP = false` (Step 4's re-run of the option-C tests, and the whole suite with them): 205 passed, 3 skipped (`@bench`), 1 failed in 38 min. The failure was `liquify.spec.ts:350` ("two fingers pinch and never draw (second finger 30 ms after the first)": 1 stroke, not 0). That test is editor-only (no camera, none of this task's code), and it also failed 1 of 3 alone. Option C on `upright_far10` again found 0 faces. E4b's option C: `liveEvery` 6, tier H.
+- `tile_face.y4m` and `group_pan.y4m` were regenerated by Step 3's commands; both came out byte-identical (md5) to the copies on disk.
+- Step 7 stages, besides its list, this plan file and the test and code files above. The commit message follows the Reconciliation's form.)
 
 ---
 

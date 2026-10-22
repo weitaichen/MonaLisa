@@ -283,8 +283,9 @@ export function readExportDebug(): ExportDebugKnob {
 export const LIVE_DEBUG_KEY = 'meiyan.debug.live.v1';
 
 /**
- * e2e knob (works in the production build): `{ group: false }` overrides LIVE_GROUP for the camera (option C, §6.3), the
- * fallback's own tests. Read when the camera starts a live loop; {} for nothing stored, junk or no storage; never throws
+ * e2e knob (works in the production build): `{ group }` overrides LIVE_GROUP for the camera: false runs option C (§6.3),
+ * the fallback's own tests; true the group path (§6.6), its own tests since LIVE_GROUP ships false (2026-10-22, PGN
+ * failed, §10). Read when the camera starts a live loop; {} for nothing stored, junk or no storage; never throws
  */
 export function readLiveDebug(): { group?: boolean } {
   const r = readJson(LIVE_DEBUG_KEY);

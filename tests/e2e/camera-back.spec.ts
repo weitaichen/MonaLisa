@@ -1,5 +1,5 @@
 // E4b (camera per-person spec §12.2): the landscape ten-face regression (K20), group path and option C.
-import { camBox, cpuDelegate, debugState, expect, flipBack, open, test } from './fixtures';
+import { camBox, cpuDelegate, debugState, expect, flipBack, liveGroup, open, test } from './fixtures';
 
 /**
  * the faces composeFitWidth puts inside the 3:4 crop (x 370–910 of 1280). The scripts are untyped .mjs, imported
@@ -16,6 +16,7 @@ async function facesInView(): Promise<number> {
 test('E4b back camera, the landscape ten-face clip: every face inside the visible crop found and tappable', async ({ page }) => {
   const inView = await facesInView();
   await cpuDelegate(page);
+  await liveGroup(page, true); // the group path, asked for: LIVE_GROUP ships false (2026-10-22, PGN failed, §10)
   await open(page);
   await flipBack(page);
   await expect.poll(async () => (await debugState(page)).faces, { timeout: 30_000 }).toBe(inView);
@@ -28,7 +29,7 @@ test('E4b back camera, the landscape ten-face clip: every face inside the visibl
 
 test('E4b option C (LIVE_GROUP off): ten faces, full-range VIDEO, the cadence skips', async ({ page }) => {
   await cpuDelegate(page);
-  await page.addInitScript(() => localStorage.setItem('meiyan.debug.live.v1', JSON.stringify({ group: false })));
+  await liveGroup(page, false);
   await open(page);
   await flipBack(page);
   await expect.poll(async () => (await debugState(page)).faces, { timeout: 60_000 }).toBe(10);

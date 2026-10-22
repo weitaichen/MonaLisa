@@ -42,8 +42,8 @@ const cameraBody: BodyContext = {
 /** basic-mode notes are announced once per engine bundle, not on every visit */
 let notedBundle: unknown = null;
 
-/** the camera's group path (camera per-person spec §6.6, K17): LIVE_GROUP unless the e2e knob turns it off (§12.2) */
-const liveGroup = (): boolean => LIVE_GROUP && deps.readLiveDebug().group !== false;
+/** the camera's group path (camera per-person spec §6.6, K17): LIVE_GROUP unless the e2e knob sets it (§12.2: off for option C's tests, on for the group path's own since LIVE_GROUP is false) */
+const liveGroup = (): boolean => deps.readLiveDebug().group ?? LIVE_GROUP;
 
 /**
  * The graph the new stream's first detection runs (§6.3): the back camera's group path IMAGE (the fallback VIDEO), the

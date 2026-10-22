@@ -262,6 +262,15 @@ export async function cpuDelegate(page: Page, delegate: string = 'CPU'): Promise
 }
 
 /**
+ * The camera's group path on or off whatever LIVE_GROUP ships (camera per-person spec §12.2's test-only override,
+ * `meiyan.debug.live.v1 { group }`): on for the group path's own tests since LIVE_GROUP is false (2026-10-22, PGN failed,
+ * §10), off for option C's. A later call wins. An init script: call before page.goto.
+ */
+export async function liveGroup(page: Page, on: boolean): Promise<void> {
+  await page.addInitScript((group: boolean) => localStorage.setItem('meiyan.debug.live.v1', JSON.stringify({ group })), on);
+}
+
+/**
  * The unprocessed frame the camera hands to 編輯 (grabOriginalFrame: createImageBitmap of a 2D canvas), copied to
  * window.__shotOriginal once `window.__armOriginal` is set (the next shot's frame). An init script: call before page.goto.
  */

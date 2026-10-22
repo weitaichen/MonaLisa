@@ -2690,31 +2690,40 @@ Adaptations, since `LIVE_GROUP = false` shipped (Task 16):
 
 **Files:** none (verification only; a failure goes back to the task that owns the code).
 
-- [ ] **Step 1: Typecheck**
+- [x] **Step 1: Typecheck**
 
 Run: `cd /d/GitSource/MonaLisa && npm run typecheck`
 Expected: exits 0, no output.
 
-- [ ] **Step 2: Unit tests**
+- [x] **Step 2: Unit tests**
 
 Run: `npm test`
 Expected: every test file passes (0 failed); the count is above 0.5.0's 2204.
 
-- [ ] **Step 3: Build**
+- [x] **Step 3: Build**
 
 Run: `npm run build`
 Expected: `tsc` clean, `vite build` writes `dist/` (with `dist/sw.js`), no error.
 
-- [ ] **Step 4: The full e2e suite**
+- [x] **Step 4: The full e2e suite**
 
 Run: `npm run test:e2e`
 Expected: every project passes (`chromium`, `chromium-group`, `chromium-upright-row3`, `chromium-upright-far10`, `chromium-selfie-group`, `chromium-group10`, `chromium-group-move`); `@bench` tests skipped.
 
-- [ ] **Step 5: The PL2 single-face camera budget**
+- [x] **Step 5: The PL2 single-face camera budget**
 
 Run: `node scripts/bench-multiface.mjs --video tests/fixtures/face.y4m L`
 Expected: `| PL2 | GPU | … verdict pass |` and `| PL2 | CPU | … verdict pass |` for the `camera` detector (Δp50 ≤ 5 ms).
 
-- [ ] **Step 6: Line endings and the tree**
+- [x] **Step 6: Line endings and the tree**
 
 Run: `git status --short | cat` (expected: clean) and the Global Constraints' line-ending check on every CRLF file listed there (expected: `ok` for each).
+
+(Executed 2026-10-22 at `e7c0cf9`. This task changes no code, so there was no failing test to write first; every step is a run, in order, with nothing else running beside the e2e suite and the bench.
+- Step 1: `npm run typecheck` exit 0, no output.
+- Step 2: `npm test` 125 files passed and 1 skipped (the `BENCH`-gated PB file); 2352 tests passed and 1 skipped, above 0.5.0's 2204.
+- Step 3: `npm run build` exit 0: `tsc` clean, `vite build` wrote `dist/` with `dist/sw.js` (precache 77 entries), no error or warning.
+- Step 4: `npm run test:e2e` (its `pretest:e2e` builds again): **206 passed, 3 skipped, 0 failed** in 31.7 min, every listed project run: `chromium` 195, `chromium-group` 4, `chromium-upright-row3` 1, `chromium-upright-far10` 2, `chromium-selfie-group` 1, `chromium-group10` 2, `chromium-group-move` 1. The three skipped: the two `@bench` tests (`camera-group.spec.ts:126`, `camera-groups.spec.ts:54`), and `shape-makeup.spec.ts:195` `contact sheet @sheet`, which is not a bench test: it skips without `SHEET=1` (v0.5's, unchanged; Task 16's note counted it among the `@bench` ones). `liquify.spec.ts:350`, the failure in Task 16's full run, passed this time. E4b option C: `liveEvery` 6, tier H.
+- Step 5: **the expectation was met on the CPU in every run and on the GPU in 2 of 3.** Three runs of row L on `face.y4m`, headed Chrome, ANGLE UHD 770. PL2 GPU Δp50 5.2 ms (fail, limit 5), 4.3 and 3.6 ms (pass). PL2 CPU 1.1, 1.9 and 1.9 ms (pass). A1's comparison, numFaces 10 against v0.5's 3: GPU +0.2, +0.1, −0.5 ms; CPU +0.2, −0.4, +1.0 ms. So the single-face selfie is no slower than v0.5. The excess over 5 ms in the failing run is numFaces 3's own cost over 1 (GPU 5.0, 4.2, 4.1 ms in these runs), which v0.5 shipped with. This is Task 16's recorded outcome again (spec §10's PL2 row, §16 item 1): PL2 is not a desktop gate, and its fallback (`MAX_LIVE_FACES = 1`, per-person off) waits for the iPhone row and the user. No limit changed, and no code regressed, so nothing goes back to an owning task.
+- Step 6: `git status --short | cat` printed nothing before this note: clean, only ignored files (`dist/`, `test-results/`, the gitignored y4m clips). The line-ending check printed `ok` for each of the 13 CRLF files listed in Global Constraints. Across the 76 files the feature added or changed since `1978218`, 12 are CRLF and 64 LF, none mixed. (`git ls-files --eol` shows one mixed file in the repo, `tests/harness/t1/harness.ts`, untouched since v0.4.)
+- Commit: this plan file only (the ticks and this note), in the Reconciliation's form, so the tree is clean again after it.)

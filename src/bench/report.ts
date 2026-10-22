@@ -397,6 +397,39 @@ export function pgnVerdict(r: Pick<LfRun, 'fps' | 'faceHz' | 'longestMs'>, optio
   return r.fps >= PGN_MIN_FPS && hz && longest ? 'pass' : 'fail';
 }
 
+/**
+ * PGN's longest-frame bound per delegate (§10: option C's longest frame at 10 faces on the same machine, row LFC's
+ * longest_ms on that delegate). A delegate without one: that condition is not judged.
+ */
+export type OptionCBounds = Readonly<Partial<Record<Delegate, number>>>;
+
+const MS = /^\d+(?:\.\d+)?$/;
+const DELEGATE_MS = /^(GPU|CPU)\s*[=:]\s*(\d+(?:\.\d+)?)$/i;
+
+/**
+ * bench-multiface.mjs --option-c and the page's optionC: `GPU=<ms>,CPU=<ms>` (`:` for `=`, any order, case and
+ * spaces ignored, either delegate may be left out) or a bare `<ms>` for both. Each ms a positive decimal. null for
+ * anything else (empty, an unknown or repeated delegate, a value that is not a positive number), so a mistyped bound
+ * is refused rather than read as no bound.
+ */
+export function parseOptionC(s: string): OptionCBounds | null {
+  const t = s.trim();
+  if (MS.test(t)) {
+    const ms = Number(t);
+    return ms > 0 ? { GPU: ms, CPU: ms } : null;
+  }
+  const out: Partial<Record<Delegate, number>> = {};
+  for (const part of t.split(',')) {
+    const m = DELEGATE_MS.exec(part.trim());
+    if (!m) return null;
+    const d = m[1].toUpperCase() as Delegate;
+    const ms = Number(m[2]);
+    if (!(ms > 0) || out[d] !== undefined) return null;
+    out[d] = ms;
+  }
+  return out;
+}
+
 /** §10 PJ1G (S §6.3's PJ1 and PJ2 limits): RMS ≤ max(0.4 px, 1.25 × MediaPipe's numFaces-1 RMS) and lag ≤ 1.25 × its lag */
 export function pj1gVerdict(rms: number, rms1: number, lag: number, lag1: number): 'pass' | 'fail' {
   return rms <= Math.max(0.4, 1.25 * rms1) && lag <= 1.25 * lag1 ? 'pass' : 'fail';
@@ -404,8 +437,8 @@ export function pj1gVerdict(rms: number, rms1: number, lag: number, lag1: number
 
 /**
  * The LF row, then its verdict: PGN with ≥ 2 faces (the longest frame judged against option C's when
- * `optionCLongestMs` is given, bench-multiface.mjs --option-c), PLB with one face (row LF runs the back camera: the
- * detection p50 + the render p50 ≤ 33 ms), none without a face.
+ * `optionCLongestMs` is given: the bound of the run's own delegate from bench-multiface.mjs --option-c), PLB with one
+ * face (row LF runs the back camera: the detection p50 + the render p50 ≤ 33 ms), none without a face.
  */
 export function lfRows(run: LfRun, optionCLongestMs: number | null): MultiRow[] {
   const minHz = run.faceHz.length ? r1(Math.min(...run.faceHz)) : 'n/a';

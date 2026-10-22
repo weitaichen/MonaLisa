@@ -2552,7 +2552,7 @@ describe('camera per-person verdicts (camera per-person spec §10)', () => {
   - `rowGS`: the same on the front camera with `selfie_group.y4m`; for each `livePath` change, the longest frame within ±1 s; PGS row per change.
   - `rowWB`: a fresh tracker; `warm('IMAGE', 'photo')` timed (`warm_ms`, the cold compile), then the first group-path frame after `camera` goes live timed (`first_ms`); PWB row. It must be the page's first full-range work (run it alone on a fresh page).
   - `rowJG`: jitter (static clip, 2 s) and lag (pan clip, 4 s) of the group path's IMAGE landmarks through the app smoother, refreshed by the whole view and by a tile holding the face, beside MediaPipe's own numFaces-1 VIDEO smoothing on the same frames (as `jitterLag`, `:671-717`); PJ1G rows per refresh kind.
-- `bench-multiface.mjs`: `--upright` appends `upright=1` to the page URL; `--option-c <ms>` appends `optionC=<ms>`, which `rowLF` passes to `lfRows` as PGN's longest-frame bound (absent → that condition is not judged). Both flags, and `--option-c`'s value, are taken out of the row ids the way `--video` and its value are (`bench-multiface.mjs:14`), so `--upright … LF` runs row `LF` only.
+- `bench-multiface.mjs`: `--upright` appends `upright=1` to the page URL; `--option-c GPU=<ms>,CPU=<ms>` (row LFC's `longest_ms` on each delegate; `report.ts` `parseOptionC`: `:` for `=`, either delegate may be left out, a bare `<ms>` bounds both, anything else exits 2) appends `optionC=GPU:<ms>,CPU:<ms>`, and `rowLF` passes to `lfRows` the bound of the delegate it is running, `d`, as PGN's longest-frame bound, so each delegate's PGN is judged against the same delegate's option C (absent, or that delegate left out → that condition is not judged). (Task 15 fix, 2026-10-22: it was one number for both delegates, which judged one delegate's PGN against the other's option C.) Both flags, and `--option-c`'s value, are taken out of the row ids the way `--video` and its value are (`bench-multiface.mjs:14`), so `--upright … LF` runs row `LF` only.
 
 - [x] **Step 4: Run** — `npx vitest run src/bench && npm run typecheck && npm run build && npx playwright test tests/e2e/bench.spec.ts --project chromium` → PASS (the bench page still mounts its sections).
 
@@ -2591,8 +2591,8 @@ Expected: every group-path E4 test passes 3 of 3 on each delegate.
 - [ ] **Step 3: PGN, PLB, PJ1G, PGS, PWB on the desktop GPU (headed Chrome) and CPU**
 
 Run, in this order, each on a fresh page (`tests/fixtures/group_pan.y4m` is gitignored and made by no setup: if missing, `node scripts/gen-y4m.mjs --src tests/fixtures/group_faces.png --out tests/fixtures/group_pan.y4m --pan 0.5`, as step 1 made it):
-`node scripts/bench-multiface.mjs --video tests/fixtures/group10.y4m LFC` (option C at 10 faces: its `longest_ms` is PGN's bound),
-`node scripts/bench-multiface.mjs --upright --option-c <LFC's longest_ms> --video tests/fixtures/upright_far10.y4m LF` (PGN),
+`node scripts/bench-multiface.mjs --video tests/fixtures/group10.y4m LFC` (option C at 10 faces: each delegate's `longest_ms` is that delegate's PGN bound),
+`node scripts/bench-multiface.mjs --upright --option-c GPU=<ms>,CPU=<ms> --video tests/fixtures/upright_far10.y4m LF` (PGN; `GPU=` the `longest_ms` of LFC's row whose config starts with `GPU` (`GPU back option C …`), `CPU=` that of its row starting with `CPU`; each PGN row's `option_c_longest_ms` shows the bound its delegate was judged against),
 `node scripts/bench-multiface.mjs --video tests/fixtures/face.y4m LF` (PLB: one face, back camera),
 `node scripts/bench-multiface.mjs --video tests/fixtures/face.y4m JG` and `--video tests/fixtures/group_pan.y4m JG` (PJ1G),
 `node scripts/bench-multiface.mjs --upright --video tests/fixtures/selfie_group.y4m GS` (PGS),

@@ -3,8 +3,8 @@
 // J2 (Task 25) and PC (the slider commit's fold check, S §6.3 PC1); v0.6 (camera per-person spec §12.4) extends L
 // (counts 1/3/10, both detectors, the group path's calls) and adds LF, LFC, GS, WB and JG. Results join 複製結果
 // through formatMultiRows. /bench.html?fixtures=1 (dev server) loads the group fixtures by URL so
-// scripts/bench-multiface.mjs can drive it (its --upright adds upright=1, --option-c <ms> optionC=<ms>); on a phone the
-// rows take a picked photo.
+// scripts/bench-multiface.mjs can drive it (its --upright adds upright=1, --option-c GPU=<ms>,CPU=<ms>
+// optionC=GPU:<ms>,CPU:<ms>); on a phone the rows take a picked photo.
 import { FaceLandmarker, FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import { debugState } from '../app/debug';
 import { type LiveLoop, resetAutoTierSession, startLiveLoop } from '../app/live';
@@ -38,6 +38,8 @@ import {
   type LiveRun,
   median,
   type MultiRow,
+  type OptionCBounds,
+  parseOptionC,
   summarizeLf,
   viewCallRows,
   type ViewRun,
@@ -563,11 +565,11 @@ const query = () => new URLSearchParams(location.search);
  * stream, since Chrome's fake camera centre-crops a portrait clip to the aspect of a landscape request (§6.1)
  */
 const upright = () => query().get('upright') === '1';
-/** bench-multiface.mjs --option-c <ms>: row LFC's longest_ms, PGN's longest-frame bound (§10); null → not judged */
-function optionCBound(): number | null {
-  const v = Number(query().get('optionC'));
-  return Number.isFinite(v) && v > 0 ? v : null;
-}
+/**
+ * bench-multiface.mjs --option-c GPU=<ms>,CPU=<ms>: PGN's longest-frame bound per delegate, row LFC's longest_ms on
+ * that delegate (§10); null (or a delegate left out) → not judged
+ */
+const optionCBounds = (): OptionCBounds | null => parseOptionC(query().get('optionC') ?? '');
 /** the camera rows' stream size: 1280 × 720, or 1080 × 1920 with --upright */
 const streamSize = (): MediaTrackConstraints => (upright() ? { width: { ideal: 1080 }, height: { ideal: 1920 } } : { width: { ideal: 1280 }, height: { ideal: 720 } });
 
@@ -1045,13 +1047,14 @@ const LF_MEASURE_MS = 10_000;
  * LF (camera per-person spec §12.4; gates PGN with ≥ 2 faces, PLB with one): the live loop as the app runs it on the
  * back camera, GPU then CPU. An engine on a hidden canvas, the app's camera controller, a fresh tracker per delegate
  * warmed as Camera.tsx does before the first frame, every shown face edited, the group path (`group`; row LFC: false,
- * option C, a VIDEO pass per frame whose longest_ms is PGN's bound, given back through --option-c). 2 s warm-up, then
+ * option C, a VIDEO pass per frame whose longest_ms on each delegate is that delegate's PGN bound, given back through
+ * --option-c GPU=<ms>,CPU=<ms> and read for the delegate asked for, `d`, as the configs' first word). 2 s warm-up, then
  * 10 s measured: every frame samples window.__meiyan (fps, the longest frame, the max gap, k, the cycle, each face's
  * refreshes), and the tracker's calls and the engine's renders are timed. LFC gives the LF row only (the comparison,
  * not a gate). With --upright the stream is 1080 × 1920 (upright_far10: PGN; face.y4m without it: PLB).
  */
 export async function rowLF(group: boolean): Promise<MultiRow[]> {
-  const optionC = group ? optionCBound() : null;
+  const optionC = group ? optionCBounds() : null;
   const engine = createEngine(document.createElement('canvas'), { mirror: false, matchGpupixel: false, showLandmarks: false });
   const camera = appCamera();
   const out: MultiRow[] = [];
@@ -1083,7 +1086,8 @@ export async function rowLF(group: boolean): Promise<MultiRow[]> {
           renderP50: p50(r.renders),
           tier: engine.tier,
         };
-        const rows = lfRows(run, optionC);
+        // PGN on d against d's option C (a GPU run against the GPU's LFC, the CPU's against the CPU's)
+        const rows = lfRows(run, optionC?.[d] ?? null);
         out.push(...(group ? rows : rows.slice(0, 1)));
       } finally {
         t.close();

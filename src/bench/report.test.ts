@@ -16,6 +16,7 @@ import {
   liveRows,
   maskCoverage,
   median,
+  parseOptionC,
   pgnVerdict,
   PGS_MAX_MS,
   pj1gVerdict,
@@ -284,6 +285,40 @@ describe('camera per-person verdicts (camera per-person spec §10)', () => {
     expect(slow.find((r) => r.row === 'PLB')?.values).toEqual({ ms: 33.5, limit_ms: 33, verdict: 'fail' });
     const pgn = lfRows({ config: 'GPU back group', fps: 26, longestMs: 75, maxGapMs: 80, every: 1, faceHz: [6, 7], views: ['whole'], detectP50: 30, renderP50: 5, faces: 2 }, 69);
     expect(pgn.find((r) => r.row === 'PGN')?.values).toMatchObject({ fps: 26, min_face_hz: 6, longest_ms: 75, option_c_longest_ms: 69, verdict: 'fail' });
+  });
+  it('parseOptionC: a bare number bounds both delegates', () => {
+    expect(parseOptionC('69')).toEqual({ GPU: 69, CPU: 69 });
+    expect(parseOptionC(' 68.5 ')).toEqual({ GPU: 68.5, CPU: 68.5 });
+  });
+  it('parseOptionC: a bound per delegate (= or :, any order, case and spaces ignored)', () => {
+    expect(parseOptionC('GPU=69,CPU=88')).toEqual({ GPU: 69, CPU: 88 });
+    expect(parseOptionC('GPU:69,CPU:88')).toEqual({ GPU: 69, CPU: 88 });
+    expect(parseOptionC('cpu = 88.2, gpu=69')).toEqual({ GPU: 69, CPU: 88.2 });
+  });
+  it('parseOptionC: a delegate left out has no bound', () => {
+    const gpu = parseOptionC('GPU=69');
+    expect(gpu).toEqual({ GPU: 69 });
+    expect(gpu?.CPU).toBeUndefined();
+    expect(parseOptionC('CPU:88')).toEqual({ CPU: 88 });
+  });
+  it('parseOptionC: anything else is refused (null), not read as no bound', () => {
+    for (const bad of ['', ' ', '0', '-5', 'abc', '1e2', '0x10', 'Infinity', 'NaN', '69,88', 'GPU=', 'GPU=0', 'GPU=-1', 'GPU=x', 'GPU=69,', ',', 'GPU=69,GPU=70', 'NPU=5', 'GPU=69;CPU=88', 'GPU69']) {
+      expect(parseOptionC(bad), bad).toBeNull();
+    }
+  });
+  it('PGN on each delegate is judged against that delegate’s option C (rowLF: the bound for d, none → not judged)', () => {
+    const bounds = parseOptionC('GPU=69,CPU=88');
+    const run = (config: string, longestMs: number) => ({ config, fps: 25, longestMs, maxGapMs: longestMs, every: 1, faceHz: Array(10).fill(7), views: ['whole'], detectP50: 30, renderP50: 5, faces: 10 });
+    const pgn = (rows: ReturnType<typeof lfRows>) => rows.find((r) => r.row === 'PGN')?.values;
+    // CPU's 80 ms frame is within CPU's option C (88), not GPU's (69); GPU's 72 ms frame is over GPU's
+    expect(pgn(lfRows(run('CPU back group', 80), bounds?.CPU ?? null))).toMatchObject({ option_c_longest_ms: 88, verdict: 'pass' });
+    expect(pgn(lfRows(run('GPU back group', 72), bounds?.GPU ?? null))).toMatchObject({ option_c_longest_ms: 69, verdict: 'fail' });
+    const gpuOnly = parseOptionC('GPU=69');
+    expect(pgn(lfRows(run('CPU back group', 500), gpuOnly?.CPU ?? null))).toMatchObject({
+      option_c_longest_ms: '—',
+      limit: expect.stringContaining('longest frame not judged'),
+      verdict: 'pass',
+    });
   });
 });
 

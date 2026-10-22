@@ -10,7 +10,8 @@
 //   node scripts/bench-multiface.mjs --video tests/fixtures/face.y4m LF       (PLB: one face, back camera)
 //   node scripts/bench-multiface.mjs --upright --video tests/fixtures/selfie_group.y4m GS   (PGS)
 //   node scripts/bench-multiface.mjs --video tests/fixtures/face.y4m WB       (PWB: run it alone, on a fresh page)
-//   node scripts/bench-multiface.mjs --video tests/fixtures/group_pan.y4m JG  (PJ1G)
+//   node scripts/bench-multiface.mjs --video tests/fixtures/tile_face.y4m JG  (PJ1G jitter, whole and tile; made by gen-y4m.mjs --layout tile_face)
+//   node scripts/bench-multiface.mjs --video tests/fixtures/group_pan.y4m JG  (PJ1G lag)
 // --upright: the camera rows ask for 1080 × 1920 (a portrait clip is otherwise centre-cropped to landscape);
 // --option-c GPU=<ms>,CPU=<ms>: PGN's longest-frame bound per delegate, LFC's row on the same delegate (report.ts
 // parseOptionC; `:` for `=`, one delegate may be left out, a bare <ms> bounds both; a delegate without one: not judged).

@@ -14,16 +14,22 @@ import {
   composeMove,
   GROUP_CAM,
   groupCamTiles,
+  LAYOUTS,
   MOVE,
   moveAt,
+  noiseFrames,
   PREVIEW_34,
   resampleRgb,
+  rgbToI420,
   rng,
   SELFIE_GROUP,
   shiftFrame,
+  TILE_FACE,
   UPRIGHT_FAR10,
   UPRIGHT_ROW3,
 } from '../../../scripts/gen-y4m.mjs';
+import { layoutViews, tileFor } from '../../../src/app/liveViews.ts';
+import { DETECTOR_FLOOR } from '../../../src/config/limits.ts';
 
 const fx = (n) => join(import.meta.dirname, '..', '..', 'fixtures', n);
 /** a JPEG's [width, height] from its first SOFn marker */
@@ -304,6 +310,41 @@ describe('upright and move clips (camera per-person spec §12.3)', () => {
     for (const g of [...gaps(near), ...gaps(back)]) expect(g).toBeCloseTo(2.7, 0);
     expect(SELFIE_GROUP.faces.every(inCrop34)).toBe(true);
   });
+  it('TILE_FACE (row JG, PJ1G): one face at 14 % of a 1280×720 frame, in one tile of either detector, 60 noisy frames', () => {
+    const W = 1280;
+    const H = 720;
+    expect([TILE_FACE.width, TILE_FACE.height]).toEqual([W, H]);
+    expect(LAYOUTS.tile_face).toBe(TILE_FACE);
+    expect(TILE_FACE.faces).toHaveLength(1);
+    const [f] = TILE_FACE.faces;
+    // above short-range's floor (DETECTOR_FLOOR.camera, ≈ 12 % measured, spec §6.1) with margin: MediaPipe's
+    // numFaces-1 VIDEO graph, JG's reference, finds it
+    expect(f.fw).toBeGreaterThanOrEqual(DETECTOR_FLOOR.camera + 0.02);
+    // its oval box, grown by 10 % of its size on every side (a detected box is not the layout's), sits whole in a tile
+    // of the back camera's layout over the whole frame (JG's crop) for either detector: JG's tile kind gets frames
+    const w = f.fw * W;
+    const h = w * FH;
+    const m = 0.1;
+    const box = { x: (f.cx * W - w / 2 - m * w) / W, y: (f.cy * H - h / 2 - m * h) / H, w: (w * (1 + 2 * m)) / W, h: (h * (1 + 2 * m)) / H };
+    for (const d of ['photo', 'camera']) expect(tileFor(box, layoutViews(W, H, { x: 0, y: 0, w: W, h: H }, 'environment', d)), d).not.toBeNull();
+    expectCells(TILE_FACE);
+    // a still clip with jitter to measure: identical frames have none (S §6.2 row J)
+    expect(TILE_FACE.noise).toEqual({ seed: 7, frames: 60 });
+  });
+  it('noiseFrames: seeded sub-pixel shifts and ±2 levels of noise, every frame distinct, the same for a seed', () => {
+    const w = 8;
+    const h = 4;
+    const rgb = new Float32Array(w * h * 3).map((_, i) => 60 + ((i * 37) % 120));
+    const a = noiseFrames(rgb, w, h, 7, 3);
+    const again = noiseFrames(rgb, w, h, 7, 3);
+    expect(a).toHaveLength(3);
+    expect(a.map((p) => Array.from(p.Y))).toEqual(again.map((p) => Array.from(p.Y)));
+    expect(Array.from(a[0].Y)).not.toEqual(Array.from(a[1].Y));
+    expect(Array.from(noiseFrames(rgb, w, h, 8, 1)[0].Y)).not.toEqual(Array.from(a[0].Y));
+    // a frame stays near the source: the shift is under a pixel and the noise ±2 levels
+    const still = rgbToI420(rgb, w, h).Y;
+    for (const p of a) for (let i = 0; i < p.Y.length; i++) expect(Math.abs(p.Y[i] - still[i])).toBeLessThan(40);
+  });
   it('composeCells is deterministic for a seed; another seed moves the faces by sub-pixel offsets', () => {
     const png = PNG.sync.read(readFileSync(fx('sample_face.png')));
     const a = composeCells(png, UPRIGHT_ROW3, 1);
@@ -352,6 +393,6 @@ describe('upright and move clips (camera per-person spec §12.3)', () => {
   });
   it('NOTICE lists the generated clips as modified derivatives (Apache-2.0 §4(b))', () => {
     const notice = readFileSync(join(import.meta.dirname, '..', '..', '..', 'LICENSES', 'NOTICE.txt'), 'utf8');
-    for (const clip of ['upright_row3.y4m', 'upright_far10.y4m', 'selfie_group.y4m', 'group10.y4m', 'group_move.y4m']) expect(notice).toContain(clip);
+    for (const clip of ['upright_row3.y4m', 'upright_far10.y4m', 'selfie_group.y4m', 'tile_face.y4m', 'group10.y4m', 'group_move.y4m']) expect(notice).toContain(clip);
   });
 });

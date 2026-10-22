@@ -9,8 +9,10 @@
 // `--noise <seed>` (per-frame sub-pixel shifts + ±2 levels of noise) or `--pan <FW/s>` (`--fw <px>`, `--frames <n>`)
 // make every frame distinct.
 // Camera per-person clips (spec §12.3): `--layout upright_row3|upright_far10|selfie_group` (composeCells: sample_face.png
-// cells on an upright 1080×1920 frame, 8 static frames, out tests/fixtures/<layout>.y4m) and `--move` (group_move.y4m:
-// group_faces.png's A, B and C along moveAt's 18 s timeline, 640×360); `--seed <n>` seeds their sub-pixel offsets.
+// cells on an upright 1080×1920 frame, 8 static frames, out tests/fixtures/<layout>.y4m), `--layout tile_face` (bench
+// row JG's still clip, TILE_FACE: one cell on 1280×720, 60 noisy frames; no e2e uses it, so global-setup does not make
+// it) and `--move` (group_move.y4m: group_faces.png's A, B and C along moveAt's 18 s timeline, 640×360); `--seed <n>`
+// seeds their sub-pixel offsets.
 import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -359,8 +361,33 @@ export const SELFIE_GROUP = {
   ],
 };
 
+/**
+ * Bench row JG's still clip (PJ1G, camera per-person spec §10: a still face refreshed by the whole view and one
+ * refreshed by a tile): one face at 14 % of the long edge (179 px) on a 1280 × 720 landscape frame, above short-range's
+ * floor (about 12 %, §6.1), so MediaPipe's numFaces-1 VIDEO graph (JG's reference) finds it, and whole inside one tile
+ * of the back camera's layout over the whole frame for either detector (full-range: t1,0 of 480 px tiles; short-range:
+ * t2,1 of 349 px tiles), so JG's whole and tile kinds both follow the face the reference follows. `noise`: 60 frames,
+ * each shifted by a seeded sub-pixel offset with ±2 levels of noise (noiseFrames), as group_noise.y4m: identical frames
+ * have no jitter to measure. (group_noise.y4m's tile kind is n/a whenever MediaPipe follows its face A, 225 px wide,
+ * which no 480 px tile holds whole, the tiles' horizontal overlap being 213 px; which of its faces MediaPipe follows
+ * varies by run.)
+ */
+export const TILE_FACE = { width: W, height: H, faces: [{ fw: 0.14, cx: 0.427, cy: 0.46, mirror: false }], noise: { seed: 7, frames: 60 } };
+
 /** `--layout` names */
-export const LAYOUTS = { upright_row3: UPRIGHT_ROW3, upright_far10: UPRIGHT_FAR10, selfie_group: SELFIE_GROUP };
+export const LAYOUTS = { upright_row3: UPRIGHT_ROW3, upright_far10: UPRIGHT_FAR10, selfie_group: SELFIE_GROUP, tile_face: TILE_FACE };
+
+/** `n` distinct I420 frames of `rgb` (w×h): each shifted by a seeded sub-pixel offset in [−0.5, 0.5) px with ±2 levels of noise */
+export function noiseFrames(rgb, w, h, seed, n) {
+  const rand = rng(seed);
+  const frames = [];
+  for (let f = 0; f < n; f++) {
+    const sx = rand() - 0.5;
+    const sy = rand() - 0.5;
+    frames.push(rgbToI420(shiftFrame(rgb, sx, sy, rand, 2, w, h), w, h));
+  }
+  return frames;
+}
 
 /**
  * A layout's frame (Float32 RGB, layout.width × layout.height) from sample_face.png: GROUP6's 1.3 FW square crop
@@ -566,7 +593,9 @@ async function main() {
     if (!layout) throw new Error(`--layout ${layoutName}: expected one of ${Object.keys(LAYOUTS).join(', ')}`);
     const outRel = arg('--out', `tests/fixtures/${layoutName}.y4m`);
     const base = composeCells(PNG.sync.read(readFileSync(join(root, arg('--src', 'tests/fixtures/sample_face.png')))), layout, seed);
-    const buf = encodeY4m(rgbToI420(base, layout.width, layout.height), layout.width, layout.height, UPRIGHT_FRAMES);
+    const buf = layout.noise
+      ? encodeY4mFrames(noiseFrames(base, layout.width, layout.height, layout.noise.seed, layout.noise.frames), layout.width, layout.height)
+      : encodeY4m(rgbToI420(base, layout.width, layout.height), layout.width, layout.height, UPRIGHT_FRAMES);
     const out = join(root, outRel);
     mkdirSync(dirname(out), { recursive: true });
     writeFileSync(out, buf);

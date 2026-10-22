@@ -1347,12 +1347,14 @@ async function groupJitterLag(
 }
 
 /**
- * JG (camera per-person spec §12.4, PJ1G): jitter (2 s; a still clip) and lag (4 s; a pan clip, e.g. group_pan.y4m) of
- * the group path's IMAGE landmarks through the app smoother, refreshed by the whole view and by a tile holding the
- * face, beside MediaPipe's own numFaces-1 VIDEO smoothing on the same frames (as rows J and J2, jitterLag), GPU then CPU,
- * three trackers per delegate (MediaPipe's, its raw reference, the group path's). PJ1G per refresh kind (report.ts
- * jgRows): a still clip judges the jitter only. A face no tile holds whole (one wider than a tile: the whole view
- * refreshes it in the app) gives the tile kind no frame (n/a).
+ * JG (camera per-person spec §12.4, PJ1G): jitter (2 s; a still clip, tile_face.y4m) and lag (4 s; a pan clip,
+ * group_pan.y4m) of the group path's IMAGE landmarks through the app smoother, refreshed by the whole view and by a tile
+ * holding the face, beside MediaPipe's own numFaces-1 VIDEO smoothing on the same frames and the same face (as rows J
+ * and J2, jitterLag), GPU then CPU, three trackers per delegate (MediaPipe's, its raw reference, the group path's).
+ * PJ1G per refresh kind (report.ts jgRows): a still clip judges the jitter only. A followed face no tile holds whole (one
+ * wider than the tiles' overlap that straddles it, or wider than a tile) gives the tile kind no frame (n/a), as on
+ * group_noise.y4m whenever MediaPipe follows its face A (225 px; which of the three faces it follows varies by run),
+ * which no 480 px tile holds. tile_face.y4m (gen-y4m.mjs TILE_FACE) holds its one face in a tile for either detector.
  */
 export async function rowJG(): Promise<MultiRow[]> {
   const cam = await cameraVideo();

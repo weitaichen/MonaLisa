@@ -23,7 +23,7 @@ import { Status } from '../components/Status';
 import { reportError } from '../debug';
 import { deps } from '../deps';
 import { openInEditor, pickPhoto } from '../flows';
-import { GROUP_MODE_LABEL, groupSceneHints, toggleGroupMode, warmsOnStart } from '../groupMode';
+import { GROUP_MODE_LABEL, showGroupSceneHints, toggleGroupMode, warmsOnStart } from '../groupMode';
 import { Icon } from '../icons';
 import { cropImageData, grabOriginalFrame, normalizedCropRect, shotPersons, shotSeed } from '../imaging';
 import { CAMERA_BODY, INITIAL_SELECTION, makeupNote, photoScoped, sliderFor, type BodyContext, type PanelSelection } from '../panelModel';
@@ -97,7 +97,7 @@ export function Camera() {
   const [shownFaces, setShownFaces] = useState(0);
   /** this mount already saw ≥ 2 faces: the one-time hints (§3.1, K22) are asked for once, not on every stats tick */
   const sawGroup = useRef(false);
-  /** the second one-time hint, shown after the first (groupSceneHints) */
+  /** the second one-time hint, shown after the first (showGroupSceneHints); cancelled on unmount, its flag kept */
   const hintTimer = useRef(0);
   /** LiveStats.gpLeftOnLeft: the tracked face's halves on the unmirrored frame (the 左／右 chips, S5 §3.4) */
   const [gpLeft, setGpLeft] = useState<boolean | null>(null);
@@ -195,15 +195,18 @@ export function Camera() {
       setPersonsTick(s.personsVersion);
       setChip(chipGate.current.update(s.faces, app.get().cameraAll, performance.now()));
       // ≥ 2 faces shown: 「點選畫面中的臉，可個別調整」 the first time (§3.1, K12), then, with 合照模式 off, that it lets
-      // far people be selected (K22); each once per install, the second after the first
+      // far people be selected (K22); each once per install, the second after the first (its flag taken when it shows)
       if (s.faces >= 2 && !sawGroup.current) {
         sawGroup.current = true;
-        const [first, next] = groupSceneHints(app.get().prefs.groupMode, { persons: takeCameraPersonsHint, groupMode: takeGroupModeHint });
-        if (first) toast(first, 3200);
-        if (next)
-          hintTimer.current = window.setTimeout(() => {
-            if (!app.get().prefs.groupMode && app.get().screen.name === 'camera') toast(next, 3200);
-          }, 3400);
+        showGroupSceneHints({
+          takePersons: takeCameraPersonsHint,
+          takeGroupMode: takeGroupModeHint,
+          skipGroupMode: () => app.get().prefs.groupMode || app.get().screen.name !== 'camera',
+          toast: (t) => toast(t, 3200),
+          later: (run, ms) => {
+            hintTimer.current = window.setTimeout(run, ms);
+          },
+        });
       }
       if (s.face === lastFace) return;
       lastFace = s.face;

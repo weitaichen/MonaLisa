@@ -17,16 +17,30 @@ export function toggleGroupMode(on: boolean, takeOnToast: () => boolean): { grou
   return { groupMode, toast: groupMode && takeOnToast() ? GROUP_MODE_ON_TOAST : null };
 }
 
+/** the 合照模式 hint follows the tap hint by this long (the tap hint's 3200 ms toast and a beat) */
+export const HINT_GAP_MS = 3400;
+
 /**
- * A camera visit's first stats tick with ≥ 2 faces shown: the one-time toasts it asks for, in the order they show (the
- * camera shows the second after the first). The tap hint first; then, with the mode off, the 合照模式 hint (its flag is
- * not asked for while the mode is on, so it stays for a later visit that has the mode off)
+ * A camera visit's first stats tick with ≥ 2 faces shown: its one-time toasts. The tap hint now (its flag taken); then
+ * the 合照模式 hint, HINT_GAP_MS later when the tap hint showed, else at once. The 合照模式 hint's flag is asked for only
+ * when that hint is due and may show (`skipGroupMode` false: the mode off, the camera still open), so a visit that ends
+ * first (the camera cancels `later`'s timer on unmount) or has the mode on keeps it for a later visit
  */
-export function groupSceneHints(groupMode: boolean, take: { persons: () => boolean; groupMode: () => boolean }): string[] {
-  const out: string[] = [];
-  if (take.persons()) out.push(PERSONS_HINT);
-  if (!groupMode && take.groupMode()) out.push(GROUP_MODE_HINT);
-  return out;
+export function showGroupSceneHints(io: {
+  takePersons: () => boolean;
+  takeGroupMode: () => boolean;
+  /** read when the 合照模式 hint is due: true while the mode is on or the camera screen has closed */
+  skipGroupMode: () => boolean;
+  toast: (text: string) => void;
+  later: (run: () => void, ms: number) => void;
+}): void {
+  const groupHint = () => {
+    if (!io.skipGroupMode() && io.takeGroupMode()) io.toast(GROUP_MODE_HINT);
+  };
+  if (io.takePersons()) {
+    io.toast(PERSONS_HINT);
+    io.later(groupHint, HINT_GAP_MS);
+  } else groupHint();
 }
 
 /**

@@ -2642,7 +2642,7 @@ Adaptations:
 **Interfaces:**
 - Consumes: Task 16's recorded outcomes (which path shipped, the measured floors, PGS / PWB, the option-C face count of E4).
 
-- [ ] **Step 1: Add the version cases** (`src/ui/updateModel.test.ts`; they pass without code changes, as RM §1.3 item 1 says: `displayVersion` is generic)
+- [x] **Step 1: Add the version cases** (`src/ui/updateModel.test.ts`; they pass without code changes, as RM §1.3 item 1 says: `displayVersion` is generic)
 
 ```ts
 it('names 0.6.0 as v0.6 (camera per-person spec §13, K16)', () => {
@@ -2653,12 +2653,12 @@ it('after the 0.6.0 update', () => {
 });
 ```
 
-- [ ] **Step 2: Bump the version**
+- [x] **Step 2: Bump the version**
 
 Run: `cd /d/GitSource/MonaLisa && npm version 0.6.0 --no-git-tag-version`
 Expected: `v0.6.0`; `git diff --stat | cat` lists `package.json` and `package-lock.json` only.
 
-- [ ] **Step 3: Write RM §15** (繁體中文, then English, then Compatibility, as §14 is laid out), from the spec and Task 16's outcomes, each item one bullet:
+- [x] **Step 3: Write RM §15** (繁體中文, then English, then Compatibility, as §14 is laid out), from the spec and Task 16's outcomes, each item one bullet:
 - per-person beauty in the camera: tap a face, the sliders adjust that person only, everyone keeps their result in the preview and the photo; 全部套用 copies the selected person's settings to everyone in view (K10); untouched people and a fresh camera are 原圖 (U2–U4);
 - settings follow people through moves, swaps and short absences; back within 4 s near where they left is the same person, else a new person at 原圖; no face recognition, and someone stepping in where a person left within 4 s takes that person's settings (U5, K7, §14 R3);
 - 編輯 continues each person's camera result; a person the editor does not find is left out with 「{n} 位人物在照片中未偵測到臉部，未帶入相機效果」; a camera with nothing set and every import still open at 原圖 (U6, K14, K21);
@@ -2666,16 +2666,23 @@ Expected: `v0.6.0`; `git diff --stat | cat` lists `package.json` and `package-lo
 - the front camera's solo selfie is unchanged; far people behind a solo selfie are found once someone nearer joins, or on the back camera; the move between the two shows one short hitch (K18, PGS's number);
 - Compatibility: 0.5's saved camera face look (磨皮, 美型, 美妝 in the camera) is no longer applied; the photo look (濾鏡, 調節, 質感, 美白, 銳化) is kept (K15, §14 R8); per-person settings last only while the camera is open (K4); a rollback to 0.5 starts the camera's faces at 原圖 (§9); a 0.5.0 install shows 「有新版本 v0.6」, then 「已更新至 v0.6」, and after deploying `/version.json` returns `0.6.0`.
 
-- [ ] **Step 4: Run**
+- [x] **Step 4: Run**
 
 Run: `cd /d/GitSource/MonaLisa && npx vitest run src/version.test.ts src/ui/updateModel.test.ts && npm run typecheck`
 Expected: PASS (`APP_VERSION` is `0.6.0`, read from `package.json` by `vitest.config.ts`); typecheck 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /d/GitSource/MonaLisa && git add package.json package-lock.json src/ui/updateModel.test.ts docs/superpowers/specs/2026-10-12-v04-roadmap.md docs/superpowers/plans/2026-10-19-camera-per-person.md && git commit -m "camera per-person: version 0.6.0, release notes in the roadmap §15" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" | cat
 ```
+
+(Executed 2026-10-22. Step 1's two cases passed before the bump, as the step says (`displayVersion` is generic; `version.test.ts` is deliberately not pinned), so there was no red to see. `npm version 0.6.0 --no-git-tag-version` printed `v0.6.0` and changed the two root lines of `package.json` and `package-lock.json` only. Step 4: `npx vitest run src/version.test.ts src/ui/updateModel.test.ts` 2 files, 27 tests passed; `npm run typecheck` exit 0; the whole `npm test` 125 files passed and 1 skipped (the `BENCH`-gated PB file), 2352 tests passed and 1 skipped.
+Adaptations, since `LIVE_GROUP = false` shipped (Task 16):
+- **Step 3's K18 bullet does not hold for the release.** With the group path off the front camera never leaves its solo path (spec §6.3, §10's closing paragraph), so "far people behind a solo selfie are found once someone nearer joins" and "the move between the two shows one short hitch (PGS)" would be false. §15 says instead: no hitch when someone joins, people behind the user under about 12 % are not found on the front camera even once someone nearer joins, and the back camera finds faces from about 9 %. In place of PGS's number (the group path's) it gives PWB's option-C flip (73.0 ms GPU, 37.7 ms CPU, the full-range compile behind the spinner).
+- The group-shot bullet states the fallback's floors with the gate that failed and its numbers (PGN, both delegates, and the two fixes tried), that the group path itself passed PGR, what is found in practice (`upright_row3`'s 6.5 % faces yes; option C 0 of `upright_far10`'s ten), and option C's 10-face cadence from row LFC (about 22 fps, each face about 3.7–3.8 Hz). It adds two facts of option C the step's list leaves out: the back camera moved from short-range (0.5) to full-range VIDEO, so a face overflowing its frame is not found (spec §14 R9), and before the detector download it runs short-range until the next flip (§6.3).
+- Beyond the step's list: an opening line naming the spec (**CP**, its ids cited as CP U…/K…) and the shipped fallback; bullet 1 also carries the brackets, the one-time hint, the no-face note and 基本模式 (K11, K12); the selfie bullet notes PL2's GPU result (over 5 ms in 4 of 5 runs, the excess being numFaces 3's own cost, which 0.5 shipped with; the iPhone row decides); Compatibility adds the session's end conditions (K8, §3.11), the one new key, and that no iPhone numbers exist yet (RM §12). Compatibility is in English only, as §14's is.
+- The commit message follows the Reconciliation's form.)
 
 ---
 

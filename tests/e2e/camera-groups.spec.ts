@@ -113,6 +113,33 @@ test('合照模式 toggled with a person edited: every face keeps its person and
   }
 });
 
+test('合照模式 turned off and on again with a far person edited: the person only it finds waits away and comes back edited and selected, past the 4 s grace @far10', async ({ page }) => {
+  await open(page);
+  await setGroupMode(page, true);
+  await flipBack(page);
+  await expect.poll(async () => (await debugState(page)).faces, { timeout: 30_000, intervals: [100] }).toBe(10);
+  const far = [...(await debugState(page)).boxes].sort((a, b) => a.x - b.x)[0];
+  const g = await camBox(page, far.id, false);
+  await page.mouse.click(g.point.x, g.point.y);
+  await expect.poll(async () => (await debugState(page)).selected).toBe(far.id);
+  await page.getByRole('tab', { name: '一鍵', exact: true }).click();
+  await page.getByRole('option', { name: '自然', exact: true }).click();
+  await expect.poll(async () => (await debugState(page)).boxes.find((b) => b.person === far.person)?.edited).toBe(true);
+  // off: option C cannot see the far face; its track is dropped after the hold and the person waits away
+  await setGroupMode(page, false);
+  await expect.poll(async () => (await debugState(page)).livePath).toBe('solo');
+  await expect.poll(async () => (await debugState(page)).boxes.some((b) => b.person === far.person), { timeout: 10_000 }).toBe(false);
+  await page.waitForTimeout(5000); // past REID_GRACE_MS (4 s) since the drop
+  await setGroupMode(page, true);
+  const back = async () => (await debugState(page)).boxes.find((b) => b.person === far.person);
+  await expect.poll(async () => (await back())?.edited, { timeout: 10_000, intervals: [100] }).toBe(true);
+  await expect.poll(async () => {
+    const d = await debugState(page);
+    return d.boxes.find((b) => b.id === d.selected)?.person;
+  }).toBe(far.person);
+  await expect(page.getByRole('option', { name: '自然', exact: true })).toHaveAttribute('aria-selected', 'true');
+});
+
 test('合照模式 on, a group selfie: the front camera runs the group path from its first frame and finds the back row; the choice survives a reload @selfie', async ({ page }) => {
   await open(page);
   await watchToasts(page);

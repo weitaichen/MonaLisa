@@ -1,17 +1,17 @@
 // Camera face tracks (S §3.4 T4; camera per-person spec §5.2, §7): de-duplicate, match against each track's predicted
 // box (velocity, the size gate), continue a held track through the re-identification gates, hold, smooth (MediaPipe's
-// smoother, bypassed at one face), and give each track a camera person: `claim` when it starts, `release` when it is
-// dropped or reset. The A7 auto pick goes to the session (`sync`), which owns the selection; each face's weight eases
-// toward "present and its person edited", its presence (the neighbours' caps, A3) and the any-face weight (the global
-// skin, A2) as before. On the group path (§6.6) a detection is one view's call: it matches and misses only the tracks
-// its scope says, and every other track is no event for it. Pure: no DOM, no GL.
+// smoother, bypassed at one face), and give each track a camera person: `claim` when it starts, `release` (with the path
+// that last found it, K22) when it is dropped or reset. The A7 auto pick goes to the session (`sync`), which owns the
+// selection; each face's weight eases toward "present and its person edited", its presence (the neighbours' caps, A3)
+// and the any-face weight (the global skin, A2) as before. On the group path (§6.6) a detection is one view's call: it
+// matches and misses only the tracks its scope says, and every other track is no event for it. Pure: no DOM, no GL.
 import { LOST_HOLD_MS, MAX_LIVE_FACES, TRACK_SIZE_JUMP } from '../config/limits';
 import { boxIoU } from '../detect/faces';
 import { ovalBox } from '../engine/passes/faceCap';
 import { adapt } from '../tracking/adapter111';
 import type { Face, Landmarks478, Rect } from '../types';
 import { FaceWeightEaser } from './liveCore';
-import { type LivePersonId, nearestUnambiguous, reidDistance, type TrackPersons } from './livePersons';
+import { type LivePath, type LivePersonId, nearestUnambiguous, reidDistance, type TrackPersons } from './livePersons';
 import type { DetectScope } from './liveViews';
 import { LandmarkSmoother } from './oneEuro';
 
@@ -60,6 +60,8 @@ interface Track {
   vx: number;
   vy: number;
   view: string;
+  /** the path whose call last refreshed it (a scoped call: the group path); its person is released with it (K22) */
+  path: LivePath;
   easer: FaceWeightEaser;
   presence: FaceWeightEaser;
 }
@@ -85,6 +87,8 @@ const insideView = (v: Rect, b: Rect) =>
   b.x >= v.x - EDGE_EPS && b.y >= v.y - EDGE_EPS && b.x + b.w <= v.x + v.w + EDGE_EPS && b.y + b.h <= v.y + v.h + EDGE_EPS;
 /** §7.3 item 3: a face whose width differs from the predicted box by more than × TRACK_SIZE_JUMP is someone else */
 const sizeOk = (p: Rect, d: Rect) => Math.max(d.w / p.w, p.w / d.w) <= TRACK_SIZE_JUMP;
+/** the path of a detection: a scoped call is one of the group path's views, an unscoped one the solo path's (§6.6) */
+const pathOf = (scope: DetectScope | undefined): LivePath => (scope ? 'group' : 'solo');
 
 export class FaceTracks {
   private list: Track[] = [];
@@ -205,7 +209,7 @@ export class FaceTracks {
       pairs.push([t, unique[0]]);
     }
     const view = scope?.name ?? 'video';
-    for (const [t, d] of pairs) this.feed(t, d, tsMs, w, h, view);
+    for (const [t, d] of pairs) this.feed(t, d, tsMs, w, h, view, pathOf(scope));
     // a track left unmatched is missed; on the group path only by a call whose view can miss it (§6.6)
     const fed = new Set(pairs.map(([t]) => t));
     for (const t of this.list) if (!fed.has(t) && (!scope || scope.missable(pred.get(t)!))) t.present = false;
@@ -232,10 +236,11 @@ export class FaceTracks {
         vx: 0,
         vy: 0,
         view,
+        path: pathOf(scope),
         easer: new FaceWeightEaser(),
         presence: new FaceWeightEaser(),
       };
-      this.feed(t, d, tsMs, w, h, view);
+      this.feed(t, d, tsMs, w, h, view, t.path);
       this.list.push(t);
     }
     // §7.3 item 6: a track missing longer than the hold is dropped and its person released
@@ -259,10 +264,10 @@ export class FaceTracks {
 
   private drop(t: Track): void {
     this.list = this.list.filter((x) => x !== t);
-    this.persons.release(t.person, t.box, t.lastSeen);
+    this.persons.release(t.person, t.box, t.lastSeen, t.path);
   }
 
-  private feed(t: Track, d: Det, tsMs: number, w: number, h: number, view: string): void {
+  private feed(t: Track, d: Det, tsMs: number, w: number, h: number, view: string, path: LivePath): void {
     const dt = tsMs - t.lastSeen;
     if (dt > 0) {
       const [px, py] = centre(t.rawBox);
@@ -276,6 +281,7 @@ export class FaceTracks {
     t.lastSeen = tsMs;
     t.seen = tsMs;
     t.view = view;
+    t.path = path;
     if (t.filter) {
       t.shown = adapt({ points: t.filter.apply(d.lm.points, w, h, tsMs) }, w, h);
       const b = ovalBox(t.shown);
@@ -371,7 +377,7 @@ export class FaceTracks {
   reset(): void {
     const gone = this.list;
     this.list = [];
-    for (const t of gone) this.persons.release(t.person, t.box, t.lastSeen);
+    for (const t of gone) this.persons.release(t.person, t.box, t.lastSeen, t.path);
     this.autoId = null;
     this.challenger = null;
     this.noAnswerSince = null;

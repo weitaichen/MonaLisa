@@ -285,6 +285,35 @@ describe('FaceTracks on the group path: a call matches and misses only what its 
     }
     expect(t.views()).toHaveLength(1);
   });
+  it.each(['dropped after the hold', 'reset (a pause)'] as const)(
+    'a track’s person is released with the path that last found it (K22): %s on the other path, they are back when it returns',
+    (how) => {
+      const s = new LivePersons();
+      const t = new FaceTracks(s);
+      const whole = scope(0, 1);
+      let now = 0;
+      s.setPath('group', now);
+      for (let i = 0; i < 5; i++, now += 33) {
+        t.detect([A(), B()], now, W, H, whole);
+        t.step(33, now);
+      }
+      const b = t.views().find((v) => v.box.x > 0.5)!.person;
+      s.write([b], naturalPerson());
+      s.setPath('solo', now); // the solo path cannot see B
+      const frames = how === 'reset (a pause)' ? 3 : 200;
+      for (let i = 0; i < frames; i++, now += 33) {
+        t.detect([A()], now, W, H);
+        t.step(33, now);
+      }
+      if (how === 'reset (a pause)') t.reset();
+      else expect(t.views()).toHaveLength(1);
+      now += 10_000;
+      s.setPath('group', now);
+      t.detect([A(), B()], now, W, H, whole);
+      expect(t.views().find((v) => v.box.x > 0.5)!.person).toBe(b);
+      expect(s.edited(b)).toBe(true);
+    },
+  );
   it('a face cut by the view edge starts no track unless it matches one', () => {
     const t = new FaceTracks(new LivePersons());
     t.detect([lmAt(0.5, 0.5, 0.2)], 0, W, H, scope(0, 0.55));

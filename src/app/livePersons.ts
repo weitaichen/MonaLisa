@@ -1,12 +1,16 @@
 // The camera session (camera per-person spec §5.1, §7.4–§7.6): the persons the live camera has seen, their params, the
 // selection, 全部套用 and the away pool. Identity is geometry and time only (U5); every ambiguity is a new person at 原圖
-// (A2). Pure: no DOM, no clock of its own (every time is the caller's, on the live loop's clock).
+// (A2). An away person's grace counts only while the path that last found them is in use (合照模式, K22: setPath).
+// Pure: no DOM, no clock of its own (every time is the caller's, on the live loop's clock).
 import { LIVE_IDLE_MAX_MS, MAX_LIVE_FACES, REID_AMBIGUITY, REID_DIST, REID_GRACE_MS, REID_SIZE } from '../config/limits';
 import { isNeutralPerson, neutralPerson } from '../edit/state';
 import type { Facing, PersonParams, Rect } from '../types';
 
 /** a camera person, per session, counting up from 1 (debug id `c{n}`) */
 export type LivePersonId = number;
+
+/** the live loop's detection path (§6.3, §6.6), the one 合照模式 picks (K22) */
+export type LivePath = 'solo' | 'group';
 
 /**
  * §7.4's distance of a new box `next` from a person last seen at `prev` (unmirrored video UV; `aspect` = frame width /
@@ -35,8 +39,11 @@ export function nearestUnambiguous<T>(cands: readonly { item: T; d: number }[]):
 export interface TrackPersons {
   /** a new track's person: an away person re-identified (§7.4), else a new one at 原圖 */
   claim(box: Rect, aspect: number, now: number): LivePersonId;
-  /** a dropped track's person, with its last shown box and time: to the away pool when edited or remembered (§7.6) */
-  release(id: LivePersonId, box: Rect, now: number): void;
+  /**
+   * a dropped track's person, with its last shown box and time and the path that last found them (K22): to the away
+   * pool when edited or remembered (§7.6)
+   */
+  release(id: LivePersonId, box: Rect, now: number, path?: LivePath): void;
   /** the persons of the shown tracks (found or held) and the A7 auto pick, every step */
   sync(inView: readonly LivePersonId[], auto: LivePersonId | null): void;
   edited(id: LivePersonId): boolean;
@@ -50,7 +57,16 @@ interface AwayEntry {
   /** the track's last shown box (unmirrored video UV) and its time on the session clock */
   box: Rect;
   lastSeen: number;
+  /** the path that last found them (K22); null: any path (released before the loop named one, or without a path) */
+  path: LivePath | null;
+  /** the REID_GRACE_MS they spent before `from` */
+  spent: number;
+  /** since when their grace runs: their path is in use; null while the other path is (it cannot see them, §3.13) */
+  from: number | null;
 }
+
+/** the grace an away person has spent at `now`: only the time their path was in use counts (K22) */
+const graceSpent = (e: AwayEntry, now: number): number => e.spent + (e.from === null ? 0 : Math.max(0, now - e.from));
 
 export class LivePersons implements TrackPersons {
   /** every person the session knows (in view, held or away) → params; null = never edited (原圖) */
@@ -74,6 +90,9 @@ export class LivePersons implements TrackPersons {
   private open = true;
   private facing: Facing | null = null;
   private pausedAt: number | null = null;
+  /** the path in use (setPath, K22) and since when; null until the live loop names one */
+  private lane: LivePath | null = null;
+  private laneSince = 0;
   private v = 0;
 
   /** moves on every change (the UI store reads it) */
@@ -108,7 +127,7 @@ export class LivePersons implements TrackPersons {
   claim(box: Rect, aspect: number, now: number): LivePersonId {
     const cands: { item: AwayEntry; d: number }[] = [];
     for (const e of this.pool) {
-      if (now - e.lastSeen > REID_GRACE_MS) continue;
+      if (!this.inGrace(e, now)) continue;
       const d = reidDistance(e.box, box, aspect);
       if (d !== null) cands.push({ item: e, d });
     }
@@ -127,7 +146,7 @@ export class LivePersons implements TrackPersons {
     return id;
   }
 
-  release(id: LivePersonId, box: Rect, now: number): void {
+  release(id: LivePersonId, box: Rect, now: number, path?: LivePath): void {
     if (!this.open || !this.known.has(id)) return;
     if (this.pinned === id) {
       this.pinned = null;
@@ -137,7 +156,18 @@ export class LivePersons implements TrackPersons {
     if (this.autoPick === id) this.autoPick = null;
     if (this.edited(id) || this.returnTo === id) {
       this.pool = this.pool.filter((e) => e.id !== id);
-      this.pool.push({ id, box: { ...box }, lastSeen: now });
+      // K22: last found by the other path, the path in use cannot see them (a toggle carried their track over and it
+      // was never found since): their grace spent is their path's time up to the toggle, and it waits for their path
+      const seenBy = path === undefined || this.lane === null ? null : path;
+      const own = seenBy === null || seenBy === this.lane;
+      this.pool.push({
+        id,
+        box: { ...box },
+        lastSeen: now,
+        path: seenBy,
+        spent: own ? 0 : Math.max(0, this.laneSince - now),
+        from: own ? now : null,
+      });
       while (this.pool.length > MAX_LIVE_FACES) {
         let oldest = 0;
         for (let i = 1; i < this.pool.length; i++) if (this.pool[i].lastSeen < this.pool[oldest].lastSeen) oldest = i;
@@ -232,6 +262,36 @@ export class LivePersons implements TrackPersons {
   }
 
   /**
+   * the live loop's path on this frame (合照模式, K22, §3.13, §7.5): a toggle stops the grace of everyone away who was
+   * last found by the path it leaves, and runs the grace of those last found by the path it picks. A face only one path
+   * finds is unseen, not gone, while the other path is in use: turning the mode back gives its person the grace they
+   * had left (a far face dropped after the hold: about REID_GRACE_MS), at most LIVE_IDLE_MAX_MS after their last
+   * sighting (inGrace)
+   */
+  setPath(path: LivePath, now: number): void {
+    if (path === this.lane) return;
+    for (const e of this.pool) {
+      if (e.path === null) continue;
+      if (e.path === path) e.from ??= now;
+      else if (e.from !== null) {
+        e.spent = graceSpent(e, now);
+        e.from = null;
+      }
+    }
+    this.lane = path;
+    this.laneSince = now;
+  }
+
+  /**
+   * §7.4's REID_GRACE_MS (K22): on their own path, the time it was in use since their last sighting; on the other path,
+   * which could not see them, the usual time since it. Never more than LIVE_IDLE_MAX_MS after it
+   */
+  private inGrace(e: AwayEntry, now: number): boolean {
+    if (now - e.lastSeen > LIVE_IDLE_MAX_MS) return false;
+    return (e.from === null ? now - e.lastSeen : graceSpent(e, now)) <= REID_GRACE_MS;
+  }
+
+  /**
    * the next live frame (§7.5): another facing ends the session first; the session opens on `facing`; a pause longer
    * than LIVE_IDLE_MAX_MS forgets everyone away and the remembered selection, a shorter one costs the away pool no grace
    */
@@ -247,7 +307,13 @@ export class LivePersons implements TrackPersons {
         for (const e of this.pool) this.known.delete(e.id);
         this.pool = [];
         this.returnTo = null;
-      } else if (span > 0) for (const e of this.pool) e.lastSeen += span;
+      } else if (span > 0) {
+        for (const e of this.pool) {
+          e.lastSeen += span;
+          if (e.from !== null) e.from += span;
+        }
+        this.laneSince += span;
+      }
     }
     if (changed) this.v++;
   }
@@ -268,6 +334,8 @@ export class LivePersons implements TrackPersons {
     this.open = false;
     this.facing = null;
     this.pausedAt = null;
+    this.lane = null;
+    this.laneSince = 0;
     this.v++;
   }
 

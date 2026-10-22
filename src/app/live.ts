@@ -284,6 +284,8 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
     const prefs = deps.getPrefs();
     const photo = deps.getPhoto();
     syncPath(liveRoute(facing, prefs.groupMode).path);
+    // every frame, so a session begun under this loop (a flip's) learns it too
+    persons.setPath(path, now);
     syncOptions(prefs, facing === 'user');
     syncTier(prefs.tier);
     ensureLuts(photo);
@@ -340,7 +342,9 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
    * 合照模式 toggled (K22): the stream moves to the path it picks on this frame, and this frame detects on it (the group
    * path's first call is the whole view). The tracks carry over both ways (their boxes are in stream UV), so every
    * person keeps their params and selection; the solo path's VIDEO graph finds the faces again on its first call (a held
-   * track is continued, §7.3 item 4). One graph rebuild on a live frame, the mode switch (PGS, §10).
+   * track is continued, §7.3 item 4). A face only the path left behind finds (a far one, one the crop edge cuts) is
+   * dropped after the hold, and its person waits away, their grace stopped, until that path is back (LivePersons.setPath,
+   * at most LIVE_IDLE_MAX_MS). One graph rebuild on a live frame, the mode switch (PGS, §10).
    */
   function syncPath(want: 'solo' | 'group'): void {
     if (want === path) return;

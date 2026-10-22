@@ -108,6 +108,107 @@ describe('LivePersons: the session clock (§7.5, K8)', () => {
   });
 });
 
+describe('LivePersons: the grace waits while another path is in use (合照模式 toggled, K22, §3.13)', () => {
+  /** an edited person last found by the `seenBy` path at `seen`, released at `seen` while the session is on `path` */
+  function awayOn(s: LivePersons, seenBy: 'solo' | 'group', seen: number): number {
+    const id = s.claim(at(0.3), ASPECT, seen);
+    s.write([id], natural);
+    s.release(id, at(0.3), seen, seenBy);
+    return id;
+  }
+  it.each([
+    ['3999 ms after the path returns', 3999, true],
+    ['4001 ms after it', 4001, false],
+  ])('a person the path in use cannot see (dropped after a toggle) comes back on their path: %s', (_, after, same) => {
+    const s = session();
+    s.setPath('group', 0);
+    s.setPath('solo', 500); // 合照模式 turned off; the far face was last found by the group path at 500
+    const id = awayOn(s, 'group', 500);
+    s.setPath('group', 30_000); // turned on again 29.5 s later
+    const got = s.claim(at(0.3), ASPECT, 30_000 + after);
+    expect(got === id).toBe(same);
+    expect(s.edited(got)).toBe(same);
+  });
+  it('a person who left on their path keeps the grace they had left across a toggle away and back', () => {
+    for (const [after, same] of [[1999, true], [2001, false]] as const) {
+      const s = session();
+      s.setPath('group', 0);
+      const id = awayOn(s, 'group', 1000); // left at 1000 with 合照模式 on
+      s.setPath('solo', 3000); // 2000 ms of the grace spent
+      s.setPath('group', 20_000);
+      expect(s.claim(at(0.3), ASPECT, 20_000 + after) === id).toBe(same);
+    }
+  });
+  it('the time on the other path counts only on their own path; a double toggle before they are found again spends none of it', () => {
+    const s = session();
+    s.setPath('group', 0);
+    s.setPath('solo', 100);
+    const id = awayOn(s, 'group', 100);
+    s.setPath('group', 10_000);
+    s.setPath('solo', 11_000); // 1000 ms on their path, not found (the tiles had not reached them)
+    s.setPath('group', 40_000);
+    expect(s.claim(at(0.3), ASPECT, 40_000 + 2900)).toBe(id); // 1000 + 2900 ≤ 4000
+  });
+  it('the path that cannot see them re-identifies them as usual: within REID_GRACE_MS of their last sighting', () => {
+    for (const [t, same] of [[3999, true], [4001, false]] as const) {
+      const s = session();
+      s.setPath('group', 0);
+      s.setPath('solo', 0);
+      const id = awayOn(s, 'group', 0);
+      expect(s.claim(at(0.3), ASPECT, t) === id).toBe(same);
+    }
+  });
+  it('at most LIVE_IDLE_MAX_MS after their last sighting: a later return is a new person at 原圖', () => {
+    const s = session();
+    s.setPath('group', 0);
+    s.setPath('solo', 0);
+    const id = awayOn(s, 'group', 0);
+    s.setPath('group', LIVE_IDLE_MAX_MS);
+    const got = s.claim(at(0.3), ASPECT, LIVE_IDLE_MAX_MS + 1);
+    expect([got === id, s.edited(got)]).toEqual([false, false]);
+  });
+  it('a pinned person the path in use cannot see is pinned again when their path finds them (returnTo)', () => {
+    const s = session();
+    s.setPath('group', 0);
+    const id = s.claim(at(0.3), ASPECT, 0);
+    s.pin(id);
+    s.setPath('solo', 100);
+    s.release(id, at(0.3), 100, 'group');
+    expect(s.selection()).toBe('auto');
+    s.setPath('group', 20_000);
+    expect(s.claim(at(0.3), ASPECT, 21_000)).toBe(id);
+    expect(s.selection()).toBe(id);
+  });
+  it('a pause stops the grace on their path as before (the paused span shifts it)', () => {
+    const s = session();
+    s.setPath('group', 0);
+    const id = awayOn(s, 'group', 0);
+    s.pause(500);
+    s.resume(30_500, 'user');
+    expect(s.claim(at(0.3), ASPECT, 30_500 + 3400)).toBe(id); // 500 + 3400 ms of live time ≤ 4000
+  });
+  it('a release without a path, or before the loop names one, runs the grace as before', () => {
+    const s = session();
+    const a = awayOn(s, 'group', 0); // no path named yet
+    s.setPath('solo', 0);
+    expect(s.claim(at(0.3), ASPECT, 4001)).not.toBe(a);
+    const b = s.claim(at(0.6), ASPECT, 5000);
+    s.write([b], natural);
+    s.release(b, at(0.6), 5000);
+    s.setPath('group', 6000);
+    expect(s.claim(at(0.6), ASPECT, 9001)).not.toBe(b);
+  });
+  it('clear() forgets the path', () => {
+    const s = session();
+    s.setPath('solo', 0);
+    s.clear();
+    s.resume(10, 'user');
+    const a = awayOn(s, 'group', 10); // the next loop has not named its path yet: the grace runs
+    s.setPath('group', 20_000);
+    expect(s.claim(at(0.3), ASPECT, 21_000)).not.toBe(a);
+  });
+});
+
 describe('LivePersons: selection (§7.6, K9) and 全部套用 (§3.4, K10)', () => {
   const three = () => {
     const s = session();

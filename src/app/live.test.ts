@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { EDIT_DETECT_FACES, LIVE_DETECT_FACES, LOST_HOLD_MS } from '../config/limits';
+import { EDIT_DETECT_FACES, LIVE_DETECT_FACES, LOST_HOLD_MS, REID_GRACE_MS } from '../config/limits';
 import { splitLegacy } from '../edit/legacy';
 import { defaultPhoto, naturalPerson, neutralPerson } from '../edit/state';
 import { applyPreset } from '../engine/params';
@@ -796,6 +796,37 @@ describe('the group path in the live loop (§6.3, §6.4, §6.6, K13, K22)', () =
       expect(tracker!.detectVideo.mock.calls.length).toBeGreaterThan(videos);
       vi.advanceTimersByTime(2000);
       check();
+      loop.stop();
+    },
+  );
+  it.each([
+    // a far face under option C's floor: only the group path finds it; turned off, then on again
+    ['a face only 合照模式 finds (far, under option C’s floor)', true, [0.25], [0.25, 0.75]],
+    // a face the crop edge cuts: only the solo path's whole frame finds it; turned on, then off again
+    ['a face only the solo path finds (cut by the crop edge)', false, [0.25, 0.75], [0.25]],
+  ] as const)(
+    'toggling 合照模式 away from the only path that finds %s and back after more than REID_GRACE_MS: the same person, edited and selected (K22)',
+    (_, startOn, soloXs, groupXs) => {
+      const persons = new LivePersons();
+      const { tracker, loop, setPrefs } = setup({ facing: 'environment', frame: whole, fullRange: true, persons, prefs: { groupMode: startOn } });
+      tracker!.detectVideo.mockImplementation(() => soloXs.map(lmX));
+      viewDetect(tracker!, () => groupXs);
+      vi.advanceTimersByTime(1000);
+      const far = () => loop.tracks().find((t) => t.box.x > 0.5);
+      const p = far()!.person;
+      loop.select(p);
+      persons.edit(naturalPerson());
+      setPrefs({ groupMode: !startOn });
+      vi.advanceTimersByTime(LOST_HOLD_MS + REID_GRACE_MS + 1000);
+      // the path in use cannot see them: their track is gone, the person is away (and the target is the auto pick)
+      expect(far()).toBeUndefined();
+      expect(loop.tracks()).toHaveLength(1);
+      setPrefs({ groupMode: startOn });
+      vi.advanceTimersByTime(1000);
+      expect(far()?.person).toBe(p);
+      expect(persons.params(p)).toEqual(naturalPerson());
+      expect(far()!.edited).toBe(true);
+      expect(loop.selection()).toBe(p);
       loop.stop();
     },
   );

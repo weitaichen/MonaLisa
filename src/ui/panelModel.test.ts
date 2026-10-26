@@ -1398,10 +1398,23 @@ describe('the camera panel (camera per-person spec §3.2, §3.6)', () => {
     expect([one.label, one.aria]).toEqual(['磨皮', undefined]);
     // photo items too: the label and aria rules still follow ≥ 2 faces, the key does not
     const photo = sliderFor(camLens(1), sel('skin.whiten'))!;
-    expect([photo.key, photo.label, photo.aria]).toEqual(['c3:skin.whiten', '美白', undefined]);
+    expect([photo.key, photo.label, photo.aria]).toEqual(['c*:skin.whiten', '美白', undefined]);
     expect(sliderFor(camLens(2), sel('skin.whiten'))!.key).toBe(photo.key);
     // the editor with one person keeps the bare key
     expect(sliderFor(lensFor(cameraEdit(neutralPhoto(), naturalPerson()), { kind: 'person', id: LIVE }, LIVE_PERSONS, LIVE), sel('skin.smooth'))!.key).toBe('skin.smooth');
+  });
+  it('a photo item’s key carries no target: a photo drag begun with no face shown survives a face appearing (round-1 review C13)', () => {
+    const lens = (target: number | null, shown: number) =>
+      lensFor(cameraEdit(neutralPhoto(), naturalPerson()), { kind: 'person', id: LIVE }, LIVE_PERSONS, LIVE, { camera: { shown, all: false, noFace: shown === 0, target } });
+    const adjust = { ...INITIAL_SELECTION, tab: 'adjust' as const, adjust: 'adjust.brightness' as const };
+    for (const s of [adjust, sel('skin.whiten'), sel('skin.sharpen'), { ...INITIAL_SELECTION, tab: 'filter' as const }, { ...INITIAL_SELECTION, tab: 'preset' as const, presetPart: 'look' as const }]) {
+      const before = sliderFor(lens(null, 0), s);
+      if (!before) continue;
+      expect([sliderFor(lens(1, 1), s)?.key, sliderFor(lens(4, 2), s)?.key]).toEqual([before.key, before.key]);
+    }
+    expect(sliderFor(lens(null, 0), adjust)?.key).toBe('c*:adjust.brightness');
+    // a person item's key still follows the target (a target change resets its drag, §3.2)
+    expect([sliderFor(lens(1, 1), sel('skin.smooth'))?.key, sliderFor(lens(4, 2), sel('skin.smooth'))?.key]).toEqual(['c1:skin.smooth', 'c4:skin.smooth']);
   });
   it('no face shown: person items are off with the note, photo items stay; 一鍵 presets are off; 美型 / 美妝 dim', () => {
     const l = camLens(0, false, true);

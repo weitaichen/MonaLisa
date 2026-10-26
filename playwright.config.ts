@@ -81,6 +81,7 @@ export default defineConfig({
     // clips, each project running the tests tagged for its clip
     { name: 'chromium-upright-row3', testMatch: 'camera-groups.spec.ts', grep: /@row3/, use: fakeCamera('upright_row3.y4m') },
     { name: 'chromium-upright-far10', testMatch: 'camera-groups.spec.ts', grep: /@far10/, use: fakeCamera('upright_far10.y4m') },
+    { name: 'chromium-upright-behind', testMatch: 'camera-groups.spec.ts', grep: /@behind/, use: fakeCamera('upright_behind.y4m') },
     { name: 'chromium-selfie-group', testMatch: 'camera-groups.spec.ts', grep: /@selfie/, use: fakeCamera('selfie_group.y4m') },
     // E4b, the landscape ten-face regression (K20)
     { name: 'chromium-group10', testMatch: 'camera-back.spec.ts', use: fakeCamera('group10.y4m') },

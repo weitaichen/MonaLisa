@@ -1285,13 +1285,15 @@ function paramBinding(lens: Lens, id: ParamId): SliderBinding {
 
 /**
  * ≥ 2 persons: the key carries the selection, photo items read 「· 整張照片」, aria names the target (S §2.4, A9). The
- * camera: the key always carries the target person, whatever the face count, so a drag keeps its binding when a second
- * face arrives or leaves (a key change drops the drag, Slider.tsx); with ≥ 2 faces shown, photo items read 「· 整張照片」
- * and aria reads 「選取的人物」 or, under 全部套用, 「全部」 (camera per-person spec §3.2)
+ * camera: a person item's key always carries the target person, whatever the face count, so a drag keeps its binding
+ * when a second face arrives or leaves (a key change drops the drag, Slider.tsx); a photo item's carries none (`c*`), as
+ * it writes no person, so a photo drag also survives a target change, a first face appearing included (round-1 review
+ * C13); with ≥ 2 faces shown, photo items read 「· 整張照片」 and aria reads 「選取的人物」 or, under 全部套用, 「全部」
+ * (camera per-person spec §3.2)
  */
 function decorate(b: SliderBinding, lens: Lens, photo: boolean): SliderBinding {
   const cam = lens.camera;
-  const prefix = cam ? `c${cam.target ?? '-'}` : selKey(lens);
+  const prefix = cam ? `c${photo ? '*' : (cam.target ?? '-')}` : selKey(lens);
   if (!multiPerson(lens)) return cam ? { ...b, key: `${prefix}:${b.key}` } : b;
   const who = photo ? PHOTO_SCOPE : lens.sel.kind === 'all' || cam?.all ? '全部' : cam ? CAMERA_TARGET : `人物 ${personNumber(lens, lens.sel.id)}`;
   return { ...b, key: `${prefix}:${b.key}`, label: photo ? `${b.label} · ${PHOTO_SCOPE}` : b.label, aria: `${b.label}，${who}` };

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DETECTOR_FLOOR, LIVE_VIEW_MAX_EDGE, MAX_LIVE_FACES } from '../config/limits';
 import { centerCropRect } from '../ui/imaging';
-import { holdsWhole, isLarge, layoutViews, mapLandmarks, refreshViews, tileFor, viewScope, ViewSchedule } from './liveViews';
+import { holdsWhole, isLarge, layoutViews, mapLandmarks, ownViewOf, refreshViews, SHUTTER_SCOPE, shutterScope, tileFor, viewScope, ViewSchedule } from './liveViews';
 
 const crop = (w: number, h: number, ratio: number) => {
   const r = centerCropRect(w, h, ratio);
@@ -87,17 +87,74 @@ describe('assignment, scope and mapping (§6.6)', () => {
     const smallAcross = box(0.2, top, 0.05); // small, no tile holds it whole
     expect(viewScope(l.whole, l).missable(across)).toBe(true);
     expect(viewScope(l.whole, l).matchable(across)).toBe(true);
-    expect(viewScope(l.whole, l).missable(smallAcross)).toBe(true);
+    expect(viewScope(l.whole, l).missable(smallAcross)).toBe(false); // its edge tile misses it (round-2 review D9)
     expect(viewScope(l.whole, l).matchable(smallAcross)).toBe(true);
     expect(viewScope(l.whole, l).matchable(box(0.5, 0.05, 0.05))).toBe(false); // wholly above the crop
-    // the crop's edge cuts it, not t0,0's: t0,0 (x 0–720 px, from the crop's top) matches it, and still misses only
-    // what it holds whole
+    // the crop's edge cuts it, not t0,0's: t0,0 (x 0–720 px, from the crop's top) matches it, and misses it too
     expect(viewScope(l.tiles[0], l).matchable(smallAcross)).toBe(true);
-    expect(viewScope(l.tiles[0], l).missable(smallAcross)).toBe(false);
+    expect(viewScope(l.tiles[0], l).missable(smallAcross)).toBe(true);
     // cut by t0,0's right edge (720 px) inside the crop: t1,0 (x 360–1080) holds it whole
     const cut = box(720 / 1080, 0.3, 0.05);
     expect(viewScope(l.tiles[0], l).matchable(cut)).toBe(false);
     expect(viewScope(l.tiles[1], l).matchable(cut)).toBe(true);
+  });
+  it('round-2 review D9: one relation, the box clipped to the crop held whole, says which view starts, refreshes, matches and misses a face: a small face the crop’s edge cuts is its edge tile’s, one a tile’s edge cuts inside the crop the neighbour’s', () => {
+    const smallAcross = box(0.2, 240 / 1920, 0.05); // small (54 px), across the crop's top edge, which is t0,0's top
+    const [t00, t10] = [l.tiles[0], l.tiles[1]];
+    expect(tileFor(smallAcross, l)!.id).toBe('t0,0');
+    expect(ownViewOf(smallAcross, l).id).toBe('t0,0');
+    expect(refreshViews(l, [smallAcross]).map((v) => v.id)).toEqual(['whole', 't0,0']);
+    const s = viewScope(t00, l);
+    expect([s.startable!(smallAcross), s.matchable(smallAcross), s.missable(smallAcross)]).toEqual([true, true, true]);
+    expect(viewScope(l.whole, l).missable(smallAcross)).toBe(false); // under the whole view's floor: the tile that finds it misses it
+    // cut by t0,0's right edge (720 px) inside the crop: t1,0's in every respect, never t0,0's
+    const cut = box(720 / 1080, 0.3, 0.05);
+    expect([s.startable!(cut), s.matchable(cut), s.missable(cut)]).toEqual([false, false, false]);
+    const n = viewScope(t10, l);
+    expect([n.startable!(cut), n.matchable(cut), n.missable(cut)]).toEqual([true, true, true]);
+    expect(tileFor(cut, l)!.id).toBe('t1,0');
+  });
+  it('round-2 review D2, D5: a face whose owner turns on tracks the view cannot see is left to the own view of one that sees them all and may start it', () => {
+    const px = (x0: number, w: number, cy = 0.3) => ({ x: x0 / 1080, y: cy - (w / 1080) * (1080 / 1920) / 2, w: w / 1080, h: ((w / 1080) * 1080) / 1920 });
+    const [t00, t10] = [l.tiles[0], l.tiles[1]];
+    const b = px(641, 80); // across t0,0's edge: t1,0's
+    expect(ownViewOf(b, l).id).toBe('t1,0');
+    expect(ownViewOf(box(0.5, 0.5, 0.2), l).id).toBe('whole'); // large
+    // t1,0 sees B and may start a face 1 width left of it; not one only t0,0 holds, nor itself
+    expect(viewScope(t00, l).defers!([b], px(561, 80))).toBe(true);
+    expect(viewScope(t00, l).defers!([b], px(300, 80))).toBe(false);
+    expect(viewScope(t10, l).defers!([b], px(561, 80))).toBe(false);
+    // it must see every one: a second track only t0,0 holds (x 100–180) is not t1,0's to see
+    expect(viewScope(t00, l).defers!([b, px(100, 80)], px(561, 80))).toBe(false);
+    // the whole view takes a face only when large (the size it finds)
+    const big = box(0.5, 0.5, 0.2);
+    expect(viewScope(t00, l).defers!([big], box(0.45, 0.5, 0.18))).toBe(true);
+    expect(viewScope(t00, l).defers!([big], box(0.45, 0.5, 0.05))).toBe(false);
+  });
+  it('§6.6 Capture, round-5 redesign: the shutter’s scope is its answered views’ union; a face whose owner turns on a track only a view without an answer sees is left to that view', () => {
+    const px = (x0: number, w: number, cy = 0.3) => ({ x: x0 / 1080, y: cy - (w / 1080) * (1080 / 1920) / 2, w: w / 1080, h: ((w / 1080) * 1080) / 1920 });
+    const [t00, t10] = [l.tiles[0], l.tiles[1]];
+    const a = box(0.2, 0.2, 0.05); // t0,0's
+    const b = px(800, 80); // t1,0's only (x 800–880 px)
+    const big = box(0.5, 0.5, 0.2); // large: the whole view's
+    const both = shutterScope([l.whole, t00, t10], l);
+    expect(both.name).toBe(SHUTTER_SCOPE);
+    expect([a, b, big].map((x) => [both.matchable(x), both.missable(x)])).toEqual([
+      [true, true],
+      [true, true],
+      [true, true],
+    ]);
+    // t1,0 had no answer: B is matched by the whole view (which cannot miss a small face) only, so nothing misses it
+    const noT10 = shutterScope([l.whole, t00], l);
+    expect([noT10.matchable(b), noT10.missable(b), noT10.missable(a), noT10.missable(big)]).toEqual([true, false, true, true]);
+    // only t0,0 answered: B is unknown to the call (neither matched nor missed), and a face beside B is left to t1,0
+    const onlyT00 = shutterScope([t00], l);
+    expect([onlyT00.matchable(b), onlyT00.missable(b), onlyT00.missable(big)]).toEqual([false, false, false]);
+    expect(onlyT00.defers!([b], px(720, 80))).toBe(true);
+    // never to a view that answered: with t1,0 among the answers, B is the call's to decide
+    expect(shutterScope([t00, t10], l).defers!([b], px(720, 80))).toBe(false);
+    // nothing answered: the scope matches and misses nothing
+    expect([shutterScope([], l).matchable(a), shutterScope([], l).missable(a)]).toEqual([false, false]);
   });
   it('mapLandmarks: view-normalized x, y → stream UV by the rect; z scaled by the rect width over the frame width', () => {
     const lm = { points: new Float32Array(478 * 3) };

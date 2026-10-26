@@ -1,13 +1,26 @@
 // E1–E3 (camera per-person spec §12.2) on group.y4m: A above, B and C side by side below (composeGroupCam), front camera.
+// Each runs on both paths (K22): 合照模式 off (the default, the solo path) and on (the group path, §6.6), so U2–U6 are
+// tested end to end on the path the mode picks (round-1 review C20: since K22 they ran on the solo path only).
 import type { Page } from '@playwright/test';
-import { armShotOriginal, camBox, capturedRegions, capturedVsOriginal, debugState, dragSlider, expect, grab, hold, mad, regionDiff, selectPerson, test } from './fixtures';
+import { armShotOriginal, camBox, capturedRegions, capturedVsOriginal, debugState, dragSlider, expect, grab, hold, mad, regionDiff, selectPerson, setGroupMode, test, toastsSeen, watchToasts } from './fixtures';
 
-/** Home → 拍攝 → the live camera with A, B and C found, and the overlays a frame grab would catch hidden (E3 shows the 全部套用 chip again to press it) */
-async function openCamera(page: Page): Promise<{ A: string; B: string; C: string }> {
+/** the two paths: the title suffix and 合照模式 */
+const PATHS = [
+  { suffix: '', group: false },
+  { suffix: ' (合照模式: the group path)', group: true },
+] as const;
+
+/**
+ * Home → 拍攝 → the live camera with A, B and C found, and the overlays a frame grab would catch hidden (E3 shows the
+ * 全部套用 chip again to press it). `group`: 合照模式 turned on at the gate, so the stream starts on the group path
+ */
+async function openCamera(page: Page, group = false): Promise<{ A: string; B: string; C: string }> {
   await page.goto('/');
   await page.getByRole('button', { name: /拍攝/ }).click();
+  if (group) await setGroupMode(page, true);
   await page.getByRole('button', { name: '點擊開啟相機' }).click();
   await expect.poll(async () => (await debugState(page)).faces, { timeout: 120_000, intervals: [500] }).toBe(3);
+  expect((await debugState(page)).livePath).toBe(group ? 'group' : 'solo');
   // .corner-label: 按住對比's 「原圖」 tag, drawn over the frame only while held
   await page.addStyleTag({ content: '.cam-marker, .all-chip, .badge, .toast, .corner-label { display: none !important; }' });
   const boxes = (await debugState(page)).boxes;
@@ -49,124 +62,129 @@ async function changed(page: Page, ids: string[]): Promise<number[]> {
   return Promise.all(ids.map(async (id) => regionDiff(held, now, (await camBox(page, id)).rect).inside));
 }
 
-test('E1 fresh camera = original: composite only, the preview equals 按住對比, the capture the frame handed to 編輯', async ({ page }) => {
-  test.setTimeout(240_000);
-  await armShotOriginal(page);
-  await openCamera(page);
-  await page.waitForTimeout(1000);
-  expect((await debugState(page)).passes).toEqual(['composite']);
-  const frame = page.locator('.cam-stage .frame');
-  const shown = await grab(frame);
-  const release = await hold(page, page.locator('.cam-controls .side-btn', { hasText: '按住對比' }));
-  await page.waitForTimeout(400);
-  const held = await grab(frame);
-  await release();
-  const preview = mad(shown, held);
-  console.log(`E1 preview vs 按住對比: MAD ${preview}`);
-  expect(preview).toBeLessThanOrEqual(0.5);
-  await page.evaluate(() => ((window as unknown as { __armOriginal: boolean }).__armOriginal = true));
-  await page.getByRole('button', { name: '拍照' }).click();
-  const d = await capturedVsOriginal(page);
-  console.log(`E1 capture vs the unprocessed frame: ${JSON.stringify(d)}`);
-  expect(d.same).toBe(true);
-  expect(d.mad).toBeLessThanOrEqual(1);
-});
+for (const { suffix, group } of PATHS) {
+  test(`E1 fresh camera = original: composite only, the preview equals 按住對比, the capture the frame handed to 編輯${suffix}`, async ({ page }) => {
+    test.setTimeout(240_000);
+    await armShotOriginal(page);
+    await openCamera(page, group);
+    await page.waitForTimeout(1000);
+    expect((await debugState(page)).passes).toEqual(['composite']);
+    const frame = page.locator('.cam-stage .frame');
+    const shown = await grab(frame);
+    const release = await hold(page, page.locator('.cam-controls .side-btn', { hasText: '按住對比' }));
+    await page.waitForTimeout(400);
+    const held = await grab(frame);
+    await release();
+    const preview = mad(shown, held);
+    console.log(`E1 preview vs 按住對比: MAD ${preview}`);
+    expect(preview).toBeLessThanOrEqual(0.5);
+    await page.evaluate(() => ((window as unknown as { __armOriginal: boolean }).__armOriginal = true));
+    await page.getByRole('button', { name: '拍照' }).click();
+    const d = await capturedVsOriginal(page);
+    console.log(`E1 capture vs the unprocessed frame: ${JSON.stringify(d)}`);
+    expect(d.same).toBe(true);
+    expect(d.mad).toBeLessThanOrEqual(1);
+  });
 
-test('E2 per person: B adjusted, then C; each keeps its result; the capture and 編輯 carry B and C, A stays 原圖', async ({ page }) => {
-  test.setTimeout(300_000);
-  await armShotOriginal(page);
-  const { A, B, C } = await openCamera(page);
-  await tap(page, B);
-  await natural(page);
-  await page.getByRole('tab', { name: '美型', exact: true }).click();
-  await page.getByRole('option', { name: '大眼', exact: true }).click();
-  await dragSlider(page, 400);
-  await expect(page.getByRole('slider')).toHaveAttribute('aria-valuenow', '100');
-  await tap(page, C);
-  const [b1, c1, a1] = await changed(page, [B, C, A]);
-  console.log(`E2 after B: B ${b1}, C ${c1}, A ${a1}`);
-  expect(b1).toBeGreaterThan(0.5);
-  expect([c1, a1].every((v) => v < 0.3)).toBe(true);
-  await natural(page);
-  const [b2, c2, a2] = await changed(page, [B, C, A]);
-  console.log(`E2 after C: B ${b2}, C ${c2}, A ${a2}`);
-  expect([b2 > 0.5, c2 > 0.5, a2 < 0.3]).toEqual([true, true, true]);
-  const persons = new Map((await debugState(page)).boxes.map((x) => [x.id, x.edited]));
-  expect([persons.get(A), persons.get(B), persons.get(C)]).toEqual([false, true, true]);
-  // capture (U3): 預覽 shows B and C adjusted and A at 原圖, against the unprocessed frame handed to 編輯; each face's
-  // preview rect is its rect in the shot (the preview's crop, mirrored as the preview)
-  const rects = await Promise.all([B, C, A].map(async (id) => (await camBox(page, id)).rect));
-  await page.evaluate(() => ((window as unknown as { __armOriginal: boolean }).__armOriginal = true));
-  await page.getByRole('button', { name: '拍照' }).click();
-  const shot = await capturedRegions(page, rects);
-  console.log(`E2 capture vs the unprocessed frame: ${JSON.stringify(shot)} (B, C, A)`);
-  expect(shot.same).toBe(true);
-  const [b3, c3, a3] = shot.mads;
-  expect([b3 > 0.5, c3 > 0.5, a3 >= 0 && a3 < 0.3]).toEqual([true, true, true]);
-  await page.getByRole('button', { name: '編輯' }).click();
-  await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 90_000 });
-  await expect.poll(async () => (await debugState(page)).faces, { timeout: 60_000 }).toBe(3);
-  const ed = (await debugState(page)).boxes;
-  const eA = [...ed].sort((a, b) => a.y - b.y)[0];
-  // saved mirrored (mirrorOnSave, front camera): B, left of C on the unmirrored frame, is right of C in the photo
-  const [eC, eB] = ed.filter((b) => b !== eA).sort((a, b) => a.x - b.x);
-  // the camera's target (C) names the primary through the seed, and the editor selects it
-  await expect.poll(async () => (await debugState(page)).selected).toBe(eC.id);
-  /**
-   * a person's value of one item: the item first (a person item, so the 人物 chips stay selectable, S A11), then the
-   * person; face ids f0… follow the display order, as the 人物 n chips do
-   */
-  const value = async (face: { id: string }, tab: string, item: string) => {
-    await page.getByRole('tab', { name: tab, exact: true }).click();
-    await page.getByRole('option', { name: item, exact: true }).click();
-    await selectPerson(page, Number(face.id.slice(1)) + 1);
-    await expect.poll(async () => (await debugState(page)).selected).toBe(face.id);
-    return Number(await page.getByRole('slider').getAttribute('aria-valuenow'));
-  };
-  expect(await value(eB, '美型', '大眼')).toBe(100);
-  const c = await value(eC, '美型', '大眼'); // 自然's 大眼: C's camera value, not B's
-  expect(c > 0 && c < 100).toBe(true);
-  expect(await value(eA, '美膚', '磨皮')).toBe(0); // A: 原圖
-  // nobody the camera edited was dropped
-  await expect(page.getByText(/未帶入相機效果/)).toHaveCount(0);
-  // a shot with nothing set opening at 原圖 (export MAD 0) is original.spec.ts's nothing-set camera test
-});
+  test(`E2 per person: B adjusted, then C; each keeps its result; the capture and 編輯 carry B and C, A stays 原圖${suffix}`, async ({ page }) => {
+    test.setTimeout(300_000);
+    await armShotOriginal(page);
+    const { A, B, C } = await openCamera(page, group);
+    await tap(page, B);
+    await natural(page);
+    await page.getByRole('tab', { name: '美型', exact: true }).click();
+    await page.getByRole('option', { name: '大眼', exact: true }).click();
+    await dragSlider(page, 400);
+    await expect(page.getByRole('slider')).toHaveAttribute('aria-valuenow', '100');
+    await tap(page, C);
+    const [b1, c1, a1] = await changed(page, [B, C, A]);
+    console.log(`E2 after B: B ${b1}, C ${c1}, A ${a1}`);
+    expect(b1).toBeGreaterThan(0.5);
+    expect([c1, a1].every((v) => v < 0.3)).toBe(true);
+    await natural(page);
+    const [b2, c2, a2] = await changed(page, [B, C, A]);
+    console.log(`E2 after C: B ${b2}, C ${c2}, A ${a2}`);
+    expect([b2 > 0.5, c2 > 0.5, a2 < 0.3]).toEqual([true, true, true]);
+    const persons = new Map((await debugState(page)).boxes.map((x) => [x.id, x.edited]));
+    expect([persons.get(A), persons.get(B), persons.get(C)]).toEqual([false, true, true]);
+    // capture (U3): 預覽 shows B and C adjusted and A at 原圖, against the unprocessed frame handed to 編輯; each face's
+    // preview rect is its rect in the shot (the preview's crop, mirrored as the preview)
+    const rects = await Promise.all([B, C, A].map(async (id) => (await camBox(page, id)).rect));
+    await page.evaluate(() => ((window as unknown as { __armOriginal: boolean }).__armOriginal = true));
+    await page.getByRole('button', { name: '拍照' }).click();
+    const shot = await capturedRegions(page, rects);
+    console.log(`E2 capture vs the unprocessed frame: ${JSON.stringify(shot)} (B, C, A)`);
+    expect(shot.same).toBe(true);
+    const [b3, c3, a3] = shot.mads;
+    expect([b3 > 0.5, c3 > 0.5, a3 >= 0 && a3 < 0.3]).toEqual([true, true, true]);
+    // every toast from here on: the hand-over notice is the first answer's, gone 3.2 s later (one slot, state.ts), which
+    // the checks below outlast, so a look at the DOM at the end could not see it (round-1 review C19)
+    await watchToasts(page);
+    await page.getByRole('button', { name: '編輯' }).click();
+    await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 90_000 });
+    await expect.poll(async () => (await debugState(page)).faces, { timeout: 60_000 }).toBe(3);
+    const ed = (await debugState(page)).boxes;
+    const eA = [...ed].sort((a, b) => a.y - b.y)[0];
+    // saved mirrored (mirrorOnSave, front camera): B, left of C on the unmirrored frame, is right of C in the photo
+    const [eC, eB] = ed.filter((b) => b !== eA).sort((a, b) => a.x - b.x);
+    // the camera's target (C) names the primary through the seed, and the editor selects it
+    await expect.poll(async () => (await debugState(page)).selected).toBe(eC.id);
+    /**
+     * a person's value of one item: the item first (a person item, so the 人物 chips stay selectable, S A11), then the
+     * person; face ids f0… follow the display order, as the 人物 n chips do
+     */
+    const value = async (face: { id: string }, tab: string, item: string) => {
+      await page.getByRole('tab', { name: tab, exact: true }).click();
+      await page.getByRole('option', { name: item, exact: true }).click();
+      await selectPerson(page, Number(face.id.slice(1)) + 1);
+      await expect.poll(async () => (await debugState(page)).selected).toBe(face.id);
+      return Number(await page.getByRole('slider').getAttribute('aria-valuenow'));
+    };
+    expect(await value(eB, '美型', '大眼')).toBe(100);
+    const c = await value(eC, '美型', '大眼'); // 自然's 大眼: C's camera value, not B's
+    expect(c > 0 && c < 100).toBe(true);
+    expect(await value(eA, '美膚', '磨皮')).toBe(0); // A: 原圖
+    // nobody the camera edited was dropped: the notice never showed
+    expect((await toastsSeen(page)).filter((t) => /未帶入相機效果/.test(t))).toEqual([]);
+    // a shot with nothing set opening at 原圖 (export MAD 0) is original.spec.ts's nothing-set camera test
+  });
 
-test('E3 全部套用: on copies the target to all three; a slider writes all; a tap on A turns it off and selects A; nobody reverts', async ({ page }) => {
-  test.setTimeout(240_000);
-  const { A, B, C } = await openCamera(page);
-  await tap(page, B);
-  // 自然 with its photo part at 0: before 全部套用 only B differs from 按住對比, so A's and C's change below is the copy
-  await natural(page);
-  const [b0, a0, c0] = await changed(page, [B, A, C]);
-  console.log(`E3 before 全部套用: B ${b0}, A ${a0}, C ${c0}`);
-  expect([b0 > 0.5, a0 < 0.3, c0 < 0.3]).toEqual([true, true, true]);
-  await page.addStyleTag({ content: '.all-chip { display: inline-flex !important; }' });
-  const chip = page.getByRole('button', { name: '全部套用' });
-  await chip.click();
-  await expect(chip).toHaveAttribute('aria-pressed', 'true');
-  await expect.poll(async () => (await debugState(page)).selected).toBe('all');
-  expect((await debugState(page)).boxes.every((x) => x.edited)).toBe(true);
-  const on = await changed(page, [A, B, C]);
-  console.log(`E3 全部套用 on: A ${on[0]}, B ${on[1]}, C ${on[2]}`);
-  expect(on.every((v) => v > 0.5)).toBe(true);
-  // a slider writes everyone in view: 磨皮 to 100
-  await page.getByRole('tab', { name: '美膚', exact: true }).click();
-  await page.getByRole('option', { name: '磨皮', exact: true }).click();
-  await dragSlider(page, 400);
-  await expect(page.getByRole('slider')).toHaveAttribute('aria-valuenow', '100');
-  expect((await debugState(page)).boxes.every((x) => x.edited)).toBe(true);
-  // a tap on A turns 全部套用 off and selects A, whose 磨皮 the slider wrote; C got it too
-  const g = await camBox(page, A);
-  await page.mouse.click(g.point.x, g.point.y);
-  await expect(chip).toHaveAttribute('aria-pressed', 'false');
-  await expect.poll(async () => (await debugState(page)).selected).toBe(A);
-  await expect(page.getByRole('slider')).toHaveAttribute('aria-valuenow', '100');
-  await tap(page, C);
-  await expect(page.getByRole('slider')).toHaveAttribute('aria-valuenow', '100');
-  // off reverts nobody
-  const off = await changed(page, [A, B, C]);
-  console.log(`E3 全部套用 off: A ${off[0]}, B ${off[1]}, C ${off[2]}`);
-  expect(off.every((v) => v > 0.5)).toBe(true);
-  expect((await debugState(page)).boxes.every((x) => x.edited)).toBe(true);
-});
+  test(`E3 全部套用: on copies the target to all three; a slider writes all; a tap on A turns it off and selects A; nobody reverts${suffix}`, async ({ page }) => {
+    test.setTimeout(240_000);
+    const { A, B, C } = await openCamera(page, group);
+    await tap(page, B);
+    // 自然 with its photo part at 0: before 全部套用 only B differs from 按住對比, so A's and C's change below is the copy
+    await natural(page);
+    const [b0, a0, c0] = await changed(page, [B, A, C]);
+    console.log(`E3 before 全部套用: B ${b0}, A ${a0}, C ${c0}`);
+    expect([b0 > 0.5, a0 < 0.3, c0 < 0.3]).toEqual([true, true, true]);
+    await page.addStyleTag({ content: '.all-chip { display: inline-flex !important; }' });
+    const chip = page.getByRole('button', { name: '全部套用' });
+    await chip.click();
+    await expect(chip).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(async () => (await debugState(page)).selected).toBe('all');
+    expect((await debugState(page)).boxes.every((x) => x.edited)).toBe(true);
+    const on = await changed(page, [A, B, C]);
+    console.log(`E3 全部套用 on: A ${on[0]}, B ${on[1]}, C ${on[2]}`);
+    expect(on.every((v) => v > 0.5)).toBe(true);
+    // a slider writes everyone in view: 磨皮 to 100
+    await page.getByRole('tab', { name: '美膚', exact: true }).click();
+    await page.getByRole('option', { name: '磨皮', exact: true }).click();
+    await dragSlider(page, 400);
+    await expect(page.getByRole('slider')).toHaveAttribute('aria-valuenow', '100');
+    expect((await debugState(page)).boxes.every((x) => x.edited)).toBe(true);
+    // a tap on A turns 全部套用 off and selects A, whose 磨皮 the slider wrote; C got it too
+    const g = await camBox(page, A);
+    await page.mouse.click(g.point.x, g.point.y);
+    await expect(chip).toHaveAttribute('aria-pressed', 'false');
+    await expect.poll(async () => (await debugState(page)).selected).toBe(A);
+    await expect(page.getByRole('slider')).toHaveAttribute('aria-valuenow', '100');
+    await tap(page, C);
+    await expect(page.getByRole('slider')).toHaveAttribute('aria-valuenow', '100');
+    // off reverts nobody
+    const off = await changed(page, [A, B, C]);
+    console.log(`E3 全部套用 off: A ${off[0]}, B ${off[1]}, C ${off[2]}`);
+    expect(off.every((v) => v > 0.5)).toBe(true);
+    expect((await debugState(page)).boxes.every((x) => x.edited)).toBe(true);
+  });
+}

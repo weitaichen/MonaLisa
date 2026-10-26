@@ -25,11 +25,12 @@ import {
   SELFIE_GROUP,
   shiftFrame,
   TILE_FACE,
+  UPRIGHT_BEHIND,
   UPRIGHT_FAR10,
   UPRIGHT_ROW3,
 } from '../../../scripts/gen-y4m.mjs';
 import { layoutViews, tileFor } from '../../../src/app/liveViews.ts';
-import { DETECTOR_FLOOR } from '../../../src/config/limits.ts';
+import { DETECTOR_FLOOR, SEED_BOX_PAD } from '../../../src/config/limits.ts';
 
 const fx = (n) => join(import.meta.dirname, '..', '..', 'fixtures', n);
 /** a JPEG's [width, height] from its first SOFn marker */
@@ -300,6 +301,33 @@ describe('upright and move clips (camera per-person spec §12.3)', () => {
     const fh = (UPRIGHT_FAR10.faces.reduce((s, f) => s + px(f).w, 0) / 10) * FH;
     expect((px(rows[1][0]).y - px(rows[0][0]).y) / fh).toBeCloseTo(1.6, 1);
   });
+  it('UPRIGHT_BEHIND (E4d, round-3 review E7): a far face at 3.2 % just above a near one at 15 %, boxed apart, its centre in the near face’s padded box', () => {
+    expect(LAYOUTS.upright_behind).toBe(UPRIGHT_BEHIND);
+    const [near, far] = UPRIGHT_BEHIND.faces;
+    expect([near.fw, far.fw]).toEqual([0.15, 0.032]);
+    // the oval boxes in px (fw of the long edge, FH tall)
+    const oval = (f) => {
+      const p = px(f);
+      return { x: p.x - p.w / 2, y: p.y - (p.w * FH) / 2, w: p.w, h: p.w * FH };
+    };
+    const [n, r] = [oval(near), oval(far)];
+    for (const b of [n, r]) expect(b.x >= 0 && b.y >= 0 && b.x + b.w <= 1080 && b.y + b.h <= 1920).toBe(true);
+    // boxed apart: no overlap at all, so no IoU pairs them
+    expect(r.y + r.h).toBeLessThan(n.y);
+    // the far face's centre inside the near face's box padded by SEED_BOX_PAD (the padded-centre rule's box), with a
+    // margin for the detected boxes not being the layout's
+    const c = px(far);
+    const pad = { x: n.x - SEED_BOX_PAD * n.w, y: n.y - SEED_BOX_PAD * n.h, w: n.w * (1 + 2 * SEED_BOX_PAD), h: n.h * (1 + 2 * SEED_BOX_PAD) };
+    expect(c.y - pad.y).toBeGreaterThan(20);
+    expect(pad.x + pad.w - c.x).toBeGreaterThan(20);
+    // the far face under the full-range photo floor, the near one over it (the editor's one pass finds the near face only)
+    expect(far.fw).toBeLessThan(DETECTOR_FLOOR.photo);
+    expect(near.fw).toBeGreaterThan(DETECTOR_FLOOR.photo);
+    // the cells: whole in the frame; the far one, drawn last, runs over the near one's top margin, never its face
+    const [nc, rc] = UPRIGHT_BEHIND.faces.map((s) => smallFaceCell({ ...s, fw: (s.fw * 1920) / 1080 }, UPRIGHT_BEHIND));
+    for (const k of [nc, rc]) expect(k.x >= 0 && k.y >= 0 && k.x + k.size <= 1080 && k.y + k.size <= 1920).toBe(true);
+    expect(rc.y + rc.size).toBeLessThan(n.y);
+  });
   it('SELFIE_GROUP: two near faces at 14 % and 16 % in the lower half, three at 6–8 % in a row behind them, all whole', () => {
     const [back, near] = rowsOf(SELFIE_GROUP);
     expect([near.map((f) => f.fw), back.map((f) => f.fw)]).toEqual([
@@ -393,6 +421,6 @@ describe('upright and move clips (camera per-person spec §12.3)', () => {
   });
   it('NOTICE lists the generated clips as modified derivatives (Apache-2.0 §4(b))', () => {
     const notice = readFileSync(join(import.meta.dirname, '..', '..', '..', 'LICENSES', 'NOTICE.txt'), 'utf8');
-    for (const clip of ['upright_row3.y4m', 'upright_far10.y4m', 'selfie_group.y4m', 'tile_face.y4m', 'group10.y4m', 'group_move.y4m']) expect(notice).toContain(clip);
+    for (const clip of ['upright_row3.y4m', 'upright_far10.y4m', 'upright_behind.y4m', 'selfie_group.y4m', 'tile_face.y4m', 'group10.y4m', 'group_move.y4m']) expect(notice).toContain(clip);
   });
 });

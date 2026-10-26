@@ -5,7 +5,7 @@
 // spec U6, §3.8; changed on purpose, §12.2). The camera keeps its own photo look for its preview and capture (its person
 // part is not applied, K15), and starts at 原圖 for anyone who never saved one (a fresh install, or an upgrader).
 import type { Page } from '@playwright/test';
-import { armShotOriginal, capturedVsOriginal, debugState, dragSlider, expect, exportDiff, grab, hold, importFixture, mad, SAMPLE_FACE, settled, test } from './fixtures';
+import { armShotOriginal, capturedVsOriginal, debugState, dragSlider, expect, exportDiff, grab, hold, importFixture, mad, SAMPLE_FACE, settled, test, toastsSeen, watchToasts } from './fixtures';
 
 const SEGMENTER = /\/models\/image_segmenter\//;
 const POSE_MODEL = /\/models\/pose_landmarker\//;
@@ -203,7 +203,10 @@ test('a shot with a camera look opens in 編輯 with it (U6): the photo look fro
   expect(captured.same).toBe(true);
   expect(captured.mad, 'the capture is drawn with the camera look').toBeGreaterThan(2);
 
-  // 編輯: the camera's photo look from the first frame, and the first answer gives the face's person the camera params
+  // 編輯: the camera's photo look from the first frame, and the first answer gives the face's person the camera params.
+  // Every toast from here on: the hand-over notice would be the first answer's and gone 3.2 s later, before the checks
+  // below end (round-1 review C19)
+  await watchToasts(page);
   await openEditor(page);
   await page.getByRole('tab', { name: '美膚', exact: true }).click();
   await page.getByRole('option', { name: '磨皮', exact: true }).click();
@@ -213,8 +216,8 @@ test('a shot with a camera look opens in 編輯 with it (U6): the photo look fro
   await page.getByRole('tab', { name: '一鍵', exact: true }).click();
   await expect(page.getByRole('option', { name: '自然', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect.poll(async () => (await debugState(page)).passes.some((p) => p !== 'composite'), { timeout: 30_000 }).toBe(true);
-  // the face was found, so nobody was dropped
-  await expect(page.getByText(/未帶入相機效果/)).toHaveCount(0);
+  // the face was found, so nobody was dropped: the notice never showed
+  expect((await toastsSeen(page)).filter((t) => /未帶入相機效果/.test(t))).toEqual([]);
 });
 
 test('a stored camera look after a reload: its photo part draws the camera, its person part is not applied (K15)', async ({ page }) => {

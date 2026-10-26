@@ -2,7 +2,7 @@
 // (camera per-person spec §5.4) and the photo hit test.
 // Pure and resolution-free (normalized O-space; iso distances divide y by the aspect).
 import { fieldAt } from '../body/cpuWarp';
-import { SEED_BOX_PAD } from '../config/limits';
+import { HANDOVER_IOU, SEED_BOX_PAD, TRACK_SIZE_JUMP } from '../config/limits';
 import { maskCoversFace } from '../ui/faceProtectModel';
 import type { BodyField, Face, PersonId, PersonInfoCached, PersonMask, Pose33, Rect } from '../types';
 import { maskHit } from './bodyHit';
@@ -127,49 +127,117 @@ export function seedPrimary(seed: { x: number; y: number }, faces: readonly { id
   return best;
 }
 
-/** a camera box and an editor face of one person by box overlap (camera per-person spec §5.4 item 1) */
-const HANDOVER_IOU = 0.3;
+/**
+ * A hand-over person's box is the captured frame's (K13): found at the shutter. A person held there (known missing: a
+ * call that could see them missed them) or not refreshed on the captured frame and not known missing (`stale`: unseen
+ * since a no-answer, round-3 review E5, or found before that frame and fed by no call on it, round-5 review: their
+ * views had no answer there, or the call could not feed them, a find its view's edge cut or a face left to another
+ * view, §7.1 I3) has a box that is the last answer's, a guess of where they were (matchHandOver's `guessed`, the
+ * retries' owns in still.ts): a held one pairs only by box IoU; a stale one, not known missing, by box IoU, else, as
+ * a found one, by the padded centre with a face of about its size (pairsByCentre, aboutSize; round-4 review F2,
+ * round-6 review H3)
+ */
+export const onShutterFrame = (p: { held?: boolean; stale?: boolean }): boolean => !p.held && !p.stale;
 
 /**
- * The camera hand-over's boxes (each edited camera person in the photo's UV) → the editor's faces (camera per-person
- * spec §5.4, K14): pairs by box IoU ≥ 0.3, the best first; then, for the boxes left, by the padded-centre rule of
- * seedPrimary (a face whose box padded by SEED_BOX_PAD holds the box's centre), the nearest first; one to one, ties in
- * the input order (boxes, then faces). A box left over is missed: its person is dropped, never given another face.
- * `pairs`: [box index, face id], the IoU pairs first.
+ * the box may pair by the padded centre with a face of about its size (matchHandOver's last rule, the retries' owns):
+ * found at the shutter, or `stale` (not known missing); a held box (known missing: they may have left) only by box IoU
+ * (round-2 review D6, round-4 review F2)
  */
-export function matchHandOver(boxes: readonly Rect[], faces: readonly { id: string; box: Rect }[]): { pairs: readonly [number, string][]; missed: number } {
+export const pairsByCentre = (p: { held?: boolean; stale?: boolean }): boolean => onShutterFrame(p) || !!p.stale;
+
+/**
+ * a face of about the box's size: their widths within × TRACK_SIZE_JUMP, the tracker's own size gate (camera per-person
+ * spec §7.3 item 3), so never D6's smaller stranger standing where they were (round-4 review F2), nor a found
+ * neighbour's face of another size (round-6 review H4)
+ */
+export const aboutSize = (a: Rect, b: Rect): boolean => Math.max(a.w / b.w, b.w / a.w) <= TRACK_SIZE_JUMP;
+
+/**
+ * The camera hand-over's boxes (each camera person in the photo's UV) → the editor's faces (camera per-person spec §5.4,
+ * K14), one to one, by the rules' strength first and the box's evidence next (round-3 review E4): every pair by box
+ * IoU ≥ 0.3 (a face of the box's size in its place), the best first, the captured frame's boxes before the `guessed`
+ * ones; only then, for the found and the `stale` boxes left (pairsByCentre; a held one never), by the padded-centre
+ * rule of seedPrimary (a face whose box padded by SEED_BOX_PAD holds the box's centre) with a face of about the box's
+ * size only (aboutSize), the nearest first, found or stale, a found box first at equal distance; other ties in the
+ * input order (boxes, then faces, then obstacles). The `obstacles` (faces the editor's size filter or cap dropped) take part as
+ * faces do, so a camera box on one is claimed by it and matches nothing: never the neighbour whose padded box holds its
+ * centre (round-1 review C10). A box left over is missed: its person is dropped, never given another face.
+ * Round-2 review D6: a held box gave its params by the padded centre to a smaller face, a far stranger the camera
+ * never tracked, standing where they were. Round-3 review E4: round 2 ran the found boxes' centre rule before the held
+ * boxes' IoU, so a found neighbour whose own face the editor missed took the face of a held person standing on it, at
+ * IoU 0.94, by its centre. Round-4 review F2: a `stale` box (not known missing: believed still in the picture, its box
+ * the last answer's) still left pairs by the padded centre too, with a face of about its size only; IoU alone dropped a
+ * person who had moved a third of a face width while the tracker could not answer, and counted them missing
+ * (「未偵測到臉部」) although 編輯 had found that face. Round-5 review G3: F2 ran the found boxes' centre pass before the
+ * stale boxes', so a smaller found neighbour partly behind a stale person who had moved, whose own face the editor
+ * missed, took that person's face by its centre (their face got the neighbour's params or 原圖, and they were counted).
+ * Round-6 review H3: G3 still ran the found boxes' sized pass first, so a neighbour of that face's size did the same.
+ * Within the centre rule the captured frame is no stronger evidence: a found box of a face's size at IoU under 0.3
+ * with it, on the same pixels, is not on it, while a stale box may be that face moved; so the nearer box goes first,
+ * either kind. H4: a found box paired by the plain
+ * padded centre with a face of any size (a third of its width, or twice it), so a smaller neighbour partly behind a
+ * held person who had moved, whose own face the editor missed, took that person's face (their params on it, uncounted,
+ * and the neighbour's own face, never retried, at 原圖); a face not of the box's size is someone else's, as for the
+ * tracker (§7.3 item 3), so the box is lost and its retry looks for its own face.
+ * `pairs`: [box index, face id] in the order taken (the found boxes' IoU pairs, the guessed boxes', then the centre
+ * pairs), never an obstacle; `missed`: the boxes paired with no face; `lost`: the indices of the boxes paired with
+ * nothing, not even an obstacle (the ones the editor's retries ask for, still.ts).
+ */
+export function matchHandOver(
+  boxes: readonly Rect[],
+  faces: readonly { id: string; box: Rect }[],
+  obstacles: readonly { box: Rect }[] = [],
+  guessed: readonly boolean[] = [],
+  stale: readonly boolean[] = [],
+): { pairs: readonly [number, string][]; missed: number; lost: readonly number[] } {
+  // an obstacle's key: no face id holds a NUL
+  const all = [...faces.map((f) => ({ id: f.id, box: f.box })), ...obstacles.map((o, k) => ({ id: `\0${k}`, box: o.box }))];
   const usedB = new Set<number>();
   const usedF = new Set<string>();
-  const pairs: [number, string][] = [];
-  const take = (cand: { i: number; f: string; k: number }[]) => {
-    // Array.prototype.sort is stable: equal keys keep the order they were listed in (boxes, then faces)
-    cand.sort((a, b) => a.k - b.k);
+  const paired: [number, string][] = [];
+  /** `k`: the key, smaller first; `g`: at an equal key, 0 (a found box) before 1 (a guessed one) */
+  const take = (cand: { i: number; f: string; k: number; g?: number }[]) => {
+    // Array.prototype.sort is stable: equal keys keep the order they were listed in (boxes, then faces, then obstacles)
+    cand.sort((a, b) => a.k - b.k || (a.g ?? 0) - (b.g ?? 0));
     for (const c of cand) {
       if (usedB.has(c.i) || usedF.has(c.f)) continue;
       usedB.add(c.i);
       usedF.add(c.f);
-      pairs.push([c.i, c.f]);
+      paired.push([c.i, c.f]);
     }
   };
-  const byIoU: { i: number; f: string; k: number }[] = [];
-  boxes.forEach((b, i) => {
-    for (const f of faces) {
-      const iou = boxIoU(b, f.box);
-      if (iou >= HANDOVER_IOU) byIoU.push({ i, f: f.id, k: -iou });
-    }
-  });
-  take(byIoU);
-  const byCentre: { i: number; f: string; k: number }[] = [];
-  boxes.forEach((b, i) => {
-    if (usedB.has(i)) return;
-    const c: [number, number] = [b.x + b.w / 2, b.y + b.h / 2];
-    for (const f of faces) {
-      if (usedF.has(f.id) || !inside(pad(f.box, SEED_BOX_PAD), c)) continue;
-      byCentre.push({ i, f: f.id, k: Math.hypot(f.box.x + f.box.w / 2 - c[0], f.box.y + f.box.h / 2 - c[1]) });
-    }
-  });
-  take(byCentre);
-  return { pairs, missed: boxes.length - pairs.length };
+  const byIoU = (guess: boolean) => {
+    const cand: { i: number; f: string; k: number }[] = [];
+    boxes.forEach((b, i) => {
+      if (!!guessed[i] !== guess) return;
+      for (const f of all) {
+        const iou = boxIoU(b, f.box);
+        if (iou >= HANDOVER_IOU) cand.push({ i, f: f.id, k: -iou });
+      }
+    });
+    take(cand);
+  };
+  /** the padded-centre rule with a face of about the box's size, for the found and the stale boxes left */
+  const centred = () => {
+    const cand: { i: number; f: string; k: number; g: number }[] = [];
+    boxes.forEach((b, i) => {
+      if (usedB.has(i) || !pairsByCentre({ held: !!guessed[i], stale: !!stale[i] })) return;
+      const c: [number, number] = [b.x + b.w / 2, b.y + b.h / 2];
+      for (const f of all) {
+        if (usedF.has(f.id) || !inside(pad(f.box, SEED_BOX_PAD), c) || !aboutSize(b, f.box)) continue;
+        cand.push({ i, f: f.id, k: Math.hypot(f.box.x + f.box.w / 2 - c[0], f.box.y + f.box.h / 2 - c[1]), g: guessed[i] ? 1 : 0 });
+      }
+    });
+    take(cand);
+  };
+  // the rules by their strength: IoU, the captured frame's boxes first (E4); then the padded centre with a face of
+  // about the box's size, found and stale boxes together, the nearest first (round-6 review H3, H4)
+  byIoU(false);
+  byIoU(true);
+  centred();
+  const pairs = paired.filter(([, f]) => !f.startsWith('\0'));
+  return { pairs, missed: boxes.length - pairs.length, lost: boxes.flatMap((_, i) => (usedB.has(i) ? [] : [i])) };
 }
 
 export interface HitCtx {

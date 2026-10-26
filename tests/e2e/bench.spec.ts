@@ -13,6 +13,18 @@ test('bench.html: 開始 → live engine + tracker + camera with fps and face', 
   expect(d.lastError).toBeNull();
   expect(d.detectMs).toBeGreaterThan(0);
   expect(d.renderMs).toBeGreaterThan(0);
+  // 美顏對象 (round-1 review C24): every face (the default) or the target only, as 0.5's bench drew; one face is edited
+  // either way
+  const every = page.getByRole('button', { name: '每張臉', exact: true });
+  const target = page.getByRole('button', { name: '僅選取的人（0.5）', exact: true });
+  await expect(every).toHaveClass(/\bon\b/);
+  await target.click();
+  await expect(target).toHaveClass(/\bon\b/);
+  await expect(every).not.toHaveClass(/\bon\b/);
+  await expect.poll(async () => (await debugState(page)).boxes?.[0]?.edited ?? false).toBe(true);
+  await every.click();
+  await expect(every).toHaveClass(/\bon\b/);
+  await expect.poll(async () => (await debugState(page)).boxes?.[0]?.edited ?? false).toBe(true);
   await shot(page, '40-bench-live');
 });
 

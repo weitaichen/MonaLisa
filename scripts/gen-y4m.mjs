@@ -8,11 +8,11 @@
 // in headless Chromium first: ten_faces.jpg → group10.y4m);
 // `--noise <seed>` (per-frame sub-pixel shifts + ±2 levels of noise) or `--pan <FW/s>` (`--fw <px>`, `--frames <n>`)
 // make every frame distinct.
-// Camera per-person clips (spec §12.3): `--layout upright_row3|upright_far10|selfie_group` (composeCells: sample_face.png
-// cells on an upright 1080×1920 frame, 8 static frames, out tests/fixtures/<layout>.y4m), `--layout tile_face` (bench
-// row JG's still clip, TILE_FACE: one cell on 1280×720, 60 noisy frames; no e2e uses it, so global-setup does not make
-// it) and `--move` (group_move.y4m: group_faces.png's A, B and C along moveAt's 18 s timeline, 640×360); `--seed <n>`
-// seeds their sub-pixel offsets.
+// Camera per-person clips (spec §12.3): `--layout upright_row3|upright_far10|upright_behind|selfie_group` (composeCells:
+// sample_face.png cells on an upright 1080×1920 frame, 8 static frames, out tests/fixtures/<layout>.y4m), `--layout
+// tile_face` (bench row JG's still clip, TILE_FACE: one cell on 1280×720, 60 noisy frames; no e2e uses it, so
+// global-setup does not make it) and `--move` (group_move.y4m: group_faces.png's A, B and C along moveAt's 18 s
+// timeline, 640×360); `--seed <n>` seeds their sub-pixel offsets.
 import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -374,8 +374,25 @@ export const SELFIE_GROUP = {
  */
 export const TILE_FACE = { width: W, height: H, faces: [{ fw: 0.14, cx: 0.427, cy: 0.46, mirror: false }], noise: { seed: 7, frames: 60 } };
 
+/**
+ * E4d's blocker scene (camera per-person spec §12.2, round-3 review E7): a far face at 3.2 % of the long edge (61 px, as
+ * UPRIGHT_FAR10's back row) just above and right of a near face at 15 % (288 px), as someone standing behind a
+ * shoulder. The near face's oval box (288 × 336 px around (540, 1136)) tops out at y 968; padded by SEED_BOX_PAD (0.25)
+ * it reaches up to y 884 and right to x 756, so the far face's centre (640, 921) lies inside it while the far face
+ * (y 886–957) is boxed apart from the near one (IoU 0). On a 9:16 shot the editor's one full-range pass finds the near
+ * face only: the hand-over's never-edited box on it (round-1 review C7) is all that keeps an edited far person's box
+ * from taking it by the padded-centre rule.
+ */
+export const UPRIGHT_BEHIND = {
+  ...UPRIGHT,
+  faces: [
+    { fw: 0.15, cx: 0.5, cy: 1136 / 1920, mirror: false },
+    { fw: 0.032, cx: 640 / 1080, cy: 921 / 1920, mirror: true },
+  ],
+};
+
 /** `--layout` names */
-export const LAYOUTS = { upright_row3: UPRIGHT_ROW3, upright_far10: UPRIGHT_FAR10, selfie_group: SELFIE_GROUP, tile_face: TILE_FACE };
+export const LAYOUTS = { upright_row3: UPRIGHT_ROW3, upright_far10: UPRIGHT_FAR10, upright_behind: UPRIGHT_BEHIND, selfie_group: SELFIE_GROUP, tile_face: TILE_FACE };
 
 /** `n` distinct I420 frames of `rgb` (w×h): each shifted by a seeded sub-pixel offset in [−0.5, 0.5) px with ±2 levels of noise */
 export function noiseFrames(rgb, w, h, seed, n) {

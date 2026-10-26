@@ -29,6 +29,8 @@ export const NO_BODY_NOTE = '這位人物未偵測到身體，僅能使用增高
 export const NO_FACE_PHOTO_NOTE = '未偵測到臉部，臉型與美妝不會套用';
 /** the camera with a working tracker and no face shown: person items are off, photo items stay (camera per-person spec §3.6, K11) */
 export const CAMERA_NO_FACE_NOTE = '未偵測到臉部，對準人臉後即可調整';
+/** the same before the stream is live: the gate, 正在開啟相機…, 相機已暫停 (§3.6, round-1 review C4) */
+export const CAMERA_OFF_NOTE = '開啟相機並對準人臉後即可調整';
 
 export interface PersonInfo {
   id: PersonId;
@@ -46,11 +48,14 @@ export interface CameraLensInfo {
   shown: number;
   /** 全部套用 is on: person items write everyone in view, and ⊘ also resets the tab's photo items */
   all: boolean;
-  /** a working tracker shows no face: person items write nothing and say CAMERA_NO_FACE_NOTE */
+  /** a working tracker shows no face: person items write nothing and say CAMERA_NO_FACE_NOTE (or `offNote`) */
   noFace: boolean;
+  /** with `noFace`, the note instead of CAMERA_NO_FACE_NOTE (before the stream is live: CAMERA_OFF_NOTE) */
+  offNote?: string;
   /**
-   * the camera person the sliders edit; null for none. Slider identity: every camera slider key carries it, whatever
-   * the face count, so a target change resets the drag state and a face-count change does not
+   * the camera person the sliders edit; null for none. Slider identity: every camera person item's slider key carries
+   * it, whatever the face count, so a target change resets the drag state and a face-count change does not; a photo
+   * item's carries none (it writes no person, round-1 review C13)
    */
   target: number | null;
 }
@@ -151,7 +156,7 @@ function baseLensFor(edit: EditState, sel: Selection, persons: readonly PersonIn
    */
   const photoToo = sel.kind === 'all' || !!camera?.all || !multi;
   /** the camera with no face shown: every person item and face target is off (§3.6); lens.noFace stays false, so no all-skin 磨皮 */
-  const personOff = camera?.noFace ? CAMERA_NO_FACE_NOTE : null;
+  const personOff = camera?.noFace ? (camera.offNote ?? CAMERA_NO_FACE_NOTE) : null;
 
   function targets(id: ParamId): PersonId[] {
     if (isPhoto(id) || personOff) return [];

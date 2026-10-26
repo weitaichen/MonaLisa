@@ -1,6 +1,7 @@
 // The camera's group path, its pure part (camera per-person spec §6.6, K17): the fixed views of the visible crop (the
 // whole view and a grid of zoomed tiles), which view refreshes which track, the call schedule, the view → stream UV
-// mapping of a call's landmarks, and the scope a call matches and misses in. No DOM, no GL, no tracker.
+// mapping of a call's landmarks, and the scope a call matches and misses in (one view's, or the shutter's union of its
+// views, §6.6 Capture). No DOM, no GL, no tracker.
 import { DETECTOR_FLOOR, LIVE_FACE_FLOOR, LIVE_SCAN_EVERY, LIVE_VIEW_MAX_EDGE, MAX_LIVE_FACES } from '../config/limits';
 import type { FaceDetectorKind, Facing, Landmarks478, PxRect, Rect } from '../types';
 
@@ -23,13 +24,26 @@ export interface ViewLayout {
   tiles: readonly LiveView[];
 }
 
-/** what one group-path call may match (faces to tracks) and miss (tracks it finds no face for), on predicted boxes in stream UV */
+/**
+ * what one group-path call may match (faces to tracks) and miss (tracks it finds no face for), on predicted boxes in
+ * stream UV, and which of its faces may start a track
+ */
 export interface DetectScope {
   name: string;
   /** the view in stream UV */
   view: Rect;
-  matchable(pred: Rect): boolean;
+  /** the view holds this box (a track's predicted box, or a face's own box) whole once clipped to the visible crop */
+  matchable(box: Rect): boolean;
   missable(pred: Rect): boolean;
+  /** a face with this box starts a track (viewScope: the view holds it, as `matchable`); absent: the view holds the box whole, unclipped */
+  startable?(box: Rect): boolean;
+  /**
+   * §7.1 I3: a face whose owner this call cannot tell, because some of its candidate tracks (`preds`, their predicted
+   * boxes) are where the view cannot see, is left to another view: true when the own view (`ownViewOf`) of one of them
+   * sees every one of them and may start the face (a tile; the whole view only for a large face, the size it finds).
+   * Absent: never (the call then cannot tell who the face is: a new person at 原圖, A2)
+   */
+  defers?(preds: readonly Rect[], box: Rect): boolean;
 }
 
 /**
@@ -78,14 +92,17 @@ export function isLarge(box: Rect, layout: ViewLayout): boolean {
   return box.w * layout.frame.w >= 1.25 * DETECTOR_FLOOR[layout.detector] * Math.max(layout.crop.w, layout.crop.h);
 }
 
-/** the tile that refreshes a small box: among the tiles holding it whole, the one with the nearest centre (null: none holds it) */
+/**
+ * the tile that refreshes a small box: among the tiles holding it whole once it is clipped to the visible crop (the
+ * relation every view's scope uses, viewScope), the one with the nearest centre (null: none holds it)
+ */
 export function tileFor(box: Rect, layout: ViewLayout): LiveView | null {
   const cx = (box.x + box.w / 2) * layout.frame.w;
   const cy = (box.y + box.h / 2) * layout.frame.h;
   let best: LiveView | null = null;
   let bestD = Infinity;
   for (const t of layout.tiles) {
-    if (!holdsWhole(t, box, layout)) continue;
+    if (!holdsInCrop(t, box, layout)) continue;
     const d = Math.hypot(t.rect.x + t.rect.w / 2 - cx, t.rect.y + t.rect.h / 2 - cy);
     if (d < bestD) {
       best = t;
@@ -93,6 +110,11 @@ export function tileFor(box: Rect, layout: ViewLayout): LiveView | null {
     }
   }
   return best;
+}
+
+/** §6.6 Assignment: the view that refreshes a track predicted at `pred`, its own view: the whole view for a large track or one no tile holds, else its tile */
+export function ownViewOf(pred: Rect, layout: ViewLayout): LiveView {
+  return isLarge(pred, layout) ? layout.whole : (tileFor(pred, layout) ?? layout.whole);
 }
 
 /** §6.6 Schedule: the refresh views of the tracks' predicted boxes, the whole view first, then each tile a small box needs (raster order) */
@@ -119,23 +141,74 @@ function holdsInCrop(view: LiveView, box: Rect, layout: ViewLayout): boolean {
 }
 
 /**
- * §6.6 Mapping and matching: a view matches the tracks whose predicted box, clipped to the visible crop, it holds whole
- * (the whole view: every track partly in view). A face cut by a tile's edge is the overlapping tile's; one cut by the
- * crop's edge (it stops near it while its velocity carries the prediction past; the frame's edge cuts it) is no view's
- * to hold whole, so the views at that edge match it, else the call misses it and its face starts a new person (A2; E5,
- * detector.spec.ts D2). A tile misses what it holds whole; the whole view misses large tracks and tracks no tile holds (a
- * track out of the crop leaves within LOST_HOLD_MS). Every other track is no event for the call.
+ * §6.6 Mapping and matching: one relation says what a view holds, a box (a track's predicted box, or a face's) that it
+ * holds whole once the box is clipped to the visible crop (holdsInCrop: no view sees past the crop), and it decides
+ * alike which views match a track, which may start a face, which view refreshes a track (tileFor, ownViewOf) and which
+ * can miss it, so the view that finds a face is the one that keeps it. The whole view holds every box partly in view. A
+ * face cut by a tile's edge inside the crop is the overlapping tile's in every respect; one cut by the crop's own edge
+ * (a close-up selfie's forehead or chin on 3:4 or 1:1, a head the back camera's crop cuts, a face that stops near the
+ * edge while its velocity carries the prediction past) is held by the views at that edge, which no other view overlaps
+ * there: the whole view and the edge tile start it, match it, and the one that refreshes it misses it (C6; round-2
+ * review D9: a tile kept the unclipped rule for starting, refreshing and missing, so a small far face the crop's edge
+ * cut, which only that tile can find, was never tracked with 合照模式 on; E5, detector.spec.ts D2). A face the view
+ * holds may feed a track the view cannot match (one predicted across a tile's edge: round-1 review C5, FaceTracks). A
+ * tile misses what it holds; the whole view misses large tracks and tracks no tile holds (a track out of the crop
+ * leaves within LOST_HOLD_MS). Every other track is no event for the call. A face whose owner turns on tracks the view
+ * cannot see goes to the own view of one of them that sees them all and may start it (`defers`, round-2 review D2,
+ * D5): it is in every cycle (`refreshViews`).
  */
 export function viewScope(view: LiveView, layout: ViewLayout): DetectScope {
   const { w, h } = layout.frame;
   const uv = { x: view.rect.x / w, y: view.rect.y / h, w: view.rect.w / w, h: view.rect.h / h };
-  const matchable = (pred: Rect) => holdsInCrop(view, pred, layout);
-  if (view.kind === 'tile') return { name: view.id, view: uv, matchable, missable: (pred) => holdsWhole(view, pred, layout) };
+  const matchable = (box: Rect) => holdsInCrop(view, box, layout);
+  const defers = (preds: readonly Rect[], box: Rect): boolean => defersTo(preds, box, layout, (own) => own.id === view.id);
+  if (view.kind === 'tile') return { name: view.id, view: uv, matchable, missable: matchable, startable: matchable, defers };
   return {
     name: view.id,
     view: uv,
     matchable,
-    missable: (pred) => isLarge(pred, layout) || !layout.tiles.some((t) => holdsWhole(t, pred, layout)),
+    missable: (pred) => isLarge(pred, layout) || !layout.tiles.some((t) => holdsInCrop(t, pred, layout)),
+    startable: matchable,
+    defers,
+  };
+}
+
+/**
+ * §7.1 I3 (`DetectScope.defers`): the own view (`ownViewOf`) of one of `preds`, other than the views `here` names (the
+ * call's own), that sees every one of them and may start the face at `box` (a tile; the whole view only for a large face)
+ */
+function defersTo(preds: readonly Rect[], box: Rect, layout: ViewLayout, here: (own: LiveView) => boolean): boolean {
+  for (const own of new Set(preds.map((p) => ownViewOf(p, layout)))) {
+    if (here(own) || (own.kind === 'whole' && !isLarge(box, layout))) continue;
+    const s = viewScope(own, layout);
+    const starts = s.startable ?? ((b: Rect) => holdsWhole(own, b, layout));
+    if (preds.every((p) => s.matchable(p) || s.missable(p)) && starts(box)) return true;
+  }
+  return false;
+}
+
+/** the name of the shutter's one call over its views' answers (FaceTracks.detectViews, §6.6 Capture) */
+export const SHUTTER_SCOPE = 'shutter';
+
+/**
+ * §6.6 Capture: the scope of the shutter's one call, the union of `views` (the views of its cycle that answered on the
+ * captured frame): it matches, misses and starts what any of them can, so a track is missed only when a view that
+ * answered could miss it (and no answer found its face, FaceTracks.detectViews), and a track none of them can match or
+ * miss (its own view had no answer) is unknown to the call, a face whose owner turns on it left to that view (I3).
+ * Each face keeps its own view's scope for what the call does with it (feeding, starting: detectViews).
+ */
+export function shutterScope(views: readonly LiveView[], layout: ViewLayout): DetectScope {
+  const scopes = views.map((v) => viewScope(v, layout));
+  const ran = new Set(views.map((v) => v.id));
+  const { w, h } = layout.frame;
+  const c = layout.crop;
+  return {
+    name: SHUTTER_SCOPE,
+    view: { x: c.x / w, y: c.y / h, w: c.w / w, h: c.h / h },
+    matchable: (box) => scopes.some((s) => s.matchable(box)),
+    missable: (pred) => scopes.some((s) => s.missable(pred)),
+    startable: (box) => scopes.some((s) => s.startable?.(box) ?? s.matchable(box)),
+    defers: (preds, box) => defersTo(preds, box, layout, (own) => ran.has(own.id)),
   };
 }
 

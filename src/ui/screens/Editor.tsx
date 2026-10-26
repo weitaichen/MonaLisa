@@ -817,9 +817,9 @@ export function Editor({ source }: { source: EditorSource }) {
               // a camera shot's seed, with the photo's first answer (D2: the short-range detector is asked for its face
               // when full-range holds none that contains it)
               faceSeed: !useCache && !answered.current && source.faceSeed !== 'all' ? source.faceSeed : null,
-              // the camera persons' boxes, with the photo's first answer (a box no full-range face holds is retried,
-              // zoomed or short-range: camera per-person spec §5.4, K21)
-              handOver: !useCache && !answered.current ? (source.handOver?.map((p) => p.box) ?? null) : null,
+              // the camera persons, with the photo's first answer (an edited person's box no face of the answer claims is
+              // retried, zoomed or short-range: camera per-person spec §5.4, K21)
+              handOver: !useCache && !answered.current ? (source.handOver ?? null) : null,
             }),
         );
         // a tracker that could not answer is not "no face": no answer until the re-detect gives a real one

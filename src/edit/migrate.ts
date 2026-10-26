@@ -5,7 +5,7 @@
 // first face answer on preAnswerCache, S §7).
 import { addFaceScan, aspectFits, boxScore, buildCache, cachedFits, noFaceCache, plainScans, poseBox, rematchByIoU, shortScan, withBodies, withFaces, withMoreFaces } from '../detect/cache';
 import { adaptCached, EMPTY_PREPARED, type PreparedFaces } from '../detect/faces';
-import { matchHandOver, primaryOf, seedPrimary } from '../detect/persons';
+import { matchHandOver, onShutterFrame, primaryOf, seedPrimary } from '../detect/persons';
 import { cropConstrain, cropValid, isIdentity } from '../geometry/view';
 import { stableKey } from '../store/undo';
 import type { BodyDetections, CachedBody, CameraHandOver, DetectionCache, EditState, FaceSeed, HistoryEntry, LiquifyFrame, PersonId, PersonParams, PhotoParams, Rect } from '../types';
@@ -130,12 +130,14 @@ export function importEdit(): EditState {
 /**
  * The shot's hand-over (camera per-person spec §3.8, §5.3), or null when nothing is set: no edited person in the
  * picture, the photo look neutral (isNeutralPhoto: the preset link never counts) and no edited ambient person; 編輯 then
- * opens at 原圖 as today (importEdit). `persons`: the capture's edited persons in the saved image (shotPersons).
+ * opens at 原圖 as today (importEdit). `persons`: the capture's persons in the saved image (shotPersons), the edited ones
+ * and those found never edited; with nobody edited there is nothing for the latter to keep their faces from, so none.
  */
-export function handOverOf(photo: PhotoParams, persons: readonly { box: Rect; params: PersonParams }[], ambient: PersonParams | null): CameraHandOver | null {
+export function handOverOf(photo: PhotoParams, persons: CameraHandOver['persons'], ambient: PersonParams | null): CameraHandOver | null {
   const amb = ambient && !isNeutralPerson(ambient) ? ambient : null;
-  if (!persons.length && isNeutralPhoto(photo) && !amb) return null;
-  return { photo, persons, ambient: amb };
+  const handed = persons.some((p) => p.params !== null) ? persons : [];
+  if (!handed.length && isNeutralPhoto(photo) && !amb) return null;
+  return { photo, persons: handed, ambient: amb };
 }
 
 /**
@@ -169,8 +171,9 @@ export interface AnswerInput {
    */
   detector?: 'full-range' | 'short-range' | null;
   /**
-   * the camera hand-over's persons (EditorSource.handOver: each edited camera person's box in the photo's UV and params),
-   * for the photo's first answer only, as faceSeed (camera per-person spec §5.4). null / absent / empty: none
+   * the camera hand-over's persons (EditorSource.handOver: each camera person's box in the photo's UV, with params when
+   * edited), for the photo's first answer only, as faceSeed (camera per-person spec §5.4). null / absent / nobody edited:
+   * none
    */
   handOver?: CameraHandOver['persons'] | null;
 }
@@ -181,8 +184,10 @@ export interface Answer {
   /** persons were renamed or reset by a rematch: show the cache-dropped toast */
   dropped: boolean;
   /**
-   * with a hand-over: how many camera persons this answer found no face for (dropped, never given another face; the
-   * editor's toast, camera per-person spec §3.8). Absent without one
+   * with a hand-over: how many edited camera persons found at the shutter (or `stale` there, round-3 review E5: not
+   * known missing, the box the last answer's) this answer found no face for (dropped, never given another face; the
+   * editor's toast, camera per-person spec §3.8). A held one is dropped uncounted (it may have left the picture,
+   * round-1 review C7). Absent without one
    */
   handOverMissed?: number;
 }
@@ -248,9 +253,11 @@ function staleFirst(e: EditState, rename: Readonly<Record<PersonId, PersonId | n
  *   rematch renamed holds a stored person's params and takes neither part (S §5.3 R2);
  * - a dropped cache is rematched by face-box IoU (S §5.3): the open's rematch, or the one the cache carries ({} too:
  *   `dropped`, the reset toast). The persons no answer can match go first (knownOnly, R1);
- * - a camera hand-over (camera per-person spec §5.4): each camera person matched to a face (matchHandOver) gives that
- *   face's person its params, after the rules above; the primary keeps p0 instead when the user edited before this
- *   answer. Unmatched camera persons are dropped and counted (`handOverMissed`, the editor's toast).
+ * - a camera hand-over (camera per-person spec §5.4): each camera person matched to a face (matchHandOver, the cache's
+ *   obstacles taking part, C10) gives that face's person its params when edited, after the rules above (a person never
+ *   edited only keeps that face from the others, C7); the primary keeps p0 instead when the user edited before this
+ *   answer. Unmatched edited camera persons are dropped, and those not known missing at the shutter (not `held`: found
+ *   there, or `stale`) counted (`handOverMissed`, the editor's toast; a held one may have left the picture, C7).
  * The one-shot inputs (v1Body, rematch, faceSeed, handOver) belong to the photo's first answer only: a later answer
  * passes null for them. A cache's own pending rematch is read from it (and dropped from the cache), first answer or not.
  */
@@ -309,15 +316,25 @@ export function firstAnswer(a: AnswerInput): Answer {
   const rename = stale ? rematchByIoU(stale, cache) : null;
   /** the persons the rematch renamed: each holds a stored person's params now, which the hand-over never touches (R2) */
   const restored = new Set(Object.values(rename ?? {}).filter((to): to is PersonId => to !== null));
-  // the camera hand-over (camera per-person spec §5.4): each camera person matched to a face of this answer (an obstacle
-  // matches nothing), its params for that face's person; the rest are dropped and counted (no face at all: every one)
-  const handOver = a.handOver?.length ? a.handOver : null;
-  const match = handOver ? matchHandOver(handOver.map((p) => p.box), cache.faces) : null;
+  // the camera hand-over (camera per-person spec §5.4): each camera person matched to a face of this answer (one on an
+  // obstacle is claimed by it and matches nothing, round-1 review C10; every box by IoU before any by the padded centre,
+  // round-3 review E4; by the padded centre only with a face of the box's size, the nearest box first, found or stale,
+  // round-4 review F2, round-6 review H3, H4; held at the shutter only by IoU, round-2 review D6, E5), an edited one's
+  // params for that face's person (a person never edited keeps that face at the
+  // template, C7); the edited ones left are dropped, and those not known missing at the shutter (found, or stale)
+  // counted (no face at all: every one)
+  const handOver = a.handOver?.some((p) => p.params !== null) ? a.handOver : null;
+  const match = handOver
+    ? matchHandOver(handOver.map((p) => p.box), cache.faces, cache.obstacles, handOver.map((p) => !onShutterFrame(p)), handOver.map((p) => !!p.stale))
+    : null;
   const camera: Record<PersonId, PersonParams> = {};
   for (const [i, face] of match?.pairs ?? []) {
+    const params = handOver![i].params;
     const owner = cache.persons.find((p) => p.face === face);
-    if (owner) camera[owner.id] = handOver![i].params;
+    if (owner && params) camera[owner.id] = params;
   }
+  const paired = new Set((match?.pairs ?? []).map(([i]) => i));
+  const missed = handOver ? handOver.filter((p, i) => p.params !== null && !p.held && !paired.has(i)).length : 0;
   /**
    * §5.4 item 2: each matched person takes the camera params, except the primary when the user edited before this
    * answer (p0 differs from the template, the preset aside: possible only while the detection waited), which keeps p0 as
@@ -346,7 +363,7 @@ export function firstAnswer(a: AnswerInput): Answer {
     if (!restored.has(b0.id)) hand[b0.id] = withLocalBody(own(b0.id), look);
     return withCamera(withPersons(assigned, Object.keys(hand), (_, id) => hand[id]), out);
   };
-  return { detect: cache, rebase, dropped: stale !== null, ...(match ? { handOverMissed: match.missed } : {}) };
+  return { detect: cache, rebase, dropped: stale !== null, ...(match ? { handOverMissed: missed } : {}) };
 }
 
 /**

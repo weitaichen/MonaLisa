@@ -1,6 +1,7 @@
 // 合照模式 (camera per-person spec K22): the camera's toggle between the solo path (one VIDEO pass, off, the default)
 // and the group path (§6.6, on), and its one-time toasts. Pure: the once-per-install flags are handed in
 // (store/settings.ts takeGroupModeOnToast, takeGroupModeHint, takeCameraPersonsHint).
+import { MAX_LIVE_FACES } from '../config/limits';
 import type { Facing } from '../types';
 
 export const GROUP_MODE_LABEL = '合照模式';
@@ -44,8 +45,16 @@ export function showGroupSceneHints(io: {
 }
 
 /**
+ * The 「合照模式」 chip shows (§3.13): only where there is a group path to pick, so neither in 基本模式 (no tracker) nor
+ * with `MAX_LIVE_FACES = 1`, PL2's fallback (§10: the v0.3 camera), where liveRoute runs the solo path whatever the mode
+ * says (round-1 review C18: the chip stayed, toggled, saved and toasted, and nothing changed)
+ */
+export const groupModeAvailable = (basic: boolean, maxLiveFaces: number = MAX_LIVE_FACES): boolean => !basic && maxLiveFaces > 1;
+
+/**
  * A camera start warms the graph its first detection runs, behind the 「正在開啟相機…」 spinner (§6.3): the back
  * camera always (the full-range compile); the front camera with 合照模式 on (its IMAGE graph, not the instance's first
- * VIDEO one). With the mode off the front camera starts as v0.5 did
+ * VIDEO one). With the mode off, or no group path (`MAX_LIVE_FACES = 1`), the front camera starts as v0.5 did
  */
-export const warmsOnStart = (facing: Facing, groupMode: boolean): boolean => facing === 'environment' || groupMode;
+export const warmsOnStart = (facing: Facing, groupMode: boolean, maxLiveFaces: number = MAX_LIVE_FACES): boolean =>
+  facing === 'environment' || (groupMode && maxLiveFaces > 1);

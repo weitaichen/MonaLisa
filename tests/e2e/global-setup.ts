@@ -1,8 +1,8 @@
 // Runs once before the e2e workers launch Chromium: the fake camera needs tests/fixtures/face.y4m
 // (gitignored, generated from sample_face.png) and the group camera tests/fixtures/group.y4m (from group_faces.png),
-// the camera per-person projects their clips (spec §12.3: upright_row3 / upright_far10 / selfie_group.y4m from
-// sample_face.png cells, group10.y4m from ten_faces.jpg, group_move.y4m from group_faces.png), the 膚質 specs need
-// tests/fixtures/sample_face_tone.{png,json} (gitignored, generated from sample_face.png by
+// the camera per-person projects their clips (spec §12.3: upright_row3 / upright_far10 / upright_behind /
+// selfie_group.y4m from sample_face.png cells, group10.y4m from ten_faces.jpg, group_move.y4m from group_faces.png), the
+// 膚質 specs need tests/fixtures/sample_face_tone.{png,json} (gitignored, generated from sample_face.png by
 // scripts/gen-tone-fixture.mjs), and `vite preview` needs a production build.
 import { execFileSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
@@ -28,7 +28,7 @@ const CLIPS: { out: string; args: string[]; inputs: string[] }[] = [
     args: ['--src', 'tests/fixtures/group_faces.png', '--out', 'tests/fixtures/group.y4m'],
     inputs: grouped('tests/fixtures/group_faces.png'),
   },
-  ...['upright_row3', 'upright_far10', 'selfie_group'].map((layout) => ({
+  ...['upright_row3', 'upright_far10', 'upright_behind', 'selfie_group'].map((layout) => ({
     out: `tests/fixtures/${layout}.y4m`,
     args: ['--layout', layout],
     inputs: grouped('tests/fixtures/sample_face.png'),

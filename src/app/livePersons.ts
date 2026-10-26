@@ -35,10 +35,25 @@ export function nearestUnambiguous<T>(cands: readonly { item: T; d: number }[]):
   return cands[best].item;
 }
 
+/** a person a call is about to `release` (their track past its hold, §7.3 item 6): the arguments that release takes */
+export interface PendingRelease {
+  id: LivePersonId;
+  box: Rect;
+  now: number;
+  path?: LivePath;
+}
+
 /** what FaceTracks needs of the session: persons for its tracks, the A7 pick in, the weights' and the marker's inputs out */
 export interface TrackPersons {
-  /** a new track's person: an away person re-identified (§7.4), else a new one at 原圖 */
-  claim(box: Rect, aspect: number, now: number): LivePersonId;
+  /**
+   * §7.4's away candidates for a new box: the away persons in grace whose last box passes the gates, each with its
+   * distance. Read-only: FaceTracks weighs them with its held tracks in one decision (§7.3 item 4, A2). `pending`: the
+   * persons the call releases once it has taken everyone it decided (I4, round-3 review E3), weighed as the away
+   * persons their release would make them, the pool's cap not yet applied
+   */
+  awayCandidates(box: Rect, aspect: number, now: number, pending?: readonly PendingRelease[]): { id: LivePersonId; d: number }[];
+  /** a new track's person: the away person `away` re-identified (FaceTracks' decision, §7.4), else a new one at 原圖 */
+  take(away: LivePersonId | null): LivePersonId;
   /**
    * a dropped track's person, with its last shown box and time and the path that last found them (K22): to the away
    * pool when edited or remembered (§7.6)
@@ -124,15 +139,32 @@ export class LivePersons implements TrackPersons {
     this.v++;
   }
 
-  claim(box: Rect, aspect: number, now: number): LivePersonId {
-    const cands: { item: AwayEntry; d: number }[] = [];
-    for (const e of this.pool) {
+  awayCandidates(box: Rect, aspect: number, now: number, pending: readonly PendingRelease[] = []): { id: LivePersonId; d: number }[] {
+    const out: { id: LivePersonId; d: number }[] = [];
+    const soon = pending.flatMap((r) => this.entryOf(r.id, r.box, r.now, r.path) ?? []);
+    for (const e of [...this.pool.filter((x) => !soon.some((y) => y.id === x.id)), ...soon]) {
       if (!this.inGrace(e, now)) continue;
       const d = reidDistance(e.box, box, aspect);
-      if (d !== null) cands.push({ item: e, d });
+      if (d !== null) out.push({ id: e.id, d });
     }
-    const hit = nearestUnambiguous(cands);
+    return out;
+  }
+
+  /**
+   * the last boxes of the away persons in grace at `now` (every one `awayCandidates` may weigh): the shutter's cycle
+   * holds the view that refreshes each of them, so a person back just before the shutter is found there (§6.6 Capture)
+   */
+  awayBoxes(now: number): Rect[] {
+    return this.pool.filter((e) => this.inGrace(e, now)).map((e) => ({ ...e.box }));
+  }
+
+  /**
+   * `away` leaves the pool as the new track's person, pinned again when they are the selection that left (§7.6); null,
+   * or a person no longer away (the pool evicted them meanwhile), is a new person at 原圖
+   */
+  take(away: LivePersonId | null): LivePersonId {
     this.v++;
+    const hit = away === null ? undefined : this.pool.find((e) => e.id === away);
     if (hit) {
       this.pool = this.pool.filter((e) => e !== hit);
       if (hit.id === this.returnTo) {
@@ -146,28 +178,23 @@ export class LivePersons implements TrackPersons {
     return id;
   }
 
+  /** a box with no held track near it (§7.4): the nearest away person unless another is about as near, else a new one at 原圖 */
+  claim(box: Rect, aspect: number, now: number): LivePersonId {
+    return this.take(nearestUnambiguous(this.awayCandidates(box, aspect, now).map((c) => ({ item: c.id, d: c.d }))));
+  }
+
   release(id: LivePersonId, box: Rect, now: number, path?: LivePath): void {
     if (!this.open || !this.known.has(id)) return;
+    const entry = this.entryOf(id, box, now, path);
     if (this.pinned === id) {
       this.pinned = null;
       this.returnTo = id;
     }
     if (this.shown.includes(id)) this.shown = this.shown.filter((x) => x !== id);
     if (this.autoPick === id) this.autoPick = null;
-    if (this.edited(id) || this.returnTo === id) {
+    if (entry) {
       this.pool = this.pool.filter((e) => e.id !== id);
-      // K22: last found by the other path, the path in use cannot see them (a toggle carried their track over and it
-      // was never found since): their grace spent is their path's time up to the toggle, and it waits for their path
-      const seenBy = path === undefined || this.lane === null ? null : path;
-      const own = seenBy === null || seenBy === this.lane;
-      this.pool.push({
-        id,
-        box: { ...box },
-        lastSeen: now,
-        path: seenBy,
-        spent: own ? 0 : Math.max(0, this.laneSince - now),
-        from: own ? now : null,
-      });
+      this.pool.push(entry);
       while (this.pool.length > MAX_LIVE_FACES) {
         let oldest = 0;
         for (let i = 1; i < this.pool.length; i++) if (this.pool[i].lastSeen < this.pool[oldest].lastSeen) oldest = i;
@@ -177,6 +204,27 @@ export class LivePersons implements TrackPersons {
       }
     } else this.known.delete(id);
     this.v++;
+  }
+
+  /**
+   * the away entry `release(id, box, now, path)` makes (§7.6): an edited person, or the pinned selection leaving (they
+   * are remembered); null when release forgets them, or the session is closed
+   */
+  private entryOf(id: LivePersonId, box: Rect, now: number, path?: LivePath): AwayEntry | null {
+    if (!this.open || !this.known.has(id)) return null;
+    if (!(this.edited(id) || this.pinned === id || this.returnTo === id)) return null;
+    // K22: last found by the other path, the path in use cannot see them (a toggle carried their track over and it was
+    // never found since): their grace spent is their path's time up to the toggle, and it waits for their path
+    const seenBy = path === undefined || this.lane === null ? null : path;
+    const own = seenBy === null || seenBy === this.lane;
+    return {
+      id,
+      box: { ...box },
+      lastSeen: now,
+      path: seenBy,
+      spent: own ? 0 : Math.max(0, this.laneSince - now),
+      from: own ? now : null,
+    };
   }
 
   sync(inView: readonly LivePersonId[], auto: LivePersonId | null): void {
@@ -248,12 +296,18 @@ export class LivePersons implements TrackPersons {
     return (id === null ? null : this.params(id)) ?? neutralPerson();
   }
 
-  /** a panel edit: the first one while the selection is auto pins the auto pick (K9); it cancels a pending return (§7.6) */
+  /**
+   * a panel edit to `ids` (a drag's persons, §3.2, else the edit targets): the first one while the selection is auto pins
+   * the auto pick (K9); under 全部套用 it writes everyone in view too, so a face that entered during a drag follows it
+   * (§3.4, K10); an edit to anyone but the pinned person who left cancels their return (§7.6), and a drag that keeps
+   * writing them does not
+   */
   edit(p: PersonParams, ids: readonly LivePersonId[] = this.editTargets()): void {
     if (!this.allOn && this.pinned === null && this.autoPick !== null && ids.includes(this.autoPick)) this.pinned = this.autoPick;
-    this.returnTo = null;
+    const to = this.allOn ? [...new Set([...ids, ...this.shown])] : ids;
+    if (this.returnTo !== null && !to.includes(this.returnTo)) this.returnTo = null;
     if (this.allOn) this.shared = isNeutralPerson(p) ? null : p;
-    this.write(ids, p);
+    this.write(to, p);
   }
 
   /** the loop pauses or stops: the session clock stops here (§7.5) */

@@ -1,7 +1,9 @@
 // Pixel helpers for capture: the viewfinder crops the canvas with object-fit: cover, so the saved
 // image is centre-cropped to the same ratio here (on the ImageData, before encoding).
+import { HANDOVER_IOU } from '../config/limits';
+import { boxIoU } from '../detect/faces';
 import { mirrorSides } from '../edit/sides';
-import type { FaceSeed, PersonParams, Rect as UvRect } from '../types';
+import type { CameraHandOver, FaceSeed, PersonParams, Rect as UvRect } from '../types';
 
 export interface Rect {
   x: number;
@@ -99,25 +101,34 @@ export function shotBox(box: UvRect, vw: number, vh: number, ratio: number, mirr
 }
 
 /**
- * The capture's edited persons (LiveLoop.capture().persons) as the hand-over gives them to 編輯 (§3.8, §5.3): each box
- * in the saved photo (shotBox), 左右分開 swapped when saved mirrored (mirrorSides, so the same cheek stays adjusted), and
- * only the persons whose box centre lies in the picture: one outside it is not in the photo, so it is not handed over
- * (never counted as a face the editor missed, Review Focus #5).
+ * The capture's persons (LiveLoop.capture().persons: the edited ones, found, held or stale, and the ones never edited
+ * found or stale) as the hand-over gives them to 編輯 (§3.8, §5.3): each box in the saved photo (shotBox), 左右分開
+ * swapped when saved mirrored (mirrorSides, so the same cheek stays adjusted), and only the persons whose box centre
+ * lies in the picture:
+ * one outside it is not in the photo, so it is not handed over (never counted as a face the editor missed, Review Focus
+ * #5). A held person whose last box a person not known missing overlaps (box IoU ≥ HANDOVER_IOU; found at the shutter,
+ * or unseen there since a no-answer) is not handed over either: someone stands where they were, in front of them or in
+ * their place, and the stale box would give that face the held person's params (round-1 review C7). `held` and `stale`
+ * (round-3 review E5: unseen since a no-answer, or, round-5 review, found before the captured frame by views that had no
+ * answer on it; the box the last answer's) go with the person: either box is a guess in
+ * 編輯, a held one paired only by IoU, a stale one by IoU or by the padded centre with a face of its size
+ * (onShutterFrame, round-4 review F2).
  */
 export function shotPersons(
-  persons: readonly { rawBox: UvRect; params: PersonParams }[],
+  persons: readonly { rawBox: UvRect; params: PersonParams | null; held: boolean; stale?: boolean }[],
   vw: number,
   vh: number,
   ratio: number,
   mirrored: boolean,
-): { box: UvRect; params: PersonParams }[] {
-  const out: { box: UvRect; params: PersonParams }[] = [];
+): CameraHandOver['persons'][number][] {
+  const out: CameraHandOver['persons'][number][] = [];
   for (const p of persons) {
+    if (p.held && persons.some((q) => !q.held && boxIoU(q.rawBox, p.rawBox) >= HANDOVER_IOU)) continue;
     const box = shotBox(p.rawBox, vw, vh, ratio, mirrored);
     const cx = box.x + box.w / 2;
     const cy = box.y + box.h / 2;
     if (!(cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1)) continue;
-    out.push({ box, params: mirrored ? mirrorSides(p.params) : p.params });
+    out.push({ box, params: p.params && mirrored ? mirrorSides(p.params) : p.params, ...(p.held ? { held: true } : {}), ...(p.stale ? { stale: true } : {}) });
   }
   return out;
 }

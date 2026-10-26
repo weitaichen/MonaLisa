@@ -63,6 +63,69 @@ describe('LivePersons: claim and release (§7.4, K7)', () => {
     expect(s.claim(at(xs[0], 0.02), ASPECT, 500)).not.toBe(ids[0]);
     expect(s.claim(at(xs[1], 0.02), ASPECT, 500)).toBe(ids[1]);
   });
+  it('awayBoxes lists the last boxes of the away persons in grace, each once (the shutter’s cycle holds their views, §6.6 Capture)', () => {
+    const s = session();
+    away(s, 0.3, 0);
+    away(s, 0.7, 2000, 0.05);
+    expect(s.awayBoxes(1000)).toEqual([at(0.3), at(0.7, 0.05)]);
+    expect(s.awayBoxes(4500)).toEqual([at(0.7, 0.05)]); // the first one's grace has run out
+    const b = s.awayBoxes(4500)[0];
+    b.x = 0; // a copy
+    expect(s.awayBoxes(4500)).toEqual([at(0.7, 0.05)]);
+  });
+  it('awayCandidates lists the away persons in grace that pass the gates, without claiming; take claims the one decided', () => {
+    const s = session();
+    const a = away(s, 0.3, 0);
+    const b = away(s, 0.5, 0);
+    away(s, 0.9, 0); // too far
+    expect(new Set([a, b]).size).toBe(2);
+    const c = s.awayCandidates(at(0.38), ASPECT, 1000);
+    expect(c.map((x) => x.id).sort()).toEqual([a, b]);
+    expect(c.find((x) => x.id === a)!.d).toBeCloseTo(0.08 * ASPECT, 9);
+    expect(s.awayCandidates(at(0.3), ASPECT, 4001)).toEqual([]); // out of grace
+    expect(s.take(b)).toBe(b);
+    expect(s.awayCandidates(at(0.38), ASPECT, 1000).map((x) => x.id)).toEqual([a]);
+    const fresh = s.take(null);
+    expect([fresh === a, s.edited(fresh)]).toEqual([false, false]);
+    expect(s.take(b)).not.toBe(b); // no longer away: a new person at 原圖
+  });
+  it('round-3 review E3: awayCandidates weighs the persons a call is about to release as their release makes them, the pool’s cap not yet applied; nothing changes until release', () => {
+    const s = session();
+    const xs = Array.from({ length: MAX_LIVE_FACES }, (_, i) => 0.05 + i * 0.09);
+    const ids = xs.map((x, i) => away(s, x, 100 + i * 10, 0.02)); // the pool full
+    const edited = s.claim(at(0.095, 0.02), ASPECT, 0); // each between two of the pool's, outside their gates
+    s.write([edited], natural);
+    const plain = s.claim(at(0.275, 0.02), ASPECT, 0); // never edited: release forgets them
+    const pinned = s.claim(at(0.455, 0.02), ASPECT, 0); // never edited, the pinned selection: release remembers them
+    s.sync([edited, plain, pinned], edited);
+    s.pin(pinned);
+    const pending = [edited, plain, pinned].map((id, i) => ({ id, box: at(0.095 + i * 0.18, 0.02), now: 50 }));
+    const near = (cx: number, now = 1000) => s.awayCandidates(at(cx, 0.02), ASPECT, now, pending).map((c) => c.id);
+    expect(near(0.05)).toEqual([ids[0]]); // the pool's oldest, whom their release would evict, is still a candidate
+    expect(near(0.095)).toEqual([edited]);
+    expect(near(0.275)).toEqual([]);
+    expect(near(0.455)).toEqual([pinned]);
+    expect(near(0.095, 4051)).toEqual([]); // out of grace, as released at 50
+    expect(s.awayCandidates(at(0.095, 0.02), ASPECT, 1000)).toEqual([]); // read-only: nobody released
+    expect([s.selection(), s.edited(edited)]).toEqual([pinned, true]);
+    // a pending person already away is weighed once, at the box their release gives them
+    expect(s.awayCandidates(at(xs[3], 0.02), ASPECT, 1000, [{ id: ids[3], box: at(0.9, 0.02), now: 900 }]).map((c) => c.id)).toEqual([]);
+    expect(s.awayCandidates(at(0.9, 0.02), ASPECT, 1000, [{ id: ids[3], box: at(0.9, 0.02), now: 900 }]).map((c) => c.id)).toEqual([ids[3]]);
+  });
+  it('take: a person the pool evicted after the decision is a new person at 原圖; the selection that left is pinned again', () => {
+    const s = session();
+    const xs = Array.from({ length: MAX_LIVE_FACES }, (_, i) => 0.05 + i * 0.09);
+    const ids = xs.map((x, i) => away(s, x, i * 10, 0.02));
+    away(s, 0.99, 500, 0.02); // the pool is full: the oldest, ids[0], is evicted
+    expect(s.edited(s.take(ids[0]))).toBe(false);
+    const p = s.claim(at(0.5), ASPECT, 600);
+    s.sync([p], p);
+    s.pin(p);
+    s.release(p, at(0.5), 700);
+    s.sync([], null);
+    expect(s.take(p)).toBe(p);
+    expect(s.selection()).toBe(p);
+  });
   it('a person written back to 原圖 (values neutral, preset custom) is never edited again (§3.3)', () => {
     const s = session();
     const id = s.claim(at(0.3), ASPECT, 0);
@@ -128,6 +191,20 @@ describe('LivePersons: the grace waits while another path is in use (合照模�
     const got = s.claim(at(0.3), ASPECT, 30_000 + after);
     expect(got === id).toBe(same);
     expect(s.edited(got)).toBe(same);
+  });
+  it('C22: a person dropped after a toggle, last found by the path it left, has spent that path’s time up to the toggle', () => {
+    // last found by the group path at 0, 合照模式 off at 3000, the track dropped later on the solo path: 3000 ms spent
+    for (const [after, same] of [[999, true], [1001, false]] as const) {
+      const s = session();
+      s.setPath('group', 0);
+      const id = s.claim(at(0.3), ASPECT, 0);
+      s.write([id], natural);
+      s.setPath('solo', 3000);
+      s.release(id, at(0.3), 0, 'group');
+      s.setPath('group', 20_000);
+      const got = s.claim(at(0.3), ASPECT, 20_000 + after);
+      expect([got === id, s.edited(got)]).toEqual([same, same]);
+    }
   });
   it('a person who left on their path keeps the grace they had left across a toggle away and back', () => {
     for (const [after, same] of [[1999, true], [2001, false]] as const) {
@@ -249,6 +326,28 @@ describe('LivePersons: selection (§7.6, K9) and 全部套用 (§3.4, K10)', () 
     const back = s.claim(at(0.5), ASPECT, t + 1);
     s.sync([1, back, 3], 1);
     expect(s.target()).not.toBe(back);
+  });
+  it('C11: an edit written to the pinned person who left (a drag that keeps writing them, §3.2) keeps their return; one to anyone else cancels it', () => {
+    for (const [ids, back] of [[[2], true], [[1], false], [[1, 2], true]] as const) {
+      const s = three();
+      s.pin(2);
+      s.release(2, at(0.5), 100);
+      s.sync([1, 3], 1);
+      s.edit(natural, ids);
+      expect(s.claim(at(0.5), ASPECT, 1500)).toBe(2);
+      s.sync([1, 2, 3], 1);
+      expect([s.selection() === 2, s.target() === 2]).toEqual([back, back]);
+    }
+  });
+  it('C12: 全部套用 edits write the persons asked and everyone in view, a face that entered after the persons were picked included', () => {
+    const s = three();
+    s.setAll(true);
+    s.edit(natural, [1, 2, 3]);
+    const d = s.claim(at(0.95, 0.04), ASPECT, 10);
+    s.sync([1, 2, 3, d], 1); // enters with the shared params (自然)
+    s.edit(refined, [1, 2, 3]); // a drag that began before d entered
+    expect([1, 2, 3, d].map((i) => s.params(i))).toEqual([refined, refined, refined, refined]);
+    expect(s.panelParams()).toEqual(refined);
   });
   it("全部套用: on copies the target's params to everyone in view, a face entering gets them, edits write all, off reverts nobody", () => {
     const s = three();

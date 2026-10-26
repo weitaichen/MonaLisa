@@ -48,11 +48,23 @@ export const ONE_EURO = { minCutoff: 0.05, beta: 80, dCutoff: 1.0 } as const;
 /** seed → face match: the face box padded by this fraction must contain the seed */
 export const SEED_BOX_PAD = 0.25;
 /**
- * the editor's zoomed hand-over retry (camera per-person spec §5.4, K21): a camera person no full-range face holds gets
- * one full-range detection on a crop of side box width / this (the face a quarter of the crop, far over the detector's
- * ~9 % floor, §6.1); a box this wide of the long edge or more (the crop would be the whole image) takes the short-range pass
+ * the editor's zoomed hand-over retry (camera per-person spec §5.4, K21): a camera person no face of the photo's answer
+ * holds gets one detection on a crop of side box width / this (the face a quarter of the crop, far over the detector's
+ * floor, §6.1)
  */
 export const HANDOVER_ZOOM_FACE = 0.25;
+/**
+ * ... unless its box is at least this many times the floor of the detector that missed it (DETECTOR_FLOOR, of the
+ * photo's long edge; 16 % for full-range): missed for its cut by the frame's edge or its pose, not its size, which a zoom
+ * does not change, so it takes S §6.5's short-range pass instead (round-1 review C2: the old rule, a quarter of the long
+ * edge, zoomed a 3:4 shot's large cut face by 1.1×)
+ */
+export const HANDOVER_OVER_FLOOR = 2;
+/**
+ * a camera box and an editor face are one person at this box IoU or more (camera per-person spec §5.4 item 1); a held
+ * camera box this close to a present one at the shutter is someone that person hides or replaced (shotPersons, C7)
+ */
+export const HANDOVER_IOU = 0.3;
 /** camera re-identification (camera per-person spec §7.4, K7): an away person is claimed only this long after last seen, on the session clock */
 export const REID_GRACE_MS = 4000;
 /** camera re-identification (§7.4, K7): the new centre within this many of the person's last box widths of their last centre */

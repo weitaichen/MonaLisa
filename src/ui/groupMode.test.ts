@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GROUP_MODE_HINT, GROUP_MODE_LABEL, GROUP_MODE_ON_TOAST, HINT_GAP_MS, showGroupSceneHints, toggleGroupMode, warmsOnStart } from './groupMode';
+import { GROUP_MODE_HINT, GROUP_MODE_LABEL, GROUP_MODE_ON_TOAST, groupModeAvailable, HINT_GAP_MS, showGroupSceneHints, toggleGroupMode, warmsOnStart } from './groupMode';
 
 describe('合照模式 (camera per-person spec K22): the toggle and its one-time toasts', () => {
   it('the copy', () => {
@@ -95,5 +95,12 @@ describe('合照模式 (camera per-person spec K22): the toggle and its one-time
   it('a camera start warms its first graph behind the spinner on the back camera, and on the front camera only with the mode on (its IMAGE graph); the solo selfie start is v0.5’s', () => {
     expect([warmsOnStart('environment', false), warmsOnStart('environment', true)]).toEqual([true, true]);
     expect([warmsOnStart('user', false), warmsOnStart('user', true)]).toEqual([false, true]);
+  });
+
+  it('round-1 review C18: the chip shows only where there is a group path to pick (not 基本模式, not MAX_LIVE_FACES = 1, PL2’s fallback)', () => {
+    expect([groupModeAvailable(false), groupModeAvailable(true)]).toEqual([true, false]);
+    expect([groupModeAvailable(false, 1), groupModeAvailable(false, 2)]).toEqual([false, true]);
+    // with the fallback a remembered 合照模式 is no mode: the front camera starts as v0.5 (liveRoute's solo path)
+    expect([warmsOnStart('user', true, 1), warmsOnStart('environment', true, 1)]).toEqual([false, true]);
   });
 });

@@ -12,7 +12,7 @@ import { cameraScreenSwap } from '../../edit/sides';
 import { cameraEdit, LIVE, neutralPerson, personOf } from '../../edit/state';
 import { takeCameraPersonsHint, takeGroupModeHint, takeGroupModeOnToast } from '../../store/settings';
 import { cameraErrorCopy } from '../cameraErrors';
-import { beginDrag, cameraSession, endCameraSession, keepDrag, panelPerson, writePerson, type CameraDrag } from '../cameraSession';
+import { beginDrag, cameraLensInfo, cameraSession, endCameraSession, keepDrag, panelPerson, writePerson, type CameraDrag } from '../cameraSession';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
 import { CameraFaceMarker } from '../components/CameraFaceMarker';
 import { CanvasHost } from '../components/CanvasHost';
@@ -20,10 +20,10 @@ import { IconButton } from '../components/Controls';
 import { EngineStatus } from '../components/EngineStatus';
 import { SliderRow } from '../components/Slider';
 import { Status } from '../components/Status';
-import { reportError } from '../debug';
+import { debug, reportError } from '../debug';
 import { deps } from '../deps';
 import { openInEditor, pickPhoto } from '../flows';
-import { GROUP_MODE_LABEL, showGroupSceneHints, toggleGroupMode, warmsOnStart } from '../groupMode';
+import { GROUP_MODE_LABEL, groupModeAvailable, showGroupSceneHints, toggleGroupMode, warmsOnStart } from '../groupMode';
 import { Icon } from '../icons';
 import { cropImageData, grabOriginalFrame, normalizedCropRect, shotPersons, shotSeed } from '../imaging';
 import { CAMERA_BODY, INITIAL_SELECTION, makeupNote, photoScoped, sliderFor, type BodyContext, type PanelSelection } from '../panelModel';
@@ -116,15 +116,15 @@ export function Camera() {
   const livePersons: PersonInfo[] = [{ ...LIVE_PERSONS[0], screenSwap: cameraScreenSwap(snap?.facing ?? 'user', gpLeft) }];
   /**
    * the panel's lens (§3.2): the photo look over one person, 'live', holding the target's params (a drag's lead while it
-   * runs; 基本模式: the session's ambient person, §3.6). It reads `ready`, so the render calls it below that line.
+   * runs; 基本模式: the session's ambient person, §3.6)
    */
   const lensOf = (l: typeof look): Lens => {
     const basic = !!bundle?.basic;
     const person = basic ? session.ambient : panelPerson(session, drag.current);
-    // noFace does not read trackerHealth: with no face shown there is no target, so a person slider would write nobody
-    // and snap back; while the tracker restarts its badge says why
+    // noFace whenever there is no target (cameraLensInfo), before the stream is live too (C4), and whatever
+    // trackerHealth says: a person slider or preset would write nobody; while the tracker restarts its badge says why
     return lensFor(cameraEdit(l.photo, person), { kind: 'person', id: LIVE }, livePersons, LIVE, {
-      camera: { shown: shownFaces, all: cameraAll, noFace: !basic && ready && shownFaces === 0, target: drag.current?.lead ?? session.target() },
+      camera: cameraLensInfo(session, drag.current, { shown: shownFaces, all: cameraAll, basic, live }),
     });
   };
   /**
@@ -331,6 +331,8 @@ export function Camera() {
     // U6 (camera per-person spec §3.8, §5.3): the photo look, each edited person in the picture (box in the saved crop,
     // mirrored as saved, 左右分開 swapped) and 基本模式's ambient person; null when nothing is set (編輯 opens at 原圖)
     const handOver = handOverOf(lookRef.current.photo, shotPersons(shotOut.persons, vw, vh, ratioValue, mirror), bundle?.basic ? cameraSession().ambient : null);
+    // what 編輯 is handed and what the camera knew of each person at the shutter (e2e, round-4 review F5)
+    debug({ shotHandOver: (handOver?.persons ?? []).map((p) => ({ ...p.box, edited: p.params !== null, held: !!p.held, stale: !!p.stale })) });
     let original: ImageBitmap | null = null;
     try {
       original = await grabOriginalFrame(cam.video, ratioValue, mirror);
@@ -428,7 +430,7 @@ export function Camera() {
     setRing({ person: a.id, at: performance.now() });
   };
 
-  // above the lens: lensOf and keepDrag read them (a const read before its line throws)
+  // above the lens: keepDrag reads them (a const read before its line throws)
   const state = snap?.state ?? 'idle';
   const ready = !!loop && live && !lost;
   // basic mode only: the live no-face state comes and goes (the badge covers it), the panel must not flicker
@@ -512,8 +514,8 @@ export function Camera() {
               {timer ? `${timer}s` : '關'}
             </span>
           </button>
-          {/* 基本模式 finds no face, so there is no path to pick */}
-          {!bundle?.basic && (
+          {/* 基本模式 finds no face and MAX_LIVE_FACES = 1 has no group path: no path to pick (groupModeAvailable, C18) */}
+          {groupModeAvailable(!!bundle?.basic) && (
             <button type="button" class={`chip-btn${prefs.groupMode ? ' on' : ''}`} aria-pressed={prefs.groupMode} onClick={toggleGroup}>
               <span>{GROUP_MODE_LABEL}</span>
             </button>

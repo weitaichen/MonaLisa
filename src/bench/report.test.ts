@@ -29,7 +29,7 @@ import {
   wbRows,
 } from './report';
 
-const row = (t: number, fps: number, face = true): BenchSample => ({
+const row = (t: number, fps: number, face = true, faces = 'every'): BenchSample => ({
   t,
   fps,
   detectMs: 10,
@@ -38,6 +38,7 @@ const row = (t: number, fps: number, face = true): BenchSample => ({
   face,
   mode: 'skin+shape',
   delegate: 'GPU',
+  faces,
 });
 
 describe('bench report', () => {
@@ -60,9 +61,20 @@ describe('bench report', () => {
     expect(lines[0]).toBe('# ua: Mozilla/5.0 (iPhone)');
     expect(lines[1]).toBe('# video: 1280×720');
     expect(lines[2]).toMatch(/^# summary: n=2 fps_avg=30\.0 fps_min=29\.9 /);
-    expect(lines[3].split('\t')).toEqual(['t_s', 'fps', 'detect_ms', 'render_ms', 'tier', 'face', 'mode', 'delegate']);
-    expect(lines[4].split('\t')).toEqual(['5', '29.9', '10.0', '4.0', 'M', '1', 'skin+shape', 'GPU']);
+    expect(lines[3].split('\t')).toEqual(['t_s', 'fps', 'detect_ms', 'render_ms', 'tier', 'face', 'mode', 'delegate', 'faces']);
+    expect(lines[4].split('\t')).toEqual(['5', '29.9', '10.0', '4.0', 'M', '1', 'skin+shape', 'GPU', 'every']);
     expect(lines).toHaveLength(6);
+  });
+
+  it('each row carries the 美顏對象 it was taken in, and samples of both get a summary per scope (Codex #3)', () => {
+    const lines = formatReport({}, [row(5, 30), row(10, 20, true, 'target'), row(15, 28)]).split('\n');
+    expect(lines[0]).toMatch(/^# summary: n=3 fps_avg=26\.0 /);
+    expect(lines[1]).toMatch(/^# summary faces=every: n=2 fps_avg=29\.0 fps_min=28\.0 /);
+    expect(lines[2]).toMatch(/^# summary faces=target: n=1 fps_avg=20\.0 /);
+    expect(lines[3].split('\t').at(-1)).toBe('faces');
+    expect(lines.slice(4).map((l) => l.split('\t').at(-1))).toEqual(['every', 'target', 'every']);
+    // one scope throughout: the one summary line, as before
+    expect(formatReport({}, [row(5, 30, true, 'target')]).split('\n')[1].startsWith('t_s')).toBe(true);
   });
 
   it('formatReport appends the 美體偵測 table only when body rows exist', () => {

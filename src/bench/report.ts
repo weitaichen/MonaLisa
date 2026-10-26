@@ -11,6 +11,11 @@ export interface BenchSample {
   face: boolean;
   mode: string;
   delegate: string;
+  /**
+   * 美顏對象 when it was taken (camera per-person spec §12.4, Codex #3): 'every' (every face edited) or 'target' (the
+   * target only, as 0.5's bench drew); a switch keeps the samples before it, so each one says which it measured
+   */
+  faces: string;
 }
 
 export interface BenchSummary {
@@ -50,11 +55,21 @@ export function formatElapsed(ms: number): string {
   return hh ? `${hh}:${p2(mm)}:${p2(ss)}` : `${p2(mm)}:${p2(ss)}`;
 }
 
-const COLS = ['t_s', 'fps', 'detect_ms', 'render_ms', 'tier', 'face', 'mode', 'delegate'] as const;
+/** `faces` last, so the columns before it keep their places in older reports */
+const COLS = ['t_s', 'fps', 'detect_ms', 'render_ms', 'tier', 'face', 'mode', 'delegate', 'faces'] as const;
+
+function summaryLine(label: string, samples: readonly BenchSample[]): string {
+  const s = summarize(samples);
+  return (
+    `# ${label}: n=${s.n} fps_avg=${s.fpsAvg.toFixed(1)} fps_min=${s.fpsMin.toFixed(1)} ` +
+    `detect_avg=${s.detectAvg.toFixed(1)}ms render_avg=${s.renderAvg.toFixed(1)}ms face=${Math.round(s.faceRatio * 100)}%`
+  );
+}
 
 /**
  * Tab-separated report: `# key: value` header lines, a summary line, then one row per sample; the 美體偵測 table
- * follows when body rows were measured.
+ * follows when body rows were measured. Samples of more than one 美顏對象 (Codex #3) get a summary line per scope too,
+ * after the overall one, since every face edited and the target alone are not the same measurement.
  */
 export function formatReport(
   meta: Readonly<Record<string, string>>,
@@ -62,11 +77,9 @@ export function formatReport(
   body: readonly BodyBenchRow[] = [],
 ): string {
   const lines = Object.entries(meta).map(([k, v]) => `# ${k}: ${v.replace(/\s+/g, ' ')}`);
-  const s = summarize(samples);
-  lines.push(
-    `# summary: n=${s.n} fps_avg=${s.fpsAvg.toFixed(1)} fps_min=${s.fpsMin.toFixed(1)} ` +
-      `detect_avg=${s.detectAvg.toFixed(1)}ms render_avg=${s.renderAvg.toFixed(1)}ms face=${Math.round(s.faceRatio * 100)}%`,
-  );
+  lines.push(summaryLine('summary', samples));
+  const scopes = [...new Set(samples.map((r) => r.faces))];
+  if (scopes.length > 1) for (const f of scopes) lines.push(summaryLine(`summary faces=${f}`, samples.filter((r) => r.faces === f)));
   lines.push(COLS.join('\t'));
   for (const r of samples) {
     lines.push(
@@ -79,6 +92,7 @@ export function formatReport(
         r.face ? '1' : '0',
         r.mode,
         r.delegate,
+        r.faces,
       ].join('\t'),
     );
   }

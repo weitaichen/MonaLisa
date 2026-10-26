@@ -78,6 +78,8 @@ export class FakeVideo {
   presentStep = 1;
   /** when true frames advance currentTime but no rVFC callback ever fires */
   rvfcSilent = false;
+  /** ms each callback runs after its frame's presentation (a device's latency): presentationTime is that much earlier */
+  presentLag = 0;
   private cbs = new Map<number, FrameCb>();
   private nextId = 1;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -113,8 +115,10 @@ export class FakeVideo {
     const list = [...this.cbs.values()];
     this.cbs.clear();
     // frame timestamps follow the fake-timer clock only; simulated work shows up in performance.now()
-    // differences (how the loop measures detect/render cost), not in the camera cadence
+    // differences (how the loop measures detect/render cost), not in the camera cadence. presentationTime is on
+    // performance.now()'s clock, as in a browser, so the loop can time its work from the frame's presentation
     const now = Date.now();
+    const presented = performance.now() - this.presentLag;
     for (const cb of list) {
       cb(now, {
         presentedFrames: this.presentedFrames,
@@ -122,7 +126,7 @@ export class FakeVideo {
         height: this.videoHeight,
         width: this.videoWidth,
         mediaTime: this.currentTime,
-        presentationTime: now,
+        presentationTime: presented,
       });
     }
   }

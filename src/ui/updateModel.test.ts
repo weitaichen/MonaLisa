@@ -164,4 +164,9 @@ describe('已更新至 notice (first launch of a new version)', () => {
   it('after the 0.6.0 update', () => {
     expect(updatedNotice('0.5.0', '0.6.0', true)).toBe('已更新至 v0.6');
   });
+
+  it('production 0.4.0 installs skip 0.5 (a preview only): 0.4.0 → 0.6.0 says so, a rollback to 0.4.0 says nothing (RM §15, round-1 review C26)', () => {
+    expect(updatedNotice('0.4.0', '0.6.0', true)).toBe('已更新至 v0.6');
+    expect(updatedNotice('0.6.0', '0.4.0', true)).toBeNull();
+  });
 });

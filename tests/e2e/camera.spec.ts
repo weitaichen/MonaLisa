@@ -106,13 +106,44 @@ test('camera: gate → live beautified preview with face → panel → slider �
   await shot(page, '08-review-to-editor');
 });
 
+test('before the stream is live (the gate), 一鍵 presets are off with the note and a tap saves nothing; live with a face they apply whole (round-1 review C4)', async ({ page }) => {
+  const presetLink = () => page.evaluate(() => JSON.parse(localStorage.getItem('meiyan.look.v1') ?? '{}').photo?.presetLink?.id ?? null);
+  await page.goto('/');
+  await page.getByRole('button', { name: /拍攝/ }).click();
+  const gate = page.getByRole('button', { name: '點擊開啟相機' });
+  await expect(gate).toBeVisible();
+  await page.getByRole('tab', { name: '一鍵' }).click();
+  const natural = page.getByRole('option', { name: '自然', exact: true });
+  await expect(natural).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.locator('.strip-note', { hasText: '開啟相機並對準人臉後即可調整' })).toBeVisible();
+  // a disabled item stays tappable (aria-disabled): the tap shows the reason and changes nothing
+  await natural.click({ force: true });
+  await page.waitForTimeout(800);
+  expect(await presetLink()).toBeNull();
+  // photo items stay usable before the stream too
+  await page.getByRole('tab', { name: '濾鏡' }).click();
+  await expect(page.getByRole('option', { name: '暖調', exact: true })).not.toHaveAttribute('aria-disabled', 'true');
+  await gate.click();
+  await expect.poll(async () => (await debugState(page)).face, { timeout: 90_000, intervals: [500] }).toBe(true);
+  await page.getByRole('tab', { name: '一鍵' }).click();
+  await expect(natural).not.toHaveAttribute('aria-disabled', 'true');
+  await natural.click();
+  await expect.poll(presetLink).toBe('natural');
+  await expect.poll(async () => (await debugState(page)).boxes?.some((b) => b.edited) ?? false).toBe(true);
+});
+
 test('A1: a lone selfie stays on the solo path: one short-range VIDEO pass on every frame', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: /拍攝/ }).click();
   await page.getByRole('button', { name: '點擊開啟相機' }).click();
   await expect.poll(async () => (await debugState(page)).face, { timeout: 90_000, intervals: [500] }).toBe(true);
   for (let i = 0; i < 20; i++) {
-    expect(await debugState(page)).toMatchObject({ livePath: 'solo', liveEvery: 1, liveDetector: 'short-range' });
+    const d = await debugState(page);
+    expect(d).toMatchObject({ livePath: 'solo', liveDetector: 'short-range' });
+    // every frame, tier L every second (§6.4 effectiveEvery): SwiftShader's slow frames may step the auto tier down to
+    // L, which alone gives 2 (round-1 review C23). At most: the frame that steps down publishes tier L with the k it
+    // used, 1, so a check for exactly 2 there could fail on a frame that did as A1 says
+    expect(d.liveEvery, `tier ${d.tier}`).toBeLessThanOrEqual(d.tier === 'L' ? 2 : 1);
     await page.waitForTimeout(250);
   }
 });

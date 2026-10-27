@@ -1,12 +1,24 @@
 // OWNER: media agent. Engine binaries download with progress (spec §9, RB §4 "Model and asset caching").
 import type { EngineAssetsProgress } from '../types';
+import { isFaceDetectorModel, withoutBlendshapes } from './faceBundle';
 
 export const ENGINE_PATHS = {
   wasmBase: '/mediapipe/0.10.35',
   wasmFile: '/mediapipe/0.10.35/vision_wasm_internal.wasm',
   wasmLoader: '/mediapipe/0.10.35/vision_wasm_internal.js',
   model: '/models/face_landmarker/float16-1/face_landmarker.task',
+  /** BlazeFace full-range, swapped into `model` for photos (faceBundle.ts, tracker.ts); 1,083,786 B (loadPhotoDetector) */
+  photoDetector: '/models/face_detector/full-range-float16-1/blaze_face_full_range.tflite',
 } as const;
+
+export interface EngineModels {
+  /**
+   * The camera bundle: face_landmarker.task (BlazeFace short-range) without face_blendshapes.tflite, which the tracker
+   * never runs (faceBundle.ts withoutBlendshapes, 2,803,159 B); as shipped (logged) when it is not a stored zip. The
+   * camera, and photos while the full-range detector (loadPhotoDetector) is not there.
+   */
+  modelBuffer: Uint8Array;
+}
 
 /**
  * Cache Storage bucket of the engine binaries. vite.config.ts names the service worker's CacheFirst route
@@ -22,19 +34,21 @@ export const PROGRESS_INTERVAL_MS = 100;
 type Listener = (p: EngineAssetsProgress) => void;
 
 const listeners = new Set<Listener>();
-let memo: Promise<{ modelBuffer: Uint8Array }> | null = null;
+let memo: Promise<EngineModels> | null = null;
 let lastProgress: EngineAssetsProgress | null = null;
 
 /**
  * Fetch model (+ warm the wasm and its loader script into HTTP/SW cache) with progress, so 'done' means every file
- * an offline tracker start needs has been requested. Validated binaries are also written to ENGINE_CACHE when no
- * service worker controls the page, and older engine versions are pruned from it. Memoised: concurrent callers share one download.
- * `loaded`/`total` are bytes of the current phase ('done' carries the sum of both phases). A caller joining late
+ * an offline tracker start needs has been requested. The full-range photo detector (loadPhotoDetector) downloads
+ * alongside the model and counts in the model phase's bar, but nothing waits for it: the camera never runs it, so a
+ * slow or failed detector holds neither 'done' nor the camera start (step-1 spec §6.5). Validated binaries are also
+ * written to ENGINE_CACHE when no service worker controls the page, and older engine versions are pruned from it.
+ * Memoised: concurrent callers share one download.
+ * `loaded`/`total` are bytes of the current phase (the model phase: the model and the detector once it answered; 'done'
+ * carries the sum of every file that finished, the detector included when it was in by then). A caller joining late
  * immediately receives the latest event. A failed download clears the memo, so calling again retries.
  */
-export function loadEngineAssets(
-  onProgress?: (p: EngineAssetsProgress) => void,
-): Promise<{ modelBuffer: Uint8Array }> {
+export function loadEngineAssets(onProgress?: (p: EngineAssetsProgress) => void): Promise<EngineModels> {
   if (onProgress) {
     listeners.add(onProgress);
     if (lastProgress) deliver(onProgress, lastProgress);
@@ -53,10 +67,50 @@ export function loadEngineAssets(
   return memo.finally(() => listeners.delete(onProgress));
 }
 
-async function download(): Promise<{ modelBuffer: Uint8Array }> {
+async function download(): Promise<EngineModels> {
   requestPersistence();
   const stash = stashTarget();
-  const model = await fetchWithProgress(ENGINE_PATHS.model, 'model', true, stash);
+  // the model phase's bar: the model's bytes plus the detector's from its first progress event (a detector that fails
+  // leaves it); detector events after the model phase reach nobody here
+  let modelPart = { loaded: 0, total: 0 };
+  let detectorPart: { loaded: number; total: number } | null = null;
+  let detectorDone = 0;
+  let modelPhase = true;
+  const showModel = () => {
+    if (!modelPhase) return;
+    const d = detectorPart;
+    const known = modelPart.total > 0 && (!d || d.total > 0);
+    emit({ phase: 'model', loaded: modelPart.loaded + (d?.loaded ?? 0), total: known ? modelPart.total + (d?.total ?? 0) : 0 });
+  };
+  const modelP = fetchWithProgress(ENGINE_PATHS.model, 'model', true, stash, (p) => {
+    modelPart = { loaded: p.loaded, total: p.total };
+    showModel();
+  });
+  // started right after the model request (one bar for both), never awaited
+  loadPhotoDetector((p) => {
+    detectorPart = { loaded: p.loaded, total: p.total };
+    showModel();
+  }).then(
+    (bytes) => {
+      detectorDone = bytes.byteLength;
+    },
+    () => {
+      detectorPart = null;
+      showModel();
+    },
+  );
+  let model: Fetched;
+  try {
+    model = await modelP;
+  } finally {
+    modelPhase = false;
+  }
+  let modelBuffer = model.bytes;
+  try {
+    modelBuffer = withoutBlendshapes(model.bytes);
+  } catch (e) {
+    console.warn('[assets] the face model is not a stored zip: the camera runs it as shipped', e);
+  }
   let wasmBytes = 0;
   try {
     // MediaPipe fetches the wasm itself (FilesetResolver); this only warms the SW/HTTP cache with progress.
@@ -73,9 +127,53 @@ async function download(): Promise<{ modelBuffer: Uint8Array }> {
   }
   // Best-effort and not awaited: the download is done whether or not Cache Storage cooperates.
   pruneStale().catch(() => {});
-  const sum = model.loaded + wasmBytes;
+  const sum = model.loaded + detectorDone + wasmBytes;
   emit({ phase: 'done', loaded: sum, total: sum });
-  return { modelBuffer: model.bytes };
+  return { modelBuffer };
+}
+
+// ───────────── the photo detector: BlazeFace full-range (photos only, step-1 spec §6.5) ─────────────
+
+const detectorJob: ModelJob = { memo: null, listeners: new Set(), last: null };
+
+/**
+ * Fetch the full-range face detector with progress (phase 'model', then 'done'), memoised. A failure (HTTP error, HTML
+ * fallback, truncated, stalled, or not a TFLite model) is logged and clears the memo, so the next call fetches again:
+ * a failed download is never kept as the answer. The engine download starts it beside the model; services.ts asks for
+ * it again whenever a photo switches the tracker to it (or the editor opens one), and lets a photo wait for the first
+ * download only, briefly (DETECTOR_WAIT_MS). Stashed in ENGINE_CACHE (no service worker) like the engine binaries, so
+ * photos detect full-range offline once this file itself has downloaded once (the engine's 'done' does not wait for it).
+ */
+export function loadPhotoDetector(onProgress?: (p: EngineAssetsProgress) => void): Promise<Uint8Array> {
+  const job = detectorJob;
+  if (onProgress) {
+    job.listeners.add(onProgress);
+    if (job.last) deliver(onProgress, job.last);
+  }
+  if (!job.memo) {
+    const run = downloadDetector(job);
+    job.memo = run;
+    run.catch((e: unknown) => {
+      console.warn('[assets] full-range face detector unavailable, photos use the short-range detector for now', e);
+      if (job.memo === run) {
+        job.memo = null;
+        job.last = null;
+      }
+    });
+  }
+  if (!onProgress) return job.memo;
+  return job.memo.finally(() => job.listeners.delete(onProgress));
+}
+
+async function downloadDetector(job: ModelJob): Promise<Uint8Array> {
+  const report = (p: EngineAssetsProgress) => {
+    job.last = p;
+    for (const cb of [...job.listeners]) deliver(cb, p);
+  };
+  const d = await fetchWithProgress(ENGINE_PATHS.photoDetector, 'model', true, stashTarget(), report);
+  if (!isFaceDetectorModel(d.bytes)) throw new Error(`${ENGINE_PATHS.photoDetector}: not a TFLite model`);
+  report({ phase: 'done', loaded: d.loaded, total: d.loaded });
+  return d.bytes;
 }
 
 // ───────────── Cache Storage (offline engine) ─────────────
@@ -127,6 +225,7 @@ async function warmLoader(stash: boolean): Promise<void> {
 function isCurrent(path: string): boolean {
   return (
     path === ENGINE_PATHS.model ||
+    path === ENGINE_PATHS.photoDetector ||
     path.startsWith(`${ENGINE_PATHS.wasmBase}/`) ||
     (Object.values(POSE_MODELS) as string[]).includes(path) ||
     path === SEGMENTER_MODEL
@@ -288,15 +387,16 @@ export function loadPoseModel(
   return job.memo.finally(() => job.listeners.delete(onProgress));
 }
 
-interface PoseJob {
+/** one memoised model download with its own listeners (the pose models, the photo detector) */
+interface ModelJob {
   memo: Promise<Uint8Array> | null;
   listeners: Set<Listener>;
   last: EngineAssetsProgress | null;
 }
 
-const poseJobs: Partial<Record<keyof typeof POSE_MODELS, PoseJob>> = {};
+const poseJobs: Partial<Record<keyof typeof POSE_MODELS, ModelJob>> = {};
 
-async function downloadPose(variant: keyof typeof POSE_MODELS, job: PoseJob): Promise<Uint8Array> {
+async function downloadPose(variant: keyof typeof POSE_MODELS, job: ModelJob): Promise<Uint8Array> {
   const report = (p: EngineAssetsProgress) => {
     job.last = p;
     for (const cb of [...job.listeners]) deliver(cb, p);

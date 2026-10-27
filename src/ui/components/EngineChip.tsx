@@ -1,5 +1,6 @@
-// Engine-download progress chip (spec §7.2 Home). Model ≈ 3.7 MB + wasm warm-up
-// (≈ 6–8 MB over the wire in total, RB row 14 / risk 11).
+// Engine-download progress chip (spec §7.2 Home). Model 3.76 MB + the full-range photo detector 1.08 MB (one bar, the
+// model phase) + wasm and its loader 2.69–3.38 MB (brotli q9 to gzip -6): 7.5–8.2 MB over the wire in total, 7.2–7.8 MiB
+// (RB row 14 / risk 11; downloadSize.test.ts holds 「約 7–8 MB」 to it).
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { progressFraction, progressText } from '../format';
 import { Icon } from '../icons';

@@ -42,6 +42,10 @@ test('three faces: auto beautifies the largest; tap B; 全部套用; tap C; the 
     return { nodes: seen.size, most, dots: dots.length };
   });
   expect(marker).toEqual({ nodes: 1, most: 1, dots: 1 });
+  // the look these checks beautify with: 自然 (the camera starts at 原圖 on a fresh install since 2026-10-18)
+  await page.getByRole('tab', { name: '一鍵' }).click();
+  await page.getByRole('option', { name: '自然', exact: true }).click();
+  await expect(page.getByRole('option', { name: '自然', exact: true })).toHaveAttribute('aria-selected', 'true');
   // a photo-level look of zero, so an unselected face is untouched pixel for pixel
   await page.getByRole('tab', { name: '美膚' }).click();
   for (const item of ['美白', '銳化']) {

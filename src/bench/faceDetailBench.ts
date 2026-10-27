@@ -1,5 +1,7 @@
 // Step-5 bench rows (face-detail spec §6.2): reshape with every new warp at ±max, P1 with every makeup part, and the
-// PMAKEUP compile time, at N = 1, 3, 6 faces and 1080 / 2048. Timings use a gl.finish() fence; medians of 20 frames.
+// PMAKEUP compile time, at N = 1, 3, 6 and 10 (the face cap) faces and 1080 / 2048. Timings use a gl.finish() fence;
+// medians of 20 frames.
+import { MAX_RENDER_FACES } from '../config/limits';
 import { defaultPhoto, emptyShades, neutralPerson } from '../edit/state';
 import { createEngine } from '../engine/index';
 import { MAKEUP_PARAM, paramsInGroup, SPLIT_IDS } from '../engine/params';
@@ -23,7 +25,10 @@ export function makeupBenchPerson(): PersonParams {
   return { ...p, values, shades: { ...emptyShades(), lip: 'rose', blush: 'peach', brow: 'black', eyeshadow: 'earth', liner: 'black', lens: 'blue' } };
 }
 
-/** n copies of `face`, shrunk into a 1 × 1, 3 × 1 or 3 × 2 grid of cells so they never overlap */
+/** the face counts the rows run at: 1, 3, 6 and the face cap (MAX_RENDER_FACES = 10, step-1 spec §6.7) */
+export const BENCH_FACE_COUNTS: readonly number[] = [1, 3, 6, MAX_RENDER_FACES];
+
+/** n copies of `face`, shrunk into a 1 × 1, 3 × 1, 3 × 2 … 3 × 4 grid of cells so they never overlap */
 export function benchFaces(face: Face, n: number, person: PersonParams): RenderFace[] {
   if (n <= 1) return [{ face, weight: 1, person, protect: null }];
   const cols = 3;
@@ -69,7 +74,7 @@ export async function runFaceDetailRows(engine: Engine, bitmap: ImageBitmap, fac
   for (const edge of [1080, 2048]) {
     const k = edge / Math.max(bitmap.width, bitmap.height);
     const src = await createImageBitmap(bitmap, { resizeWidth: Math.round(bitmap.width * k), resizeHeight: Math.round(bitmap.height * k), resizeQuality: 'high' });
-    for (const n of [1, 3, 6]) {
+    for (const n of BENCH_FACE_COUNTS) {
       const base = time(engine, gl, input(src, benchFaces(face, n, neutralPerson())));
       for (const end of [1, 0] as const) {
         const ms = time(engine, gl, input(src, benchFaces(face, n, warpBenchPerson(end)))) - base;

@@ -96,3 +96,47 @@ test('輸出測試 frame: photo-like file sizes through the export encoders (S �
   expect(r.pngBytes).toBeGreaterThan(15 * MB);
   expect(r.pngBytes).toBeLessThan(35 * MB);
 });
+
+test('bench.html row D app rows (S §6.5, PD3): the first photo of a fresh page on a tracker built like the app\'s, with the full-range detector and the short-range retry', async ({ page }) => {
+  test.setTimeout(240_000);
+  // the dev server serves /tests/fixtures (the rows read group_faces.png by URL with ?fixtures=1)
+  await page.goto('http://127.0.0.1:5190/bench.html?fixtures=1');
+  await page.waitForFunction(() => !!(window as unknown as { __benchMulti?: unknown }).__benchMulti, null, { timeout: 120_000 });
+  const rows = await page.evaluate(() =>
+    (window as unknown as { __benchMulti: { run(ids: string[]): Promise<{ row: string; config: string; values: Record<string, string | number> }[]> } }).__benchMulti.run(['DA']),
+  );
+  console.log(rows.map((r) => `${r.config}: ${JSON.stringify(r.values)}`).join('\n'));
+  expect(rows.map((r) => r.config)).toEqual(['app GPU 2048 first photo', 'app CPU 2048 first photo']);
+  for (const r of rows) {
+    expect(r.values.error, r.config).toBeUndefined();
+    // the photo bundle, as photos run it: group_faces.png's A, B and C (D is below MIN_FACE_FRAC but MediaPipe may not see it)
+    expect(r.values.detector).toBe('full-range');
+    expect(r.values.faces as number).toBeGreaterThanOrEqual(3);
+    expect(r.values.retry_faces as number).toBeGreaterThanOrEqual(3);
+    for (const k of ['tracker_ms', 'first_ms', 'next_ms', 'retry_ms', 'back_ms']) expect(r.values[k] as number, `${r.config} ${k}`).toBeGreaterThan(0);
+  }
+  // the page's first full-range detection: the cold one PD3 reads
+  expect(rows[0].values.cold).toBe('true');
+});
+
+test('bench.html row PC (S §6.1, §6.3 PC1): the slider commit’s fold check at 6, 8 and 10 faces with every face’s 瘦臉 limit, every face’s warp changed (全部) and one person’s, within 66 ms here', async ({ page }) => {
+  // the dev server serves /tests/fixtures (PC reads the fixture face's landmarks by URL)
+  await page.goto('http://127.0.0.1:5190/bench.html?fixtures=1');
+  await page.waitForFunction(() => !!(window as unknown as { __benchMulti?: unknown }).__benchMulti, null, { timeout: 60_000 });
+  const rows = await page.evaluate(() =>
+    (window as unknown as { __benchMulti: { run(ids: string[]): Promise<{ row: string; config: string; values: Record<string, string | number> }[]> } }).__benchMulti.run(['PC']),
+  );
+  console.log(rows.map((r) => `${r.config}: ${JSON.stringify(r.values)}`).join('\n'));
+  expect(rows.map((r) => r.config)).toEqual(['6 faces grid 2×3 @1.3FW', '8 faces grid 2×4 @1.3FW', '10 faces grid 2×5 @1.3FW']);
+  for (const r of rows) {
+    // the guard checked and did not act (the caps keep the sum fold-free)
+    expect(r.values.lambda_min, r.config).toBe(1);
+    expect(r.values.one_ms as number, r.config).toBeLessThan(r.values.all_ms as number);
+    // the same 全部 commits without the limits (before any contour drag)
+    expect(r.values.all_ms_unlimited as number, r.config).toBeGreaterThan(0);
+    // all_ms carries every face's limit, as the editor's commit after a contour drag: at ten faces on the workspace
+    // desktop about 17.5 ms here and 18 ms in Node, 14–15 ms without the limits (59–60 ms here and 80–83 ms in Node
+    // with the map before 2026-10-18's per-face constants)
+    expect(r.values.verdict, `${r.config} all_ms ${r.values.all_ms}`).toBe('ok');
+  }
+});

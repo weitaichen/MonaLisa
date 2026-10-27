@@ -69,6 +69,7 @@ test('credits list GPUPixel and MediaPipe; privacy statement shown', async ({ pa
   await expect(mediapipe.locator('pre')).toContainText(/Apache License\s+Version 2\.0/);
   await expect(mediapipe.locator('.credit-body')).toContainText('Pose Landmarker');
   await expect(mediapipe.locator('.credit-body')).toContainText('selfie_segmenter');
+  await expect(mediapipe.locator('.credit-body')).toContainText('BlazeFace full-range');
   for (const [file, needle] of [
     ['GPUPixel-Apache-2.0.txt', 'Apache License'],
     ['GPUImage-BSD-3-Clause.txt', 'THIS SOFTWARE IS PROVIDED'],
@@ -76,6 +77,8 @@ test('credits list GPUPixel and MediaPipe; privacy statement shown', async ({ pa
     ['NOTICE.txt', 'lip_mask.png'],
     ['NOTICE.txt', '/models/pose_landmarker/'],
     ['NOTICE.txt', '/models/image_segmenter/selfie-float16-1/'],
+    ['NOTICE.txt', '/models/face_detector/full-range-float16-1/'],
+    ['NOTICE.txt', 'face_detector.tflite replaced by blaze_face_full_range.tflite'],
   ]) {
     const res = await page.request.get(`/licenses/${file}`);
     expect(res.status(), file).toBe(200);

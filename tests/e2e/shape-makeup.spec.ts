@@ -427,6 +427,13 @@ test('美妝 and 左右分開 in the camera (S5 §2.5, §8.3 item 7)', async ({ 
     }, { timeout: 90_000, intervals: [500] })
     .toBe(true);
   const frame = page.locator('.cam-stage .frame');
+  // the look this check was tuned on: 自然, which the camera started with until it started at 原圖 on a fresh install
+  // (2026-10-18). 美瞳 冰藍 moves the eye band by ≈ 1.9 over 自然 and by ≈ 0.6 over 原圖 (measured), too close to the
+  // 0.5 floor
+  await tab(page, '一鍵');
+  await option(page, '自然');
+  await expect(optionNamed(page, '自然')).toHaveAttribute('aria-selected', 'true');
+  await page.waitForTimeout(500);
   await tab(page, '美妝');
   const a1 = await grab(frame);
   await page.waitForTimeout(700);

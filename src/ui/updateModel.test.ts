@@ -104,6 +104,14 @@ describe('banner text', () => {
   it('names 0.4.0 as v0.4 (C §1.3)', () => {
     expect(bannerTitle(available({ next: '0.4.0' }))).toBe('有新版本 v0.4');
   });
+
+  it('names 0.5.0 as v0.5 (RM §14)', () => {
+    expect(bannerTitle(available({ next: '0.5.0' }))).toBe('有新版本 v0.5');
+  });
+
+  it('names the camera fix 0.5.1 as v0.5.1 (RM §15)', () => {
+    expect(bannerTitle(available({ next: '0.5.1' }))).toBe('有新版本 v0.5.1');
+  });
 });
 
 describe('update checks', () => {
@@ -147,5 +155,13 @@ describe('已更新至 notice (first launch of a new version)', () => {
 
   it('after the 0.4.0 update', () => {
     expect(updatedNotice('0.3.0', '0.4.0', true)).toBe('已更新至 v0.4');
+  });
+
+  it('after the 0.5.0 update', () => {
+    expect(updatedNotice('0.4.0', '0.5.0', true)).toBe('已更新至 v0.5');
+  });
+
+  it('after the 0.5.1 update', () => {
+    expect(updatedNotice('0.5.0', '0.5.1', true)).toBe('已更新至 v0.5.1');
   });
 });

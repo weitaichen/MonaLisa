@@ -314,7 +314,7 @@ async function createInstance(
   mode: Mode,
 ): Promise<Instance> {
   const options: PoseLandmarkerOptions = {
-    // kept by reference and re-read on every setOptions graph rebuild: never mutate the buffer afterwards
+    // copied by tasks-vision 0.10.35 (setOptions keeps its own Uint8Array, serialized into the wasm heap on every graph rebuild)
     baseOptions: { modelAssetBuffer: modelBuffer, delegate },
     runningMode: mode,
     numPoses: MAX_EDIT_BODIES,

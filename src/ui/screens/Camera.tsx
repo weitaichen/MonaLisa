@@ -83,6 +83,8 @@ export function Camera() {
   const countTimer = useRef(0);
   /** the running live loop, maintained by its effect: a countdown captures from whichever loop is current */
   const loopRef = useRef<LiveLoop | null>(null);
+  /** 按住對比 as the loop was last told (useHold tells only of a change): a loop restarted under it takes it on */
+  const compareOn = useRef(false);
   const capturing = useRef(false);
 
   const setSel = (s: PanelSelection) => {
@@ -153,6 +155,14 @@ export function Camera() {
       return;
     }
     loopRef.current = l;
+    // a new bundle (a tracker come) restarts the loop within one render, under a held 按住對比 ([ready] does not change)
+    if (compareOn.current) {
+      try {
+        l.setCompare(true);
+      } catch (e) {
+        reportError(e, 'setCompare');
+      }
+    }
     setLoop(l);
     return () => {
       clearTimeout(faceTimer);
@@ -170,6 +180,7 @@ export function Camera() {
   useEffect(() => () => clearInterval(countTimer.current), []);
 
   const hold = useHold((on) => {
+    compareOn.current = on;
     try {
       loop?.setCompare(on);
     } catch (e) {
@@ -247,7 +258,7 @@ export function Camera() {
       original?.close();
       return;
     }
-    go({ name: 'review', shot: { image, file, original, look: lookRef.current, faceSeed, mirrored: mirror } });
+    go({ name: 'review', shot: { image, file, original, faceSeed } });
   };
 
   const shutter = () => {
@@ -346,13 +357,22 @@ export function Camera() {
       </Status>
     );
   } else if (state === 'starting') {
-    overlay = <Status spinner title="正在開啟相機…" />;
+    if (snap?.error === 'noanswer') {
+      // still waiting (a late answer goes live): no 重試, it would only wait for the same request
+      const m = cameraErrorCopy('noanswer', isStandalone(), location.origin);
+      overlay = (
+        <Status spinner title={m.title} body={m.body} steps={m.steps} detail={m.detail}>
+          <ImportButton />
+        </Status>
+      );
+    } else overlay = <Status spinner title="正在開啟相機…" />;
   } else if (state === 'error') {
     const kind = snap?.error ?? 'unknown';
     const standalone = isStandalone();
     const m = cameraErrorCopy(kind, standalone, location.origin);
     // the Safari fallback needs the URL even when there is also a start error to show
-    const detail = kind === 'black' && standalone ? [startErr, m.detail].filter(Boolean).join(' · ') : (startErr ?? m.detail);
+    const safari = (kind === 'black' || kind === 'noframe') && standalone;
+    const detail = safari ? [startErr, m.detail].filter(Boolean).join(' · ') : (startErr ?? m.detail);
     overlay = (
       <Status icon="warning" tone="danger" title={m.title} body={m.body} steps={m.steps} detail={detail}>
         <button type="button" class="btn primary" onClick={start}>

@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { placeBenchFace, reshapeBenchLayouts } from '../bench/reshapeLayouts';
+import { MAX_EDIT_FACES } from '../config/limits';
+import { PARAM_DEFS } from '../engine/params';
 import { attenuate, boxCentre, capsFor, ovalBox, WHOLE, type TableFace } from '../engine/passes/faceCap';
-import { reshapeUniforms } from '../engine/passes/reshape';
+import { faceWidthIso, reshapeUniforms } from '../engine/passes/reshape';
 import { mapMinDet, reshapeMapMulti } from '../engine/passes/reshapeCpu';
 import { adapt } from '../tracking/adapter111';
 import type { Face, FaceProtect, StillFrame } from '../types';
@@ -109,6 +112,29 @@ describe('warpGuard cost (S §6.1: it runs on the commit path, before the commit
     expect(evaluated.length).toBeGreaterThan(0);
     expect(evaluated.length).toBeLessThanOrEqual(2 * 65 * 65);
     expect(evaluated.filter((p) => !inDisc(p, 0) && !inDisc(p, 1))).toEqual([]);
+  });
+
+  it('a 全部 commit at MAX_EDIT_FACES (10) faces with every 美型 item at max (S §6.1): each face checked once, λ = 1, at most 16 Math.hypot per mapped point (a step’s constants once per chain; a disc step skips the hypot beyond its reach box)', () => {
+    // row PC's layout (bench/foldGuardBench.ts): row R's 2 × 5 grid at 1.3 FW on the square bench frame
+    const { centres, k } = reshapeBenchLayouts(faceWidthIso(base, 1))[`grid 2×${MAX_EDIT_FACES / 2} @1.3FW`];
+    const p = personFromPreset('original', 1);
+    const every = { ...p, values: { ...p.values, ...Object.fromEntries(PARAM_DEFS.filter((d) => d.group === 'shape').map((d) => [d.id, 1])) } };
+    const frame: StillFrame = {
+      ...frameOf([]),
+      faces: centres.map(([x, y]) => ({ face: placeBenchFace(base, x, y, k), weight: 1, person: every, protect: null, warpScale: 1 })),
+    };
+    const hypot = vi.spyOn(Math, 'hypot');
+    try {
+      evaluated.length = 0;
+      checks.mockClear();
+      expect(createWarpGuard()(frame, 1)).toEqual(Array(MAX_EDIT_FACES).fill(1));
+      expect(checks).toHaveBeenCalledTimes(MAX_EDIT_FACES);
+      expect(evaluated.length).toBeGreaterThan(MAX_EDIT_FACES * 1000);
+      // 92 per point before 2026-10-18 (two per contour curveWarp, 37 of them with every item on, one per disc step), 12 since
+      expect(hypot.mock.calls.length / evaluated.length).toBeLessThanOrEqual(16);
+    } finally {
+      hypot.mockRestore();
+    }
   });
 
   it('a commit that changes one person’s shape values re-checks only that face', () => {

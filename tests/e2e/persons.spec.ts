@@ -2,13 +2,14 @@
 // face boxes, photo taps, 全部, the photo-level items, undo across persons, reopen and the seeded records.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { Page } from '@playwright/test';
 import { PNG } from 'pngjs';
 import { editFromLegacy } from '../../src/edit/legacy';
 import { assignPersons } from '../../src/edit/state';
 import { applyPreset, sanitizeParams } from '../../src/engine/params';
 import { stableKey } from '../../src/store/undo';
-import { boxCentre, debugState, emptyPng, expect, grab, GROUP_FACES, historyStamps, importFixture, pinch, regionDiff, seedHistory, selectPerson, test } from './fixtures';
+import { boxCentre, debugState, dragSlider, emptyPng, expect, grab, GROUP_FACES, historyStamps, importFixture, mad, personChip, pinch, regionDiff, seedHistory, selectPerson, test } from './fixtures';
 
 test('a group photo: three selectable faces (D ignored), A is the primary, the cache is written', async ({ page }) => {
   await importFixture(page, GROUP_FACES);
@@ -470,3 +471,213 @@ test('the number badges follow a pinch-zoom: hidden on boxes under 24 pt on scre
   await expect(page.locator('.editor-stage .zoom-layer')).toHaveAttribute('style', /scale\(/);
   await expect.poll(shown, { timeout: 5000 }).toBeGreaterThan(0);
 });
+
+/** scripts/gen-group-fixture.mjs layouts / smallFaceCell: where small_faces.jpg's, ten_faces.jpg's and eleven_faces.jpg's faces are (px) */
+interface FaceLayout {
+  width: number;
+  height: number;
+  faces: { fw: number; cx: number; cy: number; mirror: boolean }[];
+}
+interface SmallFaces {
+  SMALL_FACES: FaceLayout;
+  TEN_FACES: FaceLayout;
+  ELEVEN_FACES: FaceLayout;
+  smallFaceCell(spec: FaceLayout['faces'][number], layout?: FaceLayout): { face: { cx: number; cy: number; fw: number } };
+}
+const faceLayouts = async () => (await import(pathToFileURL(resolve(import.meta.dirname, '../../scripts/gen-group-fixture.mjs')).href)) as SmallFaces;
+/** each box's fixture face (index into `truth`; −1 = none): its centre within 0.25 FW, its width within 0.3 FW */
+const truthOf = (boxes: { x: number; y: number; w: number; h: number }[], truth: { cx: number; cy: number; fw: number }[], layout: FaceLayout) =>
+  boxes.map((b) => truth.findIndex((t) => Math.hypot((b.x + b.w / 2) * layout.width - t.cx, (b.y + b.h / 2) * layout.height - t.cy) < 0.25 * t.fw && Math.abs(b.w * layout.width - t.fw) < 0.3 * t.fw));
+/** import a photo through the picker, on the default delegate or on CPU, recording every toast */
+async function importPhoto(page: Page, file: string, delegate: 'auto' | 'CPU'): Promise<void> {
+  await page.goto('/');
+  if (delegate === 'CPU') {
+    // the CPU graph (on a real group photo it returned one face twice; prepareFaces keeps one of the pair)
+    await page.evaluate(() => localStorage.setItem('meiyan.prefs.v1', JSON.stringify({ delegate: 'CPU' })));
+    await page.reload();
+  }
+  await watchToasts(page);
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: /匯入照片/ }).click();
+  await (await chooser).setFiles(resolve(import.meta.dirname, '../fixtures', file));
+  await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 90_000 });
+}
+
+for (const delegate of ['auto', 'CPU'] as const) {
+  test(`seven small faces (6–14 % of the width) are all found and all seven persons are selectable: 全部 + 7 (${delegate})`, async ({ page }) => {
+    const { SMALL_FACES, smallFaceCell } = (await import(pathToFileURL(resolve(import.meta.dirname, '../../scripts/gen-group-fixture.mjs')).href)) as SmallFaces;
+    const truth = SMALL_FACES.faces.map((f) => smallFaceCell(f).face);
+    expect(truth).toHaveLength(7);
+    await page.goto('/');
+    if (delegate === 'CPU') {
+      // the CPU graph (on a real group photo it returned one face twice; prepareFaces keeps one of the pair)
+      await page.evaluate(() => localStorage.setItem('meiyan.prefs.v1', JSON.stringify({ delegate: 'CPU' })));
+      await page.reload();
+    }
+    await watchToasts(page);
+    const chooser = page.waitForEvent('filechooser');
+    await page.getByRole('button', { name: /匯入照片/ }).click();
+    await (await chooser).setFiles(resolve(import.meta.dirname, '../fixtures/small_faces.jpg'));
+    await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 90_000 });
+    // S §6.6, §6.7: the editor's cap (MAX_EDIT_FACES = 10) holds a seven-person group whole
+    await expect.poll(async () => (await debugState(page)).faces, { timeout: 30_000 }).toBe(7);
+    const d = await debugState(page);
+    expect(d.detectCalls).toBe(1);
+    expect(d.delegate).toBe(delegate === 'CPU' ? 'CPU' : 'GPU');
+    expect(d.persons).toBe(7);
+    // the strip: 全部 and one chip per person, 全部 + 7
+    const strip = page.getByRole('radiogroup', { name: '選擇人物' });
+    await expect(strip.getByRole('radio')).toHaveCount(8);
+    await expect(strip.getByRole('radio', { name: '全部' })).toHaveCount(1);
+    // every box is one of the fixture's faces, each found once: all seven
+    const which = d.boxes.map((b) =>
+      truth.findIndex((t) => Math.hypot((b.x + b.w / 2) * SMALL_FACES.width - t.cx, (b.y + b.h / 2) * SMALL_FACES.height - t.cy) < 0.25 * t.fw && Math.abs(b.w * SMALL_FACES.width - t.fw) < 0.3 * t.fw),
+    );
+    expect(which.every((i) => i >= 0), JSON.stringify(d.boxes)).toBe(true);
+    expect(new Set(which).size).toBe(7);
+    // nothing was over the cap: no 「偵測到超過」 toast
+    await page.waitForTimeout(1000);
+    expect((await toastsSeen(page)).some((t) => t.startsWith('偵測到超過')), JSON.stringify(await toastsSeen(page))).toBe(false);
+    // each of the seven chips selects its person (the strip scrolls: eight chips do not fit 393 pt)
+    for (let n = 1; n <= 7; n++) {
+      await selectPerson(page, n);
+      await expect(strip.getByRole('radio', { name: personChip(n) })).toHaveAttribute('aria-checked', 'true');
+      await expect.poll(async () => (await debugState(page)).selected).toBe(`f${n - 1}`);
+    }
+    // the smallest face (the one a cap of 6 dropped as an obstacle) is beautified: 大眼 on it moves only its region
+    const small = [...d.boxes].sort((a, b) => a.w - b.w)[0];
+    await hideOverlays(page);
+    await tab(page, '美型');
+    const before = await grab(frame(page));
+    await selectPerson(page, Number(small.id.slice(1)) + 1);
+    await option(page, '大眼');
+    await sliderTo(page, 100);
+    await page.waitForTimeout(600);
+    const after = await grab(frame(page));
+    const r = regionDiff(before, after, { x: small.x - small.w * 0.6, y: small.y - small.h * 0.6, w: small.w * 2.2, h: small.h * 2.2 });
+    expect(r.inside, small.id).toBeGreaterThan(0.2);
+    expect(r.outsideMax, small.id).toBeLessThanOrEqual(1);
+    // the carrier the pipeline's reshape pass was built with: headless SwiftShader gets the texture (faceTableCarrier:
+    // the UBO is 2–3.5× slower here); a wiring that dropped the pick would build FACE_TABLE_CARRIER, the UBO
+    expect((await debugState(page)).gl?.FACE_TABLE_UBO).toBe(false);
+  });
+}
+
+for (const delegate of ['auto', 'CPU'] as const) {
+  test(`ten faces (ten_faces.jpg, S §6.7): the face cap holds all ten, 全部 + 10, each chip selects its person, the strip scrolls at 320 and 430 pt (${delegate})`, async ({ page }) => {
+    const { TEN_FACES, smallFaceCell } = await faceLayouts();
+    const truth = TEN_FACES.faces.map((s) => smallFaceCell(s, TEN_FACES).face);
+    expect(truth).toHaveLength(10);
+    await importPhoto(page, 'ten_faces.jpg', delegate);
+    await expect.poll(async () => (await debugState(page)).faces, { timeout: 30_000 }).toBe(10);
+    const d = await debugState(page);
+    expect(d.detectCalls).toBe(1);
+    expect(d.delegate).toBe(delegate === 'CPU' ? 'CPU' : 'GPU');
+    expect(d.persons).toBe(10);
+    // nothing was dropped: no obstacle, no over-cap or too-small count
+    expect(d.obstacles).toEqual([]);
+    expect(d.dropped).toEqual({ tooSmall: 0, overCap: 0 });
+    const strip = page.getByRole('radiogroup', { name: '選擇人物' });
+    await expect(strip.getByRole('radio')).toHaveCount(11);
+    await expect(strip.getByRole('radio', { name: '全部' })).toHaveCount(1);
+    // every box is one of the fixture's faces, each found once, and the ids run left to right (f9 is the rightmost)
+    const which = truthOf(d.boxes, truth, TEN_FACES);
+    expect(which.every((i) => i >= 0), JSON.stringify(d.boxes)).toBe(true);
+    expect(new Set(which).size).toBe(10);
+    const byX = truth.map((t, i) => [t.cx, i]).sort((a, b) => a[0] - b[0]).map(([, i]) => i);
+    expect([...d.boxes].sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1))).map((b) => which[d.boxes.indexOf(b)])).toEqual(byX);
+    await page.waitForTimeout(1000);
+    expect((await toastsSeen(page)).some((t) => t.startsWith('偵測到超過')), JSON.stringify(await toastsSeen(page))).toBe(false);
+    // each of the ten chips selects its person
+    for (let n = 1; n <= 10; n++) {
+      await selectPerson(page, n);
+      await expect(strip.getByRole('radio', { name: personChip(n) })).toHaveAttribute('aria-checked', 'true');
+      await expect.poll(async () => (await debugState(page)).selected).toBe(`f${n - 1}`);
+    }
+    // 11 chips (44 pt, 4 pt gaps, 12 pt padding: 548 pt) scroll on a 320 and a 430 pt screen: from the start of the row,
+    // a tap on the tenth face selects it and scrolls its chip into view (S §2.1)
+    const chipShown = (n: number) =>
+      strip.evaluate((el, src) => {
+        const c = [...el.querySelectorAll('[role="radio"]')].find((x) => new RegExp(src).test(x.getAttribute('aria-label') ?? x.textContent ?? ''))!.getBoundingClientRect();
+        const r = el.getBoundingClientRect();
+        return c.left >= r.left - 0.5 && c.right <= r.right + 0.5;
+      }, personChip(n).source);
+    for (const [width, height] of [
+      [320, 568],
+      [430, 932],
+    ]) {
+      await page.setViewportSize({ width, height });
+      await page.waitForTimeout(700);
+      await selectPerson(page, 1);
+      await expect.poll(() => strip.evaluate((el) => el.scrollLeft)).toBeLessThan(45);
+      const m = await strip.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+      expect(m.scroll, `${width} pt`).toBeGreaterThan(m.client);
+      expect(m.scroll, `${width} pt`).toBeGreaterThanOrEqual(548);
+      expect(await chipShown(10), `${width} pt: chip 10 starts off screen`).toBe(false);
+      const b = await boxCentre(page, 'f9');
+      await page.mouse.click(b.x, b.y);
+      await expect.poll(async () => (await debugState(page)).selected, { message: `${width} pt` }).toBe('f9');
+      await expect.poll(() => chipShown(10), { message: `${width} pt` }).toBe(true);
+    }
+    await page.setViewportSize({ width: 393, height: 852 });
+    await page.waitForTimeout(700);
+    // the table's last row is drawn: 大眼 on person 10 (f9) moves its region and nothing else
+    const last = (await debugState(page)).boxes.find((b) => b.id === 'f9')!;
+    await hideOverlays(page);
+    await tab(page, '美型');
+    await selectPerson(page, 10);
+    await option(page, '大眼');
+    await page.waitForTimeout(600);
+    const before = await grab(frame(page));
+    await dragSlider(page, 400);
+    await expect(page.getByRole('slider')).toHaveAttribute('aria-valuenow', '100');
+    await page.waitForTimeout(600);
+    const after = await grab(frame(page));
+    const r = regionDiff(before, after, { x: last.x - last.w * 0.6, y: last.y - last.h * 0.6, w: last.w * 2.2, h: last.h * 2.2 });
+    expect(r.inside).toBeGreaterThan(0.2);
+    expect(r.outsideMax).toBeLessThanOrEqual(1);
+    // the reshape pass the pipeline built for that frame: the texture carrier on SwiftShader
+    expect((await debugState(page)).gl?.FACE_TABLE_UBO).toBe(false);
+  });
+
+  test(`eleven faces (eleven_faces.jpg, S §6.7): the ten largest are persons, the eleventh is an obstacle, the over-cap toast shows, 全部 leaves it untouched (${delegate})`, async ({ page }) => {
+    const { ELEVEN_FACES, smallFaceCell } = await faceLayouts();
+    const truth = ELEVEN_FACES.faces.map((s) => smallFaceCell(s, ELEVEN_FACES).face);
+    expect(truth).toHaveLength(11);
+    const smallest = truth.reduce((m, t, i) => (t.fw < truth[m].fw ? i : m), 0);
+    expect(smallest).toBe(10);
+    await importPhoto(page, 'eleven_faces.jpg', delegate);
+    await expect.poll(async () => (await debugState(page)).faces, { timeout: 30_000 }).toBe(10);
+    const d = await debugState(page);
+    expect(d.detectCalls).toBe(1);
+    expect(d.persons).toBe(10);
+    const strip = page.getByRole('radiogroup', { name: '選擇人物' });
+    await expect(strip.getByRole('radio')).toHaveCount(11);
+    // the ten persons are the ten largest faces; the eleventh is not among them…
+    const which = truthOf(d.boxes, truth, ELEVEN_FACES);
+    expect(which.every((i) => i >= 0), JSON.stringify(d.boxes)).toBe(true);
+    expect(new Set(which).size).toBe(10);
+    expect(which).not.toContain(smallest);
+    // …it is the photo's one obstacle (dropped over the cap), where the fixture put it
+    expect(d.dropped).toEqual({ tooSmall: 0, overCap: 1 });
+    expect(d.obstacles).toHaveLength(1);
+    expect(truthOf(d.obstacles!, truth, ELEVEN_FACES)).toEqual([smallest]);
+    // and the toast says so with the new cap
+    await expect.poll(() => toastsSeen(page)).toContain('偵測到超過 10 張臉，只會美化最大的 10 張');
+    // 全部 + 大眼: every kept face changes, the obstacle's face not at all (no face effects, even under 全部, S §7)
+    await hideOverlays(page);
+    await tab(page, '美型');
+    await selectPerson(page, 0);
+    await option(page, '大眼');
+    await page.waitForTimeout(600);
+    const before = await grab(frame(page));
+    await dragSlider(page, 400);
+    await expect(page.getByRole('slider')).toHaveAttribute('aria-valuenow', '100');
+    await page.waitForTimeout(600);
+    const after = await grab(frame(page));
+    const o = d.obstacles![0];
+    const toPx = (b: { x: number; y: number; w: number; h: number }) => ({ x: Math.round(b.x * before.width), y: Math.round(b.y * before.height), w: Math.round(b.w * before.width), h: Math.round(b.h * before.height) });
+    expect(mad(before, after, toPx({ x: o.x - o.w * 0.3, y: o.y - o.h * 0.3, w: o.w * 1.6, h: o.h * 1.6 })), 'the obstacle').toBe(0);
+    for (const b of d.boxes) expect(mad(before, after, toPx(b)), b.id).toBeGreaterThan(0.2);
+  });
+}

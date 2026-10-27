@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const MODEL = '/models/face_landmarker/float16-1/face_landmarker.task';
 const WASM = '/mediapipe/0.10.35/vision_wasm_internal.wasm';
 const LOADER = '/mediapipe/0.10.35/vision_wasm_internal.js';
+const DETECTOR = '/models/face_detector/full-range-float16-1/blaze_face_full_range.tflite';
 
 function setup(controller: object | null) {
   const calls: string[] = [];
@@ -50,7 +51,7 @@ describe('loadEngineAssets: wasm loader warm-up', () => {
     const { calls, drained, put } = setup({});
     const { loadEngineAssets } = await fresh();
     await loadEngineAssets();
-    expect(calls).toEqual([MODEL, WASM, LOADER]);
+    expect(calls).toEqual([MODEL, DETECTOR, WASM, LOADER]);
     expect(drained).toContain(LOADER);
     await new Promise((r) => setTimeout(r, 20));
     expect(put).not.toHaveBeenCalled();
@@ -60,7 +61,7 @@ describe('loadEngineAssets: wasm loader warm-up', () => {
     const { calls, put } = setup(null);
     const { loadEngineAssets } = await fresh();
     await loadEngineAssets();
-    expect(calls).toEqual([MODEL, WASM, LOADER]);
+    expect(calls).toEqual([MODEL, DETECTOR, WASM, LOADER]);
     await vi.waitFor(() => expect(put.mock.calls.map((c) => c[0])).toContain(LOADER));
   });
 

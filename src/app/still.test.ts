@@ -2,13 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EDIT_DETECT_FACES } from '../config/limits';
 import { legacyFrame } from '../edit/frame';
 import { splitLegacy } from '../edit/legacy';
+import { retake, sampleFaceAt } from '../detect/testMeshes';
+import { firstAnswer } from '../edit/migrate';
 import { defaultPhoto } from '../edit/state';
 import { applyPreset, setParam } from '../engine/params';
 import { applyRatio, IDENTITY_GEOMETRY, rotateLeft, snapCrop } from '../geometry/view';
 import { spotWindowGrowth } from '../media/exportPlan';
 import { adapt } from '../tracking/adapter111';
-import type { BeautyParams, Geometry, PhotoParams, StillFrame } from '../types';
-import { createStillSession, sameDisplayFrame, type StillSession } from './still';
+import type { BeautyParams, Geometry, Landmarks478, PhotoParams, StillFrame } from '../types';
+import { createStillSession, detectStill, sameDisplayFrame, type StillSession } from './still';
 import { faceOf, fakeEngine, fakeTracker, makeBodyField, makeFace, makeLandmarks, stubRaf, weightOf } from './testFakes';
 
 vi.mock('../tracking/adapter111', () => ({
@@ -723,5 +725,213 @@ describe('crop view mode, display pause and tiles (step 3)', () => {
     expect(b.oSpacePasses).toBe(true);
     const win = { x: 0.49, y: 0.49, w: 0.002, h: 0.002 };
     expect(b.spotWindowGrowth!(win)).toEqual(spotWindowGrowth(win, [spot], { width: 1536, height: 2048 }));
+  });
+});
+
+describe('createStillSession: the short-range retry (step-1 spec §6.5)', () => {
+  /** the full-range detector misses the face (a close-up, a cut-off forehead or side), the camera's short-range one finds it */
+  function missedByFullRange(found = 1) {
+    const tracker = fakeTracker(undefined, false);
+    tracker.photoDetector = 'full-range';
+    tracker.detectImage.mockImplementation((_img, o) => (o.detector === 'camera' ? Array.from({ length: found }, (_, i) => makeLandmarks(i)) : []));
+    return tracker;
+  }
+
+  it('an answer without a usable face is asked once more on the short-range detector, and its face is taken', () => {
+    vi.stubGlobal('window', {});
+    const tracker = missedByFullRange();
+    const s = createStillSession(fakeEngine(), tracker, bitmap());
+    expect(tracker.detectImage.mock.calls.map((c) => c[1])).toEqual([{ maxFaces: EDIT_DETECT_FACES }, { maxFaces: EDIT_DETECT_FACES, detector: 'camera' }]);
+    expect(s.faces).toHaveLength(1);
+    expect(s.faceKnown).toBe(true);
+    // one face answer (detectCalls), one retry inside it
+    expect(window.__meiyan).toMatchObject({ detectCalls: 1, detectRetries: 1, faces: 1 });
+  });
+
+  it('no retry when the full-range answer has a face, or when photos already run the short-range detector', () => {
+    const found = fakeTracker();
+    found.photoDetector = 'full-range';
+    createStillSession(fakeEngine(), found, bitmap());
+    expect(found.detectImage).toHaveBeenCalledTimes(1);
+    const short = fakeTracker(undefined, false);
+    short.photoDetector = 'short-range';
+    expect(createStillSession(fakeEngine(), short, bitmap()).faces).toHaveLength(0);
+    expect(short.detectImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('a retry that finds nobody either keeps the first answer: a definite no-face', () => {
+    const tracker = missedByFullRange(0);
+    const s = createStillSession(fakeEngine(), tracker, bitmap());
+    expect(tracker.detectImage).toHaveBeenCalledTimes(2);
+    expect(s.faces).toHaveLength(0);
+    expect(s.faceKnown).toBe(true);
+  });
+
+  it('a session on cached faces asks neither detector', () => {
+    const tracker = missedByFullRange();
+    createStillSession(fakeEngine(), tracker, bitmap(), { faces: cached() });
+    expect(tracker.detectImage).not.toHaveBeenCalled();
+  });
+
+  it("detectStill (the completion's probe, §6.5) answers as a session would, without one: the bound session keeps its fields and the debug state its faces (round 4 F6)", () => {
+    vi.stubGlobal('window', {});
+    const engine = fakeEngine();
+    // the session bound to the engine, drawing 美體 and 推臉筆 fields, its one cached face on screen
+    const bound = createStillSession(engine, fakeTracker(), bitmap(), { faces: cached(), body: makeBodyField(0.01) });
+    bound.setLiquify({ width: 2, height: 2, data: new Float32Array(8), version: 1 });
+    bound.render(fr(bound, natural));
+    expect(window.__meiyan).toMatchObject({ faces: 1, stillSessions: 1, detectCalls: 0 });
+    const tracker = missedByFullRange();
+    const d = detectStill(tracker, bitmap());
+    // the same answer: the full-range one, then the short-range retry inside it
+    expect(tracker.detectImage).toHaveBeenCalledTimes(2);
+    expect(d.faces).toHaveLength(1);
+    expect(d).toMatchObject({ faceKnown: true, detector: 'full-range', dropped: { tooSmall: 0, overCap: 0 } });
+    // nothing released (a probe session's dispose dropped the bound one's field textures), nothing drawn, no session made,
+    // and __meiyan still describes the photo on screen; the answer is counted
+    expect(engine.releaseFields).not.toHaveBeenCalled();
+    expect(window.__meiyan).toMatchObject({ faces: 1, stillSessions: 1, detectCalls: 1, detectRetries: 1 });
+    expect(bound.body).not.toBeNull();
+    expect(bound.liquify).not.toBeNull();
+    // a detect call that throws: no face known (the caller's detectSession makes it unsure)
+    const threw = fakeTracker();
+    threw.detectImage.mockImplementation(() => {
+      throw new Error('graph');
+    });
+    expect(detectStill(threw, bitmap())).toMatchObject({ faces: [], faceKnown: false, detector: null });
+  });
+});
+
+describe('createStillSession: the camera seed in no full-range face (D2, step-1 spec §6.5)', () => {
+  /**
+   * landmarks the mocked adapt turns into a face centred at (cx, 0.5) with an oval of radius r (box 2r × 2r), landmark
+   * 0's y and z holding cx and r; with `marks`, every other landmark is those of that mesh (sameHead reads them)
+   */
+  const lmAt = (cx: number, r = 0.2, marks?: Landmarks478) => {
+    const l = makeLandmarks();
+    if (marks) l.points.set(marks.points.subarray(3), 3);
+    l.points[1] = cx;
+    l.points[2] = r;
+    return l;
+  };
+  beforeEach(() => {
+    vi.mocked(adapt).mockImplementation((l) => {
+      const f = makeFace(0, l.points[1]);
+      const r = l.points[2];
+      for (let i = 0; i < 36; i++) {
+        f.oval[i * 2] = l.points[1] + r * Math.cos((i / 36) * 2 * Math.PI);
+        f.oval[i * 2 + 1] = 0.5 + r * Math.sin((i / 36) * 2 * Math.PI);
+      }
+      return f;
+    });
+  });
+  afterEach(() => {
+    vi.mocked(adapt).mockImplementation(() => makeFace(7));
+  });
+  /** two people: A whole at x 0.25, B at x 0.75 (cut by the edge in the shot): full-range finds A, short-range both */
+  function twoFaces(short = [lmAt(0.25), lmAt(0.75)]) {
+    const tracker = fakeTracker();
+    tracker.photoDetector = 'full-range';
+    tracker.detectImage.mockImplementation((_img, o) => (o.detector === 'camera' ? short : [lmAt(0.25)]));
+    return tracker;
+  }
+  const centres = (s: StillSession) => s.faces.map((f) => +(f.box.x + f.box.w / 2).toFixed(2));
+
+  it('a seed in no full-range face asks the short-range detector once and adds the face that holds it', () => {
+    vi.stubGlobal('window', {});
+    const tracker = twoFaces();
+    const s = createStillSession(fakeEngine(), tracker, bitmap(), { faceSeed: { x: 0.75, y: 0.5 } });
+    expect(tracker.detectImage.mock.calls.map((c) => c[1])).toEqual([{ maxFaces: EDIT_DETECT_FACES }, { maxFaces: EDIT_DETECT_FACES, detector: 'camera' }]);
+    // the union, numbered in display order: A (f0) and B (f1), the seed's face
+    expect(centres(s)).toEqual([0.25, 0.75]);
+    expect(s.faces.map((f) => f.id)).toEqual(['f0', 'f1']);
+    expect(window.__meiyan).toMatchObject({ detectCalls: 1, detectRetries: 1, faces: 2 });
+    // and the first answer selects the camera's face
+    const a = firstAnswer({ detect: null, prepared: { faces: [...s.faces], obstacles: [...s.obstacles], dropped: s.dropped }, size: { width: 1536, height: 2048 }, v1Body: null, rematch: null, faceSeed: { x: 0.75, y: 0.5 } });
+    expect(a.detect.primary).toBe('f1');
+  });
+
+  it('only the faces holding the seed are added: another face short-range finds stays out', () => {
+    const tracker = twoFaces([lmAt(0.25), lmAt(0.75), lmAt(0.5, 0.05)]);
+    const s = createStillSession(fakeEngine(), tracker, bitmap(), { faceSeed: { x: 0.75, y: 0.5 } });
+    expect(centres(s)).toEqual([0.25, 0.75]);
+  });
+
+  it("a short-range face holding the seed that is a full-range face boxed larger replaces it (IoU > 0.6, sameHead): one face, the seed's", () => {
+    const tracker = fakeTracker();
+    tracker.photoDetector = 'full-range';
+    // full-range: x 0.3–0.7 (padded by 25 %: 0.2–0.8, without the seed at 0.81); short-range: x 0.31–0.75 (0.2–0.86 padded)
+    tracker.detectImage.mockImplementation((_img, o) => (o.detector === 'camera' ? [lmAt(0.53, 0.22)] : [lmAt(0.5)]));
+    const s = createStillSession(fakeEngine(), tracker, bitmap(), { faceSeed: { x: 0.81, y: 0.5 } });
+    expect(s.faces).toHaveLength(1);
+    expect(s.faces[0].box.w).toBeCloseTo(0.44, 5);
+  });
+
+  it("a full-range face on the seed's head boxed apart from the short-range one (IoU ≤ 0.6), its landmarks on the short-range ones (sameHead), is the same face: the short-range face replaces it; a neighbour stays", () => {
+    const tracker = fakeTracker();
+    tracker.photoDetector = 'full-range';
+    // the seed's head, x 0.3–0.7 short-range. Full-range boxes it smaller and off to the side, x 0.56–0.72: IoU 0.14,
+    // and padded by 25 % (0.52–0.76) it misses the seed at the head's centre; its landmarks are the head's, moved a
+    // twentieth of an eye span. The neighbour, x 0.06–0.34, overlaps the head's box (cheek to cheek) and is found by both
+    const head = sampleFaceAt(0.5, 0.5, 0.4, { width: 1536, height: 2048 });
+    const neighbour = lmAt(0.2, 0.14);
+    tracker.detectImage.mockImplementation((_img, o) =>
+      o.detector === 'camera' ? [lmAt(0.2, 0.14), lmAt(0.5, 0.2, head)] : [neighbour, lmAt(0.64, 0.08, retake(head, { dx: 0.05 }, 1536, 2048))],
+    );
+    const s = createStillSession(fakeEngine(), tracker, bitmap(), { faceSeed: { x: 0.5, y: 0.5 } });
+    expect(tracker.detectImage).toHaveBeenCalledTimes(2);
+    // one face per head: the neighbour (f0) and the seed's, its short-range box (f1)
+    expect(centres(s)).toEqual([0.2, 0.5]);
+    expect(s.faces[1].box.w).toBeCloseTo(0.4, 5);
+    const a = firstAnswer({ detect: null, prepared: { faces: [...s.faces], obstacles: [...s.obstacles], dropped: s.dropped }, size: { width: 1536, height: 2048 }, v1Body: null, rematch: null, faceSeed: { x: 0.5, y: 0.5 } });
+    expect(a.detect.primary).toBe('f1');
+    expect(a.detect.persons.map((p) => p.id)).toEqual(['f0', 'f1']);
+  });
+
+  it('a throw in the seed retry keeps the full-range answer, which has faces: a definite answer, not unsure', () => {
+    vi.stubGlobal('window', {});
+    const tracker = twoFaces();
+    tracker.detectImage.mockImplementation((_img, o) => {
+      if (o.detector === 'camera') throw new Error('graph rebuild failed');
+      return [lmAt(0.25)];
+    });
+    const s = createStillSession(fakeEngine(), tracker, bitmap(), { faceSeed: { x: 0.75, y: 0.5 } });
+    expect(tracker.detectImage).toHaveBeenCalledTimes(2);
+    expect(centres(s)).toEqual([0.25]);
+    expect(s.faceKnown).toBe(true);
+    expect(s.detector).toBe('full-range');
+    expect(window.__meiyan).toMatchObject({ detectCalls: 1, detectRetries: 1, faces: 1 });
+    expect(window.__meiyan!.lastError).toMatch(/retry.*graph rebuild failed/);
+  });
+
+  it('no retry when a full-range face holds the seed, for no seed or 全部, or on short-range photos', () => {
+    const held = twoFaces();
+    createStillSession(fakeEngine(), held, bitmap(), { faceSeed: { x: 0.3, y: 0.5 } });
+    expect(held.detectImage).toHaveBeenCalledTimes(1);
+    const none = twoFaces();
+    createStillSession(fakeEngine(), none, bitmap(), { faceSeed: null });
+    createStillSession(fakeEngine(), none, bitmap());
+    expect(none.detectImage).toHaveBeenCalledTimes(2);
+    const short = twoFaces();
+    short.photoDetector = 'short-range';
+    expect(centres(createStillSession(fakeEngine(), short, bitmap(), { faceSeed: { x: 0.75, y: 0.5 } }))).toEqual([0.25]);
+    expect(short.detectImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('a retry that finds no face holding the seed keeps the full-range answer', () => {
+    const tracker = twoFaces([lmAt(0.25)]);
+    const s = createStillSession(fakeEngine(), tracker, bitmap(), { faceSeed: { x: 0.75, y: 0.5 } });
+    expect(tracker.detectImage).toHaveBeenCalledTimes(2);
+    expect(centres(s)).toEqual([0.25]);
+  });
+
+  it('the session says which detector answered (D3): full-range, short-range while it is missing, null for cached faces', () => {
+    const full = twoFaces();
+    expect(createStillSession(fakeEngine(), full, bitmap()).detector).toBe('full-range');
+    const short = twoFaces();
+    short.photoDetector = 'short-range';
+    expect(createStillSession(fakeEngine(), short, bitmap()).detector).toBe('short-range');
+    expect(createStillSession(fakeEngine(), full, bitmap(), { faces: cached() }).detector).toBeNull();
+    expect(createStillSession(fakeEngine(), null, bitmap()).detector).toBeNull();
   });
 });

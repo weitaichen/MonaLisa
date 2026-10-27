@@ -19,7 +19,7 @@
 // frame (no model) and shows / exports what was saved. Preview and export draw with the same limit. New photo: not
 // requested until a contour edit; undo / redo / 重置 never withdraw the request, in this editor or a later one.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { SessionFace, StillSession } from '../../app/still';
+import type { SessionFace, StillDetection, StillSession } from '../../app/still';
 import { forwardY, heightBandStretch } from '../../body/bands';
 import { bodyFieldCacheStats, buildBodyField, fieldBands, type BodyFieldInput } from '../../body/field';
 import { measureBody, paramAvailability } from '../../body/measure';
@@ -36,12 +36,12 @@ import { EXPORT_COPY, NO_SOURCE, noSourceCopy, planExport, planHead, sourceSizeR
 import { takePersonsHint } from '../../store/settings';
 import { stableKey } from '../../store/undo';
 import { buildFaceProtect } from '../../tracking/faceProtect';
-import type { BodyDetection, BodyField, BrushKind, BrushSize, DetectionCache, EditState, Engine, Face, FaceProtect, LiquifyField, LookId, PersonId, PersonMask, Rect, Selection, SpotSize, Stroke } from '../../types';
+import type { BodyDetection, BodyField, BrushKind, BrushSize, DetectionCache, EditState, Engine, Face, FaceProtect, LiquifyField, LookId, PersonId, PersonMask, Rect, Selection, SpotSize, Stroke, Tracker } from '../../types';
 import { buildFrame } from '../../edit/frame';
 import { lensFor, type PersonInfo } from '../../edit/lens';
 import { legacyProjection } from '../../edit/legacy';
 import { LiquifyModel, makeStrokeId, type LiveStroke } from '../../edit/liquify';
-import { bodyAnswer, firstAnswer, preAnswerCache } from '../../edit/migrate';
+import { bodyAnswer, completeAnswer, firstAnswer, preAnswerCache } from '../../edit/migrate';
 import { patchPlan, readPatch } from '../../edit/patch';
 import { screenLeftIsGpLeft } from '../../edit/sides';
 import { addSpot, clearScope, clearSpots, ownerAt, ownerCtxOf, planSpot, regionAt, spotRadius, spotsInScope, type PlanResult } from '../../edit/spots';
@@ -77,7 +77,12 @@ import {
   bodyDetectionOf,
   bodyPanelContext,
   bodyScansAfter,
+  bodyWaitsForFaces,
   changedPersons,
+  completionDue,
+  completionHeld,
+  completionOf,
+  completionShows,
   detectBody,
   detectSession,
   exportOnLatest,
@@ -85,6 +90,7 @@ import {
   fieldInputOf,
   frameFacesOf,
   hitCtxOf,
+  holdsFirstAnswer,
   legsAnchorOf,
   measuredAvailable,
   measurePersons,
@@ -98,6 +104,7 @@ import {
   protectRequests,
   rebaseStamp,
   RedetectBudget,
+  rescanOf,
   sessionPlan,
   settleBodyAnswer,
   shouldDetectBody,
@@ -138,7 +145,7 @@ import {
   type SliderBinding,
 } from '../panelModel';
 import { haptic } from '../platform';
-import { ensureBodyTracker, ensureEngine, ensureFaceSegmenter, svc } from '../services';
+import { ensureBodyTracker, ensureEngine, ensureFaceSegmenter, ensurePhotoDetector, photoDetectorPending, svc, trackerComing } from '../services';
 import { app, go, setPendingHistory, showSaveFallback, toast, type EditorSource } from '../state';
 import { useStore } from '../store';
 import { requestLut, useAdjustFailureNotice, useElementSize, useHold, useLutLoader } from './hooks';
@@ -351,8 +358,10 @@ export function Editor({ source }: { source: EditorSource }) {
   /**
    * the still session plus the engine it draws with (recoverEngine replaces the engine → a new session).
    * unsure: its "no face" came from a tracker that could not answer (recovering, or the detect call threw).
+   * tracked: bound with a tracker (a 基本模式 session waits for the bind the tracker that came brings).
+   * held: the 基本模式 session held the photo's first answer for a tracker still coming (holdsFirstAnswer).
    */
-  const [bound, setBound] = useState<{ s: StillSession; engine: Engine; unsure: boolean } | null>(null);
+  const [bound, setBound] = useState<{ s: StillSession; engine: Engine; unsure: boolean; tracked: boolean; held: boolean } | null>(null);
   /** bumped to detect again on the same engine once the tracker can answer (bounded: RedetectBudget) */
   const [detectGen, setDetectGen] = useState(0);
   const [redetect] = useState(() => new RedetectBudget(trackerHealth));
@@ -362,6 +371,23 @@ export function Editor({ source }: { source: EditorSource }) {
    */
   const forceDetect = useRef(false);
   const scanQuarter = useRef<Quarter>(0);
+  /**
+   * the detection that completes a short-range answer once full-range is there (completionDue, step-1 spec §6.5) ran in
+   * this editor: once per open, whatever it found (a later open tries again while the cache keeps its mark)
+   */
+  const moreFacesTried = useRef(false);
+  /**
+   * the full-range detector is in: whichever request brought it (services.ts svc.photoDetector), not only this editor's
+   * asks (round 4: a retry a photo's tracker switch started, or one after a 5xx, landed unheard)
+   */
+  const detectorIn = useStore(svc, (s) => s.photoDetector);
+  /** 正在重新偵測臉部… over the photo while the completion's detection runs */
+  const [completing, setCompleting] = useState(false);
+  /**
+   * full-range photos now: the detector is in and this tracker takes it (a photo bundle it could not assemble leaves it
+   * on short-range, Tracker.photoDetector, so a completion would find nothing new)
+   */
+  const fullRangeIn = (t: Tracker) => detectorIn && t.photoDetector === 'full-range';
   /** 正在重新偵測臉部… until the scanning session is bound */
   const [scanning, setScanning] = useState(false);
   const sessionGen = useRef(-1);
@@ -404,6 +430,8 @@ export function Editor({ source }: { source: EditorSource }) {
   const originalBlob = useRef<Promise<Blob> | null>(null);
   const setupDone = useRef(false);
   const sessionEngine = useRef<Engine | null>(null);
+  /** the session was bound with a tracker (a 基本模式 one binds again once a tracker comes, e.g. services.ts settleLate) */
+  const sessionTracked = useRef(false);
   const stageRef = useRef<HTMLDivElement>(null);
   const layerRef = useRef<HTMLDivElement>(null);
 
@@ -726,17 +754,37 @@ export function Editor({ source }: { source: EditorSource }) {
   }, []);
 
   // One still session per engine. The editor owns source.bitmap (closed on unmount), so after
-  // recoverEngine replaces a lost engine the same photo is bound to the new one.
+  // recoverEngine replaces a lost engine the same photo is bound to the new one. A tracker coming to the same engine
+  // (a slow tracker build adopted after its 基本模式 fallback) binds it again, which detects the photo the 基本模式
+  // session could not (sessionPlan)
   const sessionRef = useRef<StillSession | null>(null);
+  /** 按住對比 as the session was last told (useHold tells only of a change): a replacement session takes it on */
+  const compareOn = useRef(false);
   const unmounted = useRef(false);
   const currentEngine = bundle?.engine ?? null;
+  const currentTracked = !!bundle?.tracker;
+  /**
+   * what the completion's synchronous detection would freeze, or a rebase would spoil: it waits until none of these holds
+   * (or a lost display). A working-size 儲存 in 準備中 too (round 4: only a tiled export held it, so the detection delayed
+   * the file past the share window, and the new persons' rebase made it look edited, dropped). A tracker come to the
+   * session's engine waits for it as well: its bind detects the photo the same way
+   */
+  const completionBusy = cropMode || drawing || dragging || exportBusy || pill === 'preparing' || lost;
+  const completionBusyRef = useRef(completionBusy);
+  completionBusyRef.current = completionBusy;
   useEffect(() => {
-    if (!bundle || (sessionEngine.current === bundle.engine && sessionGen.current === detectGen)) return;
+    if (!bundle) return;
+    const sameBind = sessionEngine.current === bundle.engine && sessionGen.current === detectGen;
+    if (sameBind && (sessionTracked.current === !!bundle.tracker || completionBusy)) return;
     const target = bundle.engine;
     const tracker = bundle.tracker;
     const gen = detectGen;
+    /** only the tracker changed (the same engine and gen): this bind waits for nothing busy, at its start too */
+    const trackerOnly = sameBind;
+    const wasTracked = sessionTracked.current;
     sessionEngine.current = target;
     sessionGen.current = gen;
+    sessionTracked.current = !!tracker;
     try {
       target.setOptions({ mirror: false });
     } catch (e) {
@@ -753,9 +801,19 @@ export function Editor({ source }: { source: EditorSource }) {
         originalBlob.current.catch((e: unknown) => reportError(e, 'toJpegBlob(original)'));
       }
     }
-    // let the "analysing" spinner paint before the synchronous face detection
-    window.setTimeout(() => {
-      if (unmounted.current || sessionEngine.current !== target || sessionGen.current !== gen) return;
+    // let the "analysing" spinner paint before the synchronous face detection. A session that is about to detect first
+    // waits for the full-range photo detector's first download, within DETECTOR_WAIT_MS once per session (step-1 spec
+    // §6.5, services.ts photoDetectorPending): past it, or after a failed download, it detects with what is there, and
+    // the cache records a short-range answer, which the completion below adds to once the detector is in. A session
+    // from the cache never waits: its faces are there, and the completion runs after it is bound
+    const start = () => {
+      // a later bind (another engine, a re-detect, a tracker come meanwhile) owns the session now
+      if (unmounted.current || sessionEngine.current !== target || sessionGen.current !== gen || sessionTracked.current !== !!tracker) return;
+      // something got busy during the wait (a 儲存, a drag, 裁切): the effect binds again once nothing is
+      if (trackerOnly && completionBusyRef.current) {
+        sessionTracked.current = wasTracked;
+        return;
+      }
       if (sessionRef.current) {
         sessionRef.current.dispose();
         sessionRef.current = null;
@@ -769,10 +827,13 @@ export function Editor({ source }: { source: EditorSource }) {
         // scanned upright), on the U image, answering in O
         const forced = forceDetect.current;
         const q: Quarter = forced ? scanQuarter.current : 0;
+        // a scan that asks an up-frame again (its short-range "nobody" owed a full-range look): not a fresh answer
+        const again = forced && rescanOf(cache, q);
         const { useCache, asks } = forced ? { useCache: false, asks: !!tracker } : sessionPlan(cache, !!tracker);
+        const healthy = () => svc.get().tracker === 'ok';
         const { s, unsure } = detectSession(
           asks,
-          () => svc.get().tracker === 'ok',
+          healthy,
           () =>
             deps.createStillSession(target, tracker && upTracker(tracker, q), source.bitmap, {
               ownsBitmap: false,
@@ -781,10 +842,18 @@ export function Editor({ source }: { source: EditorSource }) {
               body: fieldMemo.field,
               // a replacement session (engine swap, re-detect) draws the strokes on its first frame
               liquify: liquify.field,
+              // a camera shot's seed, with the photo's first answer (D2: the short-range detector is asked for its face
+              // when full-range holds none that contains it)
+              faceSeed: !useCache && !answered.current && source.faceSeed !== 'all' ? source.faceSeed : null,
             }),
         );
-        // a tracker that could not answer is not "no face": no answer until the re-detect gives a real one
-        if (!useCache && (!tracker || !unsure)) {
+        // a tracker that could not answer is not "no face": no answer until the re-detect gives a real one. Nor is a
+        // tracker still coming for a dropped cache's persons (holdsFirstAnswer): the bind it brings answers. One adopted
+        // already counts as coming until its bind runs (the adoption re-renders before the effect that binds it)
+        const now = svc.get().engine;
+        const came = !tracker && now.state === 'ready' && now.bundle.engine === target && now.bundle.tracker !== null;
+        const holds = holdsFirstAnswer({ hasTracker: !!tracker, useCache, answered: answered.current, rematch: source.rematch !== null, trackerComing: trackerComing() || came });
+        if (!useCache && !holds && (!tracker || !unsure)) {
           // the source's one-shot inputs ride with the photo's first answer only (also when 美體 wrote the cache first
           // while no face answer could come, S §7: this answer merges into it, its body primary handing over as A13 says)
           const first = !answered.current;
@@ -799,6 +868,8 @@ export function Editor({ source }: { source: EditorSource }) {
               faceSeed: first ? source.faceSeed : null,
               // the up-frame this detection ran in (0 for the first one): appended to faceScans
               quarter: q,
+              // a short-range stand-in for the full-range detector marks the cache (§6.5)
+              detector: s.detector,
             }),
             first,
           );
@@ -807,15 +878,33 @@ export function Editor({ source }: { source: EditorSource }) {
           forceDetect.current = false;
         }
         sessionRef.current = s;
-        setBound({ s, engine: target, unsure });
+        // a re-detect, an engine swap or a tracker come replaces the session under a held 按住對比
+        if (compareOn.current) {
+          try {
+            s.setCompare(true);
+          } catch (e) {
+            reportError(e, 'setCompare');
+          }
+        }
+        setBound({ s, engine: target, unsure, tracked: !!tracker, held: holds });
         setScanning(false);
-        // only a fresh answer says so (a reopened no-face photo shows no toast, S §8.4)
-        if (tracker && !unsure && !useCache && !s.faces.length) toast('未偵測到臉部，臉型、美妝與膚質工具不會套用', 3200);
+        // only a fresh answer says so (a reopened no-face photo shows no toast, S §8.4, nor does its completion, §6.5, nor
+        // the scan that asks an up-frame again once full-range is in: its short-range "nobody" said so already)
+        if (tracker && !unsure && !useCache && !again && !s.faces.length) toast('未偵測到臉部，臉型、美妝與膚質工具不會套用', 3200);
       } catch (e) {
         setFatal(reportError(e, 'createStillSession'));
       }
+    };
+    window.setTimeout(() => {
+      // a session that will detect first waits for the detector's first download (D1: within DETECTOR_WAIT_MS, never for
+      // a retry). One drawn from the cache does not, a short-range one included: its completion waits for nothing (§6.5)
+      const plan = sessionPlan(detectRef.current, true);
+      const asks = tracker !== null && (forceDetect.current || plan.asks);
+      const pending = asks ? photoDetectorPending() : null;
+      if (pending) void pending.then(start);
+      else start();
     }, 60);
-  }, [currentEngine, detectGen]);
+  }, [currentEngine, currentTracked, detectGen, completionBusy]);
 
   // the session draws identity geometry while 裁切 is open; the ratio lock is derived from the crop on entering
   const wasCrop = useRef(false);
@@ -838,17 +927,112 @@ export function Editor({ source }: { source: EditorSource }) {
   }, [cropMode, session]);
 
   // a sideways photo (S §3.6, D12): when normal mode shows an up-frame not scanned yet while no face is known (on
-  // leaving 裁切, or after ↶ ↷ elsewhere), detect once more on that U image, behind 正在重新偵測臉部…. Never in 裁切 (each
-  // 旋轉 tap would block for the detection), never while a scan is pending, and only on a bound session
+  // leaving 裁切, or after ↶ ↷ elsewhere), detect once more on that U image, behind 正在重新偵測臉部…; so too an up-frame
+  // the short-range detector answered, once full-range is in (§6.5). Never in 裁切 (each 旋轉 tap would block for the
+  // detection), never while a scan is pending, and only on a bound session. Never while a completion is due or running
+  // either (§6.5): it asks upright first, which may find the faces (no scan then) or leave the shown up-frame to ask. So
+  // its end is checked here, whatever it found (round 5: one whose detection threw, or answered short-range, changed
+  // nothing else, so the turned up-frame it held back was not scanned in that open)
   useEffect(() => {
-    if (!bundle || !session || forceDetect.current) return;
+    if (!bundle || !session || forceDetect.current || completing) return;
+    const fullRange = !!bundle.tracker && fullRangeIn(bundle.tracker);
+    if (completionDue({ cache: detectRef.current, tried: moreFacesTried.current, hasTracker: !!bundle.tracker, detectorIn: fullRange })) return;
     const geometry = editRef.current.photo.geometry;
-    if (!needsFaceScan({ cache: detectRef.current, geometry, mode: cropMode ? 'crop' : 'normal', hasTracker: !!bundle.tracker })) return;
+    if (!needsFaceScan({ cache: detectRef.current, geometry, mode: cropMode ? 'crop' : 'normal', hasTracker: !!bundle.tracker, fullRange })) return;
     scanQuarter.current = upQuarter(geometry);
     forceDetect.current = true;
     setScanning(true);
     setDetectGen((n) => n + 1);
-  }, [cropMode, edit.photo.geometry, detect, session]);
+  }, [cropMode, edit.photo.geometry, detect, session, detectorIn, completing]);
+
+  // ── the completion of a short-range answer (step-1 spec §6.5) ──
+  // A cache the short-range detector answered while the full-range one was missing is drawn as it is (a definite answer,
+  // faceless or not), and gains what one full-range detection finds once that detector is in: at once on a reopen, or
+  // when the detector lands while the photo is open (a photo detected short-range a moment ago included), through any
+  // request (detectorIn). Asking for it joins a download in flight or retries a failed one; the link coming back asks
+  // again, and so does a return to the app (a captive portal signed in elsewhere fires no 'online')
+  const marked = detect?.photoDetector === 'short-range' && !!bundle?.tracker;
+  useEffect(() => {
+    if (!marked || detectorIn || moreFacesTried.current) return;
+    const ask = () => void ensurePhotoDetector();
+    const back = () => {
+      if (document.visibilityState === 'visible') ask();
+    };
+    ask();
+    window.addEventListener('online', ask);
+    document.addEventListener('visibilitychange', back);
+    return () => {
+      window.removeEventListener('online', ask);
+      document.removeEventListener('visibilitychange', back);
+    };
+  }, [marked, detectorIn]);
+  useEffect(() => {
+    const tracker = bundle?.tracker ?? null;
+    if (!tracker || !bound || !session) return;
+    const due = completionDue({ cache: detectRef.current, tried: moreFacesTried.current, hasTracker: true, detectorIn: fullRangeIn(tracker) });
+    const held = completionHeld({ bound: true, unsure: bound.unsure, health: trackerHealth, scanPending: forceDetect.current || scanning, busy: completionBusy });
+    if (!due || held) return;
+    // once per open: taken now, handed back only when it cannot start after all
+    moreFacesTried.current = true;
+    setCompleting(true);
+    const target = bound.engine;
+    // the cached faces are drawn; 正在重新偵測臉部… over them paints before the synchronous detection
+    window.setTimeout(() => complete(target, tracker), BODY_PAINT_MS);
+  }, [bound, session, detect, detectorIn, trackerHealth, scanning, completionBusy, completing]);
+
+  /** one full-range detection where completionOf says, merged by completeAnswer when its answer is definite */
+  const complete = (target: Engine, tracker: Tracker) => {
+    if (unmounted.current) return;
+    const cache = detectRef.current;
+    const where = completionOf(cache);
+    const cur = svc.get();
+    const held =
+      cur.engine.state !== 'ready' ||
+      cur.engine.bundle.engine !== target ||
+      cur.engine.bundle.tracker !== tracker ||
+      sessionEngine.current !== target ||
+      !sessionRef.current ||
+      cur.tracker !== 'ok' ||
+      forceDetect.current ||
+      completionBusyRef.current;
+    if (!cache || !where || held) {
+      // not run: the effect starts it again once nothing holds it (or the mark is gone)
+      moreFacesTried.current = false;
+      setCompleting(false);
+      return;
+    }
+    // a detection without a session (round 4: a probe session's dispose released the bound session's 美體 and 推臉筆
+    // field textures, and its faces overwrote the debug state, so every completion rebuilt the session)
+    let probe: { s: StillDetection; unsure: boolean } | null = null;
+    try {
+      probe = detectSession(
+        true,
+        () => svc.get().tracker === 'ok',
+        () => deps.detectStill(upTracker(tracker, where.quarter), source.bitmap),
+      );
+    } catch (e) {
+      reportError(e, 'completion');
+    }
+    // a definite full-range answer only: anything else leaves the cache, mark and all, for a later open
+    let rebuild = false;
+    if (probe && !probe.unsure && probe.s.detector === 'full-range') {
+      const c = completeAnswer(cache, { faces: [...probe.s.faces], obstacles: [...probe.s.obstacles], dropped: probe.s.dropped }, photo, where.quarter);
+      if (cache.faces.length) {
+        // only new persons, from the template: nothing selected, owned or anchored moves. A new obstacle redraws too
+        // (the frame reads the cache's, and it bounds a face's warp cap): the thumbnail is owed, and a face past the cap
+        // says so, also when nobody was added (round 5)
+        rebaseOnDetect(c.rebase, c.detect);
+        const shows = completionShows(cache, c.detect, c.added, takePersonsHint);
+        if (shows.redraws) thumbOwed.current = true;
+        showNotices(shows.notices);
+      } else applyAnswer(c, false);
+      // the bound session draws the cache's faces (its obstacles and mark are the cache's, read per frame): rebuilt only
+      // when there are new ones
+      rebuild = c.added.length > 0;
+    }
+    setCompleting(false);
+    if (rebuild) setDetectGen((n) => n + 1);
+  };
 
   const onCropAction = (a: CropAction) => {
     const r = cropActivate(editRef.current, a, sel.crop, photo);
@@ -1146,15 +1330,16 @@ export function Editor({ source }: { source: EditorSource }) {
 
   // first time the 美體 tab opens (or right away when the params already use body sliders); coming back to the
   // tab after a failure retries. The bodies join the persons of the face answer: wait for it (detect), unless the tracker
-  // could not give one (bound.unsure: it may never come, S §7, and v0.3 never waited): the bodies then build the photo's
-  // cache (preAnswerCache; a v1 entry's own body cache is merged without a detection, as 基本模式 merges it). Nobody found,
+  // could not give one (bound.unsure: it may never come, S §7, and v0.3 never waited) or the bind holds it for a tracker
+  // still coming (bound.held: that may not come either, bodyWaitsForFaces): the bodies then build the photo's cache
+  // (preAnswerCache; a v1 entry's own body cache is merged without a detection, as 基本模式 merges it). Nobody found,
   // and the photo turned to an up-frame not tried yet: the next 美體 open detects once more, on that U (S §3.6, D5)
   const lastTab = useRef(sel.tab);
   useEffect(() => {
     const entered = sel.tab === 'body' && lastTab.current !== 'body';
     lastTab.current = sel.tab;
     const cache = detectRef.current;
-    if (cache === null && !bound?.unsure) return;
+    if (bodyWaitsForFaces({ cached: cache !== null, unsure: !!bound?.unsure, held: !!bound?.held })) return;
     const rescan = entered && bodyDet.phase !== 'working' && needsBodyScan(cache, editRef.current.photo.geometry);
     if (!shouldDetectBody(bodyDet, { tabOpen: sel.tab === 'body', entered, params }) && !rescan) return;
     if (cache === null && source.v1Body) {
@@ -1236,8 +1421,8 @@ export function Editor({ source }: { source: EditorSource }) {
   const [protectTick, setProtectTick] = useState(0);
   /**
    * the user moved a contour slider in this editor: with a reopened entry saved limited, the only thing that requests
-   * the limit (the 自然 default already draws 瘦臉 / V臉, and a model download plus a warp that changes by itself must
-   * never follow a mere import, preset, undo or 美體 detection)
+   * the limit (the 自然 preset already draws 瘦臉 / V臉, and a model download plus a warp that changes by itself must
+   * never follow a mere import, preset, undo or 美體 detection; a new photo opens at 原圖)
    */
   const [contourEdited, setContourEdited] = useState(false);
   const limitRequested = contourEdited || source.faceProtect === true;
@@ -1345,8 +1530,16 @@ export function Editor({ source }: { source: EditorSource }) {
   // (a layout effect: a tap's selection is readable by the time the event's task ends)
   useLayoutEffect(() => {
     if (!session) return;
-    // V-normalized like the drawn boxes (S §2.2): a tap at a box centre on the layer hits that person
-    debug({ persons: infos.length, faces: session.faces.length, selected: selId, boxes: (detect?.faces ?? []).map((f) => ({ id: f.id, ...faceViewBox(f) })) });
+    // V-normalized like the drawn boxes (S §2.2): a tap at a box centre on the layer hits that person; the obstacles and
+    // drops too (e2e: an eleventh face is an obstacle, S §6.7)
+    debug({
+      persons: infos.length,
+      faces: session.faces.length,
+      selected: selId,
+      boxes: (detect?.faces ?? []).map((f) => ({ id: f.id, ...faceViewBox(f) })),
+      obstacles: (detect?.obstacles ?? []).map((o) => viewBoxOf(o.oval, o.box)),
+      dropped: { ...(detect?.dropped ?? { tooSmall: 0, overCap: 0 }) },
+    });
   }, [session, detect, infos, selId, edit.photo.geometry]);
 
   /**
@@ -1480,6 +1673,7 @@ export function Editor({ source }: { source: EditorSource }) {
   }, [session, edit, lost, fieldTick, protectTick, exportBusy, prefs, drawing, liquifyTick, geoDrag]);
 
   const hold = useHold((on) => {
+    compareOn.current = on;
     try {
       sessionRef.current?.setCompare(on);
     } catch (e) {
@@ -1945,10 +2139,12 @@ export function Editor({ source }: { source: EditorSource }) {
   // 膚質 (skin-cleanup spec §1.2, §2.2): the photo's face answer; the closed-mouth / closed-eye notes of the target faces
   const personOfFace = new Map((detect?.persons ?? []).filter((p) => p.face).map((p) => [p.face as string, p.id]));
   const toneTargets = (session?.faces ?? []).filter((f) => selected.kind === 'all' || personOfFace.get(f.id) === selected.id).map((f) => f.face);
+  // 基本模式, or a tracker that came keeps it until its bind answers (that may wait for a drag or an export to end)
+  const basicBind = !!bundle?.basic || !!(bundle?.tracker && bound && !bound.tracked);
   const skinCtx: SkinPanelContext = {
     // no answer yet while analysing (session null): no disabled flash, as the face note below (the slider row and the
     // canvas input are off until the session exists anyway)
-    answer: session ? faceAnswer({ hasFaces: session.faces.length > 0, basic: !!bundle?.basic, unsure: !!bound?.unsure, tracker: trackerHealth }) : 'faces',
+    answer: session ? faceAnswer({ hasFaces: session.faces.length > 0, basic: basicBind, unsure: !!bound?.unsure, tracker: trackerHealth }) : 'faces',
     mouthClosed: toneTargets.length > 0 && toneTargets.every((f) => mouthOpen(f, bodyAspect) < 0.01),
     eyesClosed: toneTargets.length > 0 && toneTargets.every((f) => earOf(f, 'L', bodyAspect) < 0.12 && earOf(f, 'R', bodyAspect) < 0.12),
     spots: { inScope, total: edit.photo.spots.length, onePerson: clearSc !== 'all' },
@@ -2110,7 +2306,7 @@ export function Editor({ source }: { source: EditorSource }) {
   // (a tracker that could not answer gets a neutral note until the re-detect gives a real answer)
   let faceNote: string | null = null;
   if (session && !session.faces.length) {
-    if (bundle?.basic) faceNote = '基本模式不支援臉型與美妝';
+    if (basicBind) faceNote = '基本模式不支援臉型與美妝';
     else if (!bound?.unsure) faceNote = '未偵測到臉部，臉型與美妝不會套用';
     else if (trackerHealth === 'lost') faceNote = '臉部偵測重新啟動中，臉型與美妝暫不套用';
     else if (trackerHealth === 'failed') faceNote = '臉部偵測暫停，臉型與美妝暫不套用';
@@ -2140,6 +2336,9 @@ export function Editor({ source }: { source: EditorSource }) {
     overlay = <Status spinner title="正在重新偵測臉部…" />;
   } else if (!session) {
     overlay = <Status spinner title="正在分析臉部…" />;
+  } else if (completing) {
+    // the cached faces stay in view under it (step-1 spec §6.5)
+    overlay = <Status spinner scrim title="正在重新偵測臉部…" />;
   } else if (exporting) {
     overlay = (
       <Status spinner scrim title={EXPORT_COPY.overlay} detail={`${Math.round(exporting.progress * 100)}%`}>

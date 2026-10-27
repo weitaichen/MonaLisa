@@ -2,17 +2,20 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { applyPreset, defaultParams, PARAM_DEFS, sanitizeParams, setParam } from '../engine/params';
 import { makeBodyDetection } from '../app/testFakes';
-import { prepareFaces } from '../detect/faces';
+import { adaptCached, prepareFaces } from '../detect/faces';
 import { normalizeDetect, withBodies } from '../detect/cache';
 import { cacheBody, makeCache } from '../detect/testCaches';
+import { sampleFaceAt } from '../detect/testMeshes';
+import { boxCentre, capsFor, ovalBox } from '../engine/passes/faceCap';
 import { cropValid, IDENTITY_GEOMETRY, maxFit } from '../geometry/view';
 import { normalizeEntry } from '../store/history';
 import { stableKey } from '../store/undo';
-import type { BeautyParams, EditState, Face, HistoryEntry, Landmarks478, ParamId, Pose33, Stroke } from '../types';
+import type { BeautyParams, DetectionCache, EditState, Face, HistoryEntry, Landmarks478, ParamId, Pose33, Stroke } from '../types';
+import { buildFrame } from './frame';
 import { editFromLegacy, legacyProjection, splitLegacy } from './legacy';
-import { bodyAnswer, cameraShotEdit, firstAnswer, importEdit, openState, preAnswerCache } from './migrate';
-import { assignPersons, defaultPhoto, editFlipView, naturalPerson, neutralPerson, personFromPreset, withPersons } from './state';
-import { sessionPlan } from '../ui/editorModel';
+import { bodyAnswer, completeAnswer, firstAnswer, importEdit, openState, preAnswerCache } from './migrate';
+import { assignPersons, defaultPhoto, editFlipView, naturalPerson, neutralPerson, neutralPhoto, personFromPreset, resetAll, withPersons } from './state';
+import { completionOf, frameFacesOf, protectRequests, sessionPlan } from '../ui/editorModel';
 
 const SIZE = { width: 2048, height: 1536 };
 const v1 = (over: Partial<HistoryEntry> = {}): HistoryEntry => ({
@@ -237,21 +240,23 @@ describe('openState: what counts as 0.3 editing a v2 entry after a rollback (S �
   });
 });
 
-describe('new photos (RM §3.7)', () => {
-  const look = { photo: splitLegacy(defaultParams()).photo, person: naturalPerson() };
-  it('an import gives everyone the camera look', () => {
-    const e = importEdit(look);
-    expect(e.template).toEqual(look.person);
-    expect(e.persons.p0).toEqual(look.person);
-    expect(e.primaryInit).toBeNull();
-  });
-  it('a shot seeded on one face: only the primary gets the look; 全部套用 or no face: everyone', () => {
-    expect(cameraShotEdit(look, { x: 0.4, y: 0.5 }).template).toEqual(neutralPerson());
-    expect(cameraShotEdit(look, { x: 0.4, y: 0.5 }).primaryInit).toEqual(look.person);
-    expect(cameraShotEdit(look, 'all').template).toEqual(look.person);
-    expect(cameraShotEdit(look, null).template).toEqual(look.person);
+describe('new photos (RM §3.7, 2026-10-18: 全部都原圖)', () => {
+  it('a new photo, imported or handed over from the camera, opens at 原圖 for everyone', () => {
+    const e = importEdit();
+    expect(e).toEqual({ v: 2, photo: neutralPhoto(), persons: { p0: neutralPerson() }, template: neutralPerson(), primaryInit: null });
+    expect(legacyProjection(e, 'p0')).toEqual(applyPreset('original', 1));
+    // every person a detection adds starts there too
+    const a = firstAnswer({ detect: null, prepared: prepareFaces([lmAt(0.3, 0.4, 0.2), lmAt(0.7, 0.4, 0.12)], 1000, 1000), size: { width: 1000, height: 1000 }, v1Body: null, rematch: null, faceSeed: { x: 0.7, y: 0.4 } });
+    expect(Object.values(a.rebase(e).persons)).toEqual([neutralPerson(), neutralPerson()]);
   });
 });
+
+/**
+ * An edit whose p0 holds `person` when the first face answer lands: what the user set while the tracker could not
+ * answer yet (S §3.3 item 2). A camera shot opens at 原圖 like an import (2026-10-18), so the hand-over itself puts
+ * nothing on p0; the C2 cases below pin how the seed routes p0, whatever it holds.
+ */
+const p0Holding = (person: EditState['template']): EditState => withPersons(importEdit(), ['p0'], () => person);
 
 // (copied verbatim from src/detect/faces.test.ts)
 const fx = (n: string) => JSON.parse(readFileSync(new URL(`../../tests/fixtures/${n}`, import.meta.url), 'utf8'));
@@ -306,33 +311,49 @@ describe('firstAnswer (S §3.3 item 4, §5.3 answer-time rows, C2)', () => {
     expect(e.persons.f0.values['body.waist']).toBe(0);
     expect(e.persons.f0.values['skin.smooth']).toBe(personFromPreset('refined', 1).values['skin.smooth']);
   });
-  it('a camera seed on face B makes B the primary with the look; no box contains the seed → everyone from the template', () => {
-    const look = { photo: splitLegacy(defaultParams()).photo, person: personFromPreset('glow', 1) };
-    const shot = cameraShotEdit(look, { x: 0.7, y: 0.4 });
+  it('a camera seed on face B makes B the primary with p0’s params; no box contains the seed → the score primary gets them, as on an import', () => {
+    const look = { person: personFromPreset('glow', 1) };
+    const shot = p0Holding(look.person);
     const a = firstAnswer({ ...base, prepared: two, faceSeed: { x: 0.7, y: 0.4 } });
     expect(a.detect.primary).toBe('f1');
     expect(a.rebase(shot).persons.f1).toEqual(look.person);
     expect(a.rebase(shot).persons.f0).toEqual(neutralPerson());
+    // p0 holds only the user's own edits (the shot opens at 原圖): a seed that matches nothing never drops them
     const miss = firstAnswer({ ...base, prepared: two, faceSeed: { x: 0.05, y: 0.95 } });
-    expect(Object.values(miss.rebase(shot).persons).every((p) => JSON.stringify(p) === JSON.stringify(neutralPerson()))).toBe(true);
+    expect(miss.detect.primary).toBe('f0');
+    expect(miss.rebase(shot).persons).toEqual(firstAnswer({ ...base, prepared: two }).rebase(shot).persons);
+    expect(miss.rebase(shot).persons.f0).toEqual(look.person);
+    expect(miss.rebase(shot).persons.f1).toEqual(neutralPerson());
   });
-  it('a camera seed when the editor finds no face (C3): p0, the all-skin person the camera drew, keeps the look; a seed outside the frame still discards it', () => {
-    const look = { photo: splitLegacy(defaultParams()).photo, person: personFromPreset('glow', 1) };
+  it('C6: 磨皮 80 set on a shot while 正在分析 shows survives a first answer whose seed lies in no face box, in every undo state', () => {
+    const smooth = (v: number) => (e: EditState) => withPersons(e, ['p0'], (p) => ({ ...p, values: { ...p.values, 'skin.smooth': v }, preset: 'custom' }));
+    // the undo stack of a shot handed over from 預覽: 原圖, then the user's 磨皮 drags made before the face answer
+    const states = [importEdit(), smooth(0.5)(importEdit()), smooth(0.8)(importEdit())];
+    const a = firstAnswer({ ...base, prepared: two, faceSeed: { x: 0.05, y: 0.95 } });
+    const after = states.map(a.rebase);
+    expect(after.map((e) => e.persons.f0.values['skin.smooth'])).toEqual([0, 0.5, 0.8]);
+    expect(after.every((e) => e.persons.f1.values['skin.smooth'] === 0)).toBe(true);
+    // identical to the same edit on an import (no seed)
+    const imported = firstAnswer({ ...base, prepared: two });
+    expect(after).toEqual(states.map(imported.rebase));
+  });
+  it('a camera seed when the editor finds no face (C3): p0, the all-skin person, keeps its params, also for a seed outside the frame', () => {
+    const look = { person: personFromPreset('glow', 1) };
     const none = { faces: [], obstacles: [], dropped: { tooSmall: 0, overCap: 0 } };
-    const inside = cameraShotEdit(look, { x: 0.5, y: 0.4 });
+    const inside = p0Holding(look.person);
     const a = firstAnswer({ ...base, prepared: none, faceSeed: { x: 0.5, y: 0.4 } });
     expect(Object.keys(a.rebase(inside).persons)).toEqual(['p0']);
     expect(a.rebase(inside).persons.p0).toEqual(look.person);
     // a body-only person (no face anywhere) gets it too: p0 hands over to the primary body person
     const withBody = firstAnswer({ ...base, prepared: none, v1Body: { bodies: [cacheBody('b0', 0.5)], complete: true }, faceSeed: { x: 0.5, y: 0.4 } });
     expect(withBody.rebase(inside).persons.b0).toEqual(look.person);
-    // the beautified face was outside the saved crop: the shot drew no 磨皮 in frame
-    const outside = cameraShotEdit(look, { x: 1.3, y: 0.4 });
+    // the tracked face was outside the saved crop: p0 still holds only the user's own edits, so they stay
+    const outside = p0Holding(look.person);
     const out = firstAnswer({ ...base, prepared: none, faceSeed: { x: 1.3, y: 0.4 } });
-    expect(out.rebase(outside).persons.p0).toEqual(neutralPerson());
+    expect(out.rebase(outside).persons.p0).toEqual(look.person);
   });
   it('bodies found before the first face answer (S §7) build the 基本模式 form of the cache; the answer merges into it: a camera seed still names the primary, b0’s person keeps the local 美體 values', () => {
-    const look = { photo: splitLegacy(defaultParams()).photo, person: personFromPreset('glow', 1) };
+    const look = { person: personFromPreset('glow', 1) };
     const onF0 = { pose: poseOnFace(two.faces[0].face), mask: null, score: 0.9 };
     const lone = { pose: cacheBody('x', 0.95).pose, mask: null, score: 0.1 };
     // the 美體 detection while the face tracker could not answer: the bodies by centre x, p0 handed to the best score
@@ -343,8 +364,7 @@ describe('firstAnswer (S §3.3 item 4, §5.3 answer-time rows, C2)', () => {
     ]);
     expect(pre.detect).toMatchObject({ primary: 'b0', faces: [], faceScans: [] });
     const waist = (e: EditState) => withPersons(e, ['b0'], (p) => ({ ...p, values: { ...p.values, 'body.waist': 0.7 } }));
-    const shotOf = (seed: { x: number; y: number }) => waist(pre.rebase(cameraShotEdit(look, seed)));
-    const shot = shotOf({ x: 0.7, y: 0.4 });
+    const shot = waist(pre.rebase(p0Holding(look.person)));
     expect(shot.persons.b0.values['skin.smooth']).toBe(look.person.values['skin.smooth']);
     // the seed is on face B (f1); b0 pairs with face A and keeps its id (A15)
     const a = firstAnswer({ ...base, detect: pre.detect, prepared: two, faceSeed: { x: 0.7, y: 0.4 } });
@@ -357,16 +377,18 @@ describe('firstAnswer (S §3.3 item 4, §5.3 answer-time rows, C2)', () => {
     expect(e.persons.b0.values['skin.smooth']).toBe(0);
     expect(e.persons.b1).toEqual(neutralPerson());
     expect(e.persons.p0).toBeUndefined();
-    // the seed in no face box: everyone starts from the template, but b0's person keeps the 美體 edit made on it
-    const miss = firstAnswer({ ...base, detect: pre.detect, prepared: two, faceSeed: { x: 0.05, y: 0.95 } });
-    const m = miss.rebase(shotOf({ x: 0.05, y: 0.95 }));
-    expect(m.persons.b0.values['body.waist']).toBe(0.7);
-    expect(m.persons.b0.values['skin.smooth']).toBe(0);
-    expect(m.persons.f1).toEqual(neutralPerson());
     // without a seed b0's person is the primary (A13) and keeps everything it had
     const plain = firstAnswer({ ...base, detect: pre.detect, prepared: two });
     expect(plain.detect.primary).toBe('b0');
     expect(plain.rebase(shot).persons.b0).toEqual(shot.persons.b0);
+    // the seed in no face box: as without a seed (C6), so b0's person keeps the face and 美體 edits made on it
+    const miss = firstAnswer({ ...base, detect: pre.detect, prepared: two, faceSeed: { x: 0.05, y: 0.95 } });
+    expect(miss.detect.primary).toBe('b0');
+    const m = miss.rebase(shot);
+    expect(m).toEqual(plain.rebase(shot));
+    expect(m.persons.b0.values['body.waist']).toBe(0.7);
+    expect(m.persons.b0.values['skin.smooth']).toBe(look.person.values['skin.smooth']);
+    expect(m.persons.f1).toEqual(neutralPerson());
   });
   it('a 美體 cache is stored before the first face answer and reopened: the 美體 edit stays on the same body (D4)', () => {
     // face A scores best as a face; B's body scores best as a body, so p0 (the 美體 edits) sits on B's body
@@ -375,7 +397,7 @@ describe('firstAnswer (S §3.3 item 4, §5.3 answer-time rows, C2)', () => {
     const pre = bodyAnswer(preAnswerCache(size, null), [onA, onB], size);
     const held = pre.detect.persons.find((p) => p.id === pre.detect.primary)!;
     expect(pre.detect.bodies!.find((b) => b.id === held.body)!.pose).toBe(onB.pose);
-    const edit = withPersons(pre.rebase(importEdit({ photo: defaultPhoto(), person: naturalPerson() })), [held.id], (p) => ({ ...p, values: { ...p.values, 'body.waist': 0.7 } }));
+    const edit = withPersons(pre.rebase(p0Holding(naturalPerson())), [held.id], (p) => ({ ...p, values: { ...p.values, 'body.waist': 0.7 } }));
     // the autosave writes the cache with the edit (the tracker never answered); the reopen reads both
     const params = sanitizeParams(legacyProjection(edit, pre.detect.primary));
     const o = reopen(v1({ width: 1000, height: 1000, schema: 2, edit, params, paramsKey: stableKey(params), detect: { ...pre.detect, bodyScans: [0] } }), size);
@@ -488,6 +510,165 @@ describe('firstAnswer (S §3.3 item 4, §5.3 answer-time rows, C2)', () => {
     // 基本模式 still records nothing
     expect(firstAnswer({ ...base, prepared: null, quarter: 1 }).detect.faceScans).toEqual([]);
   });
+  it('D3: an answer the short-range detector gave while full-range was missing marks the cache; a full-range answer clears the mark', () => {
+    const short = firstAnswer({ ...base, prepared: two, detector: 'short-range' });
+    expect(short.detect.photoDetector).toBe('short-range');
+    expect(firstAnswer({ ...base, prepared: two, detector: 'full-range' }).detect).not.toHaveProperty('photoDetector');
+    // the faceless form detected again once the detector is in (completeAnswer runs firstAnswer so): the faces merge in, unmarked
+    const none = firstAnswer({ ...base, prepared: { faces: [], obstacles: [], dropped: { tooSmall: 0, overCap: 0 } }, detector: 'short-range' });
+    expect(none.detect).toMatchObject({ photoDetector: 'short-range', persons: [{ id: 'p0' }] });
+    const later = firstAnswer({ ...base, detect: none.detect, prepared: two, detector: 'full-range' });
+    expect(later.detect.persons.map((p) => p.id)).toEqual(['f0', 'f1']);
+    expect(later.detect).not.toHaveProperty('photoDetector');
+    // no detection of its own (基本模式) keeps what the cache says; a stored round trip keeps the mark
+    expect(firstAnswer({ ...base, detect: none.detect, prepared: null }).detect.photoDetector).toBe('short-range');
+    expect(normalizeDetect(structuredClone(short.detect)).cache?.photoDetector).toBe('short-range');
+  });
+  it('the short-range mark stands for each up-frame it may concern: a full-range "nobody" in another up-frame keeps it, faces lift it', () => {
+    const nobody = { faces: [], obstacles: [], dropped: { tooSmall: 0, overCap: 0 } };
+    // nobody upright, short-range; then the turned photo's scan with full-range finds nobody either
+    const upright = firstAnswer({ ...base, prepared: nobody, detector: 'short-range' }).detect;
+    const turned = firstAnswer({ ...base, detect: upright, prepared: nobody, quarter: 1, detector: 'full-range' }).detect;
+    expect(turned.faceScans).toEqual([{ quarter: 0, flipH: false, detector: 'short-range' }, { quarter: 1, flipH: false }]);
+    // the upright record is still the short-range one: the mark stays, so the completion asks it again
+    expect(turned.photoDetector).toBe('short-range');
+    expect(completionOf(turned)).toEqual({ quarter: 0 });
+    // faces found full-range in the turned photo: a cache with faces is never scanned again, nothing is left to complete
+    const found = firstAnswer({ ...base, detect: upright, prepared: two, quarter: 1, detector: 'full-range' }).detect;
+    expect(found).not.toHaveProperty('photoDetector');
+  });
+  it('completeAnswer: a faceless short-range cache takes the full-range answer upright, which replaces the upright record; the turned one stays owed', () => {
+    const nobody = { faces: [], obstacles: [], dropped: { tooSmall: 0, overCap: 0 } };
+    const upright = firstAnswer({ ...base, prepared: nobody, detector: 'short-range' }).detect;
+    const marked = firstAnswer({ ...base, detect: upright, prepared: nobody, quarter: 1, detector: 'short-range' }).detect;
+    expect(marked).toMatchObject({ photoDetector: 'short-range', faceScans: [{ quarter: 0, detector: 'short-range' }, { quarter: 1, detector: 'short-range' }] });
+    // nobody upright again: that record is a full-range one now; the turned one is still owed its look (the scan asks it
+    // when the photo is shown turned), so the mark stays
+    const still = completeAnswer(marked, nobody, size);
+    expect(still.detect.faceScans).toEqual([{ quarter: 1, flipH: false, detector: 'short-range' }, { quarter: 0, flipH: false }]);
+    expect(still.detect.photoDetector).toBe('short-range');
+    expect(completionOf(still.detect)).toEqual({ quarter: 1 });
+    expect(still.added).toEqual([]);
+    expect(still.rebase(v1edit())).toEqual(firstAnswer({ ...base, detect: marked, prepared: nobody }).rebase(v1edit()));
+    // that scan, full-range, finds nobody either: nothing is owed, the mark goes
+    const done = firstAnswer({ ...base, detect: still.detect, prepared: nobody, quarter: 1, detector: 'full-range' }).detect;
+    expect(done.faceScans).toEqual([{ quarter: 0, flipH: false }, { quarter: 1, flipH: false }]);
+    expect(done).not.toHaveProperty('photoDetector');
+    // faces: they merge as into a 基本模式 cache (A15), the look on the primary, the mark and the flags gone, the upright
+    // record last (where the faces were found)
+    const merged = completeAnswer(marked, two, size);
+    expect(merged.detect.persons.map((p) => p.id)).toEqual(['f0', 'f1']);
+    expect(merged.detect.faceScans).toEqual([{ quarter: 1, flipH: false }, { quarter: 0, flipH: false }]);
+    expect(merged.detect).not.toHaveProperty('photoDetector');
+    expect(merged.added).toEqual(['f0', 'f1']);
+    expect(merged.rebase(v1edit()).persons.f0).toEqual(splitLegacy(applyPreset('refined', 1)).person);
+  });
+  it('completeAnswer: an up-frame a full-range scan answered keeps its record, so it is not scanned again (round 4 F4)', () => {
+    const nobody = { faces: [], obstacles: [], dropped: { tooSmall: 0, overCap: 0 } };
+    // nobody upright, short-range; the photo turned while the detector was landing: the scan of q1 ran full-range
+    const upright = firstAnswer({ ...base, prepared: nobody, detector: 'short-range' }).detect;
+    const turned = firstAnswer({ ...base, detect: upright, prepared: nobody, quarter: 1, detector: 'full-range' }).detect;
+    expect(turned.photoDetector).toBe('short-range');
+    // the completion asks upright, full-range: nobody. Every record is a full-range one now, the mark goes, and q1's stays
+    const done = completeAnswer(turned, nobody, size, 0).detect;
+    expect(done.faceScans).toEqual([{ quarter: 1, flipH: false }, { quarter: 0, flipH: false }]);
+    expect(done).not.toHaveProperty('photoDetector');
+    // round 3 kept the upright record alone ([0]), so the turned up-frame was scanned once more, full-range again
+    expect(done.faceScans.map((s) => s.quarter)).toContain(1);
+  });
+  it('completeAnswer: a faceless cache whose upright record is full-range already is completed where a short-range one is owed', () => {
+    const nobody = { faces: [], obstacles: [], dropped: { tooSmall: 0, overCap: 0 } };
+    const upright = firstAnswer({ ...base, prepared: nobody, detector: 'full-range' }).detect;
+    const turned = firstAnswer({ ...base, detect: upright, prepared: nobody, quarter: 3, detector: 'short-range' }).detect;
+    expect(turned).toMatchObject({ photoDetector: 'short-range', faceScans: [{ quarter: 0 }, { quarter: 3, detector: 'short-range' }] });
+    expect(completionOf(turned)).toEqual({ quarter: 3 });
+    // its faces, found there, full-range: the cache gains them, that record last
+    const found = completeAnswer(turned, two, size, 3).detect;
+    expect(found.faceScans).toEqual([{ quarter: 0, flipH: false }, { quarter: 3, flipH: false }]);
+    expect(found.faces).toHaveLength(2);
+    expect(found).not.toHaveProperty('photoDetector');
+  });
+  it('completeAnswer: a short-range cache with faces only gains persons; every stored one keeps its id and params', () => {
+    const one = prepareFaces([lmAt(0.3, 0.4, 0.2)], 1000, 1000);
+    const short = firstAnswer({ ...base, prepared: one, quarter: 0, detector: 'short-range' });
+    const e0 = withPersons(short.rebase(v1edit()), [short.detect.primary], (q) => ({ ...q, values: { ...q.values, 'shape.eyeEnlarge': 1 }, preset: 'custom' }));
+    const c = completeAnswer(short.detect, two, size);
+    expect(c.added).toHaveLength(1);
+    expect(c.detect.persons.slice(0, 1)).toEqual(short.detect.persons);
+    expect(c.detect.primary).toBe(short.detect.primary);
+    // the records stay, without the short-range flag the mark took with it
+    expect(short.detect.faceScans).toEqual([{ quarter: 0, flipH: false, detector: 'short-range' }]);
+    expect(c.detect.faceScans).toEqual([{ quarter: 0, flipH: false }]);
+    expect(c.detect).not.toHaveProperty('photoDetector');
+    const e = c.rebase(e0);
+    expect(e.persons[short.detect.primary]).toEqual(e0.persons[short.detect.primary]);
+    expect(e.persons[c.added[0]]).toEqual(e0.template);
+    expect(e.photo).toBe(e0.photo);
+  });
+  /** what the engine draws an edit with: the frame (faces, params, obstacle centres), the caps and the 瘦臉 limits' inputs */
+  const drawn = (cache: DetectionCache, edit: EditState) => {
+    const faces = cache.faces.map((c) => ({ id: c.id, face: adaptCached(c, size.width, size.height), box: c.box, lm: c.lm }));
+    const frame = buildFrame(edit, frameFacesOf(cache, faces), cache.obstacles, new Map(), cache.primary);
+    return { frame, caps: capsFor(frame.faces.map((f) => boxCentre(ovalBox(f.face))), frame.obstacles ?? [], 1), protects: protectRequests(cache, faces, edit, size) };
+  };
+  /** an edit of an answer's cache with 瘦臉 at the top on its primary */
+  const slimmed = (a: { rebase: (e: EditState) => EditState; detect: DetectionCache }) =>
+    withPersons(a.rebase(v1edit()), [a.detect.primary], (q) => ({ ...q, values: { ...q.values, 'shape.faceSlim': 1 }, preset: 'custom' }));
+  it("completeAnswer that adds nobody leaves an edited photo's render as it was: a tiny face beside the jaw still bounds 瘦臉 (round 4 F2)", () => {
+    const a = sampleFaceAt(0.5, 0.5, 0.4);
+    // O: a background face under MIN_FACE_FRAC beside A's jaw, outside A's face oval
+    const short = firstAnswer({ ...base, prepared: prepareFaces([a, sampleFaceAt(0.344, 0.604, 0.025)], 1000, 1000), quarter: 0, detector: 'short-range' });
+    expect(short.detect.obstacles).toHaveLength(1);
+    const slim = slimmed(short);
+    const before = drawn(short.detect, slim);
+    // A's 瘦臉 stops short of O: half their distance
+    expect(before.caps[0]).toBeGreaterThan(0.05);
+    expect(before.caps[0]).toBeLessThan(0.15);
+    // the detector lands: full-range finds the same two, boxed a hair apart
+    const c = completeAnswer(short.detect, prepareFaces([sampleFaceAt(0.501, 0.5, 0.4), sampleFaceAt(0.3445, 0.6045, 0.025)], 1000, 1000), size);
+    expect(c.added).toEqual([]);
+    expect(c.detect).not.toHaveProperty('photoDetector');
+    expect(drawn(c.detect, c.rebase(slim))).toEqual(before);
+  });
+  it('completeAnswer that adds nobody but a face below MIN_FACE_FRAC short-range missed: it joins as an obstacle and bounds 瘦臉 (round 5 G3)', () => {
+    const a = sampleFaceAt(0.5, 0.5, 0.4);
+    const alone = firstAnswer({ ...base, prepared: prepareFaces([a], 1000, 1000), quarter: 0, detector: 'short-range' });
+    const edited = slimmed(alone);
+    // nothing near A: its 瘦臉 is unbounded
+    const unbounded = drawn(alone.detect, edited);
+    expect(unbounded.caps[0]).toBeLessThan(0);
+    // the detector lands: full-range finds A and, beside its jaw, the tiny face short-range missed
+    const gained = completeAnswer(alone.detect, prepareFaces([sampleFaceAt(0.501, 0.5, 0.4), sampleFaceAt(0.3445, 0.6045, 0.025)], 1000, 1000), size);
+    expect(gained.added).toEqual([]);
+    expect([alone.detect.obstacles.length, gained.detect.obstacles.length]).toEqual([0, 1]);
+    const bounded = drawn(gained.detect, gained.rebase(edited));
+    expect(bounded.caps[0]).toBeGreaterThan(0.05);
+    expect(bounded.caps[0]).toBeLessThan(0.2);
+    // the faces and their params are as they were; the cap is what changed, so the editor owes the thumbnail
+    // (completionShows). Round 4's doc said a completion that adds nobody leaves every cap as it was
+    expect(bounded.frame.faces).toEqual(unbounded.frame.faces);
+  });
+  it('C7: 重置 on a 0.4.0 entry whose stored template is the 自然 camera look: the faces found after it start at 原圖, every one', () => {
+    // 0.4.0's importEdit(look): the 自然 look on p0 and as the template; a sideways photo, so upright found no face
+    const old: EditState = { v: 2, photo: defaultPhoto(), persons: { p0: naturalPerson() }, template: naturalPerson(), primaryInit: null };
+    const upright = firstAnswer({ ...base, prepared: { faces: [], obstacles: [], dropped: { tooSmall: 0, overCap: 0 } } }).detect;
+    const params = sanitizeParams(legacyProjection(old, 'p0'));
+    const o = reopen(v1({ width: 1000, height: 1000, schema: 2, edit: old, params, paramsKey: stableKey(params), detect: upright }), size);
+    expect(o.detect).toEqual(upright);
+    expect(o.edit.template).toEqual(naturalPerson());
+    const reset = resetAll(o.edit);
+    // 裁切 › 旋轉 upright: the re-scan in the new up-frame finds both faces
+    const a = firstAnswer({ ...base, detect: o.detect, prepared: two, quarter: 1 });
+    expect(a.detect.persons.map((p) => p.id)).toEqual(['f0', 'f1']);
+    const e = a.rebase(reset);
+    expect(e.persons).toEqual({ f0: neutralPerson(), f1: neutralPerson() });
+    // the same entry closed before any answer (no cache): the first answer after 重置 gives 原圖 to everyone too
+    const closed = reopen(v1({ width: 1000, height: 1000, schema: 2, edit: old, params, paramsKey: stableKey(params) }), size);
+    expect(closed.detect).toBeNull();
+    expect(firstAnswer({ ...base, prepared: two }).rebase(resetAll(closed.edit)).persons).toEqual({ f0: neutralPerson(), f1: neutralPerson() });
+    // without 重置 the stored edit keeps what 0.4.0 saved (an entry keeps its look)
+    expect(a.rebase(o.edit).persons.f1).toEqual(naturalPerson());
+  });
 });
 
 /** a pose whose face points sit on the face's own landmarks (a perfect pair); poseOnFace of src/detect/cache.test.ts */
@@ -585,8 +766,8 @@ describe('persons before the first face answer: a dropped cache, an unsure track
   };
   const bodyOn = (face: Face, score: number) => ({ pose: poseOnFace(face), mask: null, score });
 
-  it('R2 (E1): a camera seed names face A, whose body person got 細腰 before the answer: A gets the look’s face part and keeps its 細腰', () => {
-    const look = { photo: splitLegacy(defaultParams()).photo, person: personFromPreset('glow', 1) };
+  it('R2 (E1): a camera seed names face A, whose body person got 細腰 before the answer: A gets p0’s face part and keeps its 細腰', () => {
+    const look = { person: personFromPreset('glow', 1) };
     const seed = { x: 0.3, y: 0.4 };
     const onA = bodyOn(two.faces[0].face, 0.2);
     const onB = bodyOn(two.faces[1].face, 0.9);
@@ -597,7 +778,7 @@ describe('persons before the first face answer: a dropped cache, an unsure track
     const a0 = pre.detect.persons.find((p) => p.id !== holder)!.id;
     expect(bodyOf(holder)).toBe(onB.pose);
     expect(bodyOf(a0)).toBe(onA.pose);
-    const shot = pre.rebase(cameraShotEdit(look, seed));
+    const shot = pre.rebase(p0Holding(look.person));
     const edited = waist(shot, a0, 0.5);
     const a = firstAnswer({ ...base, detect: pre.detect, prepared: two, faceSeed: seed });
     expect(a.detect.primary).toBe(a0);

@@ -583,6 +583,10 @@ test('exact copies: 翻轉 mirrors the export, 旋轉 turns it, inside the kerne
   test.setTimeout(300_000);
   await usePng(page);
   await importInto(page, SAMPLE_FACE);
+  // the beauty look the first half checks, 自然 (a new photo opens at 原圖 since 2026-10-18)
+  await tab(page, '一鍵').click();
+  await option(page, '自然').click();
+  await expect(option(page, '自然')).toHaveAttribute('aria-selected', 'true');
   /** the export as is, after 翻轉 and after 旋轉 (each undone again): b against the mirrored / turned a */
   const copies = async () => {
     await exportFile(page);
@@ -608,7 +612,7 @@ test('exact copies: 翻轉 mirrors the export, 旋轉 turns it, inside the kerne
     await page.getByRole('button', { name: '復原' }).click();
     return { flip, turn };
   };
-  // S §8.2 #2 asks for ≤ 1/255 (翻轉) and ≤ 2/255 (旋轉) everywhere with the default look. On SwiftShader a few
+  // S §8.2 #2 asks for ≤ 1/255 (翻轉) and ≤ 2/255 (旋轉) everywhere with the 自然 look. On SwiftShader a few
   // isolated pixels miss that by 1–2 levels: the look's V-space stages after P2 (bilinear-tapped means, 8-bit
   // intermediates) meet a rounding tie in a different order on the mirrored / turned image, and its high-pass stages
   // amplify the one-level flip (measured: 84 of 1.27 M interior pixels > 1/255 for 翻轉, max 3; 25 > 2/255 for 旋轉,

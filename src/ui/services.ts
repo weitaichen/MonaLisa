@@ -1,6 +1,7 @@
 // Session-wide singletons: the display canvas, one Engine, one Tracker, one CameraController,
 // the engine-asset download, (美體, on demand) one BodyTracker and (瘦臉 background limit, on demand) one person
 // segmenter. Exposed as an observable store so screens can show loading / error states instead of failing silently.
+import type { EngineModels } from '../engine/assets';
 import type { PersonSegmenter } from '../tracking/segmenter';
 import type { BodyTracker, CameraController, Engine, EngineAssetsProgress, Prefs, Tracker, TrackerState } from '../types';
 import { debug, errorText, reportError } from './debug';
@@ -48,6 +49,12 @@ interface ServicesState {
    * replaces a dead graph, 'failed' when automatic retries gave up (a later detect call retries).
    */
   tracker: TrackerState;
+  /**
+   * The full-range photo detector's bytes are in (step-1 spec §6.5): set by the download that brought them, whoever
+   * started it (the engine download, a photo's tracker switch, an editor's ask, a retry after a 5xx or a captive
+   * portal), so the editor completes a short-range answer whichever request lands (round 4: it heard only its own asks)
+   */
+  photoDetector: boolean;
   /** the single display canvas (replaced only when a lost context never comes back) */
   canvas: HTMLCanvasElement;
 }
@@ -66,6 +73,7 @@ export const svc = createStore<ServicesState>({
   engine: { state: 'idle' },
   lost: false,
   tracker: 'ok',
+  photoDetector: false,
   canvas: null as unknown as HTMLCanvasElement,
 });
 svc.set({ canvas: makeCanvas() });
@@ -94,6 +102,7 @@ export function webgl2Supported(): boolean {
 
 /** A friendly reason for an engine-download failure (engine/assets.ts errors and fetch TypeErrors). */
 export function downloadHint(e: unknown): string {
+  if (errorText(e) === TRACKER_BUSY) return TRACKER_BUSY;
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return '目前沒有網路連線，請連上網路後重試';
   // a network failure: Chromium "Failed to fetch", WebKit "Load failed"
   if (e instanceof TypeError) return '網路連線不穩，請確認網路後重試';
@@ -105,10 +114,15 @@ export function downloadHint(e: unknown): string {
   return '請確認網路後重試';
 }
 
-let assetsP: Promise<Uint8Array> | null = null;
+let assetsP: Promise<EngineModels> | null = null;
 let lastPct = -1;
 
-export function prefetchAssets(): Promise<Uint8Array> {
+/**
+ * The engine download (the camera bundle, the wasm and its loader), memoised until it fails. It also starts the photo
+ * detector's download, which nothing here waits for; ensurePhotoDetector joins it at once, so that request is the
+ * session's first (photoDetectorPending): when it fails before 'done', the request 'done' starts is a retry.
+ */
+export function prefetchAssets(): Promise<EngineModels> {
   if (assetsP) return assetsP;
   lastPct = -1;
   svc.set({ assets: { state: 'loading', progress: null } });
@@ -119,16 +133,23 @@ export function prefetchAssets(): Promise<Uint8Array> {
     lastPct = pct;
     if (svc.get().assets.state === 'loading') svc.set({ assets: { state: 'loading', progress: p } });
   };
-  let p: Promise<{ modelBuffer: Uint8Array }>;
+  let p: Promise<EngineModels>;
   try {
     p = deps.loadEngineAssets(onProgress);
   } catch (e) {
     p = Promise.reject(e);
   }
+  // joins the detector request the engine download has just started (loadPhotoDetector is memoised), so services
+  // counts that request as the session's first: a failure of it before 'done' is the first attempt failing (D1, a
+  // photo then waits for no retry), not something services never saw
+  void ensurePhotoDetector();
   const run = p.then(
     (r) => {
       svc.set({ assets: { state: 'done' } });
-      return r.modelBuffer;
+      // the detector is in, or still downloading (joined), or its request failed: asked again, so its bytes may be
+      // there before the first photo (a retry, which no photo waits for)
+      void ensurePhotoDetector();
+      return r;
     },
     (e: unknown) => {
       assetsP = null;
@@ -138,6 +159,100 @@ export function prefetchAssets(): Promise<Uint8Array> {
   );
   assetsP = run;
   return run;
+}
+
+// ───────────── the full-range photo detector (step-1 spec §6.5) ─────────────
+
+/**
+ * How long a photo's face detection waits for the full-range detector's first download of the session (D1, step-1
+ * spec §6.5): 3 s, once per session. The 1.08 MB file has been downloading since the engine started (beside the model),
+ * and a link that delivers it in about 3 s more (≥ 3 Mbit/s) brings it in while the editor's spinner shows anyway, the
+ * first full-range photo costing about 1.4–3 s of GPU compile on the desktop besides (§6.5). Past it the photo detects
+ * with what is there at once: a slow link is not allowed to hold a photo on 「正在分析臉部…」 for the download's stall
+ * bound (STALL_TIMEOUT_MS of silence per chunk, unbounded while bytes trickle in). The budget starts with the first wait
+ * and is shared: a photo opened later waits only for what is left of it. A retry after a failed download is never
+ * waited for. A photo detected meanwhile is marked short-range and picks up its missing faces once the detector is in:
+ * in the open it lands in, or at a later open (§6.5). A photo drawn from its cache waits for nothing.
+ */
+export const DETECTOR_WAIT_MS = 3000;
+
+/** the detector's bytes once downloaded; null: not yet, or the last attempt failed */
+let photoDetector: Uint8Array | null = null;
+let photoDetectorP: Promise<Uint8Array | null> | null = null;
+/**
+ * the session's first download attempt while it is in flight (the only one a detection waits for, D1); null after. The
+ * engine download's own request (prefetchAssets joins it), or a photo's when it comes first
+ */
+let firstDetectorP: Promise<Uint8Array | null> | null = null;
+/** the first attempt has been made (it may have settled since) */
+let detectorTried = false;
+/** Date.now() past which no detection waits for the first download any more: the first wait + DETECTOR_WAIT_MS */
+let detectorWaitEnd: number | null = null;
+
+/**
+ * The full-range face detector photos detect with (engine/assets.ts loadPhotoDetector), never rejecting: null =
+ * unavailable for now (photos detect short-range meanwhile). A failed attempt is not kept: the next call retries, and
+ * calls come from every photo (the tracker reads fullRangeDetector at each switch to a photo). The camera never needs it.
+ */
+export function ensurePhotoDetector(): Promise<Uint8Array | null> {
+  if (photoDetector) return Promise.resolve(photoDetector);
+  if (photoDetectorP) return photoDetectorP;
+  let p: Promise<Uint8Array>;
+  try {
+    p = deps.loadPhotoDetector();
+  } catch (e) {
+    p = Promise.reject(e);
+  }
+  // (loadPhotoDetector logs its own failures)
+  const run = p.then(
+    (bytes) => {
+      photoDetector = bytes;
+      // whoever asked: the editor follows the store, not its own requests (svc.photoDetector)
+      svc.set({ photoDetector: true });
+      return bytes;
+    },
+    () => null,
+  );
+  photoDetectorP = run;
+  const first = !detectorTried;
+  detectorTried = true;
+  if (first) firstDetectorP = run;
+  void run.then(() => {
+    if (photoDetectorP === run) photoDetectorP = null;
+    if (firstDetectorP === run) firstDetectorP = null;
+  });
+  return run;
+}
+
+/** TrackerOptions.fullRangeDetector of every tracker build: the bytes, or null and a retry in the background */
+function fullRangeDetector(): Uint8Array | null {
+  if (!photoDetector) void ensurePhotoDetector();
+  return photoDetector;
+}
+
+/**
+ * What a face detection about to run waits for (D1): the session's first detector download while it is in flight, for
+ * what is left of DETECTOR_WAIT_MS since the first wait; it settles then or when the download does, and never rejects.
+ * null (detect at once): the detector is in, the first attempt failed (its retries are never waited for), or the budget
+ * is spent. Starts the first download when nothing has asked for it yet.
+ */
+export function photoDetectorPending(): Promise<void> | null {
+  if (photoDetector) return null;
+  if (!detectorTried) void ensurePhotoDetector();
+  const first = firstDetectorP;
+  if (!first) return null;
+  const now = Date.now();
+  detectorWaitEnd ??= now + DETECTOR_WAIT_MS;
+  const left = detectorWaitEnd - now;
+  if (left <= 0) return null;
+  debug({ detectorWaits: (window.__meiyan?.detectorWaits ?? 0) + 1 });
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, left);
+    void first.then(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }
 
 /** Start the download on the first idle moment after launch (spec §7.2 Home). */
@@ -187,10 +302,84 @@ function discardEngine(): void {
   engine = null;
 }
 
-async function createTrackerSafe(
-  modelBuffer: Uint8Array,
-  delegate: Prefs['delegate'],
-): Promise<{ tracker: Tracker | null; note: string | null }> {
+/**
+ * A tracker build (wasm instantiation + MediaPipe graph) not finished by then hands the UI a 基本模式 bundle and goes on:
+ * a build that never settles would otherwise leave 「正在啟動臉部偵測…」 up for good, joined by every later
+ * ensureEngine. The tracker it brings later takes that bundle's place (settleLate).
+ */
+export const TRACKER_BUILD_TIMEOUT_MS = 20_000;
+
+const SLOW_TRACKER_NOTE = '臉部偵測啟動較慢，暫時改用基本模式；啟動完成後會自動恢復臉型與美妝';
+/**
+ * a timed-out build that failed after all, or a later build that gave up waiting for one still running. That one can
+ * still land after the give-up: its tracker is adopted then all the same (settleLate, 「臉部偵測已啟動」)
+ */
+const STUCK_TRACKER_NOTE = '臉部偵測無法啟動，已切換為基本模式；請把 App 關掉重新開啟再試';
+/** 美體 asked while a timed-out face-tracker build still runs (its downloadHint) */
+const TRACKER_BUSY = '臉部偵測仍在啟動，請稍後重試；若一直如此，請把 App 關掉重新開啟';
+
+/**
+ * A timed-out tracker build still running; it settles once its tracker was adopted or closed. No other MediaPipe graph
+ * is built beside it (two initialising at once is the memory peak that gets SE-class iPhones killed, see
+ * ensureBodyTracker), and a wait for it is bounded (lateBuildSettled).
+ */
+let lateBuild: Promise<void> | null = null;
+
+/** true once no timed-out build runs (at once when none does); false when one still runs TRACKER_BUILD_TIMEOUT_MS later */
+async function lateBuildSettled(): Promise<boolean> {
+  const p = lateBuild;
+  if (!p) return true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const settled = await Promise.race([
+    p.then(() => true),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), TRACKER_BUILD_TIMEOUT_MS);
+    }),
+  ]);
+  clearTimeout(timer);
+  return settled;
+}
+
+/** a timed-out tracker build may still bring a tracker (the editor holds a dropped cache's persons for its answer) */
+export function trackerComing(): boolean {
+  return lateBuild !== null;
+}
+
+/** what withBuildTimeout rejects with: a TimeoutError from inside the build is a failure like any other */
+class BuildTimeout extends Error {
+  constructor() {
+    super('啟動逾時');
+    this.name = 'BuildTimeout';
+  }
+}
+
+/** `building`, or a BuildTimeout after TRACKER_BUILD_TIMEOUT_MS (the build itself goes on) */
+function withBuildTimeout(building: Promise<Tracker>): Promise<Tracker> {
+  return new Promise<Tracker>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new BuildTimeout()), TRACKER_BUILD_TIMEOUT_MS);
+    building.then(
+      (t) => {
+        clearTimeout(timer);
+        resolve(t);
+      },
+      (e: unknown) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+interface TrackerBuild {
+  tracker: Tracker | null;
+  note: string | null;
+  /** a build that timed out and goes on: its tracker once it lands, null when it fails then */
+  late: Promise<Tracker | null> | null;
+}
+
+async function createTrackerSafe(models: EngineModels, delegate: Prefs['delegate']): Promise<TrackerBuild> {
+  // never beside a timed-out build still running (one still running after the wait leaves 基本模式, until it lands)
+  if (!(await lateBuildSettled())) return { tracker: null, note: STUCK_TRACKER_NOTE, late: null };
   let created: Tracker | null = null;
   const onStateChange = (state: TrackerState) => {
     // only the tracker of the current bundle speaks for the UI (a replaced one is closed anyway); written even
@@ -199,26 +388,84 @@ async function createTrackerSafe(
     if (state === 'ok') debug({ delegate: created.delegate }); // an 'auto' rebuild may have fallen back to CPU
     svc.set({ tracker: state });
   };
+  let building: Promise<Tracker> | null = null;
   try {
-    const tracker = await deps.createTracker({ modelBuffer, wasmBase: deps.wasmBase, delegate, onStateChange });
+    building = deps.createTracker({
+      modelBuffer: models.modelBuffer,
+      fullRangeDetector,
+      wasmBase: deps.wasmBase,
+      delegate,
+      onStateChange,
+    });
+    const tracker = await withBuildTimeout(building);
     created = tracker;
     debug({ delegate: tracker.delegate });
-    return { tracker, note: null };
+    return { tracker, note: null, late: null };
   } catch (e) {
     const msg = reportError(e, 'createTracker');
     debug({ delegate: null });
-    return { tracker: null, note: `臉部偵測無法啟動，已切換為基本模式（${msg}）` };
+    if (building && e instanceof BuildTimeout) {
+      // `created` lets its health reach the UI once settleLate adopts it
+      const late = building.then(
+        (t) => (created = t),
+        (err: unknown) => {
+          reportError(err, 'createTracker (after the timeout)');
+          return null;
+        },
+      );
+      return { tracker: null, note: SLOW_TRACKER_NOTE, late };
+    }
+    return { tracker: null, note: `臉部偵測無法啟動，已切換為基本模式（${msg}）`, late: null };
   }
 }
 
+/**
+ * The tracker of a timed-out build, once it lands. It takes the place of a ready 基本模式 bundle a tracker failure left
+ * (the fallback itself, a recoverEngine reload of it, or a later build that gave up waiting for this one) when nothing is
+ * (re)building and the pref still asks for its delegate; otherwise it is closed (one FaceLandmarker at a time: a restart
+ * that already started would build a second one). A build that fails after all says so on that bundle. Builds wait for
+ * it meanwhile (lateBuild).
+ */
+function settleLate(late: Promise<Tracker | null>, want: Prefs['delegate']): void {
+  const p = late.then((t) => {
+    const cur = svc.get().engine;
+    const fallback = cur.state === 'ready' && cur.bundle.tracker === null && trackerFailed && !engineP && !trackerP ? cur.bundle : null;
+    if (!t) {
+      // the recovery the note promised does not come (a fresh bundle object: the camera shows a note once per bundle)
+      if (fallback) setEngineState({ state: 'ready', bundle: { ...fallback }, note: STUCK_TRACKER_NOTE });
+      return;
+    }
+    if (fallback && getPrefs().delegate === want) {
+      trackerFailed = false;
+      liveTracker = t;
+      trackerDelegate = want;
+      debug({ delegate: t.delegate });
+      svc.set({ tracker: 'ok' });
+      setEngineState({ state: 'ready', bundle: { engine: fallback.engine, tracker: t, basic: false }, note: '臉部偵測已啟動' });
+      return;
+    }
+    try {
+      t.close();
+    } catch (e) {
+      reportError(e, 'tracker.close (after the timeout)');
+    }
+  });
+  lateBuild = p;
+  const clear = () => {
+    if (lateBuild === p) lateBuild = null;
+  };
+  p.then(clear, clear);
+}
+
 /** Build a tracker for the current delegate pref; if the pref changed while building, discard and rebuild. */
-async function buildTracker(eng: Engine, model: Uint8Array): Promise<EngineBundle> {
+async function buildTracker(eng: Engine, models: EngineModels): Promise<EngineBundle> {
   for (;;) {
     const want = getPrefs().delegate;
     setEngineState({ state: 'loading', step: 'tracker' });
-    const { tracker, note } = await createTrackerSafe(model, want);
+    const { tracker, note, late } = await createTrackerSafe(models, want);
     if (getPrefs().delegate !== want) {
       tracker?.close();
+      if (late) settleLate(late, want);
       continue;
     }
     trackerFailed = !tracker;
@@ -227,6 +474,7 @@ async function buildTracker(eng: Engine, model: Uint8Array): Promise<EngineBundl
     trackerDelegate = want; // even when it failed: a later delegate change is what retries it
     svc.set({ tracker: 'ok' });
     setEngineState({ state: 'ready', bundle, note });
+    if (late) settleLate(late, want);
     return bundle;
   }
 }
@@ -246,7 +494,7 @@ export function ensureEngine(basic = false): Promise<EngineBundle> {
       throw new Error('此裝置不支援 WebGL2');
     }
     setEngineState({ state: 'loading', step: 'engine' });
-    let modelP: Promise<Uint8Array> | null = null;
+    let modelP: Promise<EngineModels> | null = null;
     if (!basic) {
       modelP = prefetchAssets();
       modelP.catch(() => undefined); // awaited below; avoid an unhandled rejection meanwhile
@@ -271,14 +519,14 @@ export function ensureEngine(basic = false): Promise<EngineBundle> {
       return bundle;
     }
     setEngineState({ state: 'loading', step: 'assets' });
-    let model: Uint8Array;
+    let models: EngineModels;
     try {
-      model = await modelP;
+      models = await modelP;
     } catch (e) {
       setEngineState({ state: 'error', message: `美顏引擎下載失敗：${downloadHint(e)}（${errorText(e)}）`, canBasic: true });
       throw e;
     }
-    return buildTracker(eng, model);
+    return buildTracker(eng, models);
   })();
   engineP.then(
     () => {
@@ -318,10 +566,10 @@ export function restartTracker(): Promise<void> {
   if (cur.state !== 'ready' || (cur.bundle.basic && !trackerFailed)) return Promise.resolve();
   const old = cur.bundle.tracker;
   const eng = cur.bundle.engine;
-  const p = prefetchAssets().then((model) => {
+  const p = prefetchAssets().then((models) => {
     liveTracker = null;
     old?.close();
-    return buildTracker(eng, model);
+    return buildTracker(eng, models);
   });
   trackerP = p;
   const clear = () => {
@@ -439,6 +687,18 @@ export function ensureBodyTracker(onProgress?: (p: EngineAssetsProgress) => void
     svc.set({ body: { state: 'loading', step: 'model', progress: null } });
     const modelBuffer = await deps.loadPoseModel('full', progress);
     svc.set({ body: { state: 'loading', step: 'tracker', progress: 1 } });
+    // until a synchronous check finds no graph build in flight: a face build or the segmenter's creation may have
+    // started during the download, and a timed-out face build may still run (lateBuild; still running after the
+    // wait: 重試 later). A face rebuild released by the same lateBuild is in trackerP by then, so this waits for it
+    for (;;) {
+      const pending = [trackerP ?? engineP, segmenterCreateP].filter((q) => q !== null);
+      if (pending.length) {
+        for (const q of pending) await q.catch(() => undefined);
+        continue;
+      }
+      if (!lateBuild) break;
+      if (!(await lateBuildSettled())) throw new Error(TRACKER_BUSY);
+    }
     const t = await deps.createBodyTracker({
       modelBuffer,
       wasmBase: deps.wasmBase,
@@ -511,8 +771,13 @@ export function ensureFaceSegmenter(): Promise<PersonSegmenter | null> {
     // until a synchronous check finds no build in flight (one may have started during the download or the wait)
     for (;;) {
       const pending = [trackerP ?? engineP, bodyP].filter((q) => q !== null);
-      if (!pending.length) break;
-      for (const q of pending) await q.catch(() => undefined);
+      if (pending.length) {
+        for (const q of pending) await q.catch(() => undefined);
+        continue;
+      }
+      if (!lateBuild) break;
+      // a timed-out face-tracker build still running after the wait: the unlimited 瘦臉 for now, the next call retries
+      if (!(await lateBuildSettled())) return null;
     }
     // (no await between that check and this: a 美體 build starting from now on waits for segmenterCreateP)
     let create: Promise<PersonSegmenter> | null = null;

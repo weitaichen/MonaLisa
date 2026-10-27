@@ -3,14 +3,14 @@
 // Nothing is rewritten in bulk; the first write after an open writes v2.
 // The answer-time half (pairing, the p0 hand-over, A13) is firstAnswer; a 美體 detection's is bodyAnswer (before the
 // first face answer on preAnswerCache, S §7).
-import { addFaceScan, aspectFits, boxScore, buildCache, cachedFits, noFaceCache, poseBox, rematchByIoU, withBodies, withFaces } from '../detect/cache';
+import { addFaceScan, aspectFits, boxScore, buildCache, cachedFits, noFaceCache, plainScans, poseBox, rematchByIoU, shortScan, withBodies, withFaces, withMoreFaces } from '../detect/cache';
 import { adaptCached, EMPTY_PREPARED, type PreparedFaces } from '../detect/faces';
 import { primaryOf, seedPrimary } from '../detect/persons';
 import { cropConstrain, cropValid, isIdentity } from '../geometry/view';
-import type { BodyDetections, CachedBody, CameraLook, DetectionCache, EditState, FaceSeed, HistoryEntry, LiquifyFrame, PersonId, PersonParams, Rect } from '../types';
+import type { BodyDetections, CachedBody, DetectionCache, EditState, FaceSeed, HistoryEntry, LiquifyFrame, PersonId, PersonParams, Rect } from '../types';
 import { editFromLegacy, mergeLegacy } from './legacy';
 import { sanitizeStrokes } from './liquify';
-import { assignPersons, neutralPerson, P0, renamePersons, sanitizeEditState, sanitizeGeometry, withPersons } from './state';
+import { assignPersons, neutralPerson, neutralPhoto, P0, renamePersons, sanitizeEditState, sanitizeGeometry, withPersons } from './state';
 
 export interface V1Bodies {
   bodies: CachedBody[];
@@ -117,18 +117,13 @@ function openStored(entry: HistoryEntry, size: { width: number; height: number }
   return { edit, detect: null, rematch: null, v1Body: v1BodiesOf(entry, size), cacheDropped: false, frame };
 }
 
-/** An imported photo starts from the camera look for everyone (RM §3.7, §12 Q2). */
-export function importEdit(look: CameraLook): EditState {
-  return { v: 2, photo: look.photo, persons: { [P0]: look.person }, template: look.person, primaryInit: null };
-}
-
 /**
- * A camera shot (C2): the look goes to the primary (primaryInit, p0); the others start neutral when one face was
- * beautified (a point seed), or carry the look under 全部套用 / without a face.
+ * A new photo, imported or a camera shot handed over from 預覽, opens at 原圖 for everyone (RM §3.7, 2026-10-18): it
+ * renders as the original until the user touches something, whatever look the camera holds. A shot hands over only
+ * its face seed (EditorSource.faceSeed), which names the person the editor selects (C2).
  */
-export function cameraShotEdit(look: CameraLook, seed: FaceSeed): EditState {
-  const point = seed !== null && seed !== 'all';
-  return { v: 2, photo: look.photo, persons: { [P0]: look.person }, template: point ? neutralPerson() : look.person, primaryInit: look.person };
+export function importEdit(): EditState {
+  return { v: 2, photo: neutralPhoto(), persons: { [P0]: neutralPerson() }, template: neutralPerson(), primaryInit: null };
 }
 
 export interface AnswerInput {
@@ -144,6 +139,14 @@ export interface AnswerInput {
   faceSeed: FaceSeed;
   /** the up-frame the face detection ran in (step-3 spec §3.6); default 0 */
   quarter?: 0 | 1 | 2 | 3;
+  /**
+   * the photo detector that answered (StillSession.detector): 'short-range' (the full-range one was not there) marks the
+   * cache (DetectionCache.photoDetector, step-1 spec §6.5) and flags its up-frame's scan record. 'full-range' replaces
+   * that up-frame's record, flag and all, and clears the mark when no short-range record is left: it found faces (a cache
+   * with faces is never scanned again), or every other record is a full-range one. A full-range "nobody" beside a
+   * short-range record keeps it: the completion still owes that up-frame a look. null / absent keeps the cache's
+   */
+  detector?: 'full-range' | 'short-range' | null;
 }
 export interface Answer {
   detect: DetectionCache;
@@ -206,8 +209,9 @@ function staleFirst(e: EditState, rename: Readonly<Record<PersonId, PersonId | n
  * undo state).
  * - p0's look: on p0, or (a faceless cache with bodies) on the cache's primary body person, which p0 was handed to. Its
  *   body is b0 of A13: 0.3's body (v1Body) without a cache, else that person's body;
- * - primary: a camera seed's face (C2: a seed in no padded box → the score primary, and p0 is discarded); else the
- *   person owning b0 when it pairs with a face or no face exists (A13); else the best score;
+ * - primary: a camera seed's face (C2); else (no seed, or a seed in no padded box, C6) the person owning b0 when it
+ *   pairs with a face or no face exists (A13); else the best score. p0 is never discarded: it holds only the user's
+ *   own edits (a shot opens at 原圖), so a seed that matches nothing routes it as an import's;
  * - A13: when someone else is the primary, the look's face part is merged over the primary's own params (it keeps its
  *   own local 美體 values) and its nine local 美體 values over b0's person's (it keeps its face values); a person the
  *   rematch renamed holds a stored person's params and takes neither part (S §5.3 R2);
@@ -217,8 +221,10 @@ function staleFirst(e: EditState, rename: Readonly<Record<PersonId, PersonId | n
  * for them. A cache's own pending rematch is read from it (and dropped from the cache), first answer or not.
  */
 export function firstAnswer(a: AnswerInput): Answer {
-  // a later scan in another up-frame (a sideways photo, S §3.6) appends its quarter: the cache only grows
-  const scans: DetectionCache['faceScans'] = a.prepared ? addFaceScan(a.detect?.faceScans ?? [], a.quarter ?? 0) : [];
+  // a later scan in another up-frame (a sideways photo, S §3.6) appends its quarter: the cache only grows. A short-range
+  // answer flags its record; a full-range one for an up-frame the short-range detector answered replaces that record
+  // (the completion's, §6.5), moved last as the newest answer
+  const scans: DetectionCache['faceScans'] = a.prepared ? addFaceScan(a.detect?.faceScans ?? [], a.quarter ?? 0, a.detector) : [];
   // the faceless cache's primary body person that holds p0's look (p0 handed over when the bodies came first)
   const holder = a.detect && !a.detect.faces.length ? a.detect.persons.find((p) => p.id === a.detect!.primary && p.body !== null) : undefined;
   const lookBody = holder ? holder.body : !a.detect && a.v1Body?.bodies.length ? 'b0' : null;
@@ -230,10 +236,23 @@ export function firstAnswer(a: AnswerInput): Answer {
   } else cache = { ...noFaceCache(a.size.width, a.size.height, scans), bodies: a.v1Body ? [] : null };
   // this answer rematches them
   delete cache.rematch;
+  // which detector answered: a short-range stand-in is completed once full-range is there (§6.5). The mark stands for
+  // the short-range records (FaceScanRecord.detector), so a full-range answer lifts it only when none is left beside it,
+  // or when it found faces; otherwise the cache's mark is carried (withFaces rebuilds a cache without bodies from
+  // scratch). Without the mark no record keeps its flag: nothing is owed
+  const lifted = a.detector === 'full-range' && (cache.faces.length > 0 || !cache.faceScans.some(shortScan));
+  const marked = a.prepared ? a.detector === 'short-range' || (!lifted && a.detect?.photoDetector === 'short-range') : a.detect?.photoDetector === 'short-range';
+  if (marked) cache.photoDetector = 'short-range';
+  else {
+    delete cache.photoDetector;
+    cache.faceScans = plainScans(cache.faceScans);
+  }
   const ids = cache.persons.map((p) => p.id);
-  let discardP0 = false;
   /** a camera seed named the primary's face */
   let seeded = false;
+  // the seed only names the primary (C2). A shot opens at 原圖 (importEdit, 2026-10-18), so p0 holds nothing but the
+  // user's own edits made before this answer: a seed in no padded box (a face near the crop edge, boxed otherwise by
+  // the photo detector, or cropped away) leaves the primary and p0's hand-over to the rules an import follows (C6)
   if (a.faceSeed && a.faceSeed !== 'all') {
     const f = seedPrimary(a.faceSeed, cache.faces);
     const owner = f ? cache.persons.find((p) => p.face === f) : undefined;
@@ -241,10 +260,6 @@ export function firstAnswer(a: AnswerInput): Answer {
       cache = { ...cache, primary: owner.id };
       seeded = true;
     }
-    // no padded box holds the seed: with faces, the look was meant for a face the editor cannot match (C2). With no face
-    // at all, p0 is the all-skin person the camera drew too (globalSkin, live.ts liveFrame), so it keeps the look as in
-    // v0.3; unless the seed lies outside the frame (the beautified face was not in the saved shot)
-    else discardP0 = cache.faces.length > 0 || !inFrame(a.faceSeed);
   }
   // b0: the body p0's local 美體 values were drawn on. Its person is the primary when it pairs with a face, or when there
   // is no face at all (A13), unless a camera seed named the primary; when it found no face beside faces, the face score
@@ -264,24 +279,48 @@ export function firstAnswer(a: AnswerInput): Answer {
     // the look goes back on p0 first, so a 美體 cache's body person and a v1 body take the same hand-over below
     let out = knownOnly(holder ? handBack(e, holder.id) : e, a.detect, stale);
     if (rename) out = renamePersons(staleFirst(out, rename), rename);
-    const assigned = assignPersons(out, ids, primary, { discardP0 });
-    // b0's person is the primary: it takes the whole look (assignPersons), unless a seed discarded it
-    if (!b0 || (!split && !discardP0)) return assigned;
+    const assigned = assignPersons(out, ids, primary);
+    // b0's person is the primary: it takes the whole look (assignPersons)
+    if (!b0 || !split) return assigned;
     // the A13 hand-over: each part of the look merged over the person's own params from before this answer (a person
     // new to the edit: the template)
     const look = out.persons[P0] ?? out.primaryInit ?? out.template;
     const own = (id: PersonId) => out.persons[id] ?? out.template;
     const hand: Record<PersonId, PersonParams> = {};
-    if (split && !discardP0 && !restored.has(primary)) hand[primary] = withLocalBody(look, own(primary));
-    // a discarded look keeps the body edit made on b0: the 美體 values were the user's, on that body (C2 drops the face part)
+    if (!restored.has(primary)) hand[primary] = withLocalBody(look, own(primary));
     if (!restored.has(b0.id)) hand[b0.id] = withLocalBody(own(b0.id), look);
     return withPersons(assigned, Object.keys(hand), (_, id) => hand[id]);
   };
   return { detect: cache, rebase, dropped: stale !== null };
 }
 
-/** a seed inside the saved shot (C2 maps it unclamped: outside [0, 1]² the tracked face was cropped away) */
-const inFrame = (s: { x: number; y: number }) => s.x >= 0 && s.x <= 1 && s.y >= 0 && s.y <= 1;
+/**
+ * The completion of a short-range answer (DetectionCache.photoDetector, step-1 spec §6.5): what a full-range detection
+ * of the photo, run where completionOf (editorModel.ts) says, brings to the cache, and the mapping every stored edit goes
+ * through. It only adds:
+ * - a cache with faces keeps every face, person, link, the primary and the scan records (withMoreFaces); the found faces
+ *   that are new take free ids and join as persons from the template (assignPersons), so no stored edit is renamed and
+ *   nothing selected, owned or anchored moves;
+ * - a faceless cache takes the answer as a 基本模式 cache does (A15, firstAnswer): its faces, p0's look handed over as a
+ *   first answer hands it. The detection ran in `quarter` (upright, unless that record is a full-range one already), and
+ *   its answer replaces that up-frame's short-range record alone. Another up-frame's short-range "nobody" stays owed
+ *   (FaceScanRecord.detector): the scan asks it again, full-range, when the photo is shown in it (needsFaceScan), and the
+ *   mark goes with the last such record or with faces. A full-range record stays as it is: that up-frame is answered
+ *   (round 4: round 3 dropped every other record, so a turned up-frame scanned full-range was scanned once more, and its
+ *   「未偵測到臉部」 shown again).
+ * `added`: the face ids the cache did not hold.
+ */
+export function completeAnswer(cache: DetectionCache, found: PreparedFaces, size: { width: number; height: number }, quarter: 0 | 1 | 2 | 3 = 0): Answer & { added: readonly string[] } {
+  if (cache.faces.length) {
+    const more = withMoreFaces(cache, found);
+    // the mark goes (withMoreFaces), and with it every record's flag: nothing is owed now
+    const detect = { ...more.cache, faceScans: plainScans(more.cache.faceScans) };
+    const ids = detect.persons.map((p) => p.id);
+    return { detect, rebase: (e) => assignPersons(e, ids, detect.primary), dropped: false, added: more.added };
+  }
+  const a = firstAnswer({ detect: cache, prepared: found, size, v1Body: null, rematch: null, faceSeed: null, quarter, detector: 'full-range' });
+  return { ...a, added: a.detect.faces.map((f) => f.id) };
+}
 
 /**
  * The cache a 美體 detection merges into before the photo's first face answer (S §7: a tracker that cannot answer yet;

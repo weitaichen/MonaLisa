@@ -1,6 +1,7 @@
 // createEngine context-loss bookkeeping of filter LUT loads, with the GL layer and the pipeline faked.
 import { readFileSync } from 'node:fs';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { FACE_TABLE_CARRIER } from '../config/limits';
 import { legacyFrame } from '../edit/frame';
 import { defaultPhoto, neutralPerson } from '../edit/state';
 import { flipView, glMat3, IDENTITY_GEOMETRY, IDENTITY_MAT3, oToV, rotateLeft, vToO } from '../geometry/view';
@@ -34,12 +35,20 @@ vi.mock('./passes/makeupProc', async (importOriginal) => {
   return { ...actual, buildMakeupGeometry: vi.fn(actual.buildMakeupGeometry) };
 });
 
+// the dev-build probes draw on the context: stubbed (the GL limits read the fake context)
+vi.mock('./glProbe', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./glProbe')>()),
+  probeFaceTable: vi.fn(() => ({ texture: true, ubo: true, float32: null })),
+  probeR16FArray: vi.fn(() => true),
+}));
+
 vi.mock('./pipeline', () => ({
   createPipeline: vi.fn(() => ({
     preloadMakeup: async () => undefined,
     run: vi.fn(() => ({ passes: [], output: null })),
     drawOverlay: vi.fn(),
     procMakeupFailed: vi.fn(() => false),
+    faceTableCarrier: vi.fn((): 'texture' | 'ubo' | null => null),
     drawSource: vi.fn(),
     releaseBuffers: vi.fn(),
     releaseFields: vi.fn(),
@@ -123,6 +132,35 @@ describe('createEngine: filter loads across a context loss', () => {
     const params = { ...defaultParams(), filterId: 'y' };
     engine.render({ source: {} as TexImageSource, width: 640, height: 480, ...legacyFrame(params, null, 0) });
     expect(filterCalls('y')).toBe(1);
+  });
+});
+
+describe('createEngine: window.__meiyan.gl.FACE_TABLE_UBO (S §6.4)', () => {
+  it('is the carrier the pipeline’s reshape pass was built with, once a frame built it, not the renderer selector’s pick', async () => {
+    vi.stubGlobal('window', {});
+    try {
+      const { canvas, gl } = fakeCanvas();
+      // no debug-renderer extension and no renderer string: the selector picks FACE_TABLE_CARRIER (the UBO)
+      Object.assign(gl, { getExtension: () => null });
+      const engine = createEngine(canvas);
+      await engine.ready;
+      expect(FACE_TABLE_CARRIER).toBe('ubo');
+      expect(vi.mocked(createPipeline)).toHaveBeenLastCalledWith(gl, { faceTable: 'ubo' });
+      const pipe = vi.mocked(createPipeline).mock.results.at(-1)!.value as { faceTableCarrier: Mock<() => 'texture' | 'ubo' | null> };
+      const info = () => (window as Window).__meiyan?.gl;
+      expect(info()?.MAX_TEXTURE_SIZE).toBe(4096);
+      const frame = { source: {} as TexImageSource, width: 640, height: 480, ...legacyFrame(defaultParams(), null, 0) };
+      // no frame has built the reshape pass yet: nothing to report
+      engine.render(frame);
+      expect(info()?.FACE_TABLE_UBO).toBeUndefined();
+      // what the pipeline built is what the flag says, here the texture whatever the selector picked (a wiring that
+      // dropped the pick would show on the device)
+      pipe.faceTableCarrier.mockReturnValue('texture');
+      engine.render(frame);
+      expect(info()?.FACE_TABLE_UBO).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

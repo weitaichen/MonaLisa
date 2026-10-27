@@ -15,6 +15,7 @@ export function debugState(): DebugState | null {
     persons: 0,
     selected: null,
     detectCalls: 0,
+    detectRetries: 0,
     boxes: [],
     screen: '',
     cameraState: 'idle',

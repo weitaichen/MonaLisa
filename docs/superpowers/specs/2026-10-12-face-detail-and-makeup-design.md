@@ -307,14 +307,14 @@ export interface Shot { /* … */ mirrored: boolean } // Camera.tsx:205 already 
   - `get(id, side?: 'L' | 'R'): {value, mixed}` and `set(id, v, side?)`. Without `side`, for a non-split item, or while that person's `right` is null, both read and write `values`; `set` never creates `right`. Under 全部, `mixed` compares the requested side across persons.
   - `split(): boolean` (the reference person's `right ≠ null`) and `setSplit(on: boolean, activeSide)`: on copies the six values into `right`; off writes the active side's value to both sides, then `right = null`.
   - Every one of these is one `EditState` change, so it is one undo step.
-- **Camera → editor hand-over.** The camera detects on the unmirrored frame. A shot saved mirrored (`Shot.mirrored`) becomes an O whose GPUPixel-left half is the subject's other cheek. `mirrorSides(person)` swaps `values[id]` and `right[id]` for the six split ids. It is applied to `primaryInit` and `template` when `shot.mirrored` (RM §3.7). Unit-tested.
+- **Camera → editor hand-over.** The camera detects on the unmirrored frame. A shot saved mirrored (`Shot.mirrored`) becomes an O whose GPUPixel-left half is the subject's other cheek. `mirrorSides(person)` swaps `values[id]` and `right[id]` for the six split ids. It is applied to `primaryInit` and `template` when `shot.mirrored` (RM §3.7). Unit-tested. **Removed 2026-10-18:** the shot opens at 原圖 (RM §3.7), so no split value is handed over and nothing needs swapping; `Shot.mirrored`, `mirrorSides` and `handOverLook` are gone.
 - **Engine.** `reshapeUniforms(person, weight)` returns `dL = values[id]` and `dR = right?.[id] ?? values[id]` for each split item. Non-split items are unchanged.
 
 ### 3.5 Presets, 重置, sanitize, legacy
 
 - **Presets** (`params.ts:98-143`, ported to person parts in step 1): the person part of every preset sets the 14 new values to neutral, `right = null`, and `shades.brow`, `.eyeshadow`, `.liner` and `.lens` to null. Under Q7's alternative ("leave them"), the person part would omit these fields. That is the only code that changes.
 - **`matchesPreset`** (`params.ts:307-311`, ported) also requires `right === null` and neutral new values.
-- **重置** sets every person to `naturalPerson()` (RM §3.4), which is neutral for every new item.
+- **重置** sets every person to `neutralPerson()` (RM §3.4; `naturalPerson()` until 2026-10-18), which is neutral for every new item.
 - **`sanitizeEditState`** (RM §3.4), additions:
   - missing new ids → neutral; missing new shade keys → null; a missing `right` → null (entries from step-1 to step-4 builds have none);
   - a shade id not in `SHADES[part]` → null;
@@ -339,12 +339,12 @@ export interface Shot { /* … */ mirrored: boolean } // Camera.tsx:205 already 
 | `src/engine/gl/gl.ts:140-149` | `loadImageTexture(gl, url, {mipmap?: boolean, r8?: boolean})` for the lashes texture (today it takes no options) |
 | `src/engine/passes/overlay.ts` | With 顯示臉部特徵點 on, also draws the lid stations, the brow-gap ends and the iris circles (debug) |
 | `scripts/gen-makeup.mjs:13-18` | `lashes()` generator → `public/makeup/own/lashes.png` (§4.10) |
-| `src/edit/lens.ts`, `src/edit/state.ts`, `src/edit/legacy.ts` (step 1) | Side-aware `get/set`, `split`, `setSplit`, `mirrorSides`, `screenSwap`; new neutral values |
+| `src/edit/lens.ts`, `src/edit/state.ts`, `src/edit/legacy.ts` (step 1) | Side-aware `get/set`, `split`, `setSplit`, `mirrorSides` (until 2026-10-18), `screenSwap`; new neutral values |
 | `src/ui/panelModel.ts:22-55, 241-247, 301-561` | `MAKEUP_PARTS` × 10, `makeupView`, `side`, level-1 items, 卸妝, `makeupOn`, liner effective shade, split item, dividers, badges, side binding |
 | `src/ui/components/BeautyPanel.tsx:43-120` | Two-level makeup strip (leading part tile, part list), dividers, badges, the seen-dot |
 | `src/ui/components/Slider.tsx:48-53, 145-166` | `binding.sides` → segmented 左｜右 plus the other-side caption |
 | `src/ui/icons.tsx` | 17 new icons |
-| `src/ui/screens/Editor.tsx:789-797`, `Camera.tsx:205`, `Review.tsx:84-92`, `src/ui/state.ts:17-25` | Strip notes (§2.4); `Shot.mirrored`; `mirrorSides` at hand-over |
+| `src/ui/screens/Editor.tsx:789-797`, `Camera.tsx:205`, `Review.tsx:84-92`, `src/ui/state.ts:17-25` | Strip notes (§2.4); `Shot.mirrored` and `mirrorSides` at hand-over (until 2026-10-18: the shot opens at 原圖) |
 | `LICENSES/NOTICE.txt:48` | "Original to this project" gains the procedural makeup and `public/makeup/own/lashes.png` |
 | `src/bench/main.ts` | Step-5 rows (§6.2) |
 
@@ -543,7 +543,7 @@ The lens's (q − c)/r and the ellipses' (ξ, η) are affine in the position, so
 - It emits nothing for an item at 0 after the gates, so an item with nothing to draw costs nothing.
 - Eye items are ribbons along the lid stations (§4.7), and the lens is the aperture strip between the lids. Brows and the 修容／高光 ribbons are strips along their landmarks, and ellipses are 4-vertex quads.
 - Each layer is **one `TRIANGLE_STRIP` over every face**. Consecutive pieces are joined by repeating the last vertex of one and the first vertex of the next (one more repeat when needed to keep the strip's parity). Culling is off, as for the GPUPixel mesh (`makeup.ts:220-221`).
-- With all ten parts on, a face needs about 680 vertices (joins included); the cap is `MAX_PMAKEUP_VERTS_PER_FACE = 768`. The buffer holds `MAX_RENDER_FACES × 768 × 44 B` = 203 KB, and only the used range is uploaded with `bufferSubData` each frame.
+- With all ten parts on, a face needs about 680 vertices (joins included); the cap is `MAX_PMAKEUP_VERTS_PER_FACE = 768`. The buffer holds `MAX_RENDER_FACES × 768 × 44 B` = 338 KB (10 faces since step-1 spec §6.7; 270 KB at 8, 203 KB at 6), and only the used range is uploaded with `bufferSubData` each frame.
 
 ### 4.7 Eye frames, lid stations, EAR, iris (`eyeFrame.ts`)
 
@@ -649,9 +649,9 @@ How occlusion is handled:
 
 | Path | Budget |
 |---|---|
-| Reshape at 2048, 6 faces, all 15 shape items non-neutral and split | ≤ 8 ms (the RM §6.2 rule: above it, the editor cap drops to 4 faces) |
+| Reshape at 2048, 10 faces (the cap since step-1 spec §6.7; 8 from §6.6, 6 before), all 15 shape items non-neutral and split | ≤ 8 ms (the RM §6.2 rule: above it, the editor cap drops to 8, then 6, then 4 faces) |
 | Reshape live at 1080, 3 faces, all items | ≤ 3 ms |
-| P1 makeup at 2048, 6 faces, all 10 parts | ≤ 3 ms GPU; ≤ 9 draw calls plus N GPUPixel meshes |
+| P1 makeup at 2048, 10 faces, all 10 parts | ≤ 3 ms GPU; ≤ 9 draw calls plus N GPUPixel meshes |
 | P1 makeup live at 1080, 3 faces, all parts | ≤ 1.5 ms |
 | `buildMakeupGeometry` + `eyeFrames` (CPU) | ≤ 0.2 ms per face |
 | PMAKEUP program compile (lazy, first frame with a procedural item) | ≤ 40 ms once |
@@ -660,8 +660,8 @@ How occlusion is handled:
 
 ### 6.2 Bench rows (`src/bench/main.ts`)
 
-1. A reshape microbench with the step-5 warps at N = 1, 3, 6, at 1080 and 2048, every item at ±max: the median of 20 frames with a `gl.finish()` fence.
-2. P1 with all ten parts at N = 1, 3, 6.
+1. A reshape microbench with the step-5 warps at N = 1, 3, 6 and 10 (the cap, step-1 spec §6.7), at 1080 and 2048, every item at ±max: the median of 20 frames with a `gl.finish()` fence.
+2. P1 with all ten parts at N = 1, 3, 6 and 10.
 3. PMAKEUP compile time.
 4. Live fps in the `chromium-group` Playwright project (`group.y4m`, RM §8.4) with all makeup on.
 
@@ -691,7 +691,7 @@ The iPhone runs use `/bench.html` and need a preview deploy, which happens only 
 | Upside-down or rotated photo | Sides and axes come from landmarks (§3.4, §4.1), and the labels come from the V-space eye positions, so everything stays consistent. |
 | 翻轉 / 旋轉 after split edits | Stored values are unchanged, and the labels swap to match the screen. |
 | Camera flip (front ↔ back) | The look is subject-sided, so the labels re-map on the next frame. The physical cheek stays the same for a subject facing the camera. |
-| Mirrored save → 編輯 | `mirrorSides` keeps the same cheek (§3.4). |
+| Mirrored save → 編輯 | The shot opens at 原圖 (2026-10-18), so no split value crosses over; until then `mirrorSides` kept the same cheek (§3.4). |
 | Overlapping faces | Warps: the RM influence cap. Lip and blush meshes: table order, last face wins. Procedural items blend, so both faces' items show where they overlap. |
 | Feature at the image border | Geometry is clipped by the viewport, and reshape samples clamp to the edge, as today. |
 | Open mouth + 嘴高 | The ellipse moves lips and teeth together. The subnasale stays. |
@@ -720,7 +720,7 @@ The iPhone runs use `/bench.html` and need a preview deploy, which happens only 
   - `setSplit` on copies and off keeps the active side;
   - side writes with `screenSwap` false and true;
   - 全部 + split;
-  - `mirrorSides` swaps exactly the six ids and is an involution;
+  - `mirrorSides` swaps exactly the six ids and is an involution (removed with it, 2026-10-18);
   - `screenLeftIsGpLeft` for upright, mirrored, flipH and quarter-turned faces;
   - under 全部 the label is resolved per face.
 - **Adapter:** `iris` and `lids` from `landmarks_sample_face.json` and its `mirrored` landmarks. The iris centres equal p104 and p105, and the radius / eye width is in [0.15, 0.3]. The lid corners equal p52 / p55 and p61 / p58, and the upper-mid and lower-mid points (MP 159 / 145, 386 / 374) equal p72 / p73 and p75 / p76.

@@ -271,6 +271,11 @@ export interface Pipeline {
   preloadMakeup(): Promise<void>;
   /** step 5: PMAKEUP failed to compile on this context (its eight parts are off) */
   procMakeupFailed(): boolean;
+  /**
+   * the face-table carrier of the reshape pass this pipeline built (ReshapePass.carrier, S §4.4); null until a frame
+   * with a reshape built it (the pass is created on first use)
+   */
+  faceTableCarrier(): 'texture' | 'ubo' | null;
   /** the 調節 program failed to compile on this context */
   readonly adjustFailed: boolean;
   /** every FBO to 1 × 1 (after a tiled export, S §4.4); the next frame re-allocates at its own size */
@@ -378,7 +383,8 @@ export function pickFull(prefer: 'A' | 'B', input: 'A' | 'B' | null): 'A' | 'B' 
   return input === prefer ? (prefer === 'A' ? 'B' : 'A') : prefer;
 }
 
-export function createPipeline(gl: GL): Pipeline {
+/** `faceTable`: the reshape pass's face-table carrier (picked per renderer, faceTableCarrier.ts); default FACE_TABLE_CARRIER */
+export function createPipeline(gl: GL, opts: { faceTable?: 'texture' | 'ubo' } = {}): Pipeline {
   const meanProg = createProgram(gl, MEAN_VS, MEAN_FS, 'mean');
   const comp = createCompositePrograms(gl);
   const presentProg = createProgram(gl, PRESENT_VS, PRESENT_FS, 'present');
@@ -624,7 +630,7 @@ export function createPipeline(gl: GL): Pipeline {
         passes.push('makeup', ...layers.map((l) => `mk.${l}`));
       }
       if (plan.reshape) {
-        reshape ??= createReshapePass(gl, { carrier: FACE_TABLE_CARRIER });
+        reshape ??= createReshapePass(gl, { carrier: opts.faceTable ?? FACE_TABLE_CARRIER });
         // the working bitmap's aspect (step 3, S §4.1): at identity without a window it is job.size's, as before
         const aspect = job.oAspect;
         const view: ReshapeView = { geo: job.geo, tile: job.tile, win: job.win };
@@ -720,6 +726,10 @@ export function createPipeline(gl: GL): Pipeline {
 
     procMakeupFailed() {
       return makeup?.procStatus() === 'failed';
+    },
+
+    faceTableCarrier() {
+      return reshape?.carrier ?? null;
     },
 
     releaseBuffers() {

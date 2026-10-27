@@ -8,7 +8,7 @@
 //     (the editor falls back to today's unlimited warp: also the "never break the editor" path) and once normally (the
 //     selfie segmenter loads on demand, once, and only after the first contour drag): the wall beside the cheek moves less with the limit, the far wall not
 //     at all, the eyes / nose / mouth are identical, and at neutral contour sliders both renders are identical.
-//  3. persisted with the edit: the 自然 default alone (import, autosave, reopen) never requests the segmenter; a 瘦臉
+//  3. persisted with the edit: the 自然 preset alone (import, tap, autosave, reopen) never requests the segmenter; a 瘦臉
 //     drag (no 美體) autosaves the limit with its mask, and a reopen from 最近編輯 on a fresh page exports the same
 //     limited photo with no segmenter model / chunk request; a contour edit flushed by ✕ while the WebGL context is lost
 //     (no thumbnail) still records the request.
@@ -229,13 +229,15 @@ async function editorRun(page: Page, tag: string, blocked: boolean): Promise<Run
   await expect(page.locator('.toast')).toHaveCount(0, { timeout: 10_000 });
   const tab = (name: string) => page.getByRole('tab', { name, exact: true });
   const option = (name: string) => page.getByRole('option', { name, exact: true });
-  // 自然 (the default) already draws 瘦臉 / V臉, but only the user's own contour slider edit may load the segmenter
-  // (K2: no model download and no warp changing by itself after a mere import)
+  // 自然 already draws 瘦臉 / V臉, but only the user's own contour slider edit may load the segmenter (K2: no model
+  // download and no warp changing by itself after a mere import or a preset; a new photo opens at 原圖)
+  await tab('一鍵').click();
+  await option('自然').click();
+  await expect(option('自然')).toHaveAttribute('aria-selected', 'true');
   await page.waitForTimeout(2500);
   expect(segmenterRequests, `${tag}: no segmenter request before a contour slider is touched`).toBe(0);
 
   const frame = page.locator('.editor-stage .frame');
-  await tab('一鍵').click();
   await option('原圖').click();
   const neutral = await settled(frame);
   await tab('美型').click();
@@ -395,15 +397,21 @@ function countSegmenter(page: Page): { model: number; chunk: number } {
   return n;
 }
 
-test('face protect: the 自然 default alone, autosaved and reopened, never requests the segmenter', async ({ page }) => {
+test('face protect: the 自然 preset alone, autosaved and reopened, never requests the segmenter', async ({ page }) => {
   test.setTimeout(240_000);
   const seg = countSegmenter(page);
   await importWallPortrait(page);
-  // the default (瘦臉 / V臉 on) autosaves unlimited: no flag, no mask
+  // a new photo opens at 原圖 (2026-10-18): 自然 (瘦臉 / V臉 on) is a tap, and it autosaves unlimited: no flag, no mask
+  await page.getByRole('tab', { name: '一鍵', exact: true }).click();
+  await page.getByRole('option', { name: '自然', exact: true }).click();
+  await expect(page.getByRole('option', { name: '自然', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect.poll(() => entries(page), { timeout: 30_000 }).toEqual([{ faceProtect: false }]);
   await page.waitForTimeout(2500);
-  expect(seg, 'no segmenter request on import').toEqual({ model: 0, chunk: 0 });
+  expect(seg, 'no segmenter request on import or on the preset').toEqual({ model: 0, chunk: 0 });
   await closeAndReopen(page);
+  // the reopened entry keeps its saved edit
+  await page.getByRole('tab', { name: '一鍵', exact: true }).click();
+  await expect(page.getByRole('option', { name: '自然', exact: true })).toHaveAttribute('aria-selected', 'true');
   await page.waitForTimeout(2500);
   await settled(page.locator('.editor-stage .frame'));
   expect(await entries(page)).toEqual([{ faceProtect: false }]);
@@ -507,7 +515,7 @@ test('face protect: the limit landing while a slow 儲存 waits is no edit: the 
 test('face protect: a contour edit flushed while the WebGL context is lost keeps the request (M2)', async ({ page }) => {
   test.setTimeout(240_000);
   await importWallPortrait(page);
-  // the import autosave: the 自然 default, never requested
+  // the import autosave: 原圖, never requested
   await expect.poll(() => entries(page), { timeout: 30_000 }).toEqual([{ faceProtect: false }]);
   const slim = page.getByRole('option', { name: '瘦臉', exact: true });
   await page.getByRole('tab', { name: '美型', exact: true }).click();

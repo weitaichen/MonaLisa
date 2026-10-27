@@ -2,8 +2,8 @@
 // implementations; the visual harness (tests/harness/t7) swaps in fakes so screens can be verified
 // before / independently of the engine, tracker and camera modules.
 import { autoTierSession, startLiveLoop } from '../app/live';
-import { createStillSession } from '../app/still';
-import { ENGINE_PATHS, loadEngineAssets, loadPoseModel, loadSegmenterModel } from '../engine/assets';
+import { createStillSession, detectStill } from '../app/still';
+import { ENGINE_PATHS, loadEngineAssets, loadPhotoDetector, loadPoseModel, loadSegmenterModel } from '../engine/assets';
 import { createEngine, isWebGL2Supported } from '../engine/index';
 import { createCamera } from '../media/camera';
 import { encodeJpeg, encodeOutput, encodePng, saveFile, toJpegBlob } from '../media/exporter';
@@ -44,6 +44,7 @@ export const deps = {
   createEngine,
   isWebGL2Supported,
   loadEngineAssets,
+  loadPhotoDetector,
   wasmBase: ENGINE_PATHS.wasmBase as string,
   createTracker,
   loadPoseModel,
@@ -77,6 +78,7 @@ export const deps = {
   startLiveLoop,
   autoTierSession,
   createStillSession,
+  detectStill,
 };
 
 export type Deps = typeof deps;

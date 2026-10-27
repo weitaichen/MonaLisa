@@ -3,7 +3,7 @@
 import type { SessionFace } from '../app/still';
 import type { BodyFieldInput, BodyPersonInput } from '../body/field';
 import { MAX_EDIT_FACES } from '../config/limits';
-import { bodyBox, scanned0 } from '../detect/cache';
+import { bodyBox, scanned0, shortScan } from '../detect/cache';
 import type { HitCtx } from '../detect/persons';
 import type { FrameFaceIn } from '../edit/frame';
 import { personOf } from '../edit/state';
@@ -55,33 +55,127 @@ export function detectSession<S extends { faces: readonly unknown[]; faceKnown: 
  * Where the session's faces come from (S §3.3 item 3). A fitting cache with an upright answer (the photo's own, or one
  * found before an engine recovery took the session) is used as is, also without a tracker (基本模式); anything else
  * asks the tracker. `asks` is detectSession's hasTracker: only a session that asks the tracker can be unsure, so cached
- * faces, none included, stay a definite answer whatever the tracker's health.
+ * faces, none included, stay a definite answer whatever the tracker's health. A cache the short-range detector answered
+ * (DetectionCache.photoDetector, step-1 spec §6.5) is used as is too, faceless or not: its completion is a detection of
+ * its own, after the session is bound (completionOf).
  */
 export function sessionPlan(cache: DetectionCache | null, hasTracker: boolean): { useCache: boolean; asks: boolean } {
   const useCache = cache !== null && (!hasTracker || scanned0(cache));
   return { useCache, asks: hasTracker && !useCache };
 }
 
+/**
+ * A session without a tracker that holds back the photo's first answer (roadmap §15): a dropped cache's persons (the
+ * open's rematch) meet a 基本模式 answer with no face, which drops them for good (migrate.ts knownOnly). While a
+ * timed-out tracker build may still bring a tracker (services.ts trackerComing), the session is drawn without an answer,
+ * and the bind that tracker brings answers instead, renaming them. A session bound with no tracker coming answers as
+ * 基本模式 does. One that held its answer keeps holding it if the build fails after all: the persons wait for the next
+ * open's tracker, and 美體 does not wait for the answer (bodyWaitsForFaces).
+ */
+export function holdsFirstAnswer(s: { hasTracker: boolean; useCache: boolean; answered: boolean; rematch: boolean; trackerComing: boolean }): boolean {
+  return !s.hasTracker && !s.useCache && !s.answered && s.rematch && s.trackerComing;
+}
+
+/**
+ * The 美體 detection waits for the photo's first face answer (S §7): the bodies join its persons. It does not wait for an
+ * answer that may never come: a tracker that could not answer (unsure), or a bind that holds the answer for a tracker
+ * still coming (holdsFirstAnswer: the build may fail, or never land). The bodies then build the photo's cache
+ * (preAnswerCache), which carries a dropped cache's rematch to the face answer.
+ */
+export function bodyWaitsForFaces(s: { cached: boolean; unsure: boolean; held: boolean }): boolean {
+  return !s.cached && !s.unsure && !s.held;
+}
+
+/**
+ * The completion of a short-range answer (step-1 spec §6.5): a cache whose answer the short-range detector gave while the
+ * full-range one was missing (DetectionCache.photoDetector) gains, once that detector is in, what one full-range
+ * detection finds (completeAnswer). It runs where the answer it completes was found: a cache with faces in its last face
+ * scan's up-frame (a cache with faces is never scanned again, so that is where its faces were found), a faceless one
+ * where a short-range record is owed its full-range look (FaceScanRecord.detector): upright when that one is (or no
+ * record says), else the last one owed; the scan asks any other owed up-frame the photo is shown in (needsFaceScan).
+ * null: nothing to complete (no mark, or no upright answer yet: the session's own detection comes first).
+ */
+export function completionOf(cache: DetectionCache | null): { quarter: Quarter } | null {
+  if (!cache || cache.photoDetector !== 'short-range' || !scanned0(cache)) return null;
+  if (cache.faces.length) return { quarter: cache.faceScans[cache.faceScans.length - 1]?.quarter ?? 0 };
+  const owed = cache.faceScans.filter(shortScan);
+  return { quarter: !owed.length || owed.some((s) => s.quarter === 0) ? 0 : owed[owed.length - 1].quarter };
+}
+
+/**
+ * The completion is owed in this open: there is one (completionOf), a tracker to run it, the full-range detector is in,
+ * and it has not run in this open (it runs once per open, whatever it found; a further open tries again while the mark
+ * stays). A face scan waits for it (it rewrites a faceless cache's scan records), and it waits for completionHeld.
+ */
+export function completionDue(s: { cache: DetectionCache | null; tried: boolean; hasTracker: boolean; detectorIn: boolean }): { quarter: Quarter } | null {
+  if (s.tried || !s.hasTracker || !s.detectorIn) return null;
+  return completionOf(s.cache);
+}
+
+/**
+ * What holds a due completion back for now (it runs once nothing does, in the same open): no session bound to the
+ * engine, or one whose answer is not definite (the re-detect comes first); a tracker that is not 'ok' (a probe could not
+ * answer, and would spend the open's one try: the cached answer stays meanwhile, a definite one, so no tool is gated); a
+ * face scan pending; or what the synchronous detection would freeze (裁切, a stroke or a slider drag, an export: a
+ * tiled one or a working-size 儲存 in 準備中, whose file a rebase meanwhile would drop).
+ */
+export function completionHeld(s: { bound: boolean; unsure: boolean; health: TrackerState; scanPending: boolean; busy: boolean }): boolean {
+  return !s.bound || s.unsure || s.health !== 'ok' || s.scanPending || s.busy;
+}
+
+/**
+ * What a completion merged into a cache with faces (completeAnswer, step-1 spec §6.5) shows beside its new persons.
+ * `redraws`: the saved thumbnail is owed, because the render changed: a new face, or a new obstacle, which bounds the
+ * cap of a face's warp (§4.1) and which every frame reads from the cache, so a completion that adds nobody can redraw
+ * too (a face full-range finds past the cap or below MIN_FACE_FRAC beside a cached one). `notices`: with new faces, what an
+ * answer says (answerNotices, the first group photo's hint included: `hint` takes it); without, only what the cache now
+ * says and did not before, never the hint (the eleventh face it found: 「偵測到超過 10 張臉」; round 5: round 4 showed
+ * nothing and owed no thumbnail unless a face was added)
+ */
+export function completionShows(before: DetectionCache, after: DetectionCache, added: readonly string[], hint: () => boolean): { redraws: boolean; notices: string[] } {
+  const n = after.persons.length;
+  if (added.length) return { redraws: true, notices: answerNotices(after, n, n >= 2 && hint()) };
+  const had = answerNotices(before, before.persons.length, false);
+  return {
+    redraws: stableKey(before.obstacles) !== stableKey(after.obstacles),
+    notices: answerNotices(after, n, false).filter((t) => !had.includes(t)),
+  };
+}
+
 /** the up-frame scan record lives with the cache (src/detect/cache.ts), so firstAnswer can write it too */
 export { addFaceScan } from '../detect/cache';
 
-type FaceScan = { quarter: number; flipH: boolean };
+type FaceScan = { quarter: number; flipH: boolean; detector?: 'short-range' };
 
 /**
- * one face scan in the current up-frame (S §3.6, D12): normal mode, a tracker, no face known, the up-frame unscanned.
- * Only after the upright answer: a cache without it (a 基本模式 cache, or one 美體 wrote while the tracker could not
- * answer, S §7) waits for the session's own detection, which asks upright first (sessionPlan; RedetectBudget retries it)
+ * one face scan in the current up-frame (S §3.6, D12): normal mode, a tracker, no face known, the up-frame unscanned,
+ * or answered by the short-range detector while full-range is in now (`fullRange`, step-1 spec §6.5: the completion
+ * owes that record its full-range look). Only after the upright answer: a cache without it (a 基本模式 cache, or one 美體
+ * wrote while the tracker could not answer, S §7) waits for the session's own detection, which asks upright first
+ * (sessionPlan; RedetectBudget retries it). (The editor also holds a scan while a completion is due, completionDue: the
+ * completion asks upright first, which may find the faces, and leaves the scan whatever up-frame is still owed.)
  */
 export function needsFaceScan(s: {
   cache: { faces: readonly unknown[]; faceScans: readonly FaceScan[] } | null;
   geometry: Geometry;
   mode: 'crop' | 'normal';
   hasTracker: boolean;
+  fullRange?: boolean;
 }): boolean {
   if (s.mode !== 'normal' || !s.hasTracker || !s.cache || s.cache.faces.length > 0) return false;
   if (!s.cache.faceScans.some((x) => x.quarter === 0)) return false;
   const q = upQuarter(s.geometry);
-  return !s.cache.faceScans.some((x) => x.quarter === q);
+  const rec = s.cache.faceScans.find((x) => x.quarter === q);
+  return !rec || (!!s.fullRange && rec.detector === 'short-range');
+}
+
+/**
+ * The face scan about to run re-asks an up-frame that already has an answer (a short-range "nobody" the completion owes
+ * its full-range look, needsFaceScan): its 「未偵測到臉部」 was shown when that answer was fresh, so a "nobody" now says
+ * nothing (step-1 spec §6.5, S §8.4; round 4: round 3 showed it again, on a reopen too)
+ */
+export function rescanOf(cache: { faceScans: readonly FaceScan[] } | null, quarter: Quarter): boolean {
+  return !!cache?.faceScans.some((x) => x.quarter === quarter);
 }
 
 /** nobody was found, and this up-frame was not tried yet (absent bodyScans = [0], S D5) */

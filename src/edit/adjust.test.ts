@@ -118,7 +118,7 @@ describe('the lens routes 調節 and 質感 to the photo (C §3.3)', () => {
     const l = lensFor(styled, { kind: 'person', id: 'p0' }, [{ id: 'p0', face: true, body: false }], 'p0');
     const link = styled.photo.presetLink;
     expect(link).not.toBeNull(); // defaultPhoto() is linked to 自然 100
-    // 重置 (RM §3.4): defaultPhoto() — no look, the 12 values neutral
+    // 重置 (RM §3.4): neutralPhoto() — no look, the 12 values neutral
     const reset = l.reset();
     expect(reset.photo.look).toBeNull();
     for (const id of ADJUST) expect(reset.photo.values[id], id).toBe(neutral(id));

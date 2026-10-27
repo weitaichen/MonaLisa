@@ -4,7 +4,7 @@ import type { BeautyParams, EditState, PersonParams } from '../types';
 import { editFromLegacy, legacyProjection, splitLegacy } from './legacy';
 import { LIVE_PERSONS, lensFor, NO_BODY_NOTE, NO_FACE_NOTE, P0_INFO, type PersonInfo } from './lens';
 import { splitOn } from './sides';
-import { assignPersons, cameraEdit, defaultPhoto, emptyShades, LIVE, lookOf, naturalPerson, neutralPerson, personFromPreset } from './state';
+import { assignPersons, cameraEdit, defaultPhoto, emptyShades, LIVE, lookOf, naturalPerson, neutralPerson, neutralPhoto, personFromPreset } from './state';
 import { TONE_COPY } from './toneCopy';
 
 const three: PersonInfo[] = [
@@ -126,10 +126,12 @@ describe('⊘ and 重置 (RM §2.1 notes)', () => {
     expect(lensFor(e, one('f0'), three, 'f0').groupNeutral('body')).toBe(true);
     expect(lensFor(e, one('b0'), three, 'f0').groupNeutral('body')).toBe(false);
   });
-  it('重置 is every person 自然 and the 自然 photo part', () => {
-    const e = lensFor(group(), all, three, 'f0').reset();
-    expect(e.persons.f1).toEqual(naturalPerson());
-    expect(e.photo).toEqual(defaultPhoto());
+  it('重置 is every person 原圖 and the 原圖 photo part (what a new photo opens with), whatever is selected', () => {
+    for (const sel of [all, one('f1')]) {
+      const e = lensFor(group(), sel, three, 'f0').reset();
+      for (const id of ['f0', 'f1', 'b0']) expect(e.persons[id], id).toEqual(neutralPerson());
+      expect(e.photo).toEqual(neutralPhoto());
+    }
   });
 });
 
@@ -348,7 +350,8 @@ describe('step-5 review: effective shades and template persons', () => {
   });
 
   it('a listed person missing from edit.persons reads and writes its chosen side from the template', () => {
-    // the template carries a split look (a camera hand-over under 全部套用 copies look.person, right included)
+    // the template carries a split look: the camera's own edit (cameraEdit: template = look.person, right included), or
+    // a 0.4.0 entry whose shot copied the camera look into it (since 2026-10-18 a shot opens at 原圖 and copies none)
     const template = { ...splitOn(P()), right: { ...splitOn(P()).right, 'shape.jawline': 0.7 } };
     const e: EditState = { v: 2, photo: defaultPhoto(), persons: { f0: P() }, template, primaryInit: null };
     // f1 is listed but has no entry yet; its GPUPixel-left half shows on the screen's right

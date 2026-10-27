@@ -112,10 +112,10 @@ try {
     const s3 = await page.evaluate(() => window.t4.camera.start());
     check('restart after stop keeps the last facing', s3.snap.state === 'live' && s3.snap.facing === 'environment', s3.snap);
     const bg = await page.evaluate(() => window.t4.camera.background());
-    report.cameraBackground = { whileHidden: bg.whileHidden, at400: bg.at400, at1000: bg.at1000 };
-    check('background + ended track → still live during grace → interrupted after 800 ms', bg.whileHidden === 'live' && bg.at400 === 'live' && bg.at1000 === 'interrupted' && !bg.video.hasSrc, report.cameraBackground);
+    report.cameraBackground = { whileHidden: bg.whileHidden, trackHidden: bg.trackHidden, at400: bg.at400, at1000: bg.at1000, newStreams: bg.newStreams };
+    check('background → capture stopped at once (interrupted, track ended) → a quick return restarts it by itself (0.5.1)', bg.whileHidden === 'interrupted' && bg.trackHidden === 'ended' && bg.at1000 === 'live' && bg.newStreams === 1 && bg.video.hasSrc, report.cameraBackground);
     const rs = await page.evaluate(() => window.t4.camera.resume());
-    check('resume → live again with a fresh stream', rs.snap.state === 'live' && rs.tracks.at(-1) === 'video:live', { snap: rs.snap, n: rs.tracks.length });
+    check('resume while already live again → no new request, still live', rs.snap.state === 'live' && rs.tracks.at(-1) === 'video:live' && rs.gumCalls.length === bg.gumCalls.length, { snap: rs.snap, n: rs.tracks.length });
     const en = await page.evaluate(() => window.t4.camera.endNow());
     check('ended while visible → interrupted immediately', en.snap.state === 'interrupted', en.snap.state);
 
@@ -271,23 +271,37 @@ try {
     report.share = sh;
     check('saveFile without user activation resolves to fallback (never throws/hangs)', sh.result === 'fallback', sh);
 
-    // assets: progress, memoisation (one request), replay to a late caller
+    // assets: progress, memoisation (one request), replay to a late caller. The expected byte counts come from the
+    // served files (a context of its own, so nothing below is warmed): the camera bundle loadEngineAssets returns is the
+    // shipped model without face_blendshapes.tflite, and the model phase's bar and 'done' add the photo detector, which
+    // downloads beside the model unwaited (engine/assets.ts), when it had finished by then.
+    const { ctx: xctx, page: xpage } = await open(browser);
+    const want = await xpage.evaluate(() => window.t4.assets.expected());
+    await xctx.close();
+    report.assetSizes = want;
+    check('the camera bundle is the shipped model less its blendshapes entry', want.camera > 0 && want.camera < want.model && want.detector > 0 && want.wasm > 0, want);
+    const modelBar = (ev) =>
+      ev.model.first.loaded === 0 && ev.model.last.total === want.model + want.detector && ev.model.monotone &&
+      (ev.detector.inModel ? ev.model.last.loaded === ev.model.last.total : ev.model.last.loaded >= want.model && ev.model.last.loaded < ev.model.last.total);
+    const doneSum = (ev, wasm) => want.model + (ev.detector.inDone ? want.detector : 0) + wasm;
     let modelRequests = 0;
+    let detectorRequests = 0;
     let wasmRequests = 0;
     page.on('request', (r) => {
-      if (r.url().endsWith('/face_landmarker.task')) modelRequests++;
-      if (r.url().endsWith('/vision_wasm_internal.wasm')) wasmRequests++;
+      if (r.url().endsWith(want.paths.model)) modelRequests++;
+      if (r.url().endsWith(want.paths.detector)) detectorRequests++;
+      if (r.url().endsWith(want.paths.wasm)) wasmRequests++;
     });
     const a = await page.evaluate(() => window.t4.assets.concurrent());
     report.assets = a;
-    check('model streamed with progress (total from Content-Length, monotone, ends at total)',
-      a.bytes === 3758596 && a.a.model.first.loaded === 0 && a.a.model.last.loaded === 3758596 && a.a.model.last.total === 3758596 && a.a.model.monotone, a.a.model);
+    check('model phase streams the model and the photo detector with progress (total from both Content-Lengths, monotone, ends at total once the detector is in)',
+      a.bytes === want.camera && modelBar(a.a) && modelBar(a.b), { bytes: a.bytes, model: a.a.model, detector: a.a.detector });
     check('model bytes are the .task archive (bytes 2..3 = "PK")', a.head[2] === 0x50 && a.head[3] === 0x4b, a.head);
-    check('wasm warm-up phase reported', a.a.wasm.last && a.a.wasm.last.loaded === 11153617 && a.a.wasm.monotone, a.a.wasm);
+    check('wasm warm-up phase reported', a.a.wasm.last && a.a.wasm.last.loaded === want.wasm && a.a.wasm.monotone, a.a.wasm);
     check('phases in order model → wasm → done', a.a.order.join() === 'model,wasm,done' && a.b.order.join() === 'model,wasm,done', a.a.order);
-    check('done carries the byte sum', a.a.done.length === 1 && a.a.done[0].loaded === 3758596 + 11153617, a.a.done);
-    check('memoised: concurrent callers share one download (1 model + 1 wasm request)', modelRequests === 1 && wasmRequests === 1 && a.sameBuffer, { modelRequests, wasmRequests });
-    check('late caller gets the done event replayed, no new request', a.late.length === 1 && a.late[0].phase === 'done' && modelRequests === 1, a.late);
+    check('done carries the byte sum (model + detector when it was in + wasm)', a.a.done.length === 1 && a.a.done[0].loaded === doneSum(a.a, want.wasm), { done: a.a.done, detector: a.a.detector });
+    check('memoised: concurrent callers share one download (1 model + 1 detector + 1 wasm request)', modelRequests === 1 && detectorRequests === 1 && wasmRequests === 1 && a.sameBuffer, { modelRequests, detectorRequests, wasmRequests });
+    check('late caller gets the done event replayed, no new request', a.late.length === 1 && a.late[0].phase === 'done' && a.late[0].loaded === a.a.done[0].loaded && modelRequests === 1, a.late);
     await ctx.close();
 
     // assets: failure clears the memo; retry succeeds
@@ -296,15 +310,15 @@ try {
     await p2page.route('**/face_landmarker.task', (route) => (fails-- > 0 ? route.abort('connectionreset') : route.continue()));
     const r1 = await p2page.evaluate(() => window.t4.assets.once());
     const r2 = await p2page.evaluate(() => window.t4.assets.once());
-    report.assetsRetry = { r1, r2: { ok: r2.ok, bytes: r2.bytes, order: r2.ev.order } };
+    report.assetsRetry = { r1, r2: { ok: r2.ok, bytes: r2.bytes, order: r2.ev.order, done: r2.ev.done, detector: r2.ev.detector } };
     check('network failure rejects', !r1.ok, r1.error);
-    check('retry after failure downloads again and succeeds', r2.ok && r2.bytes === 3758596 && r2.ev.order.join() === 'model,wasm,done', report.assetsRetry.r2);
+    check('retry after failure downloads again and succeeds', r2.ok && r2.bytes === want.camera && r2.ev.order.join() === 'model,wasm,done' && r2.ev.done[0].loaded === doneSum(r2.ev, want.wasm), report.assetsRetry.r2);
 
     // assets: wasm failure is non-fatal
     const { page: p3 } = await open(browser);
     await p3.route('**/vision_wasm_internal.wasm', (route) => route.fulfill({ status: 404, body: 'gone' }));
     const r3 = await p3.evaluate(() => window.t4.assets.once());
-    check('wasm warm-up failure is non-fatal (done still emitted)', r3.ok && r3.ev.done.length === 1 && r3.ev.done[0].loaded === 3758596, r3.ev.done);
+    check('wasm warm-up failure is non-fatal (done still emitted)', r3.ok && r3.ev.done.length === 1 && r3.ev.done[0].loaded === doneSum(r3.ev, 0), { done: r3.ev.done, detector: r3.ev.detector });
 
     // assets: unknown length (chunked, no Content-Length) → total 0 during the download
     const { page: p4 } = await open(browser);
@@ -315,7 +329,7 @@ try {
     });
     const r4 = await p4.evaluate(() => window.t4.assets.once());
     report.assetsNoLength = r4.ev.model;
-    check('download completes when the server omits/garbles Content-Length', r4.ok && r4.bytes === 3758596, r4.ev.model);
+    check('download completes when the server omits/garbles Content-Length', r4.ok && r4.bytes === want.camera, r4.ev.model);
     await browser.close();
   }
 } catch (e) {

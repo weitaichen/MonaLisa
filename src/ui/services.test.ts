@@ -46,6 +46,7 @@ async function load(prefs: { current: Prefs }): Promise<{ svc: Services; deps: D
   svc.bindPrefs(() => prefs.current);
   deps.isWebGL2Supported = () => true;
   deps.loadEngineAssets = async () => ({ modelBuffer: new Uint8Array(4) });
+  deps.loadPhotoDetector = async () => new Uint8Array(8);
   return { svc, deps };
 }
 
@@ -187,6 +188,332 @@ describe('services: tracker builds', () => {
     prefs.current = { ...prefs.current, delegate: 'CPU' };
     await svc.restartTracker();
     expect(gates).toHaveLength(0);
+  });
+
+  describe('a tracker build that never finishes', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('falls back to 基本模式 with a note after the timeout instead of 正在啟動臉部偵測… forever', async () => {
+      const svc = await setup();
+      const p0 = svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS - 1);
+      expect(svc.svc.get().engine).toMatchObject({ state: 'loading', step: 'tracker' });
+      await vi.advanceTimersByTimeAsync(1);
+      const b = await p0;
+      expect(b).toMatchObject({ tracker: null, basic: true });
+      const s = svc.svc.get().engine;
+      expect(s.state === 'ready' && s.note).toContain('基本模式');
+    });
+
+    it('the tracker that lands after the timeout takes the 基本模式 bundle\'s place', async () => {
+      const svc = await setup();
+      const p0 = svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS);
+      const fallback = await p0;
+      gates[0].resolve();
+      await flush();
+      const s = svc.svc.get().engine;
+      expect(s.state).toBe('ready');
+      if (s.state !== 'ready') return;
+      expect(s.bundle).not.toBe(fallback);
+      expect(s.bundle).toMatchObject({ engine: fallback.engine, tracker: made[0], basic: false });
+      expect(s.note).toBe('臉部偵測已啟動');
+      expect(unclosed()).toHaveLength(1);
+      expect(await svc.ensureEngine()).toBe(s.bundle);
+    });
+
+    it('a delegate change while the timed-out build still runs builds nothing beside it; that build is closed when it lands', async () => {
+      const svc = await setup();
+      const p0 = svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS);
+      await p0;
+      prefs.current = { ...prefs.current, delegate: 'CPU' };
+      const r = svc.restartTracker();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(gates).toHaveLength(1); // only the timed-out build: one MediaPipe graph initialising at a time
+      gates[0].resolve();
+      await flush();
+      expect(made[0].close).toHaveBeenCalled(); // the pref moved on
+      await openAll();
+      await r;
+      const s = svc.svc.get().engine;
+      expect(s.state === 'ready' && s.bundle.tracker?.delegate).toBe('CPU');
+      expect(unclosed()).toHaveLength(1);
+    });
+
+    it('a restart with the same pref while the timed-out build still runs: that build is closed when it lands, one tracker remains', async () => {
+      const svc = await setup();
+      const p0 = svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS);
+      await p0;
+      const r = svc.restartTracker(); // e.g. a re-tap in 設定: the restart waits for the timed-out build
+      gates[0].resolve();
+      await flush();
+      expect(made[0].close).toHaveBeenCalled();
+      await openAll();
+      await r;
+      expect(unclosed()).toHaveLength(1);
+      const s = svc.svc.get().engine;
+      expect(s.state === 'ready' && s.bundle.tracker).toBe(unclosed()[0]);
+    });
+
+    it('a timed-out build that fails after all: 基本模式 stays, and a note says the recovery does not come', async () => {
+      const svc = await setup(true); // the first build throws once its gate opens
+      const p0 = svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS);
+      const fallback = await p0;
+      gates[0].resolve();
+      await flush();
+      const s = svc.svc.get().engine;
+      expect(s.state).toBe('ready');
+      if (s.state !== 'ready') return;
+      expect(s.bundle).not.toBe(fallback); // a fresh bundle: the camera shows the note
+      expect(s.bundle).toMatchObject({ engine: fallback.engine, tracker: null, basic: true });
+      expect(s.note).toContain('請把 App 關掉重新開啟');
+    });
+
+    it('a later build that gave up waiting (same pref) still takes the timed-out build\'s tracker when it lands', async () => {
+      const svc = await setup();
+      const p0 = svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS);
+      await p0;
+      const r = svc.restartTracker();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS);
+      await r;
+      const stuck = svc.svc.get().engine;
+      expect(stuck.state === 'ready' && stuck.note).toContain('臉部偵測無法啟動');
+      gates[0].resolve();
+      await flush();
+      const s = svc.svc.get().engine;
+      expect(s.state === 'ready' && s.bundle.tracker).toBe(made[0]);
+      expect(s.state === 'ready' && s.note).toBe('臉部偵測已啟動');
+      expect(unclosed()).toHaveLength(1);
+      expect(gates).toHaveLength(1); // the give-up built nothing
+    });
+
+    it('a timed-out build that never lands: a later build gives up after the wait instead of starting beside it', async () => {
+      const svc = await setup();
+      const p0 = svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS);
+      await p0;
+      prefs.current = { ...prefs.current, delegate: 'CPU' };
+      const r = svc.restartTracker();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS);
+      await r;
+      expect(gates).toHaveLength(1);
+      const s = svc.svc.get().engine;
+      expect(s.state === 'ready' && s.bundle.basic).toBe(true);
+    });
+  });
+});
+
+describe('services: the full-range photo detector (C4)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function withTrackers(prefs: { current: Prefs }) {
+    const loaded = await load(prefs);
+    loaded.deps.createEngine = (() => fakeEngine(Promise.resolve())) as unknown as Deps['createEngine'];
+    const opts: TrackerOptions[] = [];
+    loaded.deps.createTracker = (async (o: TrackerOptions) => {
+      opts.push(o);
+      return { delegate: 'GPU', close: vi.fn() };
+    }) as unknown as Deps['createTracker'];
+    return { ...loaded, opts };
+  }
+
+  it('the engine (the camera) is ready without waiting for the detector; every tracker build reads it at each photo through fullRangeDetector', async () => {
+    const prefs = { current: { ...PREFS } };
+    const { svc, deps, opts } = await withTrackers(prefs);
+    const camera = new Uint8Array(4);
+    deps.loadEngineAssets = async () => ({ modelBuffer: camera });
+    const det = deferred<Uint8Array>();
+    deps.loadPhotoDetector = vi.fn(() => det.promise) as unknown as Deps['loadPhotoDetector'];
+    await svc.ensureEngine();
+    expect(svc.svc.get().engine.state).toBe('ready');
+    expect(opts[0].modelBuffer).toBe(camera);
+    expect(opts[0]).not.toHaveProperty('photoModelBuffer');
+    expect(opts[0].fullRangeDetector!()).toBeNull();
+    const bytes = new Uint8Array(6);
+    det.resolve(bytes);
+    await flush();
+    expect(opts[0].fullRangeDetector!()).toBe(bytes);
+    prefs.current = { ...PREFS, delegate: 'CPU' } as Prefs;
+    await svc.restartTracker();
+    expect(opts).toHaveLength(2);
+    expect(opts[1].fullRangeDetector!()).toBe(bytes);
+    expect(deps.loadPhotoDetector).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed detector download is not kept: the next photo asks again (fullRangeDetector), and the answer after it is used', async () => {
+    const { svc, deps, opts } = await withTrackers({ current: { ...PREFS } });
+    const bytes = new Uint8Array(6);
+    const load = vi.fn().mockRejectedValueOnce(new Error('HTTP 404')).mockResolvedValueOnce(bytes);
+    deps.loadPhotoDetector = load as unknown as Deps['loadPhotoDetector'];
+    await svc.ensureEngine();
+    await flush();
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(opts[0].fullRangeDetector!()).toBeNull(); // this photo detects short-range, and a retry starts
+    expect(load).toHaveBeenCalledTimes(2);
+    await flush();
+    expect(opts[0].fullRangeDetector!()).toBe(bytes);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('svc.photoDetector says the detector is in whichever request brought it (round 4): a 5xx first, then a retry no editor asked for (a photo switching the tracker) lands', async () => {
+    const { svc, deps, opts } = await withTrackers({ current: { ...PREFS } });
+    const retry = deferred<Uint8Array>();
+    const load = vi.fn().mockRejectedValueOnce(new Error('HTTP 503')).mockReturnValueOnce(retry.promise);
+    deps.loadPhotoDetector = load as unknown as Deps['loadPhotoDetector'];
+    await svc.ensureEngine();
+    await flush();
+    expect(svc.svc.get().photoDetector).toBe(false);
+    const seen: boolean[] = [];
+    svc.svc.subscribe((s) => seen.push(s.photoDetector));
+    // a photo's switch to its model reads the detector: missing, so services asks again by itself
+    expect(opts[0].fullRangeDetector!()).toBeNull();
+    expect(load).toHaveBeenCalledTimes(2);
+    await flush();
+    expect(svc.svc.get().photoDetector).toBe(false);
+    retry.resolve(new Uint8Array(6));
+    await flush();
+    // the store says so (an open editor completes its short-range answer on it, not on its own asks)
+    expect(svc.svc.get().photoDetector).toBe(true);
+    expect(seen.at(-1)).toBe(true);
+    // and it stays in: an editor's later ask joins nothing, the bytes are there
+    await svc.ensurePhotoDetector();
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(svc.svc.get().photoDetector).toBe(true);
+  });
+
+  it('photoDetectorPending: a face detection waits for the first download when it lands within the cap; null once the detector is in', async () => {
+    const { svc, deps } = await load({ current: { ...PREFS } });
+    const first = deferred<Uint8Array>();
+    const loadDet = vi.fn().mockReturnValueOnce(first.promise);
+    deps.loadPhotoDetector = loadDet as unknown as Deps['loadPhotoDetector'];
+    const p = svc.photoDetectorPending();
+    expect(p).not.toBeNull();
+    let done = false;
+    void p!.then(() => (done = true));
+    await flush();
+    expect(done).toBe(false);
+    first.resolve(new Uint8Array(6));
+    await flush();
+    expect(done).toBe(true);
+    expect(svc.photoDetectorPending()).toBeNull();
+    expect(loadDet).toHaveBeenCalledTimes(1);
+  });
+
+  it('photoDetectorPending: a hanging first download is waited for DETECTOR_WAIT_MS at most, once per session (D1)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { svc, deps } = await load({ current: { ...PREFS } });
+      // the request never answers (lie-fi): its stall abort would come only after STALL_TIMEOUT_MS of silence per chunk
+      deps.loadPhotoDetector = vi.fn(() => new Promise<Uint8Array>(() => undefined)) as unknown as Deps['loadPhotoDetector'];
+      expect(svc.DETECTOR_WAIT_MS).toBe(3000);
+      const p = svc.photoDetectorPending();
+      expect(p).not.toBeNull();
+      let done = false;
+      void p!.then(() => (done = true));
+      await vi.advanceTimersByTimeAsync(svc.DETECTOR_WAIT_MS - 1);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(done).toBe(true);
+      // the cap is spent: the next photo detects with what is there at once, though the download is still in flight
+      expect(svc.photoDetectorPending()).toBeNull();
+      expect(deps.loadPhotoDetector).toHaveBeenCalledTimes(1);
+      // one wait in the session (window.__meiyan, read by the e2e)
+      expect(window.__meiyan?.detectorWaits).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('photoDetectorPending: a photo opened within the cap waits only for what is left of it', async () => {
+    vi.useFakeTimers();
+    try {
+      const { svc, deps } = await load({ current: { ...PREFS } });
+      deps.loadPhotoDetector = vi.fn(() => new Promise<Uint8Array>(() => undefined)) as unknown as Deps['loadPhotoDetector'];
+      void svc.photoDetectorPending();
+      await vi.advanceTimersByTimeAsync(2000);
+      let done = false;
+      void svc.photoDetectorPending()!.then(() => (done = true));
+      await vi.advanceTimersByTimeAsync(999);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('photoDetectorPending: no wait on a retry after a failed first download (D1), though one is in flight', async () => {
+    const { svc, deps } = await load({ current: { ...PREFS } });
+    const first = deferred<Uint8Array>();
+    const retry = deferred<Uint8Array>();
+    const loadDet = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
+    deps.loadPhotoDetector = loadDet as unknown as Deps['loadPhotoDetector'];
+    const p = svc.photoDetectorPending();
+    expect(svc.photoDetectorPending()).not.toBeNull(); // joins the same download
+    first.reject(new TypeError('Failed to fetch'));
+    await p;
+    // the next photo starts a retry (the tracker's fullRangeDetector), and nothing waits for it
+    void svc.ensurePhotoDetector();
+    expect(loadDet).toHaveBeenCalledTimes(2);
+    expect(svc.photoDetectorPending()).toBeNull();
+    retry.resolve(new Uint8Array(6));
+    await flush();
+    expect(svc.photoDetectorPending()).toBeNull();
+  });
+
+  it("the engine download's own detector request is the session's first: when it fails before 'done', the request 'done' starts is a retry nobody waits for (D1)", async () => {
+    const { svc, deps } = await load({ current: { ...PREFS } });
+    // loadPhotoDetector as assets.ts has it: memoised while in flight, the memo cleared by a failure
+    const attempts: Deferred<Uint8Array>[] = [];
+    let memo: Promise<Uint8Array> | null = null;
+    const loadDet = vi.fn(() => {
+      if (!memo) {
+        const d = deferred<Uint8Array>();
+        attempts.push(d);
+        const m = d.promise;
+        memo = m;
+        m.catch(() => {
+          if (memo === m) memo = null;
+        });
+      }
+      return memo;
+    });
+    deps.loadPhotoDetector = loadDet as unknown as Deps['loadPhotoDetector'];
+    // the engine download starts the detector's request right after the model's, and never waits for it
+    const engine = deferred<{ modelBuffer: Uint8Array }>();
+    deps.loadEngineAssets = (() => {
+      void deps.loadPhotoDetector().catch(() => undefined);
+      return engine.promise;
+    }) as unknown as Deps['loadEngineAssets'];
+    const assets = svc.prefetchAssets();
+    expect(attempts).toHaveLength(1);
+    // lie-fi: the request is reset at once while the model downloads on
+    attempts[0].reject(new TypeError('Failed to fetch'));
+    await flush();
+    engine.resolve({ modelBuffer: new Uint8Array(4) });
+    await assets;
+    await flush();
+    // 'done' asks again, and that retry hangs: the first photo detects at once, short-range
+    expect(attempts).toHaveLength(2);
+    expect(svc.photoDetectorPending()).toBeNull();
+    expect(window.__meiyan?.detectorWaits ?? 0).toBe(0);
+    attempts[1].resolve(new Uint8Array(6));
+    await flush();
+    expect(svc.photoDetectorPending()).toBeNull();
+    // two requests in all: services joined the engine's, it started no third
+    expect(attempts).toHaveLength(2);
   });
 });
 
@@ -557,6 +884,58 @@ describe('services: 美體 body tracker', () => {
     await expect(p).resolves.toBeTruthy();
     expect(t.order).not.toContain('face:start');
   });
+
+  describe('beside a face tracker build that timed out', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function timedOut() {
+      const t = await setup();
+      const e = t.svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(t.svc.TRACKER_BUILD_TIMEOUT_MS);
+      await e; // 基本模式 for now, the face build goes on
+      t.modelGate.resolve(new Uint8Array(4));
+      return t;
+    }
+
+    it('creates its graph only once that build landed (the download may overlap)', async () => {
+      const t = await timedOut();
+      const p = t.svc.ensureBodyTracker();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(t.createBodyTracker).not.toHaveBeenCalled();
+      t.faceGate.resolve();
+      await expect(p).resolves.toBeTruthy();
+      expect(t.order).toEqual(['face:start', 'pose-model:full', 'face:done', 'pose-tracker']);
+    });
+
+    it('gives up with a retryable hint when that build still runs after the wait', async () => {
+      const t = await timedOut();
+      const p = t.svc.ensureBodyTracker();
+      p.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(t.svc.TRACKER_BUILD_TIMEOUT_MS);
+      await expect(p).rejects.toThrow('臉部偵測仍在啟動');
+      const st = t.svc.svc.get().body;
+      expect(st.state === 'error' && st.hint).toContain('臉部偵測仍在啟動，請稍後重試');
+      expect(t.createBodyTracker).not.toHaveBeenCalled();
+    });
+
+    it('a face rebuild released by the same landing waits first: never two graphs initialising together', async () => {
+      const t = await timedOut();
+      const body = t.svc.ensureBodyTracker();
+      await vi.advanceTimersByTimeAsync(1000); // downloaded, waiting for the timed-out build
+      expect(t.svc.svc.get().body).toEqual({ state: 'loading', step: 'tracker', progress: 1 });
+      prefs.current = { ...prefs.current, delegate: 'CPU' };
+      const restart = t.svc.restartTracker(); // 設定 › 偵測器: waits for the same build
+      t.faceGate.resolve();
+      await restart;
+      await body;
+      expect(t.order).toEqual(['face:start', 'pose-model:full', 'face:done', 'face:start', 'face:done', 'pose-tracker']);
+    });
+  });
 });
 
 describe('services: 瘦臉 person segmenter', () => {
@@ -642,6 +1021,43 @@ describe('services: 瘦臉 person segmenter', () => {
     await seg;
     await body;
     expect(t.order.indexOf('pose-model')).toBeGreaterThan(t.order.findIndex((o) => o.startsWith('seg:3:')));
+  });
+
+  describe('beside a face tracker build that timed out', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('creates its graph only once that build landed', async () => {
+      const t = await setup();
+      const e = t.svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(t.svc.TRACKER_BUILD_TIMEOUT_MS);
+      await e;
+      const seg = t.svc.ensureFaceSegmenter();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(t.createPersonSegmenter).not.toHaveBeenCalled();
+      t.faceGate.resolve();
+      expect(await seg).not.toBeNull();
+      expect(t.order).toEqual(['face:start', 'seg-model', 'face:done', `seg:3:${t.deps.wasmBase}`]);
+    });
+
+    it('still running after the wait: null (the unlimited 瘦臉) without marking it broken, and the next call creates it', async () => {
+      const t = await setup();
+      const e = t.svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(t.svc.TRACKER_BUILD_TIMEOUT_MS);
+      await e;
+      const seg = t.svc.ensureFaceSegmenter();
+      await vi.advanceTimersByTimeAsync(t.svc.TRACKER_BUILD_TIMEOUT_MS);
+      expect(await seg).toBeNull();
+      expect(t.createPersonSegmenter).not.toHaveBeenCalled();
+      t.faceGate.resolve();
+      await flush();
+      expect(await t.svc.ensureFaceSegmenter()).not.toBeNull();
+      expect(t.createPersonSegmenter).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("a stalled segmenter download never holds the 美體 tracker (it is not a graph build)", async () => {

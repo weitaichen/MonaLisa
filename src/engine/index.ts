@@ -24,6 +24,7 @@ import {
   type Texture,
   uploadSource,
 } from './gl/gl';
+import { faceTableCarrier, rendererOf } from './faceTableCarrier';
 import { probeFaceTable, probeR16FArray, readGlLimits } from './glProbe';
 import { lookDef } from './looks';
 import { boxCentre, capsFor, ovalBox } from './passes/faceCap';
@@ -126,9 +127,19 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
 
   /** makeup textures of the current pipeline (see Pipeline.preloadMakeup) */
   let makeupLoad: Promise<void> = Promise.resolve();
+  /** whether window.__meiyan.gl.FACE_TABLE_UBO already says what this pipeline's reshape pass was built with */
+  let carrierNoted = false;
 
   function build(): void {
-    pipeline = createPipeline(gl);
+    // the UBO on a GPU, the texture on a software rasterizer (S §6.4, 2026-10-18); never fatal on an odd context
+    let faceTable: 'texture' | 'ubo' | undefined;
+    try {
+      faceTable = faceTableCarrier(rendererOf(gl));
+    } catch {
+      faceTable = undefined;
+    }
+    pipeline = createPipeline(gl, { faceTable });
+    carrierNoted = false;
     makeupLoad = pipeline.preloadMakeup();
     srcTex = createTexture(gl, 0, 0);
     maxSize = Math.min(
@@ -144,6 +155,7 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
         const limits = readGlLimits(gl);
         console.info('[engine] GL limits', limits);
         const probes = import.meta.env.DEV ? probeFaceTable(gl) : null;
+        // FACE_TABLE_UBO joins once a frame has built the reshape pass (noteCarrier)
         dbg.gl = {
           ...limits,
           ...(probes ? { PG1_texture: probes.texture, PG1_ubo: probes.ubo, ...(probes.float32 === null ? {} : { PG1_float32: probes.float32 }) } : {}),
@@ -153,6 +165,19 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
         console.warn('[engine] GL limits / probes unavailable', e);
       }
     }
+  }
+
+  /**
+   * after a frame: the carrier the pipeline's reshape pass was compiled with (Pipeline.faceTableCarrier, S §6.4), not
+   * the renderer selector's pick, once a frame with a reshape built it (the pass is created on first use)
+   */
+  function noteCarrier(): void {
+    if (carrierNoted || !pipeline) return;
+    const carrier = pipeline.faceTableCarrier();
+    if (!carrier) return;
+    carrierNoted = true;
+    const info = debugState()?.gl;
+    if (info) info.FACE_TABLE_UBO = carrier === 'ubo';
   }
 
   async function loadStaticLuts(): Promise<void> {
@@ -484,6 +509,7 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       uploadSource(gl, srcTex, input.source, input.width, input.height);
       sizeCanvas(size);
       const res = pipeline.run(job(input, srcTex, size, !still && tier === 'L', 'canvas', options.mirror));
+      noteCarrier();
       if (options.showLandmarks && input.faces.length) {
         // the points are O-space and the canvas shows V: through the view geometry (identity in 裁切 mode, in the camera)
         const g = input.geometry;
@@ -500,6 +526,7 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       const size = frameSize(input, true);
       uploadSource(gl, srcTex, input.source, input.width, input.height);
       const res = pipeline.run(job(input, srcTex, size, false, 'fbo', opts.mirror));
+      noteCarrier();
       const out = res.output;
       if (!out) throw new Error('renderToImageData: no output buffer');
       const pixels = new Uint8Array(size.width * size.height * 4);
@@ -544,6 +571,7 @@ export function createEngine(canvas: HTMLCanvasElement, opts?: Partial<EngineOpt
       }
       uploadSource(gl, srcTex, input.source, input.width, input.height);
       const res = pipeline.run(j);
+      noteCarrier();
       const out = res.output;
       if (!out) throw new Error('renderTile: no output buffer');
       const pixels = new Uint8Array(read.w * read.h * 4);

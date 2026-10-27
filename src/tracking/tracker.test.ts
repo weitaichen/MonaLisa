@@ -1,7 +1,8 @@
 // createTracker recovery paths against a fake MediaPipe: lost GL context (event and poll),
 // poisoned-graph rebuilds, throttling, escalation, logging and the GPU → CPU last resort.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LIVE_DETECT_FACES } from '../config/limits';
+import { EDIT_DETECT_FACES, LIVE_DETECT_FACES } from '../config/limits';
+import { crc32, readStoredZip, writeStoredZip } from '../engine/faceBundle';
 import type { TrackerState } from '../types';
 
 const h = vi.hoisted(() => ({
@@ -13,7 +14,7 @@ const h = vi.hoisted(() => ({
 interface FakeLandmarkerT {
   delegate: string;
   canvas: FakeCanvas | undefined;
-  opts: { numFaces?: number; runningMode?: string };
+  opts: { numFaces?: number; runningMode?: string; baseOptions: { modelAssetBuffer?: Uint8Array; delegate: string } };
   detectForVideo: ReturnType<typeof vi.fn>;
   detect: ReturnType<typeof vi.fn>;
   setOptions: ReturnType<typeof vi.fn>;
@@ -27,7 +28,10 @@ vi.mock('@mediapipe/tasks-vision', () => ({
   FilesetResolver: { forVisionTasks: vi.fn(async () => ({})) },
   FaceLandmarker: {
     createFromOptions: vi.fn(
-      async (_fs: unknown, o: { canvas?: FakeCanvas; baseOptions: { delegate: string }; numFaces?: number; runningMode?: string }) => {
+      async (
+        _fs: unknown,
+        o: { canvas?: FakeCanvas; baseOptions: { modelAssetBuffer?: Uint8Array; delegate: string }; numFaces?: number; runningMode?: string },
+      ) => {
         h.onCreate?.(o);
         const lm: FakeLandmarkerT = {
           delegate: o.baseOptions.delegate,
@@ -445,7 +449,9 @@ describe('createTracker: multiple faces (S §3.4 T1, T2)', () => {
     const t = await make();
     const lm = last();
     t.detectImage(image, { maxFaces: 99 });
-    expect(lm.setOptions).toHaveBeenLastCalledWith({ runningMode: 'IMAGE', numFaces: 8 });
+    // EDIT_DETECT_FACES = MAX_EDIT_FACES + 2 = 12 (S §6.7)
+    expect(EDIT_DETECT_FACES).toBe(12);
+    expect(lm.setOptions).toHaveBeenLastCalledWith({ runningMode: 'IMAGE', numFaces: EDIT_DETECT_FACES });
     t.detectImage(image, { maxFaces: Number.NaN });
     expect(lm.setOptions).toHaveBeenLastCalledWith({ runningMode: 'IMAGE', numFaces: 1 });
   });
@@ -466,5 +472,193 @@ describe('createTracker: multiple faces (S §3.4 T1, T2)', () => {
     last().detectForVideo.mockReturnValueOnce(lmAt(0));
     expect(t.detectVideo(video, 1, { maxFaces: 3 })).toEqual([]);
     expect(t.detectVideo({ readyState: 1, videoWidth: 640, videoHeight: 480 } as unknown as HTMLVideoElement, 2, { maxFaces: 3 })).toBeNull();
+  });
+});
+
+describe('createTracker: the full-range photo detector (BlazeFace full-range for IMAGE, the camera bundle for VIDEO)', () => {
+  // a camera bundle and a detector small enough to read back (withFaceDetector assembles the photo bundle from them)
+  const entry = (name: string, data: Uint8Array) => ({ name, data, crc: crc32(data), time: 0, date: 0, madeBy: 20, external: 0 });
+  const tfl = (n: number, seed: number) => {
+    const b = new Uint8Array(n).map((_, i) => (i * 13 + seed) & 255);
+    b.set([0x54, 0x46, 0x4c, 0x33], 4);
+    return b;
+  };
+  const SHORT = tfl(64, 1);
+  const LANDMARKS = tfl(96, 2);
+  const CAMERA = writeStoredZip([entry('face_detector.tflite', SHORT), entry('face_landmarks_detector.tflite', LANDMARKS)]);
+  const FULL = tfl(80, 3);
+  async function makeWith(detector?: () => Uint8Array | null) {
+    const { createTracker } = await load();
+    return createTracker({ modelBuffer: CAMERA, fullRangeDetector: detector, wasmBase: '/wasm', delegate: 'auto', onStateChange: (s) => states.push(s) });
+  }
+  type Sent = { baseOptions?: { modelAssetBuffer: Uint8Array }; runningMode?: string; numFaces?: number };
+  const sent = (lm: FakeLandmarkerT) => lm.setOptions.mock.calls.map((c) => c[0] as Sent);
+  /** a setOptions call as its shape: the model as 'camera' (the very buffer), 'photo' (camera bundle + FULL) or absent */
+  const shape = (o: Sent) => {
+    const buf = o.baseOptions?.modelAssetBuffer;
+    const model = !buf ? undefined : buf === CAMERA ? 'camera' : isPhoto(buf) ? 'photo' : 'other';
+    return { ...(model ? { model } : {}), runningMode: o.runningMode, numFaces: o.numFaces };
+  };
+  const isPhoto = (buf: Uint8Array) => {
+    const e = readStoredZip(buf);
+    const same = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
+    return e.length === 2 && e[0].name === 'face_detector.tflite' && same(e[0].data, FULL) && e[1].name === 'face_landmarks_detector.tflite' && same(e[1].data, LANDMARKS);
+  };
+
+  it('is created with the camera bundle; a photo switches to the photo bundle (the camera bundle with the detector) in the same setOptions as runningMode and numFaces', async () => {
+    const t = await makeWith(() => FULL);
+    const lm = last();
+    expect(lm.opts.baseOptions.modelAssetBuffer).toBe(CAMERA);
+    expect(t.photoDetector).toBe('full-range');
+    expect(t.detectImage(image, { maxFaces: 8 })).toHaveLength(1);
+    t.detectImage(image, { maxFaces: 8 });
+    expect(sent(lm).map(shape)).toEqual([{ model: 'photo', runningMode: 'IMAGE', numFaces: 8 }]);
+    expect(t.detectVideo(video, 1, ONE)).not.toBeNull();
+    expect(sent(lm).map(shape)).toEqual([
+      { model: 'photo', runningMode: 'IMAGE', numFaces: 8 },
+      { model: 'camera', runningMode: 'VIDEO', numFaces: LIVE_DETECT_FACES },
+    ]);
+  });
+
+  it('keeps no photo bundle: every switch to it assembles a new one (MediaPipe copies what it is given)', async () => {
+    const t = await makeWith(() => FULL);
+    const lm = last();
+    t.detectImage(image, { maxFaces: 8 });
+    t.detectVideo(video, 1, ONE);
+    t.detectImage(image, { maxFaces: 8 });
+    const [a, , b] = sent(lm).map((o) => o.baseOptions!.modelAssetBuffer);
+    expect(isPhoto(a) && isPhoto(b)).toBe(true);
+    expect(a).not.toBe(b);
+  });
+
+  it('reads the detector at each switch to a photo: none yet → photos run the camera bundle; the first photo after it arrives switches (C4)', async () => {
+    let det: Uint8Array | null = null;
+    const t = await makeWith(() => det);
+    const lm = last();
+    expect(t.photoDetector).toBe('short-range');
+    t.detectImage(image, { maxFaces: 8 });
+    expect(sent(lm).map(shape)).toEqual([{ runningMode: 'IMAGE', numFaces: 8 }]);
+    det = FULL;
+    expect(t.photoDetector).toBe('full-range');
+    t.detectImage(image, { maxFaces: 8 });
+    expect(sent(lm).map(shape)).toEqual([
+      { runningMode: 'IMAGE', numFaces: 8 },
+      { model: 'photo', runningMode: 'IMAGE', numFaces: 8 },
+    ]);
+  });
+
+  it("detector 'camera' runs the camera bundle in IMAGE (the short-range retry, S §6.5); the camera then switches mode only, the next photo back to the photo bundle", async () => {
+    const t = await makeWith(() => FULL);
+    const lm = last();
+    t.detectImage(image, { maxFaces: EDIT_DETECT_FACES });
+    expect(t.detectImage(image, { maxFaces: EDIT_DETECT_FACES, detector: 'camera' })).toHaveLength(1);
+    t.detectImage(image, { maxFaces: EDIT_DETECT_FACES, detector: 'camera' });
+    t.detectVideo(video, 1, ONE);
+    t.detectImage(image, { maxFaces: EDIT_DETECT_FACES });
+    expect(sent(lm).map(shape)).toEqual([
+      { model: 'photo', runningMode: 'IMAGE', numFaces: EDIT_DETECT_FACES },
+      { model: 'camera', runningMode: 'IMAGE', numFaces: EDIT_DETECT_FACES },
+      { runningMode: 'VIDEO', numFaces: LIVE_DETECT_FACES },
+      { model: 'photo', runningMode: 'IMAGE', numFaces: EDIT_DETECT_FACES },
+    ]);
+    expect(lm.detect).toHaveBeenCalledTimes(4);
+  });
+
+  it('a detector the photo bundle cannot be assembled from is refused once (logged): photos stay on the camera bundle', async () => {
+    const warn = vi.mocked(console.warn);
+    const notTflite = new Uint8Array(80).fill(9);
+    const t = await makeWith(() => notTflite);
+    const lm = last();
+    expect(t.detectImage(image, { maxFaces: 8 })).toHaveLength(1);
+    expect(t.photoDetector).toBe('short-range');
+    t.detectImage(image, { maxFaces: 8 });
+    expect(sent(lm).map(shape)).toEqual([{ runningMode: 'IMAGE', numFaces: 8 }]);
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('photo model'))).toHaveLength(1);
+  });
+
+  it('a camera bundle that is not a stored zip leaves photos on it', async () => {
+    const { createTracker } = await load();
+    const shipped = new Uint8Array(50).fill(3);
+    const t = await createTracker({ modelBuffer: shipped, fullRangeDetector: () => FULL, wasmBase: '/wasm', delegate: 'auto' });
+    t.detectImage(image, { maxFaces: 8 });
+    expect(last().setOptions.mock.calls).toEqual([[{ runningMode: 'IMAGE', numFaces: 8 }]]);
+    expect(t.photoDetector).toBe('short-range');
+  });
+
+  it('the camera never carries a model: a count change in VIDEO sends runningMode and numFaces only', async () => {
+    const t = await makeWith(() => FULL);
+    const lm = last();
+    t.detectVideo(video, 1, ONE);
+    expect(lm.setOptions).not.toHaveBeenCalled();
+    t.detectVideo(video, 2, { maxFaces: 1 });
+    expect(lm.setOptions.mock.calls).toEqual([[{ runningMode: 'VIDEO', numFaces: 1 }]]);
+  });
+
+  it('without a detector (no getter, or a getter answering null or throwing) photos keep the camera bundle and no setOptions carries one', async () => {
+    for (const det of [undefined, () => null, () => {
+      throw new Error('services gone');
+    }]) {
+      const t = await makeWith(det);
+      const lm = last();
+      t.detectImage(image, { maxFaces: 8 });
+      t.detectImage(image, { maxFaces: 8, detector: 'camera' });
+      t.detectVideo(video, 1, ONE);
+      expect(lm.setOptions.mock.calls).toEqual([[{ runningMode: 'IMAGE', numFaces: 8 }], [{ runningMode: 'VIDEO', numFaces: LIVE_DETECT_FACES }]]);
+      expect(t.photoDetector).toBe('short-range');
+      t.close();
+    }
+  });
+
+  it('a replacement after a lost context is built on the camera bundle and gets the photo bundle with the next photo', async () => {
+    const t = await makeWith(() => FULL);
+    t.detectImage(image, { maxFaces: 8 }); // the lost graph held the photo bundle
+    last().canvas!.lose(true);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.created).toHaveLength(2);
+    const second = last();
+    expect(second.opts.baseOptions.modelAssetBuffer).toBe(CAMERA);
+    expect(t.detectImage(image, { maxFaces: 8 })).toHaveLength(1);
+    expect(sent(second).map(shape)).toEqual([{ model: 'photo', runningMode: 'IMAGE', numFaces: 8 }]);
+    t.detectVideo(video, 1, ONE);
+    expect(shape(sent(second)[1])).toEqual({ model: 'camera', runningMode: 'VIDEO', numFaces: LIVE_DETECT_FACES });
+  });
+
+  it('a replacement made while the camera runs stays on the camera bundle without a setOptions', async () => {
+    const t = await makeWith(() => FULL);
+    t.detectVideo(video, 1, ONE);
+    last().canvas!.lose(true);
+    await vi.advanceTimersByTimeAsync(500);
+    const second = last();
+    expect(t.detectVideo(video, 2, ONE)).not.toBeNull();
+    expect(second.setOptions).not.toHaveBeenCalled();
+  });
+
+  it('the in-place rebuild after a failed photo inference keeps the photo bundle without resending it', async () => {
+    const t = await makeWith(() => FULL);
+    const lm = last();
+    lm.detect.mockImplementationOnce(() => {
+      throw new Error('Graph has errors');
+    });
+    expect(() => t.detectImage(image, { maxFaces: 8 })).toThrow('Graph');
+    expect(t.detectImage(image, { maxFaces: 8 })).toHaveLength(1);
+    expect(sent(lm).map(shape)).toEqual([
+      { model: 'photo', runningMode: 'IMAGE', numFaces: 8 },
+      { runningMode: 'IMAGE', numFaces: 8 },
+    ]);
+  });
+
+  it('a synchronously throwing model switch still counts as switched (the bundle sets the model before rebuilding)', async () => {
+    const t = await makeWith(() => FULL);
+    const lm = last();
+    lm.setOptions.mockImplementationOnce(() => {
+      throw new Error('close old graph');
+    });
+    expect(t.detectImage(image, { maxFaces: 8 })).toHaveLength(1);
+    t.detectImage(image, { maxFaces: 8 });
+    t.detectVideo(video, 1, ONE);
+    expect(sent(lm).map(shape)).toEqual([
+      { model: 'photo', runningMode: 'IMAGE', numFaces: 8 },
+      { model: 'camera', runningMode: 'VIDEO', numFaces: LIVE_DETECT_FACES },
+    ]);
   });
 });

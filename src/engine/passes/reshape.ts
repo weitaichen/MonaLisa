@@ -851,6 +851,8 @@ function protectShapeValid(p: FaceProtect): boolean {
 }
 
 export interface ReshapePass {
+  /** the face-table carrier this pass's program was compiled with (reshapeFs: `#define FACE_TABLE_UBO` for 'ubo') */
+  readonly carrier: 'texture' | 'ubo';
   /**
    * Sample `src` (any size, by UV) and write the warped image into `dst`. `faces` exactly as packed (yaw-attenuated,
    * × weight; faceCap.ts TableFace), at most MAX_RENDER_FACES; `protects[layer]` are their 瘦臉 limits (all the same
@@ -1013,6 +1015,7 @@ export function createReshapePass(gl: GL, opts: { carrier?: 'texture' | 'ubo' } 
   };
 
   return {
+    carrier,
     drawFaces,
     draw(src, dst, face, u, aspectIn, body, protect, view, liquify) {
       const faces: TableFace[] = face && u ? [{ face, u: attenuate(u, face.yaw), layer: protect ? 0 : -1, window: protect?.window ?? WHOLE, centre: boxCentre(ovalBox(face)), cap: -1 }] : [];

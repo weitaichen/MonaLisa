@@ -189,6 +189,127 @@ describe('services: tracker builds', () => {
     await svc.restartTracker();
     expect(gates).toHaveLength(0);
   });
+
+  describe('a tracker build that never finishes', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('falls back to 基本模式 with a note after the timeout instead of 正在啟動臉部偵測… forever', async () => {
+      const svc = await setup();
+      const p0 = svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS - 1);
+      expect(svc.svc.get().engine).toMatchObject({ state: 'loading', step: 'tracker' });
+      await vi.advanceTimersByTimeAsync(1);
+      const b = await p0;
+      expect(b).toMatchObject({ tracker: null, basic: true });
+      const s = svc.svc.get().engine;
+      expect(s.state === 'ready' && s.note).toContain('基本模式');
+    });
+
+    it('the tracker that lands after the timeout takes the 基本模式 bundle\'s place', async () => {
+      const svc = await setup();
+      const p0 = svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS);
+      const fallback = await p0;
+      gates[0].resolve();
+      await flush();
+      const s = svc.svc.get().engine;
+      expect(s.state).toBe('ready');
+      if (s.state !== 'ready') return;
+      expect(s.bundle).not.toBe(fallback);
+      expect(s.bundle).toMatchObject({ engine: fallback.engine, tracker: made[0], basic: false });
+      expect(s.note).toBe('臉部偵測已啟動');
+      expect(unclosed()).toHaveLength(1);
+      expect(await svc.ensureEngine()).toBe(s.bundle);
+    });
+
+    it('a delegate change while the timed-out build still runs builds nothing beside it; that build is closed when it lands', async () => {
+      const svc = await setup();
+      const p0 = svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS);
+      await p0;
+      prefs.current = { ...prefs.current, delegate: 'CPU' };
+      const r = svc.restartTracker();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(gates).toHaveLength(1); // only the timed-out build: one MediaPipe graph initialising at a time
+      gates[0].resolve();
+      await flush();
+      expect(made[0].close).toHaveBeenCalled(); // the pref moved on
+      await openAll();
+      await r;
+      const s = svc.svc.get().engine;
+      expect(s.state === 'ready' && s.bundle.tracker?.delegate).toBe('CPU');
+      expect(unclosed()).toHaveLength(1);
+    });
+
+    it('a restart with the same pref while the timed-out build still runs: that build is closed when it lands, one tracker remains', async () => {
+      const svc = await setup();
+      const p0 = svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS);
+      await p0;
+      const r = svc.restartTracker(); // e.g. a re-tap in 設定: the restart waits for the timed-out build
+      gates[0].resolve();
+      await flush();
+      expect(made[0].close).toHaveBeenCalled();
+      await openAll();
+      await r;
+      expect(unclosed()).toHaveLength(1);
+      const s = svc.svc.get().engine;
+      expect(s.state === 'ready' && s.bundle.tracker).toBe(unclosed()[0]);
+    });
+
+    it('a timed-out build that fails after all: 基本模式 stays, and a note says the recovery does not come', async () => {
+      const svc = await setup(true); // the first build throws once its gate opens
+      const p0 = svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS);
+      const fallback = await p0;
+      gates[0].resolve();
+      await flush();
+      const s = svc.svc.get().engine;
+      expect(s.state).toBe('ready');
+      if (s.state !== 'ready') return;
+      expect(s.bundle).not.toBe(fallback); // a fresh bundle: the camera shows the note
+      expect(s.bundle).toMatchObject({ engine: fallback.engine, tracker: null, basic: true });
+      expect(s.note).toContain('請把 App 關掉重新開啟');
+    });
+
+    it('a later build that gave up waiting (same pref) still takes the timed-out build\'s tracker when it lands', async () => {
+      const svc = await setup();
+      const p0 = svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS);
+      await p0;
+      const r = svc.restartTracker();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS);
+      await r;
+      const stuck = svc.svc.get().engine;
+      expect(stuck.state === 'ready' && stuck.note).toContain('臉部偵測無法啟動');
+      gates[0].resolve();
+      await flush();
+      const s = svc.svc.get().engine;
+      expect(s.state === 'ready' && s.bundle.tracker).toBe(made[0]);
+      expect(s.state === 'ready' && s.note).toBe('臉部偵測已啟動');
+      expect(unclosed()).toHaveLength(1);
+      expect(gates).toHaveLength(1); // the give-up built nothing
+    });
+
+    it('a timed-out build that never lands: a later build gives up after the wait instead of starting beside it', async () => {
+      const svc = await setup();
+      const p0 = svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS);
+      await p0;
+      prefs.current = { ...prefs.current, delegate: 'CPU' };
+      const r = svc.restartTracker();
+      await vi.advanceTimersByTimeAsync(svc.TRACKER_BUILD_TIMEOUT_MS);
+      await r;
+      expect(gates).toHaveLength(1);
+      const s = svc.svc.get().engine;
+      expect(s.state === 'ready' && s.bundle.basic).toBe(true);
+    });
+  });
 });
 
 describe('services: the full-range photo detector (C4)', () => {
@@ -763,6 +884,58 @@ describe('services: 美體 body tracker', () => {
     await expect(p).resolves.toBeTruthy();
     expect(t.order).not.toContain('face:start');
   });
+
+  describe('beside a face tracker build that timed out', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function timedOut() {
+      const t = await setup();
+      const e = t.svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(t.svc.TRACKER_BUILD_TIMEOUT_MS);
+      await e; // 基本模式 for now, the face build goes on
+      t.modelGate.resolve(new Uint8Array(4));
+      return t;
+    }
+
+    it('creates its graph only once that build landed (the download may overlap)', async () => {
+      const t = await timedOut();
+      const p = t.svc.ensureBodyTracker();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(t.createBodyTracker).not.toHaveBeenCalled();
+      t.faceGate.resolve();
+      await expect(p).resolves.toBeTruthy();
+      expect(t.order).toEqual(['face:start', 'pose-model:full', 'face:done', 'pose-tracker']);
+    });
+
+    it('gives up with a retryable hint when that build still runs after the wait', async () => {
+      const t = await timedOut();
+      const p = t.svc.ensureBodyTracker();
+      p.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(t.svc.TRACKER_BUILD_TIMEOUT_MS);
+      await expect(p).rejects.toThrow('臉部偵測仍在啟動');
+      const st = t.svc.svc.get().body;
+      expect(st.state === 'error' && st.hint).toContain('臉部偵測仍在啟動，請稍後重試');
+      expect(t.createBodyTracker).not.toHaveBeenCalled();
+    });
+
+    it('a face rebuild released by the same landing waits first: never two graphs initialising together', async () => {
+      const t = await timedOut();
+      const body = t.svc.ensureBodyTracker();
+      await vi.advanceTimersByTimeAsync(1000); // downloaded, waiting for the timed-out build
+      expect(t.svc.svc.get().body).toEqual({ state: 'loading', step: 'tracker', progress: 1 });
+      prefs.current = { ...prefs.current, delegate: 'CPU' };
+      const restart = t.svc.restartTracker(); // 設定 › 偵測器: waits for the same build
+      t.faceGate.resolve();
+      await restart;
+      await body;
+      expect(t.order).toEqual(['face:start', 'pose-model:full', 'face:done', 'face:start', 'face:done', 'pose-tracker']);
+    });
+  });
 });
 
 describe('services: 瘦臉 person segmenter', () => {
@@ -848,6 +1021,43 @@ describe('services: 瘦臉 person segmenter', () => {
     await seg;
     await body;
     expect(t.order.indexOf('pose-model')).toBeGreaterThan(t.order.findIndex((o) => o.startsWith('seg:3:')));
+  });
+
+  describe('beside a face tracker build that timed out', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('creates its graph only once that build landed', async () => {
+      const t = await setup();
+      const e = t.svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(t.svc.TRACKER_BUILD_TIMEOUT_MS);
+      await e;
+      const seg = t.svc.ensureFaceSegmenter();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(t.createPersonSegmenter).not.toHaveBeenCalled();
+      t.faceGate.resolve();
+      expect(await seg).not.toBeNull();
+      expect(t.order).toEqual(['face:start', 'seg-model', 'face:done', `seg:3:${t.deps.wasmBase}`]);
+    });
+
+    it('still running after the wait: null (the unlimited 瘦臉) without marking it broken, and the next call creates it', async () => {
+      const t = await setup();
+      const e = t.svc.ensureEngine();
+      await vi.advanceTimersByTimeAsync(t.svc.TRACKER_BUILD_TIMEOUT_MS);
+      await e;
+      const seg = t.svc.ensureFaceSegmenter();
+      await vi.advanceTimersByTimeAsync(t.svc.TRACKER_BUILD_TIMEOUT_MS);
+      expect(await seg).toBeNull();
+      expect(t.createPersonSegmenter).not.toHaveBeenCalled();
+      t.faceGate.resolve();
+      await flush();
+      expect(await t.svc.ensureFaceSegmenter()).not.toBeNull();
+      expect(t.createPersonSegmenter).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("a stalled segmenter download never holds the 美體 tracker (it is not a graph build)", async () => {

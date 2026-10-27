@@ -102,6 +102,7 @@ export function webgl2Supported(): boolean {
 
 /** A friendly reason for an engine-download failure (engine/assets.ts errors and fetch TypeErrors). */
 export function downloadHint(e: unknown): string {
+  if (errorText(e) === TRACKER_BUSY) return TRACKER_BUSY;
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return '目前沒有網路連線，請連上網路後重試';
   // a network failure: Chromium "Failed to fetch", WebKit "Load failed"
   if (e instanceof TypeError) return '網路連線不穩，請確認網路後重試';
@@ -301,10 +302,84 @@ function discardEngine(): void {
   engine = null;
 }
 
-async function createTrackerSafe(
-  models: EngineModels,
-  delegate: Prefs['delegate'],
-): Promise<{ tracker: Tracker | null; note: string | null }> {
+/**
+ * A tracker build (wasm instantiation + MediaPipe graph) not finished by then hands the UI a 基本模式 bundle and goes on:
+ * a build that never settles would otherwise leave 「正在啟動臉部偵測…」 up for good, joined by every later
+ * ensureEngine. The tracker it brings later takes that bundle's place (settleLate).
+ */
+export const TRACKER_BUILD_TIMEOUT_MS = 20_000;
+
+const SLOW_TRACKER_NOTE = '臉部偵測啟動較慢，暫時改用基本模式；啟動完成後會自動恢復臉型與美妝';
+/**
+ * a timed-out build that failed after all, or a later build that gave up waiting for one still running. That one can
+ * still land after the give-up: its tracker is adopted then all the same (settleLate, 「臉部偵測已啟動」)
+ */
+const STUCK_TRACKER_NOTE = '臉部偵測無法啟動，已切換為基本模式；請把 App 關掉重新開啟再試';
+/** 美體 asked while a timed-out face-tracker build still runs (its downloadHint) */
+const TRACKER_BUSY = '臉部偵測仍在啟動，請稍後重試；若一直如此，請把 App 關掉重新開啟';
+
+/**
+ * A timed-out tracker build still running; it settles once its tracker was adopted or closed. No other MediaPipe graph
+ * is built beside it (two initialising at once is the memory peak that gets SE-class iPhones killed, see
+ * ensureBodyTracker), and a wait for it is bounded (lateBuildSettled).
+ */
+let lateBuild: Promise<void> | null = null;
+
+/** true once no timed-out build runs (at once when none does); false when one still runs TRACKER_BUILD_TIMEOUT_MS later */
+async function lateBuildSettled(): Promise<boolean> {
+  const p = lateBuild;
+  if (!p) return true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const settled = await Promise.race([
+    p.then(() => true),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), TRACKER_BUILD_TIMEOUT_MS);
+    }),
+  ]);
+  clearTimeout(timer);
+  return settled;
+}
+
+/** a timed-out tracker build may still bring a tracker (the editor holds a dropped cache's persons for its answer) */
+export function trackerComing(): boolean {
+  return lateBuild !== null;
+}
+
+/** what withBuildTimeout rejects with: a TimeoutError from inside the build is a failure like any other */
+class BuildTimeout extends Error {
+  constructor() {
+    super('啟動逾時');
+    this.name = 'BuildTimeout';
+  }
+}
+
+/** `building`, or a BuildTimeout after TRACKER_BUILD_TIMEOUT_MS (the build itself goes on) */
+function withBuildTimeout(building: Promise<Tracker>): Promise<Tracker> {
+  return new Promise<Tracker>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new BuildTimeout()), TRACKER_BUILD_TIMEOUT_MS);
+    building.then(
+      (t) => {
+        clearTimeout(timer);
+        resolve(t);
+      },
+      (e: unknown) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+interface TrackerBuild {
+  tracker: Tracker | null;
+  note: string | null;
+  /** a build that timed out and goes on: its tracker once it lands, null when it fails then */
+  late: Promise<Tracker | null> | null;
+}
+
+async function createTrackerSafe(models: EngineModels, delegate: Prefs['delegate']): Promise<TrackerBuild> {
+  // never beside a timed-out build still running (one still running after the wait leaves 基本模式, until it lands)
+  if (!(await lateBuildSettled())) return { tracker: null, note: STUCK_TRACKER_NOTE, late: null };
   let created: Tracker | null = null;
   const onStateChange = (state: TrackerState) => {
     // only the tracker of the current bundle speaks for the UI (a replaced one is closed anyway); written even
@@ -313,22 +388,73 @@ async function createTrackerSafe(
     if (state === 'ok') debug({ delegate: created.delegate }); // an 'auto' rebuild may have fallen back to CPU
     svc.set({ tracker: state });
   };
+  let building: Promise<Tracker> | null = null;
   try {
-    const tracker = await deps.createTracker({
+    building = deps.createTracker({
       modelBuffer: models.modelBuffer,
       fullRangeDetector,
       wasmBase: deps.wasmBase,
       delegate,
       onStateChange,
     });
+    const tracker = await withBuildTimeout(building);
     created = tracker;
     debug({ delegate: tracker.delegate });
-    return { tracker, note: null };
+    return { tracker, note: null, late: null };
   } catch (e) {
     const msg = reportError(e, 'createTracker');
     debug({ delegate: null });
-    return { tracker: null, note: `臉部偵測無法啟動，已切換為基本模式（${msg}）` };
+    if (building && e instanceof BuildTimeout) {
+      // `created` lets its health reach the UI once settleLate adopts it
+      const late = building.then(
+        (t) => (created = t),
+        (err: unknown) => {
+          reportError(err, 'createTracker (after the timeout)');
+          return null;
+        },
+      );
+      return { tracker: null, note: SLOW_TRACKER_NOTE, late };
+    }
+    return { tracker: null, note: `臉部偵測無法啟動，已切換為基本模式（${msg}）`, late: null };
   }
+}
+
+/**
+ * The tracker of a timed-out build, once it lands. It takes the place of a ready 基本模式 bundle a tracker failure left
+ * (the fallback itself, a recoverEngine reload of it, or a later build that gave up waiting for this one) when nothing is
+ * (re)building and the pref still asks for its delegate; otherwise it is closed (one FaceLandmarker at a time: a restart
+ * that already started would build a second one). A build that fails after all says so on that bundle. Builds wait for
+ * it meanwhile (lateBuild).
+ */
+function settleLate(late: Promise<Tracker | null>, want: Prefs['delegate']): void {
+  const p = late.then((t) => {
+    const cur = svc.get().engine;
+    const fallback = cur.state === 'ready' && cur.bundle.tracker === null && trackerFailed && !engineP && !trackerP ? cur.bundle : null;
+    if (!t) {
+      // the recovery the note promised does not come (a fresh bundle object: the camera shows a note once per bundle)
+      if (fallback) setEngineState({ state: 'ready', bundle: { ...fallback }, note: STUCK_TRACKER_NOTE });
+      return;
+    }
+    if (fallback && getPrefs().delegate === want) {
+      trackerFailed = false;
+      liveTracker = t;
+      trackerDelegate = want;
+      debug({ delegate: t.delegate });
+      svc.set({ tracker: 'ok' });
+      setEngineState({ state: 'ready', bundle: { engine: fallback.engine, tracker: t, basic: false }, note: '臉部偵測已啟動' });
+      return;
+    }
+    try {
+      t.close();
+    } catch (e) {
+      reportError(e, 'tracker.close (after the timeout)');
+    }
+  });
+  lateBuild = p;
+  const clear = () => {
+    if (lateBuild === p) lateBuild = null;
+  };
+  p.then(clear, clear);
 }
 
 /** Build a tracker for the current delegate pref; if the pref changed while building, discard and rebuild. */
@@ -336,9 +462,10 @@ async function buildTracker(eng: Engine, models: EngineModels): Promise<EngineBu
   for (;;) {
     const want = getPrefs().delegate;
     setEngineState({ state: 'loading', step: 'tracker' });
-    const { tracker, note } = await createTrackerSafe(models, want);
+    const { tracker, note, late } = await createTrackerSafe(models, want);
     if (getPrefs().delegate !== want) {
       tracker?.close();
+      if (late) settleLate(late, want);
       continue;
     }
     trackerFailed = !tracker;
@@ -347,6 +474,7 @@ async function buildTracker(eng: Engine, models: EngineModels): Promise<EngineBu
     trackerDelegate = want; // even when it failed: a later delegate change is what retries it
     svc.set({ tracker: 'ok' });
     setEngineState({ state: 'ready', bundle, note });
+    if (late) settleLate(late, want);
     return bundle;
   }
 }
@@ -559,6 +687,18 @@ export function ensureBodyTracker(onProgress?: (p: EngineAssetsProgress) => void
     svc.set({ body: { state: 'loading', step: 'model', progress: null } });
     const modelBuffer = await deps.loadPoseModel('full', progress);
     svc.set({ body: { state: 'loading', step: 'tracker', progress: 1 } });
+    // until a synchronous check finds no graph build in flight: a face build or the segmenter's creation may have
+    // started during the download, and a timed-out face build may still run (lateBuild; still running after the
+    // wait: 重試 later). A face rebuild released by the same lateBuild is in trackerP by then, so this waits for it
+    for (;;) {
+      const pending = [trackerP ?? engineP, segmenterCreateP].filter((q) => q !== null);
+      if (pending.length) {
+        for (const q of pending) await q.catch(() => undefined);
+        continue;
+      }
+      if (!lateBuild) break;
+      if (!(await lateBuildSettled())) throw new Error(TRACKER_BUSY);
+    }
     const t = await deps.createBodyTracker({
       modelBuffer,
       wasmBase: deps.wasmBase,
@@ -631,8 +771,13 @@ export function ensureFaceSegmenter(): Promise<PersonSegmenter | null> {
     // until a synchronous check finds no build in flight (one may have started during the download or the wait)
     for (;;) {
       const pending = [trackerP ?? engineP, bodyP].filter((q) => q !== null);
-      if (!pending.length) break;
-      for (const q of pending) await q.catch(() => undefined);
+      if (pending.length) {
+        for (const q of pending) await q.catch(() => undefined);
+        continue;
+      }
+      if (!lateBuild) break;
+      // a timed-out face-tracker build still running after the wait: the unlimited 瘦臉 for now, the next call retries
+      if (!(await lateBuildSettled())) return null;
     }
     // (no await between that check and this: a 美體 build starting from now on waits for segmenterCreateP)
     let create: Promise<PersonSegmenter> | null = null;

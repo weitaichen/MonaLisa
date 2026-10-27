@@ -1570,7 +1570,8 @@ button:focus-visible {
   white-space: normal;
 }
 
-/* status (gate / loading / error) laid over the stage */
+/* status (gate / loading / error) laid over the stage. A card taller than the stage (a long one on a small iPhone, with
+   the panel below) scrolls: centred while it fits, from its top when it does not (the auto margins), nothing squashed */
 .status {
   position: absolute;
   inset: 0;
@@ -1578,11 +1579,21 @@ button:focus-visible {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   padding: 24px 28px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   text-align: center;
   background: var(--bg);
   animation: screen-in 200ms;
+}
+.status > * {
+  flex-shrink: 0;
+}
+.status > :first-child {
+  margin-top: auto;
+}
+.status > :last-child {
+  margin-bottom: auto;
 }
 .status.scrim {
   background: rgba(0, 0, 0, 0.72);

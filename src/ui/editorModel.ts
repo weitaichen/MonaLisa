@@ -65,6 +65,28 @@ export function sessionPlan(cache: DetectionCache | null, hasTracker: boolean): 
 }
 
 /**
+ * A session without a tracker that holds back the photo's first answer (roadmap §15): a dropped cache's persons (the
+ * open's rematch) meet a 基本模式 answer with no face, which drops them for good (migrate.ts knownOnly). While a
+ * timed-out tracker build may still bring a tracker (services.ts trackerComing), the session is drawn without an answer,
+ * and the bind that tracker brings answers instead, renaming them. A session bound with no tracker coming answers as
+ * 基本模式 does. One that held its answer keeps holding it if the build fails after all: the persons wait for the next
+ * open's tracker, and 美體 does not wait for the answer (bodyWaitsForFaces).
+ */
+export function holdsFirstAnswer(s: { hasTracker: boolean; useCache: boolean; answered: boolean; rematch: boolean; trackerComing: boolean }): boolean {
+  return !s.hasTracker && !s.useCache && !s.answered && s.rematch && s.trackerComing;
+}
+
+/**
+ * The 美體 detection waits for the photo's first face answer (S §7): the bodies join its persons. It does not wait for an
+ * answer that may never come: a tracker that could not answer (unsure), or a bind that holds the answer for a tracker
+ * still coming (holdsFirstAnswer: the build may fail, or never land). The bodies then build the photo's cache
+ * (preAnswerCache), which carries a dropped cache's rematch to the face answer.
+ */
+export function bodyWaitsForFaces(s: { cached: boolean; unsure: boolean; held: boolean }): boolean {
+  return !s.cached && !s.unsure && !s.held;
+}
+
+/**
  * The completion of a short-range answer (step-1 spec §6.5): a cache whose answer the short-range detector gave while the
  * full-range one was missing (DetectionCache.photoDetector) gains, once that detector is in, what one full-range
  * detection finds (completeAnswer). It runs where the answer it completes was found: a cache with faces in its last face

@@ -236,6 +236,32 @@ describe('camera error copy', () => {
   it('other kinds keep their copy and error code', () => {
     expect(cameraErrorCopy('denied', true, 'x')).toMatchObject({ title: '無法使用相機', detail: '錯誤代碼：denied' });
   });
+  it('no answer yet: the permission prompt first, then closing the app (both iPhone gestures), Safari last', () => {
+    const m = cameraErrorCopy('noanswer', true, 'https://monalisa.example');
+    expect(m.title).toBe('相機還沒有回應');
+    expect(m.body).toContain('允許');
+    expect(m.steps?.some((s) => s.includes('重試'))).toBe(false); // still waiting: nothing to retry
+    expect(m.steps?.[0]).toContain('往上滑掉');
+    expect(m.steps?.[0]).toContain('主畫面按鈕');
+    expect(m.steps?.at(-1)).toContain('Safari');
+    expect(m.detail).toBe('https://monalisa.example'); // the bare URL: copying all of it pastes as one
+  });
+  it('no frame in a Home Screen app: 重試, then closing the app, then Safari with the URL (WK 252465)', () => {
+    const m = cameraErrorCopy('noframe', true, 'https://monalisa.example');
+    expect(m.title).toBe('收不到相機畫面');
+    expect(m.steps?.[0]).toContain('重試');
+    expect(m.steps?.[1]).toContain('往上滑掉');
+    expect(m.steps?.at(-1)).toContain('Safari');
+    expect(m.detail).toBe('https://monalisa.example'); // the bare URL: copying all of it pastes as one
+  });
+  it('in a Safari tab: reopen the tab, no app switcher or Safari steps, the error code as detail', () => {
+    for (const kind of ['noanswer', 'noframe'] as const) {
+      const m = cameraErrorCopy(kind, false, 'https://monalisa.example');
+      expect(m.steps?.some((s) => s.includes('分頁'))).toBe(true);
+      expect(m.steps?.some((s) => s.includes('往上滑掉') || s.includes('Safari'))).toBe(false);
+      expect(m.detail).toBe(`錯誤代碼：${kind}`);
+    }
+  });
 });
 
 describe('site security headers (vercel.json, mirrored into vite preview)', () => {

@@ -715,7 +715,11 @@ export type Facing = 'user' | 'environment';
 
 export type CameraState = 'idle' | 'starting' | 'live' | 'interrupted' | 'error';
 
-export type CameraErrorKind = 'denied' | 'notfound' | 'insecure' | 'inuse' | 'black' | 'unknown';
+/**
+ * noanswer: getUserMedia has not answered in time, shown while still 'starting' (it keeps waiting); noframe: a stream
+ * showed no frame, and so did the one asked for again (or that request was refused without a tap)
+ */
+export type CameraErrorKind = 'denied' | 'notfound' | 'insecure' | 'inuse' | 'black' | 'noanswer' | 'noframe' | 'unknown';
 
 export interface CameraSnapshot {
   state: CameraState;

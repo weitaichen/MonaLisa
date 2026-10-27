@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test';
 import { debugState, dragSlider, expect, grab, hold, mad, meanLuma, shot, test } from './fixtures';
 
 test('camera: gate → live beautified preview with face → panel → slider → shutter → review', async ({ page }) => {
@@ -104,4 +105,180 @@ test('camera: gate → live beautified preview with face → panel → slider �
   await expect.poll(async () => (await debugState(page)).screen).toBe('editor');
   await expect(page.getByRole('button', { name: '儲存' })).toBeEnabled({ timeout: 30_000 });
   await shot(page, '08-review-to-editor');
+});
+
+/** what iOS does when the user swipes home: the page turns hidden (and back) */
+const setVisibility = (page: Page, state: 'hidden' | 'visible') =>
+  page.evaluate((s) => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => s });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, state);
+
+/** the camera controller's hidden <video>: its stream's video track states ([] = no stream attached) */
+const captureTracks = (page: Page) =>
+  page.evaluate(() => {
+    const s = document.querySelector('video')?.srcObject as MediaStream | null | undefined;
+    return s ? s.getVideoTracks().map((t) => t.readyState) : [];
+  });
+
+const liveWithFrames = async (page: Page) => {
+  const d = await debugState(page);
+  return d.cameraState === 'live' && d.fps > 0;
+};
+
+test('camera: the background stops the capture, a quick return restarts it by itself (0.5.1)', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: /拍攝/ }).click();
+  await page.getByRole('button', { name: '點擊開啟相機' }).click();
+  await expect.poll(() => liveWithFrames(page), { timeout: 90_000, intervals: [500] }).toBe(true);
+  expect(await captureTracks(page)).toEqual(['live']);
+
+  await setVisibility(page, 'hidden');
+  await expect.poll(async () => (await debugState(page)).cameraState).toBe('interrupted');
+  expect(await captureTracks(page)).toEqual([]); // nothing captures in the background
+
+  await setVisibility(page, 'visible');
+  await expect.poll(() => liveWithFrames(page), { timeout: 30_000, intervals: [250] }).toBe(true);
+  expect(await captureTracks(page)).toEqual(['live']);
+  await expect(page.getByText('相機已暫停')).toHaveCount(0);
+  expect((await debugState(page)).lastError).toBeNull();
+});
+
+test('camera: a getUserMedia that does not answer shows 相機還沒有回應 under the spinner; its late answer goes live (0.5.1)', async ({ page }) => {
+  // the first request is held until __answerGum(): WebKit can leave one unanswered
+  await page.addInitScript(() => {
+    const md = navigator.mediaDevices;
+    const real = md.getUserMedia.bind(md);
+    const w = window as unknown as { __gumCalls: number; __answerGum?: () => void };
+    w.__gumCalls = 0;
+    md.getUserMedia = (c?: MediaStreamConstraints) => {
+      w.__gumCalls++;
+      const answer = real(c);
+      if (w.__gumCalls > 1) return answer;
+      return new Promise<MediaStream>((resolve, reject) => {
+        w.__answerGum = () => void answer.then(resolve, reject);
+      });
+    };
+  });
+  const gumCalls = () => page.evaluate(() => (window as unknown as { __gumCalls: number }).__gumCalls);
+
+  await page.goto('/');
+  await page.getByRole('button', { name: /拍攝/ }).click();
+  await page.getByRole('button', { name: '點擊開啟相機' }).click();
+  await expect(page.getByText('正在開啟相機…')).toBeVisible();
+  // ANSWER_TIMEOUT_MS (8 s) later: still waiting, the permission prompt named first, no 重試 (it would wait for the same request)
+  await expect(page.getByText('相機還沒有回應')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/請點「允許」/)).toBeVisible();
+  await expect(page.getByText('錯誤代碼：noanswer')).toBeVisible();
+  await expect(page.locator('.status .spinner')).toBeVisible();
+  await expect(page.getByRole('button', { name: '重試' })).toHaveCount(0);
+  expect((await debugState(page)).cameraState).toBe('starting');
+
+  // back home and in again (點擊開啟相機): no second request queued behind the unanswered one
+  await page.getByRole('button', { name: '回首頁' }).click();
+  await page.getByRole('button', { name: /拍攝/ }).click();
+  await page.getByRole('button', { name: '點擊開啟相機' }).click();
+  expect(await gumCalls()).toBe(1);
+
+  await page.evaluate(() => (window as unknown as { __answerGum: () => void }).__answerGum());
+  await expect.poll(() => liveWithFrames(page), { timeout: 90_000, intervals: [500] }).toBe(true);
+  expect(await gumCalls()).toBe(1);
+  await expect(page.getByText('相機還沒有回應')).toHaveCount(0);
+});
+
+test('camera: a stream that never shows a frame (WK 252465) is stopped and asked for again by itself (0.5.1)', async ({ page }) => {
+  // the first answer is a stream with no frame ever: a canvas captured at 0 fps that is never asked for one
+  await page.addInitScript(() => {
+    const md = navigator.mediaDevices;
+    const real = md.getUserMedia.bind(md);
+    const w = window as unknown as { __gumCalls: number; __deadTrack?: MediaStreamTrack };
+    w.__gumCalls = 0;
+    md.getUserMedia = async (c?: MediaStreamConstraints) => {
+      if (++w.__gumCalls > 1) return real(c);
+      const s = document.createElement('canvas').captureStream(0);
+      w.__deadTrack = s.getVideoTracks()[0];
+      return s;
+    };
+  });
+  const probe = () =>
+    page.evaluate(() => {
+      const w = window as unknown as { __gumCalls: number; __deadTrack?: MediaStreamTrack };
+      return { calls: w.__gumCalls, dead: w.__deadTrack?.readyState ?? null };
+    });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: /拍攝/ }).click();
+  await page.getByRole('button', { name: '點擊開啟相機' }).click();
+  await expect(page.getByText('正在開啟相機…')).toBeVisible();
+  expect(await probe()).toEqual({ calls: 1, dead: 'live' });
+  // FRAME_TIMEOUT_MS (5 s) + REACQUIRE_DELAY_MS later: the dead stream stopped, a second request, live
+  await expect.poll(() => liveWithFrames(page), { timeout: 60_000, intervals: [500] }).toBe(true);
+  expect(await probe()).toEqual({ calls: 2, dead: 'ended' });
+  expect(await captureTracks(page)).toEqual(['live']);
+  await expect(page.getByText('收不到相機畫面')).toHaveCount(0);
+});
+
+/** a Home Screen app (platform.ts isStandalone): its camera cards carry the close-the-app and Safari steps */
+const asHomeScreenApp = (page: Page) =>
+  page.addInitScript(() => Object.defineProperty(Navigator.prototype, 'standalone', { configurable: true, get: () => true }));
+
+/**
+ * The whole card can be read on a small screen: its first line is not cut off, and scrolling the card itself (a wheel
+ * over it, as a finger would; the stage around it cannot scroll) brings its last line, the buttons, fully into view.
+ */
+async function cardReadable(page: Page): Promise<void> {
+  const card = page.locator('.status');
+  // it does not fit (else this proves nothing)
+  expect(await card.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+  await expect(card.locator(':scope > :first-child')).toBeInViewport({ ratio: 1 });
+  const box = (await card.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, 2000);
+  await expect(card.locator(':scope > :last-child')).toBeInViewport({ ratio: 1 });
+}
+
+test.describe('the long camera cards on a small iPhone (SE: 375×667, less its 20 px status bar)', () => {
+  test.use({ viewport: { width: 375, height: 647 } });
+
+  test('收不到相機畫面 scrolls, nothing cut off; a short card stays centred (0.5.1)', async ({ page }) => {
+    await asHomeScreenApp(page);
+    // every answer is a stream with no frame ever: the one asked for again shows none either
+    await page.addInitScript(() => {
+      navigator.mediaDevices.getUserMedia = async () => document.createElement('canvas').captureStream(0);
+    });
+    await page.goto('/');
+    await page.getByRole('button', { name: /拍攝/ }).click();
+    const gate = page.getByRole('button', { name: '點擊開啟相機' });
+    await expect(gate).toBeVisible();
+    // the gate fits: as far from the top of the stage as from its bottom
+    const fit = await page.locator('.status').evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const top = el.firstElementChild!.getBoundingClientRect().top - r.top;
+      const bottom = r.bottom - el.lastElementChild!.getBoundingClientRect().bottom;
+      return { top, bottom, scrolls: el.scrollHeight > el.clientHeight };
+    });
+    expect(fit.scrolls).toBe(false);
+    expect(Math.abs(fit.top - fit.bottom)).toBeLessThan(2);
+
+    await gate.click();
+    await expect(page.getByText('收不到相機畫面')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/App 切換器/)).toBeVisible();
+    await cardReadable(page);
+    await expect(page.getByRole('button', { name: '改用匯入照片' })).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole('button', { name: '重試' })).toBeInViewport({ ratio: 1 });
+  });
+
+  test('相機還沒有回應 scrolls under its spinner, nothing cut off (0.5.1)', async ({ page }) => {
+    await asHomeScreenApp(page);
+    await page.addInitScript(() => {
+      navigator.mediaDevices.getUserMedia = () => new Promise<MediaStream>(() => {});
+    });
+    await page.goto('/');
+    await page.getByRole('button', { name: /拍攝/ }).click();
+    await page.getByRole('button', { name: '點擊開啟相機' }).click();
+    await expect(page.getByText('相機還沒有回應')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/App 切換器/)).toBeVisible();
+    await cardReadable(page);
+    await expect(page.getByRole('button', { name: '改用匯入照片' })).toBeInViewport({ ratio: 1 });
+  });
 });

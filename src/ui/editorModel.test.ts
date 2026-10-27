@@ -26,6 +26,7 @@ import {
   BodyFieldMemo,
   bodyInputKey,
   bodyPanelContext,
+  bodyWaitsForFaces,
   changedPersons,
   completionDue,
   completionHeld,
@@ -38,6 +39,7 @@ import {
   fieldInputOf,
   frameFacesOf,
   hitCtxOf,
+  holdsFirstAnswer,
   MAX_REDETECTS,
   measuredAvailable,
   measurePersons,
@@ -116,6 +118,27 @@ describe('detectSession', () => {
     expect(sessionPlan(null, true)).toEqual({ useCache: false, asks: true });
     expect(sessionPlan(makeCache({ faceScans: [] }), false)).toEqual({ useCache: true, asks: false });
     expect(sessionPlan(null, false)).toEqual({ useCache: false, asks: false });
+  });
+
+  it('a dropped cache\'s persons wait for a tracker still coming instead of meeting a 基本模式 answer (0.5.1)', () => {
+    const base = { hasTracker: false, useCache: false, answered: false, rematch: true, trackerComing: true };
+    expect(holdsFirstAnswer(base)).toBe(true);
+    // the 基本模式 answer stands without a tracker coming, without a rematch, once answered, with a cache or a tracker
+    expect(holdsFirstAnswer({ ...base, trackerComing: false })).toBe(false);
+    expect(holdsFirstAnswer({ ...base, rematch: false })).toBe(false);
+    expect(holdsFirstAnswer({ ...base, answered: true })).toBe(false);
+    expect(holdsFirstAnswer({ ...base, useCache: true })).toBe(false);
+    expect(holdsFirstAnswer({ ...base, hasTracker: true })).toBe(false);
+  });
+
+  it('美體 waits for the first face answer, but not for one held for a tracker still coming, nor an unsure one (0.5.1)', () => {
+    const base = { cached: false, unsure: false, held: false };
+    expect(bodyWaitsForFaces(base)).toBe(true);
+    // the build may fail or never land: the bodies build the cache instead, and it carries the rematch to the face answer
+    expect(bodyWaitsForFaces({ ...base, held: true })).toBe(false);
+    expect(preAnswerCache({ width: 800, height: 1000 }, { p1: { x: 0.2, y: 0.2, w: 0.3, h: 0.3 } }).rematch).toEqual({ p1: { x: 0.2, y: 0.2, w: 0.3, h: 0.3 } });
+    expect(bodyWaitsForFaces({ ...base, unsure: true })).toBe(false);
+    expect(bodyWaitsForFaces({ ...base, cached: true })).toBe(false);
   });
 
   it('a short-range cache is drawn as it is, faceless or not: a definite answer whatever the tracker health (§6.5)', () => {

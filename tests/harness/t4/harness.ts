@@ -125,18 +125,21 @@ const camera = {
       fr.readAsDataURL(blob);
     });
   },
-  /** simulate iOS backgrounding: hidden → track killed → visible; the controller must land in 'interrupted' */
+  /**
+   * simulate iOS backgrounding (0.5.1): hidden → the controller stops the capture at once ('interrupted'), then a quick
+   * return → it restarts by itself with a fresh stream
+   */
   async background() {
     const track = streams.at(-1)!.getVideoTracks()[0];
+    const before = streams.length;
     setVisibility('hidden');
-    track.stop();
-    track.dispatchEvent(new Event('ended'));
     const whileHidden = cam!.snapshot.state;
+    const trackHidden = track.readyState;
     setVisibility('visible');
     await sleep(400);
     const at400 = cam!.snapshot.state;
     await sleep(600);
-    return { whileHidden, at400, at1000: cam!.snapshot.state, ...camState() };
+    return { whileHidden, trackHidden, at400, at1000: cam!.snapshot.state, newStreams: streams.length - before, ...camState() };
   },
   /** a real 'ended' (e.g. device unplugged) while visible */
   endNow() {

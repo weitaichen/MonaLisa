@@ -350,9 +350,9 @@ public/makeup/gp/{lip,blush}{,_mask}.png
 **Camera handling**
 - Show a start screen with a "點擊開啟相機" button before calling `getUserMedia`, on every cold launch.
 - Use `<video autoplay muted playsinline>`. Keep it in the DOM at 1×1 or `opacity: 0` behind the canvas rather than `display: none`; whether a hidden video keeps updating is UNVERIFIED.
-- Attach the stream once and keep it alive across editor and settings screens. The re-prompt fires after about 1 minute with no capture. Whether `track.enabled = false` counts as capturing is UNVERIFIED.
+- Attach the stream once and keep it alive across editor and settings screens (0.5.1, 2026-10-26: no longer while the app is hidden; see roadmap §15). The re-prompt fires after about 1 minute with no capture. Whether `track.enabled = false` counts as capturing is UNVERIFIED.
 - Read actual frame dimensions from `video.videoWidth/Height`, not `getSettings()` (WK 323550). If the video is landscape while the UI is portrait, rotate in the shader (Apple forum 801146, UNVERIFIED symptom).
-- **Recovery:** listen for `visibilitychange` and the track's `mute`, `unmute` and `ended` events. On return to the foreground, wait about 0.7–1 s. If the track is still muted or has ended, stop it and show "恢復相機" (needs a gesture), which calls `getUserMedia` again.
+- **Recovery:** listen for `visibilitychange` and the track's `mute`, `unmute` and `ended` events. On return to the foreground, wait about 0.7–1 s (0.5.1, 2026-10-26: the capture stops while hidden and restarts on return, the grace stays for a mute while visible; see roadmap §15). If the track is still muted or has ended, stop it and show "恢復相機" (needs a gesture), which calls `getUserMedia` again.
 - On repeated black frames (WK 252465), show "在 Safari 開啟" with step-by-step instructions.
 - Switching cameras means stopping the old track first.
 - Use the Wake Lock API while the camera is active. It works in standalone mode on 18.4+ and is broken on 16.4–18.3.

@@ -9,7 +9,12 @@ export interface CameraErrorCopy {
   detail: string;
 }
 
-const COPY: Record<Exclude<CameraErrorKind, 'black'>, { title: string; body: string; steps?: string[] }> = {
+/** Closing a Home Screen app on every iPhone: Face ID models swipe up and hold, Home-button models double-press. */
+const APP_SWITCHER = '打開 App 切換器（多工畫面；從螢幕底部往上滑並停住，有主畫面按鈕的機型請連按兩下主畫面按鈕），把這個 App 往上滑掉';
+/** the last resort of a stuck Home Screen camera: the selectable detail holds the bare URL, so copying all of it pastes as one */
+const SAFARI_LAST = '還是不行：重新開機，或先長按複製下方網址，再開啟 Safari 貼到網址列';
+
+const COPY: Record<Exclude<CameraErrorKind, 'black' | 'noanswer' | 'noframe'>, { title: string; body: string; steps?: string[] }> = {
   denied: {
     title: '無法使用相機',
     body: '相機權限已被拒絕。',
@@ -27,6 +32,43 @@ const COPY: Record<Exclude<CameraErrorKind, 'black'>, { title: string; body: str
  * black stream means a covered lens or a very dark scene, and the Safari advice would be wrong.
  */
 export function cameraErrorCopy(kind: CameraErrorKind, standalone: boolean, origin: string): CameraErrorCopy {
+  // Still waiting for getUserMedia (shown under the spinner, the state is 'starting'): the permission prompt first. A
+  // request WebKit left unanswered blocks every later one of the page: only closing the app (or another browser) helps.
+  if (kind === 'noanswer') {
+    const body = '還在等相機回應。如果畫面上有詢問相機權限的視窗，請點「允許」。';
+    if (standalone) {
+      return {
+        title: '相機還沒有回應',
+        body,
+        steps: [`若一直沒有反應：${APP_SWITCHER}`, '再從主畫面重新開啟', SAFARI_LAST],
+        detail: origin,
+      };
+    }
+    return {
+      title: '相機還沒有回應',
+      body,
+      steps: ['若一直沒有反應：關閉這個分頁後重新開啟', '還是不行就重新啟動瀏覽器或裝置'],
+      detail: '錯誤代碼：noanswer',
+    };
+  }
+  // Two streams in a row showed no frame (WK 252465 and kin, Home Screen apps only): 重試 once, then close the app;
+  // Safari does not have the bug
+  if (kind === 'noframe') {
+    if (standalone) {
+      return {
+        title: '收不到相機畫面',
+        body: '沒有收到相機畫面。這是主畫面 App 偶爾會遇到的系統問題：',
+        steps: ['先點「重試」', `仍然不行：${APP_SWITCHER}，再從主畫面重新開啟`, SAFARI_LAST],
+        detail: origin,
+      };
+    }
+    return {
+      title: '收不到相機畫面',
+      body: '沒有收到相機畫面，這通常是暫時的系統問題：',
+      steps: ['先點「重試」', '仍然不行：關閉這個分頁後重新開啟', '還是不行就重新啟動瀏覽器或裝置'],
+      detail: '錯誤代碼：noframe',
+    };
+  }
   if (kind === 'black') {
     if (standalone) {
       return {

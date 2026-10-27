@@ -112,10 +112,10 @@ try {
     const s3 = await page.evaluate(() => window.t4.camera.start());
     check('restart after stop keeps the last facing', s3.snap.state === 'live' && s3.snap.facing === 'environment', s3.snap);
     const bg = await page.evaluate(() => window.t4.camera.background());
-    report.cameraBackground = { whileHidden: bg.whileHidden, at400: bg.at400, at1000: bg.at1000 };
-    check('background + ended track → still live during grace → interrupted after 800 ms', bg.whileHidden === 'live' && bg.at400 === 'live' && bg.at1000 === 'interrupted' && !bg.video.hasSrc, report.cameraBackground);
+    report.cameraBackground = { whileHidden: bg.whileHidden, trackHidden: bg.trackHidden, at400: bg.at400, at1000: bg.at1000, newStreams: bg.newStreams };
+    check('background → capture stopped at once (interrupted, track ended) → a quick return restarts it by itself (0.5.1)', bg.whileHidden === 'interrupted' && bg.trackHidden === 'ended' && bg.at1000 === 'live' && bg.newStreams === 1 && bg.video.hasSrc, report.cameraBackground);
     const rs = await page.evaluate(() => window.t4.camera.resume());
-    check('resume → live again with a fresh stream', rs.snap.state === 'live' && rs.tracks.at(-1) === 'video:live', { snap: rs.snap, n: rs.tracks.length });
+    check('resume while already live again → no new request, still live', rs.snap.state === 'live' && rs.tracks.at(-1) === 'video:live' && rs.gumCalls.length === bg.gumCalls.length, { snap: rs.snap, n: rs.tracks.length });
     const en = await page.evaluate(() => window.t4.camera.endNow());
     check('ended while visible → interrupted immediately', en.snap.state === 'interrupted', en.snap.state);
 

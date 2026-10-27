@@ -11,9 +11,9 @@ import {
   SHADES,
 } from '../engine/params';
 import type { BeautyParams, EditState, ParamId, PersonParams, RegionStatus, Selection, Stroke } from '../types';
-import { lensFor, NO_BODY_NOTE, NO_FACE_NOTE, P0_INFO, type PersonInfo } from '../edit/lens';
+import { CAMERA_NO_FACE_NOTE, LIVE_PERSONS, lensFor, NO_BODY_NOTE, NO_FACE_NOTE, P0_INFO, type PersonInfo } from '../edit/lens';
 import { editFromLegacy, legacyProjection } from '../edit/legacy';
-import { assignPersons, defaultPhoto, emptyShades, naturalPerson, neutralPerson, personFromPreset, withPersons, withStrokes } from '../edit/state';
+import { assignPersons, cameraEdit, defaultPhoto, emptyShades, LIVE, naturalPerson, neutralPerson, neutralPhoto, personFromPreset, withPersons, withStrokes } from '../edit/state';
 import { TONE_COPY } from '../edit/toneCopy';
 import { heightBandStretch } from '../body/bands';
 import { bandEdges, bandToDisplay, defaultStretch, displayToBand, dragEdge, keyStep, MIN_GAP, moveEdge } from './components/HeightBandOverlay';
@@ -32,6 +32,7 @@ import {
   BRUSH_KEY,
   brushItem,
   CAMERA_BODY,
+  CAMERA_TARGET,
   clearArmKey,
   clearLabel,
   clearTap,
@@ -1376,5 +1377,56 @@ describe('推臉筆 in the strips (push-brush spec §2.1)', () => {
     const body = rememberSel({ ...last, tab: 'body', body: 'brush' }, last);
     expect(body.body).toBe(last.body);
     expect(rememberSel(last, INITIAL_SELECTION)).toEqual(last);
+  });
+});
+
+describe('the camera panel (camera per-person spec §3.2, §3.6)', () => {
+  const sel = (skin: ParamId) => ({ ...INITIAL_SELECTION, tab: 'skin' as const, skin });
+  const camLens = (shown: number, all = false, noFace = false) =>
+    lensFor(cameraEdit(neutralPhoto(), naturalPerson()), { kind: 'person', id: LIVE }, LIVE_PERSONS, LIVE, { camera: { shown, all, noFace, target: 3 } });
+  it('≥ 2 faces: photo items read 「· 整張照片」; person items name the selected person, or 全部 under 全部套用', () => {
+    expect(sliderFor(camLens(2), sel('skin.whiten'))).toMatchObject({ label: '美白 · 整張照片', aria: '美白，整張照片' });
+    expect(sliderFor(camLens(2), sel('skin.smooth'))).toMatchObject({ label: '磨皮', aria: `磨皮，${CAMERA_TARGET}`, key: 'c3:skin.smooth' });
+    expect(sliderFor(camLens(2, true), sel('skin.smooth'))?.aria).toBe('磨皮，全部');
+    const one = sliderFor(camLens(1), sel('skin.smooth'))!;
+    expect([one.label, one.aria]).toEqual(['磨皮', undefined]);
+  });
+  it('the slider key carries the target whatever the face count: a drag survives a second face arriving or leaving (§3.2)', () => {
+    const one = sliderFor(camLens(1), sel('skin.smooth'))!;
+    expect(one.key).toBe('c3:skin.smooth');
+    expect(sliderFor(camLens(2), sel('skin.smooth'))!.key).toBe(one.key);
+    expect([one.label, one.aria]).toEqual(['磨皮', undefined]);
+    // photo items too: the label and aria rules still follow ≥ 2 faces, the key does not
+    const photo = sliderFor(camLens(1), sel('skin.whiten'))!;
+    expect([photo.key, photo.label, photo.aria]).toEqual(['c*:skin.whiten', '美白', undefined]);
+    expect(sliderFor(camLens(2), sel('skin.whiten'))!.key).toBe(photo.key);
+    // the editor with one person keeps the bare key
+    expect(sliderFor(lensFor(cameraEdit(neutralPhoto(), naturalPerson()), { kind: 'person', id: LIVE }, LIVE_PERSONS, LIVE), sel('skin.smooth'))!.key).toBe('skin.smooth');
+  });
+  it('a photo item’s key carries no target: a photo drag begun with no face shown survives a face appearing (round-1 review C13)', () => {
+    const lens = (target: number | null, shown: number) =>
+      lensFor(cameraEdit(neutralPhoto(), naturalPerson()), { kind: 'person', id: LIVE }, LIVE_PERSONS, LIVE, { camera: { shown, all: false, noFace: shown === 0, target } });
+    const adjust = { ...INITIAL_SELECTION, tab: 'adjust' as const, adjust: 'adjust.brightness' as const };
+    for (const s of [adjust, sel('skin.whiten'), sel('skin.sharpen'), { ...INITIAL_SELECTION, tab: 'filter' as const }, { ...INITIAL_SELECTION, tab: 'preset' as const, presetPart: 'look' as const }]) {
+      const before = sliderFor(lens(null, 0), s);
+      if (!before) continue;
+      expect([sliderFor(lens(1, 1), s)?.key, sliderFor(lens(4, 2), s)?.key]).toEqual([before.key, before.key]);
+    }
+    expect(sliderFor(lens(null, 0), adjust)?.key).toBe('c*:adjust.brightness');
+    // a person item's key still follows the target (a target change resets its drag, §3.2)
+    expect([sliderFor(lens(1, 1), sel('skin.smooth'))?.key, sliderFor(lens(4, 2), sel('skin.smooth'))?.key]).toEqual(['c1:skin.smooth', 'c4:skin.smooth']);
+  });
+  it('no face shown: person items are off with the note, photo items stay; 一鍵 presets are off; 美型 / 美妝 dim', () => {
+    const l = camLens(0, false, true);
+    const skin = itemsFor(l, sel('skin.smooth'));
+    expect(skin.find((i) => i.key === 'skin.smooth')).toMatchObject({ disabled: true, reason: CAMERA_NO_FACE_NOTE });
+    expect(skin.find((i) => i.key === 'skin.whiten')?.disabled).toBe(false);
+    expect(sliderFor(l, sel('skin.smooth'))).toBeNull();
+    expect(sliderFor(l, sel('skin.whiten'))?.param).toBe('skin.whiten');
+    expect(itemsFor(l, { ...INITIAL_SELECTION, tab: 'preset' }).every((i) => i.disabled)).toBe(true);
+    expect(sliderFor(l, { ...INITIAL_SELECTION, tab: 'preset' })).toBeNull();
+    expect(personNote('shape', l)).toEqual({ text: CAMERA_NO_FACE_NOTE, dim: true });
+    expect(personNote('skin', l)).toEqual({ text: CAMERA_NO_FACE_NOTE, dim: false });
+    expect(personNote('filter', l)).toBeNull();
   });
 });

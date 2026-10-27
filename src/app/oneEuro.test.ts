@@ -56,6 +56,44 @@ describe('LandmarkSmoother', () => {
     }
     for (let k = 0; k < oa.length; k++) expect(Math.abs(oa[k] - ob[k])).toBeLessThan(1e-6);
   });
+  it('is one OneEuro per coordinate, to the bit (round-2 review D11: the state in typed arrays changes no output)', () => {
+    // the reference: the smoother as it was, 478 × 3 OneEuro filters, each fed its coordinate in source px
+    const ref = Array.from({ length: 478 * 3 }, () => new OneEuro());
+    const refApply = (p: Float32Array, w: number, h: number, ts: number) => {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let i = 0; i < 478; i++) {
+        x0 = Math.min(x0, p[i * 3] * w); x1 = Math.max(x1, p[i * 3] * w);
+        y0 = Math.min(y0, p[i * 3 + 1] * h); y1 = Math.max(y1, p[i * 3 + 1] * h);
+      }
+      const size = (x1 - x0 + (y1 - y0)) / 2;
+      const scale = size > 0 && Number.isFinite(size) ? 1 / size : 1;
+      const out = new Float32Array(p.length);
+      for (let i = 0; i < 478; i++) {
+        out[i * 3] = ref[i * 3].apply(p[i * 3] * w, ts, scale) / w;
+        out[i * 3 + 1] = ref[i * 3 + 1].apply(p[i * 3 + 1] * h, ts, scale) / h;
+        out[i * 3 + 2] = ref[i * 3 + 2].apply(p[i * 3 + 2] * w, ts, scale) / w;
+      }
+      return out;
+    };
+    const s = new LandmarkSmoother();
+    // motion, a jump, uneven frame times, a repeated and an older timestamp, a resolution change
+    const frames: [number, number, number, number][] = [];
+    let ts = 1000;
+    for (let i = 0; i < 60; i++) {
+      ts += i === 20 ? 0 : i === 21 ? -40 : [33, 16, 50, 34][i % 4];
+      const res = i < 40 ? [1280, 720] : [720, 1280];
+      frames.push([i < 30 ? i * 0.003 : 0.2 + Math.sin(i) * 0.01, res[0], res[1], ts]);
+    }
+    let differ = 0;
+    for (const [dx, w, h, t] of frames) {
+      const p = pts(dx);
+      const a = s.apply(p, w, h, t);
+      const b = refApply(p, w, h, t);
+      for (let k = 0; k < a.length; k++) if (!Object.is(a[k], b[k])) differ++;
+    }
+    expect(differ).toBe(0);
+  });
+
   it('one filter per landmark coordinate: a still point stays put while another moves', () => {
     const s = new LandmarkSmoother();
     let out = new Float32Array(0);

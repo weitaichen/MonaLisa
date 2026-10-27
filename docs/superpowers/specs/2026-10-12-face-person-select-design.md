@@ -38,7 +38,7 @@
 | Persistence | Detection results (faces and persons) and per-person params are cached in the history entry. A reopen needs no detection and always maps edits to the same person. Old entries (no cache) give their params to the default-selected person. |
 | Engine | One pass for all faces. Every face's displacement is computed in original-image coordinates and the displacements are **summed**, never chained face after face. Each face's influence is capped at half the distance to the nearest other face. 磨皮 and 紅潤 strengths are per face, carried in the skin mask. Makeup is drawn per face. The source is still resampled once. |
 | Multi-person 美體 | Each person's local field is computed and the fields are combined into **one** field. Other persons are protected zones. 背景保護 and the 瘦臉 background limit are computed per person. |
-| Camera | Track up to 3 faces; default = the largest face; tap a face to switch; 「全部」 gives every face the same params (shown as the chip 「全部套用」, A10); no per-face settings in the camera; app-side landmark smoothing (MediaPipe smoothing is off when `numFaces > 1`), e.g. One-Euro; capture → 編輯 hands the selected face to the editor. |
+| Camera | Track up to 3 faces; default = the largest face; tap a face to switch; 「全部」 gives every face the same params (shown as the chip 「全部套用」, A10); no per-face settings in the camera; app-side landmark smoothing (MediaPipe smoothing is off when `numFaces > 1`), e.g. One-Euro; capture → 編輯 hands the selected face to the editor. **Superseded in v0.6 by [2026-10-19-camera-per-person-design.md](2026-10-19-camera-per-person-design.md)** (per-person camera settings, up to 10 faces). |
 | Phase 0 | Measure first: a group-photo fixture, numFaces/numPoses cost (desktop now, iPhone via `/bench.html` later), GL limits (`MAX_FRAGMENT_UNIFORM_VECTORS`, UBO size, float textures). Fallbacks such as a lower face cap exist for bad numbers. |
 | Out of scope | Long-press re-detect of missed small faces; per-person filters; per-person camera settings |
 
@@ -127,7 +127,7 @@ Sibling sub-specs that quoted the old RM text were updated in the 2026-10-12 con
 1. Up to 3 faces are tracked. By default the largest face is beautified; with one face that is v0.3's behaviour, and a tap on that face still collapses the panel as today.
 2. **Tap** (only while ≥ 2 faces are tracked). Tapping a face the user has not picked beautifies that face (a face beautified only by default gets pinned); an accent ring shows around it for 800 ms. Tapping the picked face again, or the background, collapses the panel as today. While ≥ 2 faces are tracked and 全部套用 is off, a 6 px accent dot sits above the beautified face.
 3. **全部套用.** A chip appears at the top left of the preview once ≥ 2 faces have been tracked for 300 ms. When it is on, every face gets the same look and no dot is shown; a tap on a face turns it off and selects that face. It is off at app start and not persisted, but it survives the review screen and retakes.
-4. There is one look for every face; there are no per-face settings in the camera.
+4. There is one look for every face; there are no per-face settings in the camera. (Superseded in v0.6 by [2026-10-19-camera-per-person-design.md](2026-10-19-camera-per-person-design.md): each face keeps its own settings.)
 5. **Hand-over.** Shutter → 預覽 → 編輯 opens the photo with the same person selected. Since 2026-10-18 it opens at 原圖, as an import does (RM §3.7): the camera look stays in the camera. Under 全部套用 the primary person is selected (§11 Q3); until then everyone in the editor carried the look.
 6. VoiceOver users cannot pick a face by tapping; 全部套用 is their way to beautify everyone.
 
@@ -228,6 +228,8 @@ Hit test (`hitPerson(uv, ctx)`, pure, `src/detect/persons.ts`):
 - **A selected body person the item refuses** reads its own measure's reason (`BodyContext.personGate`, `editorModel.personBodyGate`); a body person with no measure (`measureBody` threw) reads 「無法量測人物輪廓，美體調整暫不可用」 (`BODY_UNMEASURED_REASON`, as v0.3), never the lens's generic 「此照片無法使用這個效果」 (step-1 review). A notice that fails after a 美體 answer was merged is reported on its own and is not 美體偵測失敗 (`settleBodyAnswer`).
 
 ### 2.5 Camera
+
+> **Superseded in v0.6** by [2026-10-19-camera-per-person-design.md](2026-10-19-camera-per-person-design.md): 全部套用 copies the selected person's settings (K10), every face renders its own person, faint brackets mark each face (K12); the chip, tap and marker rules below are v0.4–v0.5.
 
 - **全部套用 chip** (A10): top left of `.frame` (`Camera.tsx:340-342`), 32 pt tall, the pill style of the editor's float buttons, `aria-pressed`. When on, it has an accent fill.
   - It appears once ≥ 2 shown tracks (held tracks included) have existed for 300 ms, and hides after < 2 for 1200 ms (the badge debounce of `Camera.tsx:105-112`). It never hides while it is on.

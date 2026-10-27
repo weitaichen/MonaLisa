@@ -1,16 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EDIT_DETECT_FACES } from '../config/limits';
+import { boxIoU } from '../detect/faces';
 import { legacyFrame } from '../edit/frame';
 import { splitLegacy } from '../edit/legacy';
 import { retake, sampleFaceAt } from '../detect/testMeshes';
-import { firstAnswer } from '../edit/migrate';
-import { defaultPhoto } from '../edit/state';
+import { firstAnswer, handOverEdit } from '../edit/migrate';
+import { defaultPhoto, naturalPerson, personFromPreset } from '../edit/state';
 import { applyPreset, setParam } from '../engine/params';
 import { applyRatio, IDENTITY_GEOMETRY, rotateLeft, snapCrop } from '../geometry/view';
 import { spotWindowGrowth } from '../media/exportPlan';
 import { adapt } from '../tracking/adapter111';
-import type { BeautyParams, Geometry, Landmarks478, PhotoParams, StillFrame } from '../types';
-import { createStillSession, detectStill, sameDisplayFrame, type StillSession } from './still';
+import type { BeautyParams, Geometry, Landmarks478, PhotoParams, PxRect, Rect, StillFrame } from '../types';
+import { createStillSession, detectStill, sameDisplayFrame, zoomCrop, type StillSession } from './still';
 import { faceOf, fakeEngine, fakeTracker, makeBodyField, makeFace, makeLandmarks, stubRaf, weightOf } from './testFakes';
 
 vi.mock('../tracking/adapter111', () => ({
@@ -933,5 +934,340 @@ describe('createStillSession: the camera seed in no full-range face (D2, step-1 
     expect(createStillSession(fakeEngine(), short, bitmap()).detector).toBe('short-range');
     expect(createStillSession(fakeEngine(), full, bitmap(), { faces: cached() }).detector).toBeNull();
     expect(createStillSession(fakeEngine(), null, bitmap()).detector).toBeNull();
+  });
+});
+
+describe('createStillSession: the hand-over retries (camera per-person spec §5.4, K21)', () => {
+  beforeEach(() => {
+    // a face at (lm0.x, lm0.y) with radius lm0.z (a fraction of the width), square in pixels: mapLandmarks moves it like a real face
+    vi.mocked(adapt).mockImplementation((l, w, h) => {
+      const f = makeFace(0, l.points[0]);
+      for (let i = 0; i < 36; i++) {
+        f.oval[i * 2] = l.points[0] + l.points[2] * Math.cos((i / 36) * 2 * Math.PI);
+        f.oval[i * 2 + 1] = l.points[1] + l.points[2] * (w / h) * Math.sin((i / 36) * 2 * Math.PI);
+      }
+      return f;
+    });
+    vi.stubGlobal(
+      'OffscreenCanvas',
+      class {
+        constructor(
+          public width: number,
+          public height: number,
+        ) {}
+        getContext() {
+          return { drawImage: vi.fn() };
+        }
+      },
+    );
+  });
+  afterEach(() => {
+    vi.mocked(adapt).mockImplementation(() => makeFace(7));
+  });
+  const face = (x: number, y: number, r: number) => {
+    const l = makeLandmarks();
+    l.points.set([x, y, r], 0);
+    return l;
+  };
+  const nat = naturalPerson();
+  /** an edited camera person's box (params set): the retries ask for it */
+  const ed = (box: Rect) => ({ box, params: nat });
+  const far = { x: 0.59375, y: 0.3, w: 0.0625, h: 0.046875 }; // 96 px wide, centre x 960 px
+  const xs = (s: StillSession) => s.faces.map((f) => f.box.x + f.box.w / 2);
+  /** each detectImage call: the detector asked ('photo' when none is named) and the input's size, read at call time */
+  function record(tracker: ReturnType<typeof fakeTracker>, answer: (img: unknown, o: { detector?: string }) => Landmarks478[]) {
+    const calls: { detector: string; size: [number, number] }[] = [];
+    tracker.detectImage.mockImplementation((img, o) => {
+      const v = img as unknown as { width: number; height: number };
+      calls.push({ detector: o.detector ?? 'photo', size: [v.width, v.height] });
+      return answer(img, o);
+    });
+    return calls;
+  }
+  it('a box no full-range face holds gets one full-range detection on a crop of side box width / 0.25; the face holding its centre joins; the crop is freed', () => {
+    const bmp = bitmap();
+    const tracker = fakeTracker();
+    tracker.photoDetector = 'full-range';
+    const calls = record(tracker, (img) => (img === bmp ? [face(0.25, 0.5, 0.15)] : [face(0.5, 0.5, 0.125)]));
+    const s = createStillSession(fakeEngine(), tracker, bmp, { handOver: [ed(far)] });
+    expect(calls[1]).toEqual({ detector: 'photo', size: [384, 384] });
+    expect(tracker.detectImage.mock.calls[1][1]).toEqual({ maxFaces: EDIT_DETECT_FACES });
+    expect(xs(s)).toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.625, 6)]);
+    // its pixels go at once (round-1 review C15), as grabOriginalFrame's copy does
+    const crop = tracker.detectImage.mock.calls[1][0] as unknown as { width: number; height: number };
+    expect([crop.width, crop.height]).toEqual([0, 0]);
+  });
+  it('zoomCrop moves the crop inside the image at an edge', () => {
+    expect(zoomCrop({ x: 0.97, y: 0.97, w: 0.02, h: 0.015 }, 1536, 2048)).toEqual({ x: 1536 - 123, y: 2048 - 123, w: 123, h: 123 });
+  });
+  it('a box twice full-range’s floor or more and the faceSeed share one short-range pass (missed for its cut or pose, not its size)', () => {
+    const bmp = bitmap();
+    const tracker = fakeTracker();
+    tracker.photoDetector = 'full-range';
+    tracker.detectImage.mockImplementation((_img, o) => (o.detector === 'camera' ? [face(0.25, 0.5, 0.15), face(0.75, 0.5, 0.2)] : [face(0.25, 0.5, 0.15)]));
+    const big = { x: 0.55, y: 0.4, w: 0.4, h: 0.3 }; // 614 px ≥ 2 × 0.08 × 2048
+    const s = createStillSession(fakeEngine(), tracker, bmp, { handOver: [ed(big)], faceSeed: { x: 0.75, y: 0.5 } });
+    expect(tracker.detectImage.mock.calls.map((c) => c[1])).toEqual([{ maxFaces: EDIT_DETECT_FACES }, { maxFaces: EDIT_DETECT_FACES, detector: 'camera' }]);
+    expect(xs(s)).toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.75, 6)]);
+  });
+  it('round-6 review H4 (round-7 review J3): a found box’s zoom that finds only a neighbour of another size, whose padded box holds its centre, has found nothing for it: the short-range pass looks for its own face', () => {
+    const bmp = bitmap();
+    // N: a face 0.3 wide (460 px) at (0.5, 0.5), claimed by no box. B: a found edited box 0.18 wide (276 px, 13.5 % of the
+    // 2048 px long edge: zoomed, and over short-range's floor), its centre in N's padded box, box IoU under 0.3
+    const b = { x: 0.61, y: 0.4325, w: 0.18, h: 0.135 };
+    const crop = zoomCrop(b, 1536, 2048);
+    /** N as the zoom's crop sees it (square in pixels: the radius is a fraction of the crop's width) */
+    const nInCrop = face((0.5 * 1536 - crop.x) / crop.w, (0.5 * 2048 - crop.y) / crop.h, (0.15 * 1536) / crop.w);
+    const tracker = fakeTracker();
+    tracker.photoDetector = 'full-range';
+    const calls = record(tracker, (img, o) => (img !== bmp ? [nInCrop] : o.detector === 'camera' ? [face(0.5, 0.5, 0.15), face(0.7, 0.5, 0.09)] : [face(0.5, 0.5, 0.15)]));
+    const s = createStillSession(fakeEngine(), tracker, bmp, { handOver: [ed(b)] });
+    expect(calls.map((c) => c.detector)).toEqual(['photo', 'photo', 'camera']);
+    expect(calls[1].size).toEqual([crop.w, crop.h]);
+    expect(xs(s)).toEqual([expect.closeTo(0.5, 6), expect.closeTo(0.7, 6)]);
+  });
+  it('nothing more runs when every seed is found; a box its zoomed retry misses is left out (firstAnswer counts it)', () => {
+    const bmp = bitmap();
+    const found = fakeTracker();
+    found.photoDetector = 'full-range';
+    found.detectImage.mockImplementation(() => [face(0.25, 0.5, 0.15)]);
+    // the box is about the face's size (0.25 against 0.3 wide), its centre in the face's padded box: found by the centre
+    // rule (round-6 review H4: a face of another size would be someone else's, and the box retried)
+    createStillSession(fakeEngine(), found, bmp, { handOver: [ed({ x: 0.14, y: 0.42, w: 0.25, h: 0.1875 })] });
+    expect(found.detectImage).toHaveBeenCalledTimes(1);
+    const missed = fakeTracker();
+    missed.photoDetector = 'full-range';
+    missed.detectImage.mockImplementation((img) => (img === bmp ? [face(0.25, 0.5, 0.15)] : []));
+    // 96 px, under the short-range detector's floor on the whole photo (0.11 × 2048): no short-range pass either
+    const s = createStillSession(fakeEngine(), missed, bmp, { handOver: [ed(far)] });
+    expect(missed.detectImage).toHaveBeenCalledTimes(2);
+    expect(xs(s)).toEqual([expect.closeTo(0.25, 6)]);
+  });
+
+  describe('round 1 (C2): the size that picks the retry is the face over the long edge, for 3:4 and 9:16 shots and cut faces', () => {
+    /** the user, found by full-range; the friend at `friend`, found by the short-range detector only (cut by the left edge) */
+    function cutFriend(bmp: ImageBitmap, friend: Rect) {
+      const aspect = bmp.width / bmp.height;
+      const c = { x: friend.x + friend.w / 2, y: friend.y + friend.h / 2 };
+      const user = face(0.6, 0.5, 0.15);
+      const tracker = fakeTracker();
+      tracker.photoDetector = 'full-range';
+      const calls = record(tracker, (img, o) => (o.detector === 'camera' ? [user, face(c.x, c.y, friend.w / 2)] : img === bmp ? [user] : []));
+      return { calls, tracker, box: { ...friend, h: friend.w * aspect } };
+    }
+    it('3:4 (1080 × 1440): a face 30 % of the width cut by the edge (22.5 % of the long edge) takes the short-range pass, not a zoom of 1.1×', () => {
+      const bmp = bitmap(1080, 1440);
+      const { calls, tracker, box } = cutFriend(bmp, { x: -0.03, y: 0.4, w: 0.3, h: 0 });
+      const s = createStillSession(fakeEngine(), tracker, bmp, { handOver: [ed(box)] });
+      expect(calls.map((c) => c.detector)).toEqual(['photo', 'camera']);
+      // the friend's box clipped to the photo (x 0–0.27, ovalBox)
+      expect(xs(s)).toEqual([expect.closeTo(0.135, 6), expect.closeTo(0.6, 6)]);
+    });
+    it('9:16 (1080 × 1920): 30 % of the width (16.9 % of the long edge) is a short-range face too', () => {
+      const bmp = bitmap(1080, 1920);
+      const { calls, tracker, box } = cutFriend(bmp, { x: -0.03, y: 0.4, w: 0.3, h: 0 });
+      const s = createStillSession(fakeEngine(), tracker, bmp, { handOver: [ed(box)] });
+      expect(calls.map((c) => c.detector)).toEqual(['photo', 'camera']);
+      expect(xs(s)).toHaveLength(2);
+    });
+    it('9:16: 26 % of the width (14.6 % of the long edge) is zoomed first; the zoom missing it, the short-range pass, which can see it, finds it', () => {
+      const bmp = bitmap(1080, 1920);
+      const { calls, tracker, box } = cutFriend(bmp, { x: -0.03, y: 0.4, w: 0.26, h: 0 });
+      const s = createStillSession(fakeEngine(), tracker, bmp, { handOver: [ed(box)] });
+      expect(calls.map((c) => c.detector)).toEqual(['photo', 'photo', 'camera']);
+      expect(xs(s)).toEqual([expect.closeTo(0.115, 6), expect.closeTo(0.6, 6)]);
+    });
+  });
+
+  it('round 1 (C15): the zoom runs first, on the full-range graph; a faceSeed in a small edited box is that box’s, so no short-range pass runs for a face it cannot find', () => {
+    const bmp = bitmap();
+    const tracker = fakeTracker();
+    tracker.photoDetector = 'full-range';
+    const calls = record(tracker, (img) => (img === bmp ? [face(0.25, 0.5, 0.15)] : [face(0.5, 0.5, 0.125)]));
+    // far: 96 px, 4.7 % of the long edge; the seed its centre (the camera's target is this edited person)
+    const s = createStillSession(fakeEngine(), tracker, bmp, { handOver: [ed(far)], faceSeed: { x: far.x + far.w / 2, y: far.y + far.h / 2 } });
+    expect(calls.map((c) => c.detector)).toEqual(['photo', 'photo']);
+    expect(xs(s)).toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.625, 6)]);
+    // the zoom missing it too: still no short-range pass (the face is under that detector's floor on the whole photo)
+    const lost = fakeTracker();
+    lost.photoDetector = 'full-range';
+    const none = record(lost, (img) => (img === bmp ? [face(0.25, 0.5, 0.15)] : []));
+    createStillSession(fakeEngine(), lost, bmp, { handOver: [ed(far)], faceSeed: { x: far.x + far.w / 2, y: far.y + far.h / 2 } });
+    expect(none.map((c) => c.detector)).toEqual(['photo', 'photo']);
+    // a zoom and a short-range pass in one answer: the zoom first, so the graph changes detector once
+    const both = fakeTracker();
+    both.photoDetector = 'full-range';
+    const order = record(both, (img, o) => (o.detector === 'camera' ? [face(0.25, 0.5, 0.15), face(0.75, 0.5, 0.2)] : img === bmp ? [face(0.25, 0.5, 0.15)] : [face(0.5, 0.5, 0.125)]));
+    const s2 = createStillSession(fakeEngine(), both, bmp, { handOver: [ed({ x: 0.55, y: 0.35, w: 0.4, h: 0.3 }), ed(far)] });
+    expect(order.map((c) => c.detector)).toEqual(['photo', 'photo', 'camera']);
+    expect(xs(s2)).toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.625, 6), expect.closeTo(0.75, 6)]);
+  });
+
+  it('round 1 (C8): while photos run the short-range detector, a lost box is still zoomed (a quarter of the crop is over its floor); no repeat of the whole-photo pass', () => {
+    const bmp = bitmap();
+    const tracker = fakeTracker();
+    tracker.photoDetector = 'short-range';
+    const calls = record(tracker, (img) => (img === bmp ? [face(0.25, 0.5, 0.15)] : [face(0.5, 0.5, 0.125)]));
+    const s = createStillSession(fakeEngine(), tracker, bmp, { handOver: [ed(far)] });
+    expect(calls).toEqual([
+      { detector: 'photo', size: [1536, 2048] },
+      { detector: 'photo', size: [384, 384] },
+    ]);
+    expect(xs(s)).toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.625, 6)]);
+    expect(s.detector).toBe('short-range');
+    // no face at all on a short-range answer: the boxes are zoomed, and no 'camera' pass repeats the detection
+    const none = fakeTracker();
+    none.photoDetector = 'short-range';
+    const c2 = record(none, (img) => (img === bmp ? [] : [face(0.5, 0.5, 0.125)]));
+    expect(xs(createStillSession(fakeEngine(), none, bmp, { handOver: [ed(far)] }))).toEqual([expect.closeTo(0.625, 6)]);
+    expect(c2.map((c) => c.detector)).toEqual(['photo', 'photo']);
+  });
+
+  describe('round 1 (C10): which boxes are retried is firstAnswer’s one-to-one pairing, obstacles included', () => {
+    // Y at x 0.4–0.6 (padded 0.35–0.65); X, 96 px, its centre at x 0.640625: inside Y's padded box, apart from Y's own
+    const Y = { x: 0.4, y: 0.425, w: 0.2, h: 0.15 };
+    const X = { x: 0.609375, y: 0.4765625, w: 0.0625, h: 0.046875 };
+    function scene() {
+      const bmp = bitmap();
+      const tracker = fakeTracker();
+      tracker.photoDetector = 'full-range';
+      const calls = record(tracker, (img) => (img === bmp ? [face(0.5, 0.5, 0.1)] : [face(0.5, 0.5, 0.125)]));
+      return { bmp, tracker, calls };
+    }
+    it('Y claimed by its own box: X, whose centre Y’s padded box holds, is retried and found', () => {
+      const { bmp, tracker, calls } = scene();
+      const s = createStillSession(fakeEngine(), tracker, bmp, { handOver: [ed(Y), ed(X)] });
+      expect(calls.map((c) => c.detector)).toEqual(['photo', 'photo']);
+      expect(xs(s)).toEqual([expect.closeTo(0.5, 6), expect.closeTo(0.640625, 6)]);
+    });
+    it('Y a person never edited (params null): it still claims its face, so X is retried; a box of such a person is never retried itself', () => {
+      const { bmp, tracker, calls } = scene();
+      const s = createStillSession(fakeEngine(), tracker, bmp, { handOver: [{ box: Y, params: null }, ed(X)] });
+      expect(calls).toHaveLength(2);
+      expect(xs(s)).toHaveLength(2);
+      const lone = scene();
+      createStillSession(fakeEngine(), lone.tracker, lone.bmp, { handOver: [{ box: far, params: null }] });
+      expect(lone.calls).toHaveLength(1);
+    });
+    it('a box on an obstacle (the eleventh face, over the cap) is claimed by it: no retry, which would find it over the cap again', () => {
+      const bmp = bitmap();
+      const tracker = fakeTracker();
+      tracker.photoDetector = 'full-range';
+      const eleven = [...Array.from({ length: 10 }, (_, i) => face(0.05 + i * 0.09, 0.5, 0.035)), face(0.95, 0.5, 0.02)];
+      const calls = record(tracker, (img) => (img === bmp ? eleven : [face(0.5, 0.5, 0.125)]));
+      const s = createStillSession(fakeEngine(), tracker, bmp, { handOver: [ed({ x: 0.93, y: 0.485, w: 0.04, h: 0.03 })] });
+      expect(s.obstacles).toHaveLength(1);
+      expect(calls).toHaveLength(1);
+    });
+  });
+
+  describe('round 2: what a retry may count as the box’s face (D6, D8)', () => {
+    // a 3:4 shot, 1080 × 1440; a face at (x, y) with radius r (a fraction of the width), square in px
+    const W = 1080;
+    const H = 1440;
+    const boxOf = (x: number, y: number, r: number): Rect => ({ x: x - r, y: y - r * (W / H), w: 2 * r, h: 2 * r * (W / H) });
+    /** the face at (x, y, r) of the photo as a detection on `crop` (px) answers it */
+    const inCrop = (x: number, y: number, r: number, crop: PxRect) => face((x * W - crop.x) / crop.w, (y * H - crop.y) / crop.h, (r * W) / crop.w);
+    const user = [0.25, 0.5, 0.12] as const;
+    it('D6: a held box’s zoom adds only a face of its size in its place (a blink), never a smaller stranger at its spot', () => {
+      const A = [0.5, 0.4, 0.06] as const; // held at the shutter, 130 px (9 % of the long edge): zoomed
+      const crop = zoomCrop(boxOf(...A), W, H);
+      const run = (inZoom: readonly [number, number, number]) => {
+        const bmp = bitmap(W, H);
+        const tracker = fakeTracker();
+        tracker.photoDetector = 'full-range';
+        tracker.detectImage.mockImplementation((img, o) => (o.detector === 'camera' || img === bmp ? [face(...user)] : [inCrop(...inZoom, crop)]));
+        return createStillSession(fakeEngine(), tracker, bmp, { handOver: [{ box: boxOf(...user), params: null }, { box: boxOf(...A), params: nat, held: true }] });
+      };
+      // a far face (43 px, under the live floor: never tracked) right behind where A stood: not A
+      expect(xs(run([0.505, 0.402, 0.02]))).toEqual([expect.closeTo(0.25, 6)]);
+      // A, who blinked at the shutter: the same face in the same place
+      expect(xs(run(A))).toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.5, 6)]);
+    });
+    it('round 3 (E5): a stale box (unseen at the shutter since a no-answer, the last answer’s box) is retried as a guess, as a held one: never a smaller face at its spot', () => {
+      const A = [0.5, 0.4, 0.06] as const;
+      const crop = zoomCrop(boxOf(...A), W, H);
+      const run = (inZoom: readonly [number, number, number]) => {
+        const bmp = bitmap(W, H);
+        const tracker = fakeTracker();
+        tracker.photoDetector = 'full-range';
+        tracker.detectImage.mockImplementation((img, o) => (o.detector === 'camera' || img === bmp ? [face(...user)] : [inCrop(...inZoom, crop)]));
+        return createStillSession(fakeEngine(), tracker, bmp, { handOver: [{ box: boxOf(...user), params: null }, { box: boxOf(...A), params: nat, stale: true }] });
+      };
+      expect(xs(run([0.505, 0.402, 0.02]))).toEqual([expect.closeTo(0.25, 6)]);
+      expect(xs(run(A))).toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.5, 6)]);
+    });
+    it('round 4 (F2): a stale box’s zoom adds their face moved 0.4 of a width since the no-answer (a face of its size near its place), as the pairing would give it; a held box’s does not', () => {
+      const A = [0.5, 0.4, 0.06] as const; // their last box, 130 px: zoomed
+      const moved = [0.5 + 0.4 * 0.12, 0.4 + 0.4 * 0.12 * (W / H), 0.06] as const; // 0.4 of a width down and right
+      expect(boxIoU(boxOf(...A), boxOf(...moved))).toBeLessThan(0.3);
+      const crop = zoomCrop(boxOf(...A), W, H);
+      const run = (flag: 'stale' | 'held') => {
+        const bmp = bitmap(W, H);
+        const tracker = fakeTracker();
+        tracker.photoDetector = 'full-range';
+        tracker.detectImage.mockImplementation((img, o) => (o.detector === 'camera' || img === bmp ? [face(...user)] : [inCrop(...moved, crop)]));
+        const handOver = [{ box: boxOf(...user), params: null }, { box: boxOf(...A), params: nat, [flag]: true }];
+        const s = createStillSession(fakeEngine(), tracker, bmp, { handOver });
+        const a = firstAnswer({ detect: null, prepared: { faces: [...s.faces], obstacles: [...s.obstacles], dropped: s.dropped }, size: { width: W, height: H }, v1Body: null, rematch: null, faceSeed: null, handOver });
+        return { xs: xs(s), missed: a.handOverMissed };
+      };
+      expect(run('stale')).toEqual({ xs: [expect.closeTo(0.25, 6), expect.closeTo(moved[0], 6)], missed: 0 });
+      expect(run('held')).toEqual({ xs: [expect.closeTo(0.25, 6)], missed: 0 });
+      // a smaller face where they were stays someone else's (E5, above)
+    });
+    it('round 3 (E4): a held person on their own face keeps it from a found neighbour the editor missed, whose centre its padded box holds; the neighbour is retried, then counted', () => {
+      const A = [0.45, 0.4, 0.06] as const; // held at the shutter (a blink), 130 px: the editor finds their face in place
+      const B = [0.52, 0.4, 0.05] as const; // found at the shutter beside A, partly behind; the editor misses B
+      const ab = boxOf(...A);
+      const bb = boxOf(...B);
+      const ref = personFromPreset('refined', 1);
+      const opened = handOverEdit({ photo: defaultPhoto(), persons: [], ambient: null });
+      for (const bParams of [nat, null]) {
+        const bmp = bitmap(W, H);
+        const tracker = fakeTracker();
+        tracker.photoDetector = 'full-range';
+        const calls = record(tracker, (img) => (img === bmp ? [face(...A)] : [inCrop(...A, zoomCrop(bb, W, H))]));
+        const handOver = [{ box: ab, params: ref, held: true }, { box: bb, params: bParams }];
+        const s = createStillSession(fakeEngine(), tracker, bmp, { handOver });
+        // B's zoom (when edited) finds only A's face again, which A's box claimed: no face for B
+        expect(calls.map((c) => c.detector)).toEqual(bParams ? ['photo', 'photo'] : ['photo']);
+        expect(xs(s)).toEqual([expect.closeTo(0.45, 6)]);
+        const a = firstAnswer({ detect: null, prepared: { faces: [...s.faces], obstacles: [...s.obstacles], dropped: s.dropped }, size: { width: W, height: H }, v1Body: null, rematch: null, faceSeed: null, handOver });
+        const owner = a.detect.persons.find((p) => p.face === s.faces[0].id)!.id;
+        expect(a.rebase(opened).persons[owner]).toEqual(ref);
+        expect(a.handOverMissed).toBe(bParams ? 1 : 0);
+      }
+    });
+    it('D6: a large held box’s short-range pass adds only a face of its size in its place', () => {
+      const A = [0.65, 0.5, 0.13] as const; // held, 281 px (19.5 % of the long edge): the short-range pass
+      const run = (short: readonly [number, number, number]) => {
+        const bmp = bitmap(W, H);
+        const tracker = fakeTracker();
+        tracker.photoDetector = 'full-range';
+        const calls = record(tracker, (_img, o) => (o.detector === 'camera' ? [face(...user), face(...short)] : [face(...user)]));
+        const s = createStillSession(fakeEngine(), tracker, bmp, { handOver: [{ box: boxOf(...A), params: nat, held: true }] });
+        return { s, calls };
+      };
+      const stranger = run([0.66, 0.5, 0.05]);
+      expect(stranger.calls.map((c) => c.detector)).toEqual(['photo', 'camera']);
+      expect(xs(stranger.s)).toEqual([expect.closeTo(0.25, 6)]);
+      expect(xs(run(A).s)).toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.65, 6)]);
+    });
+    it('D8: a zoom that finds only the neighbour another box claimed found nothing for its box: the short-range pass, which can see it, runs for it', () => {
+      const Y = [0.5, 0.5, 0.1] as const; // found at the shutter, claimed by its own box
+      const X = [0.63, 0.5, 0.085] as const; // edited, 184 px (12.8 %): zoomed; its centre in Y's padded box, its head behind Y's
+      const xb = boxOf(...X);
+      const crop = zoomCrop(xb, W, H);
+      for (const yParams of [null, nat]) {
+        const bmp = bitmap(W, H);
+        const tracker = fakeTracker();
+        tracker.photoDetector = 'full-range';
+        const calls = record(tracker, (img, o) => (o.detector === 'camera' ? [face(...Y), face(...X)] : img === bmp ? [face(...Y)] : [inCrop(...Y, crop)]));
+        const s = createStillSession(fakeEngine(), tracker, bmp, { handOver: [{ box: boxOf(...Y), params: yParams }, { box: xb, params: nat }] });
+        expect(calls.map((c) => c.detector)).toEqual(['photo', 'photo', 'camera']);
+        expect(xs(s)).toEqual([expect.closeTo(0.5, 6), expect.closeTo(0.63, 6)]);
+      }
+    });
   });
 });

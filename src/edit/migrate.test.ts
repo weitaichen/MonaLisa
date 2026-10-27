@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { applyPreset, defaultParams, PARAM_DEFS, sanitizeParams, setParam } from '../engine/params';
 import { makeBodyDetection } from '../app/testFakes';
-import { adaptCached, prepareFaces } from '../detect/faces';
+import { adaptCached, boxIoU, prepareFaces } from '../detect/faces';
+import { seedPrimary } from '../detect/persons';
 import { normalizeDetect, withBodies } from '../detect/cache';
 import { cacheBody, makeCache } from '../detect/testCaches';
 import { sampleFaceAt } from '../detect/testMeshes';
@@ -13,7 +14,7 @@ import { stableKey } from '../store/undo';
 import type { BeautyParams, DetectionCache, EditState, Face, HistoryEntry, Landmarks478, ParamId, Pose33, Stroke } from '../types';
 import { buildFrame } from './frame';
 import { editFromLegacy, legacyProjection, splitLegacy } from './legacy';
-import { bodyAnswer, completeAnswer, firstAnswer, importEdit, openState, preAnswerCache } from './migrate';
+import { bodyAnswer, completeAnswer, firstAnswer, handOverEdit, handOverOf, importEdit, openState, preAnswerCache } from './migrate';
 import { assignPersons, defaultPhoto, editFlipView, naturalPerson, neutralPerson, neutralPhoto, personFromPreset, resetAll, withPersons } from './state';
 import { completionOf, frameFacesOf, protectRequests, sessionPlan } from '../ui/editorModel';
 
@@ -248,6 +249,26 @@ describe('new photos (RM §3.7, 2026-10-18: 全部都原圖)', () => {
     // every person a detection adds starts there too
     const a = firstAnswer({ detect: null, prepared: prepareFaces([lmAt(0.3, 0.4, 0.2), lmAt(0.7, 0.4, 0.12)], 1000, 1000), size: { width: 1000, height: 1000 }, v1Body: null, rematch: null, faceSeed: { x: 0.7, y: 0.4 } });
     expect(Object.values(a.rebase(e).persons)).toEqual([neutralPerson(), neutralPerson()]);
+  });
+});
+
+describe('the camera hand-over (camera per-person spec §3.8, §5.3)', () => {
+  const box = { x: 0.4, y: 0.3, w: 0.2, h: 0.2 };
+  it('handOverOf: null when nothing is set; otherwise the photo look, the edited persons and the ambient person', () => {
+    expect(handOverOf(neutralPhoto(), [], null)).toBeNull();
+    expect(handOverOf({ ...neutralPhoto(), presetLink: null }, [], neutralPerson())).toBeNull();
+    expect(handOverOf(defaultPhoto(), [], null)).toEqual({ photo: defaultPhoto(), persons: [], ambient: null });
+    expect(handOverOf(neutralPhoto(), [{ box, params: naturalPerson() }], null)?.persons).toEqual([{ box, params: naturalPerson() }]);
+    expect(handOverOf(neutralPhoto(), [], naturalPerson())?.ambient).toEqual(naturalPerson());
+    // round 1 (C7): the persons found never edited go with the edited ones, never alone
+    expect(handOverOf(neutralPhoto(), [{ box, params: null }], null)).toBeNull();
+    expect(handOverOf(defaultPhoto(), [{ box, params: null }], null)?.persons).toEqual([]);
+    expect(handOverOf(neutralPhoto(), [{ box, params: null }, { box, params: naturalPerson(), held: true }], null)?.persons).toHaveLength(2);
+  });
+  it('handOverEdit: the camera photo look from the first frame, p0 the ambient person or 原圖, template 原圖', () => {
+    const e = handOverEdit({ photo: defaultPhoto(), persons: [{ box, params: naturalPerson() }], ambient: null });
+    expect(e).toEqual({ v: 2, photo: defaultPhoto(), persons: { p0: neutralPerson() }, template: neutralPerson(), primaryInit: null });
+    expect(handOverEdit({ photo: neutralPhoto(), persons: [], ambient: naturalPerson() }).persons.p0).toEqual(naturalPerson());
   });
 });
 
@@ -668,6 +689,150 @@ describe('firstAnswer (S §3.3 item 4, §5.3 answer-time rows, C2)', () => {
     expect(firstAnswer({ ...base, prepared: two }).rebase(resetAll(closed.edit)).persons).toEqual({ f0: neutralPerson(), f1: neutralPerson() });
     // without 重置 the stored edit keeps what 0.4.0 saved (an entry keeps its look)
     expect(a.rebase(o.edit).persons.f1).toEqual(naturalPerson());
+  });
+
+  describe('firstAnswer with a camera hand-over (camera per-person spec §5.4)', () => {
+    const at = (cx: number, w: number) => ({ x: cx - w / 2, y: 0.4 - w / 2, w, h: w });
+    const nat = naturalPerson();
+    const ref = personFromPreset('refined', 1);
+    const opened = handOverEdit({ photo: defaultPhoto(), persons: [], ambient: null });
+    it('each matched face takes its camera person’s params; the seed names the primary; an unmatched person is counted', () => {
+      const a = firstAnswer({ ...base, prepared: two, faceSeed: { x: 0.7, y: 0.4 }, handOver: [{ box: at(0.3, 0.2), params: nat }, { box: at(0.71, 0.1), params: ref }, { box: at(0.95, 0.05), params: nat }] });
+      const e = a.rebase(opened);
+      expect([a.detect.primary, e.persons.f0, e.persons.f1, a.handOverMissed]).toEqual(['f1', nat, ref, 1]);
+      expect(e.photo).toEqual(defaultPhoto());
+    });
+    it('an edit made before the answer (p0 ≠ the template) stays with the primary; the others still take theirs', () => {
+      const touched = withPersons(opened, ['p0'], (p) => ({ ...p, values: { ...p.values, 'skin.smooth': 0.8 }, preset: 'custom' }));
+      const a = firstAnswer({ ...base, prepared: two, faceSeed: { x: 0.7, y: 0.4 }, handOver: [{ box: at(0.3, 0.2), params: nat }, { box: at(0.71, 0.1), params: ref }] });
+      const e = a.rebase(touched);
+      expect(e.persons.f1.values['skin.smooth']).toBe(0.8);
+      expect(e.persons.f0).toEqual(nat);
+    });
+    it('no face in the answer: every camera person is missed, p0 stays as the edit opened', () => {
+      const a = firstAnswer({ ...base, prepared: prepareFaces([], 1000, 1000), handOver: [{ box: at(0.3, 0.2), params: nat }] });
+      expect(a.handOverMissed).toBe(1);
+      expect(a.rebase(opened).persons).toEqual({ p0: neutralPerson() });
+    });
+    it('a camera box on an obstacle (a face the cap dropped) matches nothing; every undo state takes the same mapping', () => {
+      const eleven = prepareFaces(Array.from({ length: 11 }, (_, i) => lmAt(0.05 + i * 0.09, 0.5, i === 10 ? 0.05 : 0.07)), 1000, 1000);
+      expect(eleven.obstacles).toHaveLength(1);
+      const a = firstAnswer({ ...base, prepared: eleven, handOver: [{ box: eleven.obstacles[0].box, params: nat }, { box: eleven.faces[0].box, params: ref }] });
+      expect(a.handOverMissed).toBe(1);
+      const older = withPersons(opened, ['p0'], (p) => ({ ...p, values: { ...p.values, 'skin.smooth': 0.3 }, preset: 'custom' }));
+      const owner = a.detect.persons.find((p) => p.face === eleven.faces[0].id)!.id;
+      expect(a.rebase(opened).persons[owner]).toEqual(ref);
+      expect(Object.keys(a.rebase(older).persons)).toEqual(Object.keys(a.rebase(opened).persons));
+    });
+    it('round 1 (C10): a camera box on an obstacle whose centre a neighbour’s padded box holds is the obstacle’s: the neighbour keeps 原圖', () => {
+      // ten faces, and an eleventh, smaller, cheek to cheek with the tenth: over the cap, an obstacle
+      const lms = [...Array.from({ length: 10 }, (_, i) => lmAt(0.05 + i * 0.09, 0.5, 0.07)), lmAt(0.905, 0.5, 0.05)];
+      const eleven = prepareFaces(lms, 1000, 1000);
+      expect(eleven.obstacles).toHaveLength(1);
+      const ob = eleven.obstacles[0].box;
+      const tenth = eleven.faces[9];
+      // the precondition: the centre rule alone would hand the obstacle's person to the tenth face
+      expect(boxIoU(ob, tenth.box)).toBeLessThan(0.3);
+      expect(seedPrimary({ x: ob.x + ob.w / 2, y: ob.y + ob.h / 2 }, [tenth])).toBe(tenth.id);
+      const a = firstAnswer({ ...base, prepared: eleven, handOver: [{ box: ob, params: nat }] });
+      expect(a.handOverMissed).toBe(1);
+      const owner = a.detect.persons.find((p) => p.face === tenth.id)!.id;
+      expect(a.rebase(opened).persons[owner] ?? opened.template).toEqual(neutralPerson());
+    });
+    it('round 1 (C7): a person never edited (params null) keeps their face from an edited held box on it; a held person missed is not counted', () => {
+      // f1 (x 0.64–0.76) found at the shutter and never edited; an edited person held where f1 now stands
+      const a = firstAnswer({ ...base, prepared: two, handOver: [{ box: at(0.7, 0.12), params: null }, { box: at(0.72, 0.12), params: nat, held: true }, { box: at(0.3, 0.2), params: ref }] });
+      const e = a.rebase(opened);
+      expect([e.persons.f0, e.persons.f1 ?? e.template]).toEqual([ref, neutralPerson()]);
+      // the held person was dropped uncounted (they may have left the picture); found ones still count
+      expect(a.handOverMissed).toBe(0);
+      const b = firstAnswer({ ...base, prepared: two, handOver: [{ box: at(0.95, 0.05), params: nat, held: true }, { box: at(0.05, 0.05), params: nat }] });
+      expect(b.handOverMissed).toBe(1);
+      // nobody edited: nothing is handed over (no count, no params)
+      const c = firstAnswer({ ...base, prepared: two, handOver: [{ box: at(0.7, 0.12), params: null }] });
+      expect(c.handOverMissed).toBeUndefined();
+      expect(c.rebase(opened).persons).toEqual(firstAnswer({ ...base, prepared: two }).rebase(opened).persons);
+    });
+    it('round 2 (D6): an edited person held at the shutter gives their params only to a face of their size in their place, never by the padded centre to a smaller face at their spot', () => {
+      // a held box 0.3 wide where f1 (0.12 wide) now stands, never tracked by the camera: its centre in f1's padded box
+      const stale = at(0.7, 0.3);
+      expect(boxIoU(stale, two.faces[1].box)).toBeLessThan(0.3);
+      expect(seedPrimary({ x: 0.7, y: 0.4 }, [two.faces[1]])).toBe(two.faces[1].id);
+      // a found box takes no face of another size by the centre either (round-6 review H4: the 0.3 box's face is not f1,
+      // 0.12 wide, standing at its spot): it is missed, and counted, since it was found at the shutter
+      const found = firstAnswer({ ...base, prepared: two, handOver: [{ box: stale, params: nat }] });
+      const fe = found.rebase(opened);
+      expect(fe.persons.f1 ?? fe.template).toEqual(neutralPerson());
+      expect(found.handOverMissed).toBe(1);
+      const held = firstAnswer({ ...base, prepared: two, handOver: [{ box: stale, params: nat, held: true }] });
+      const e = held.rebase(opened);
+      expect(e.persons.f1 ?? e.template).toEqual(neutralPerson());
+      expect(held.handOverMissed).toBe(0);
+      // a blink: the held box on their own face still takes it
+      const blink = firstAnswer({ ...base, prepared: two, handOver: [{ box: two.faces[1].box, params: nat, held: true }] });
+      expect(blink.rebase(opened).persons.f1).toEqual(nat);
+    });
+    it('round 3 (E4): a held person on their own face keeps it from a found neighbour whose centre its padded box holds, edited or never edited; the neighbour the editor missed is counted', () => {
+      const f = two.faces[1].box;
+      const A = { ...f, x: f.x + 0.004 }; // held at the shutter (a blink), on their own face f1
+      const B = { x: f.x + 0.75 * f.w, y: f.y + 0.1 * f.h, w: 0.75 * f.w, h: 0.8 * f.h }; // found beside A, partly behind
+      expect(boxIoU(A, B)).toBeLessThan(0.3); // shotPersons keeps A
+      expect(boxIoU(B, f)).toBeLessThan(0.3);
+      expect(seedPrimary({ x: B.x + B.w / 2, y: B.y + B.h / 2 }, [two.faces[1]])).toBe(two.faces[1].id);
+      for (const bParams of [nat, null]) {
+        const a = firstAnswer({ ...base, prepared: two, handOver: [{ box: A, params: ref, held: true }, { box: B, params: bParams }] });
+        expect(a.rebase(opened).persons.f1).toEqual(ref);
+        expect(a.handOverMissed).toBe(bParams ? 1 : 0);
+      }
+    });
+    it('round 3 (E5): a person unseen at the shutter since a no-answer (stale: the box is the last answer’s, not the captured frame’s) is a guess, as a held one: never given a smaller face at their spot by the padded centre, but counted when missed', () => {
+      // their old box 0.3 wide where f1 (0.12 wide) now stands: its centre in f1's padded box, at IoU < 0.3
+      const old = at(0.7, 0.3);
+      const a = firstAnswer({ ...base, prepared: two, handOver: [{ box: old, params: nat, stale: true }] });
+      const e = a.rebase(opened);
+      expect(e.persons.f1 ?? e.template).toEqual(neutralPerson());
+      expect(a.handOverMissed).toBe(1); // not known missing: counted
+      // their own face, of their size in their place: paired
+      expect(firstAnswer({ ...base, prepared: two, handOver: [{ box: two.faces[1].box, params: nat, stale: true }] }).rebase(opened).persons.f1).toEqual(nat);
+      // never edited, on their own face: it keeps that face from an edited held box there
+      const blocked = firstAnswer({ ...base, prepared: two, handOver: [{ box: two.faces[1].box, params: null, stale: true }, { box: { ...two.faces[1].box, x: two.faces[1].box.x + 0.01 }, params: nat, held: true }] });
+      const eb = blocked.rebase(opened);
+      expect(eb.persons.f1 ?? eb.template).toEqual(neutralPerson());
+    });
+    it('round 4 (F2): a person unseen at the shutter since a no-answer, their face 0.4 of a width from their last box (IoU 0.22), the only face in the photo: that face takes their params, and nobody is counted missing', () => {
+      // the solo path: the tracker stops answering (a context loss, the rebuild throttle) and the shutter's re-ask too;
+      // the box is the last answer's, and the phone moved a little since
+      const one = prepareFaces([lmAt(0.5, 0.4, 0.2)], 1000, 1000);
+      const f = one.faces[0].box;
+      const old = { ...f, x: f.x - 0.4 * f.w, y: f.y - 0.4 * f.h };
+      expect(boxIoU(old, f)).toBeLessThan(0.3);
+      const a = firstAnswer({ ...base, prepared: one, handOver: [{ box: old, params: nat, stale: true }] });
+      const owner = a.detect.persons.find((p) => p.face === one.faces[0].id)!.id;
+      expect(a.rebase(opened).persons[owner]).toEqual(nat);
+      expect(a.handOverMissed).toBe(0); // no 「未偵測到臉部」 toast for a face 編輯 found
+      // held there instead (known missing, they may have left): only a face of their size in their place, uncounted (D6)
+      const held = firstAnswer({ ...base, prepared: one, handOver: [{ box: old, params: nat, held: true }] });
+      expect(held.rebase(opened).persons[owner] ?? opened.template).toEqual(neutralPerson());
+      expect(held.handOverMissed).toBe(0);
+    });
+    it('round 5 (G3): that stale person keeps their moved face from a smaller neighbour found at the shutter, partly behind them, whose own face the editor missed: edited or never edited, the neighbour is the one dropped, counted when edited', () => {
+      const one = prepareFaces([lmAt(0.5, 0.4, 0.2)], 1000, 1000);
+      const f = one.faces[0].box;
+      const old = { ...f, x: f.x - 0.4 * f.w, y: f.y - 0.4 * f.h }; // A's last answer's box (F2's case)
+      const B = { x: f.x + 0.85 * f.w, y: f.y + 0.6 * f.h, w: 0.6 * f.w, h: 0.5 * f.h }; // found, 0.6 of A's width
+      const c = (b: typeof f) => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 });
+      const d = (b: typeof f) => Math.hypot(c(b).x - c(f).x, c(b).y - c(f).y);
+      // the preconditions: no IoU pair, both centres in the face's padded box, A's nearer
+      expect([boxIoU(old, f), boxIoU(B, f), boxIoU(old, B)].every((v) => v < 0.3)).toBe(true);
+      expect([seedPrimary(c(old), one.faces), seedPrimary(c(B), one.faces)]).toEqual([one.faces[0].id, one.faces[0].id]);
+      expect(d(old)).toBeLessThan(d(B));
+      for (const bParams of [ref, null]) {
+        const a = firstAnswer({ ...base, prepared: one, handOver: [{ box: old, params: nat, stale: true }, { box: B, params: bParams }] });
+        const owner = a.detect.persons.find((p) => p.face === one.faces[0].id)!.id;
+        expect(a.rebase(opened).persons[owner]).toEqual(nat);
+        expect(a.handOverMissed).toBe(bParams ? 1 : 0); // B, not A: 編輯 found A's face
+      }
+    });
   });
 });
 

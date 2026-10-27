@@ -1,6 +1,7 @@
 // Every number Phase 0 can change (step-1 spec §3.5, §6.3). A fallback is a one-line change here, committed together
 // with the measurements (spec §6.4). iPhone numbers need a preview deploy, which only happens with the user's go-ahead:
 // until then these defaults ship (RM §12 decision).
+import type { FaceDetectorKind, Facing } from '../types';
 
 /**
  * selectable faces per photo (§6.3 PD1, PR1, PE1, PM1). 10 since 2026-10-18 (S §6.7, the user's cap: at most ten
@@ -21,13 +22,14 @@ export const MAX_RENDER_FACES = 10;
 /** numPoses of the 美體 detection (§6.3 PB1, PM1) */
 export const MAX_EDIT_BODIES = 4;
 /**
- * faces the camera tracks; 1 hides the camera's 選臉 and bypasses the smoother (§6.3 PL1, PL2, PJ1). Desktop 2026-10-13
- * (S §6.4, bench L): with one face in view, numFaces 3 adds 3.5–4.2 ms per detection on the GPU delegate (p50 about
- * 12.4 → 16.3 ms, +28–35 %) and 1.9–2.1 ms on CPU, within PL2's 5 ms. With three faces in view p50 is about 31 ms
- * (numFaces 2: about 22 ms), over PL1's 20 ms on that desktop. §6.3 applies both rows to the slowest iPhone, so this
- * default ships until the iPhone rows exist (RM §12); the bench prints the PL1 / PL2 verdicts (bench/report.ts liveRows).
+ * faces the camera tracks, one camera person each (camera per-person spec §6.3, K5): every face in view up to the
+ * editor's cap (U1). 1 hides the camera's 選臉, bypasses the smoother and has no group path (§6.3 PL1, PL2, PJ1).
+ * Desktop 2026-10-19 (camera per-person spec §6.1): on the front camera's short-range detector, numFaces 10 costs a lone
+ * face what v0.5's 3 cost (p50 14.1 vs 14.2 ms GPU, 14.1 vs 14.3 ms CPU), so A1 / PL2 hold; each tracked face adds a
+ * landmark inference (about 6–7 ms GPU, 7–8 ms CPU), which the detection cadence spreads (§6.4). 3 from S §6.4 (bench L,
+ * 2026-10-13) until 0.6. The default ships until the iPhone rows exist (RM §12; bench/report.ts liveRows prints PL2).
  */
-export const MAX_LIVE_FACES = 3;
+export const MAX_LIVE_FACES = MAX_EDIT_FACES;
 /**
  * numFaces the camera requests: every live instance is built with it and the camera never toggles it (T1). A count
  * switch rebuilds the graph, and its first inference took 145–165 ms on the desktop's GPU delegate (33–49 ms on CPU),
@@ -45,6 +47,61 @@ export const LOST_HOLD_MS = 1000;
 export const ONE_EURO = { minCutoff: 0.05, beta: 80, dCutoff: 1.0 } as const;
 /** seed → face match: the face box padded by this fraction must contain the seed */
 export const SEED_BOX_PAD = 0.25;
+/**
+ * the editor's zoomed hand-over retry (camera per-person spec §5.4, K21): a camera person no face of the photo's answer
+ * holds gets one detection on a crop of side box width / this (the face a quarter of the crop, far over the detector's
+ * floor, §6.1)
+ */
+export const HANDOVER_ZOOM_FACE = 0.25;
+/**
+ * ... unless its box is at least this many times the floor of the detector that missed it (DETECTOR_FLOOR, of the
+ * photo's long edge; 16 % for full-range): missed for its cut by the frame's edge or its pose, not its size, which a zoom
+ * does not change, so it takes S §6.5's short-range pass instead (round-1 review C2: the old rule, a quarter of the long
+ * edge, zoomed a 3:4 shot's large cut face by 1.1×)
+ */
+export const HANDOVER_OVER_FLOOR = 2;
+/**
+ * a camera box and an editor face are one person at this box IoU or more (camera per-person spec §5.4 item 1); a held
+ * camera box this close to a present one at the shutter is someone that person hides or replaced (shotPersons, C7)
+ */
+export const HANDOVER_IOU = 0.3;
+/** camera re-identification (camera per-person spec §7.4, K7): an away person is claimed only this long after last seen, on the session clock */
+export const REID_GRACE_MS = 4000;
+/** camera re-identification (§7.4, K7): the new centre within this many of the person's last box widths of their last centre */
+export const REID_DIST = 1.5;
+/** camera re-identification (§7.4, K7): the new box width within × this of the person's last */
+export const REID_SIZE = 1.5;
+/** camera re-identification (§7.4, K7): another candidate within × this of the best distance → nobody (a new person at 原圖, A2) */
+export const REID_AMBIGUITY = 1.25;
+/** camera track matching (§7.3 item 3): a pair whose width differs from the predicted box by more than × this is refused */
+export const TRACK_SIZE_JUMP = 1.5;
+/** camera session clock (§7.5, K8): a pause longer than this without a live frame forgets everyone away and the remembered selection */
+export const LIVE_IDLE_MAX_MS = 60_000;
+// The camera's group path (camera per-person spec §6.6, K17: IMAGE calls on the whole view and zoomed tiles) runs while
+// the user's 合照模式 is on (Prefs.groupMode, K22, §6.3: a runtime choice, off by default); off, every stream runs
+// option C (one VIDEO pass over the whole frame per facing: faces from about 9 % of the long edge on the back camera,
+// 12 % on the front). Off by default because the desktop gate PGN failed (§10): row LF on upright_far10 (10 faces at
+// 3–4 %), i7-14700 / UHD 770, headed Chrome: GPU 19.8 fps, slowest face 1.2 Hz, longest frame 250 ms; CPU 21.2 fps,
+// 2.4 Hz, 217 ms; the limits are ≥ 24 fps, every face ≥ 5 Hz and no frame longer than option C's at 10 faces (row LFC on
+// group10: 167 ms GPU, 150 ms CPU). The whole view finds all ten faces, so each call ran 5–10 landmark inferences
+// (detection p50 151 ms GPU, 123 ms CPU) and k stayed at LIVE_MAX_DETECT_EVERY. §10's fixes did not help:
+// LIVE_SCAN_EVERY 8 (no scans run at 10 faces) 21.6 / 21.4 fps, 1.3 / 2.4 Hz, 267 / 200 ms; LIVE_MAX_DETECT_EVERY 12:
+// 21.7 / 20.7 fps, 0.7 / 1.2 Hz, 323 / 384 ms. PGR (E4: 3 of 3 per fixture and delegate), PJ1G and PLB passed: it finds
+// the far faces, at that cost in smoothness, which is what 合照模式 trades.
+/** the face detector of each facing's paths (§6.3): the front camera stays on short-range (no bundle switch into a group scene), the back camera full-range */
+export const LIVE_DETECTOR: Record<Facing, FaceDetectorKind> = { user: 'camera', environment: 'photo' };
+/** the smallest face the group path finds, as a fraction of the stream frame's long edge (§6.6, K17, K19): back camera 3 %, front-camera group scenes 5 % */
+export const LIVE_FACE_FLOOR: Record<Facing, number> = { user: 0.05, environment: 0.03 };
+/** each detector's floor over its view's long edge, with margin (§6.1: short-range ~12 %, full-range ~9 %); sizes the tiles and their overlap (§6.6) */
+export const DETECTOR_FLOOR: Record<FaceDetectorKind, number> = { camera: 0.11, photo: 0.08 };
+/** every LIVE_SCAN_EVERY-th group-path call scans the next tile no track needs (§6.6) */
+export const LIVE_SCAN_EVERY = 4;
+/** the group path's whole view is copied at most this many px on its long edge (§6.6) */
+export const LIVE_VIEW_MAX_EDGE = 1280;
+/** with ≥ 2 faces the camera skips detections so the preview averages at least this many fps (camera per-person spec §6.4, K6) */
+export const LIVE_MIN_FPS = 24;
+/** …but detects at least every this-many frames: face updates ≥ 5 Hz at 30 fps (§6.4, K6) */
+export const LIVE_MAX_DETECT_EVERY = 6;
 /** 瘦臉 limit layer edge with ≥ 2 selectable faces (§4.7) */
 export const PROTECT_WINDOW = 128;
 /**

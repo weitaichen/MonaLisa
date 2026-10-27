@@ -2685,17 +2685,19 @@ button.row:active {
 .face-box.selected {
   --c: var(--accent);
 }
-.face-box .br {
+/* the corners, shared with the camera's brackets (.cam-bracket, camera per-person spec §3.1) */
+.face-box .br,
+.cam-bracket .br {
   position: absolute;
   width: 22%;
   height: 22%;
   border: 0 solid var(--c);
   filter: drop-shadow(0 0 1px rgb(0 0 0 / 0.5));
 }
-.face-box .tl { left: 0; top: 0; border-left-width: calc(2px / var(--zs, 1)); border-top-width: calc(2px / var(--zs, 1)); }
-.face-box .tr { right: 0; top: 0; border-right-width: calc(2px / var(--zs, 1)); border-top-width: calc(2px / var(--zs, 1)); }
-.face-box .bl { left: 0; bottom: 0; border-left-width: calc(2px / var(--zs, 1)); border-bottom-width: calc(2px / var(--zs, 1)); }
-.face-box .br-r { right: 0; bottom: 0; border-right-width: calc(2px / var(--zs, 1)); border-bottom-width: calc(2px / var(--zs, 1)); }
+.face-box .tl, .cam-bracket .tl { left: 0; top: 0; border-left-width: calc(2px / var(--zs, 1)); border-top-width: calc(2px / var(--zs, 1)); }
+.face-box .tr, .cam-bracket .tr { right: 0; top: 0; border-right-width: calc(2px / var(--zs, 1)); border-top-width: calc(2px / var(--zs, 1)); }
+.face-box .bl, .cam-bracket .bl { left: 0; bottom: 0; border-left-width: calc(2px / var(--zs, 1)); border-bottom-width: calc(2px / var(--zs, 1)); }
+.face-box .br-r, .cam-bracket .br-r { right: 0; bottom: 0; border-right-width: calc(2px / var(--zs, 1)); border-bottom-width: calc(2px / var(--zs, 1)); }
 .face-box.dashed .br {
   border-style: dashed;
 }
@@ -2729,6 +2731,17 @@ button.row:active {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  transition: opacity 200ms;
+}
+/* the active panel item is photo-level (S A11): brackets, dot and ring dim to 30 % */
+.cam-marker.dim {
+  opacity: 0.3;
+}
+/* every shown face while ≥ 2 are shown and 全部套用 is off (K12): the editor's bracket corners at 40 % */
+.cam-bracket {
+  position: absolute;
+  --c: rgb(255 255 255 / 0.6);
+  opacity: 0.4;
 }
 .cam-ring {
   position: absolute;

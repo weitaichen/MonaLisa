@@ -3,7 +3,7 @@ import { neutralLook } from '../edit/state';
 import { DEFAULT_PREFS } from '../store/settings';
 import type { V1Bodies } from '../edit/migrate';
 import type { SourceInfo } from '../media/exportPlan';
-import type { CameraLook, DetectionCache, EditState, FaceSeed, LiquifyFrame, PersonId, PersonMask, Prefs, Rect } from '../types';
+import type { CameraHandOver, CameraLook, DetectionCache, EditState, FaceSeed, LiquifyFrame, PersonId, PersonMask, Prefs, Rect } from '../types';
 import { deps } from './deps';
 import { debug, reportError } from './debug';
 import { createStore } from './store';
@@ -21,16 +21,20 @@ export interface Shot {
   image: ImageData;
   /** encoding starts right after capture so 儲存 can share synchronously */
   file: Promise<File>;
-  /** unprocessed frame with the same crop / mirror, for 編輯: it opens there at 原圖, the camera look stays behind (2026-10-18) */
+  /** unprocessed frame with the same crop / mirror, for 編輯: it opens there with the hand-over, else at 原圖 */
   original: ImageBitmap | null;
   /** camera → editor (C2): the beautified face's centre in the saved image, 'all', or null; it picks who is selected */
   faceSeed: FaceSeed;
+  /** camera → editor (camera per-person U6, §5.3): the photo look and each edited person's box and params; null when
+   * nothing is set, so 編輯 opens at 原圖 (importEdit) */
+  handOver: CameraHandOver | null;
 }
 
 export interface EditorSource {
   /** owned by the editor session afterwards */
   bitmap: ImageBitmap;
-  /** the edit to open with: openState for an entry, importEdit (原圖) for a new photo, imported or a camera shot */
+  /** the edit to open with: openState for an entry, importEdit (原圖) for a new photo, imported or a camera shot with
+   * nothing set; handOverEdit for a shot with beauty set (camera per-person U6) */
   edit: EditState;
   /** existing history entry being re-edited, or null for a new photo */
   historyId: string | null;
@@ -44,6 +48,9 @@ export interface EditorSource {
   cacheDropped: boolean;
   /** camera → editor: the beautified face (C2) */
   faceSeed: FaceSeed;
+  /** camera → editor (camera per-person §5.3): each edited camera person's box in the photo and params, a one-shot
+   * input of the photo's first face answer like faceSeed; absent / null = none */
+  handOver?: CameraHandOver['persons'] | null;
   /** the entry was saved with the 瘦臉 background limit requested (HistoryEntry.faceProtect): reopening requests it again */
   faceProtect?: boolean;
   /** the entry's cached segmenter mask for that limit (HistoryEntry.faceMask) */
@@ -69,7 +76,10 @@ export type Sheet = null | 'settings' | 'credits';
 export interface AppState {
   screen: Screen;
   sheet: Sheet;
-  /** live-camera look (persisted as meiyan.look.v1); the editor keeps its own per-photo edit */
+  /**
+   * the live camera's photo look (persisted as meiyan.look.v1); its `person` stays 原圖 (K15: each camera person's
+   * params live in the camera session, ui/cameraSession.ts, camera per-person spec §9); the editor keeps its own edit
+   */
   look: CameraLook;
   prefs: Prefs;
   ratio: Ratio;
@@ -81,7 +91,10 @@ export interface AppState {
   saveFallbackName: string | null;
   /** blocking work in progress (e.g. decoding an imported photo) */
   busy: string | null;
-  /** 全部套用 (S §2.5): in memory only, false at app start, kept across Review and retakes */
+  /**
+   * 全部套用 (S §2.5, camera per-person spec §3.4): in memory only, false at app start, kept across Review and retakes;
+   * off when the camera session ends (endCameraSession: ✕, a flip)
+   */
   cameraAll: boolean;
 }
 

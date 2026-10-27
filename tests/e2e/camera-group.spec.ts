@@ -1,34 +1,33 @@
 // The camera with three faces (S §8.4): group.y4m shows A, B and C (gen-y4m from group_faces.png), inside the 3:4
 // preview: A above, B and C side by side below it (composeGroupCam).
 import type { Page } from '@playwright/test';
-import { debugState, expect, grab, hold, regionDiff, test } from './fixtures';
-
-/** a camera debug box (unmirrored video UV) → client px and → a rect in fractions of the preview frame */
-async function camGeom(page: Page, id: string) {
-  const b = (await debugState(page)).boxes.find((x) => x.id === id)!;
-  return page.evaluate((b) => {
-    const c = document.querySelector('.cam-stage canvas') as HTMLCanvasElement;
-    const v = document.querySelector('video') as HTMLVideoElement;
-    const r = c.getBoundingClientRect();
-    const s = Math.max(r.width / v.videoWidth, r.height / v.videoHeight);
-    const fx = (u: number) => (r.width - v.videoWidth * s) / 2 + (1 - u) * v.videoWidth * s; // the front camera preview is mirrored
-    const fy = (y: number) => (r.height - v.videoHeight * s) / 2 + y * v.videoHeight * s;
-    const x0 = fx(b.x + b.w);
-    const x1 = fx(b.x);
-    return {
-      point: { x: r.left + (x0 + x1) / 2, y: r.top + fy(b.y + b.h / 2) },
-      rect: { x: x0 / r.width, y: fy(b.y) / r.height, w: (x1 - x0) / r.width, h: (fy(b.y + b.h) - fy(b.y)) / r.height },
-    };
-  }, b);
-}
+import { camBox, debugState, expect, grab, hold, regionDiff, test, toastsSeen, watchToasts } from './fixtures';
 const byX = async (page: Page) => [...(await debugState(page)).boxes].sort((a, b) => b.x - a.x).map((b) => b.id); // mirrored: screen left → right
 
-test('three faces: auto beautifies the largest; tap B; 全部套用; tap C; the hand-over selects B', async ({ page }) => {
+/** a photo-level look of zero (美白, 銳化 to 0), so an untouched face is untouched pixel for pixel */
+async function zeroPhotoLook(page: Page) {
+  await page.getByRole('tab', { name: '美膚' }).click();
+  for (const item of ['美白', '銳化']) {
+    await page.getByRole('option', { name: item, exact: true }).click();
+    const s = page.getByRole('slider');
+    await s.focus();
+    for (let i = 0; i < 100; i++) await page.keyboard.press('ArrowLeft');
+  }
+}
+
+// camera per-person spec §12.2 (changed on purpose): every face renders its own person's params, 全部套用 copies
+test('three faces, one person at a time: 自然 edits and pins the largest (A); tap B and edit B: A keeps its result, C stays 原圖; 全部套用 copies B to everyone; a tap on C turns it off, nobody reverts; the hand-over selects B', async ({ page }) => {
   await page.goto('/');
+  await watchToasts(page);
   await page.getByRole('button', { name: /拍攝/ }).click();
   await page.getByRole('button', { name: '點擊開啟相機' }).click();
   await expect.poll(async () => (await debugState(page)).faces, { timeout: 120_000, intervals: [500] }).toBe(3);
-  // the face marker keeps its nodes across frames: one dot above the beautified face, the same node every frame
+  // the first time ≥ 2 faces are shown: the one-time hint (§3.1)
+  await expect.poll(() => toastsSeen(page)).toContain('點選畫面中的臉，可個別調整');
+  // 美膚 › 磨皮 is a person item: the marker is not dimmed
+  await expect(page.locator('.cam-marker')).toHaveAttribute('class', 'cam-marker');
+  // the face marker keeps its nodes across frames: one dot above the target's face and one bracket per face (§3.1,
+  // K12), the same nodes every frame
   const marker = await page.evaluate(async () => {
     const m = document.querySelector('.cam-marker')!;
     const seen = new Set<Element>();
@@ -41,50 +40,59 @@ test('three faces: auto beautifies the largest; tap B; 全部套用; tap C; the 
     const dots = Array.from(m.querySelectorAll<HTMLElement>('.cam-dot')).filter((d) => d.style.display !== 'none');
     return { nodes: seen.size, most, dots: dots.length };
   });
-  expect(marker).toEqual({ nodes: 1, most: 1, dots: 1 });
-  // the look these checks beautify with: 自然 (the camera starts at 原圖 on a fresh install since 2026-10-18)
+  expect(marker).toEqual({ nodes: 4, most: 4, dots: 1 });
+  // the camera starts at 原圖 (2026-10-18); 一鍵 › 自然 edits the auto target, the largest face (A), and pins it (K9)
   await page.getByRole('tab', { name: '一鍵' }).click();
   await page.getByRole('option', { name: '自然', exact: true }).click();
   await expect(page.getByRole('option', { name: '自然', exact: true })).toHaveAttribute('aria-selected', 'true');
-  // a photo-level look of zero, so an unselected face is untouched pixel for pixel
-  await page.getByRole('tab', { name: '美膚' }).click();
-  for (const item of ['美白', '銳化']) {
-    await page.getByRole('option', { name: item, exact: true }).click();
-    const s = page.getByRole('slider');
-    await s.focus();
-    for (let i = 0; i < 100; i++) await page.keyboard.press('ArrowLeft');
-  }
+  // the preset's photo part goes to the whole frame: zero it
+  await zeroPhotoLook(page);
+  // 美膚 › 銳化 is photo-level: brackets and dot dim to 30 % (S A11)
+  await expect(page.locator('.cam-marker')).toHaveAttribute('class', 'cam-marker dim');
   const boxes = (await debugState(page)).boxes;
   const largest = [...boxes].sort((a, b) => b.w * b.h - a.w * a.h)[0].id;
   expect((await debugState(page)).selected).toBe(largest);
   const [B, C] = (await byX(page)).reverse().filter((id) => id !== largest); // A is the largest; B, C left to right in the scene
   const frame = page.locator('.cam-stage .frame');
   await page.addStyleTag({ content: '.cam-marker, .all-chip, .badge { display: none !important; }' });
-  // tap B: B beautified, A unchanged
-  const gb = await camGeom(page, B);
+  // tap B: B selected, and 原圖 until edited (the panel reads B); 一鍵 › 自然 on B, whose photo part re-applies 美白 /
+  // 銳化 to the whole frame, so they go back to 0
+  const gb = await camBox(page, B);
   await page.mouse.click(gb.point.x, gb.point.y);
   await expect.poll(async () => (await debugState(page)).selected).toBe(B);
+  await page.getByRole('tab', { name: '一鍵' }).click();
+  await expect(page.getByRole('option', { name: '原圖', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('option', { name: '自然', exact: true }).click();
+  await expect(page.getByRole('option', { name: '自然', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await zeroPhotoLook(page);
   await page.waitForTimeout(500);
   const beautified = await grab(frame);
   const release = await hold(page, page.locator('.cam-controls .side-btn', { hasText: '按住對比' }));
   await page.waitForTimeout(400);
   const original = await grab(frame);
   await release();
-  const ga = await camGeom(page, largest === B ? C : largest);
-  expect(regionDiff(original, beautified, gb.rect).inside).toBeGreaterThan(0.5);
-  expect(regionDiff(original, beautified, ga.rect).inside).toBeLessThan(0.3);
-  // 全部套用: every face changes; a tap on C turns it off and selects C
+  const ga = await camBox(page, largest);
+  const gc = await camBox(page, C);
+  expect(regionDiff(original, beautified, gb.rect).inside, 'B adjusted').toBeGreaterThan(0.5);
+  expect(regionDiff(original, beautified, ga.rect).inside, 'A keeps its result (U3)').toBeGreaterThan(0.5);
+  expect(regionDiff(original, beautified, gc.rect).inside, 'C untouched').toBeLessThan(0.3);
+  // 全部套用 copies B's params to everyone in view (K10): C now differs too (group.y4m's frames are identical, so the
+  // compare frame above stays the original)
   await page.addStyleTag({ content: '.all-chip { display: inline-flex !important; }' });
   const chip = page.getByRole('button', { name: '全部套用' });
   await chip.click();
   await expect(chip).toHaveAttribute('aria-pressed', 'true');
   await expect.poll(async () => (await debugState(page)).selected).toBe('all');
-  const gc = await camGeom(page, C);
+  await page.waitForTimeout(500);
+  expect(regionDiff(original, await grab(frame), gc.rect).inside, '全部套用 copies B to C').toBeGreaterThan(0.5);
+  // a tap on C turns it off and selects C; nobody reverts
   await page.mouse.click(gc.point.x, gc.point.y);
   await expect(chip).toHaveAttribute('aria-pressed', 'false');
   await expect.poll(async () => (await debugState(page)).selected).toBe(C);
+  await page.waitForTimeout(500);
+  expect(regionDiff(original, await grab(frame), gc.rect).inside, 'C keeps the copy').toBeGreaterThan(0.5);
   // hand-over: B selected, shutter → 編輯 → the editor selects the person whose face holds the seed (B)
-  const gb2 = await camGeom(page, B);
+  const gb2 = await camBox(page, B);
   await page.mouse.click(gb2.point.x, gb2.point.y);
   await expect.poll(async () => (await debugState(page)).selected).toBe(B);
   await page.getByRole('button', { name: '拍照' }).click();

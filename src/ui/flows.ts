@@ -1,6 +1,6 @@
 // Multi-step user flows shared by several screens.
 import { importEdit, openState } from '../edit/migrate';
-import type { EditState, FaceSeed, HistoryEntry } from '../types';
+import type { CameraHandOver, EditState, FaceSeed, HistoryEntry } from '../types';
 import { reportError } from './debug';
 import { deps } from './deps';
 import { app, go, toast, type EditorSource } from './state';
@@ -14,9 +14,18 @@ export function maxImportEdge(): number {
   return tier === 'L' ? 1440 : 2048;
 }
 
-/** A new photo's editor source (an import or a camera shot): nothing cached (the editor detects once, sessionPlan). */
-export function freshSource(bitmap: ImageBitmap, edit: EditState, returnTo: EditorSource['returnTo'], faceSeed: FaceSeed = null): EditorSource {
-  return { bitmap, edit, historyId: null, detect: null, rematch: null, v1Body: null, cacheDropped: false, faceSeed, frame: { width: bitmap.width, height: bitmap.height }, returnTo };
+/**
+ * A new photo's editor source (an import or a camera shot): nothing cached (the editor detects once, sessionPlan). A
+ * shot carries its face seed and its hand-over persons (camera per-person §5.3) to the photo's first face answer.
+ */
+export function freshSource(
+  bitmap: ImageBitmap,
+  edit: EditState,
+  returnTo: EditorSource['returnTo'],
+  faceSeed: FaceSeed = null,
+  handOver: CameraHandOver['persons'] | null = null,
+): EditorSource {
+  return { bitmap, edit, historyId: null, detect: null, rematch: null, v1Body: null, cacheDropped: false, faceSeed, handOver, frame: { width: bitmap.width, height: bitmap.height }, returnTo };
 }
 
 /**

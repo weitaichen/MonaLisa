@@ -2,13 +2,17 @@
 // BeautyPanel + floating slider, timer, flip, hold-to-compare, shutter → Review.
 // 美體 is photo-only for now (body research report P1): the tab is shown with every item off and a note.
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { cameraTapAction, ChipGate, coverTapUv, type TrackId } from '../../app/faceTracks';
-import type { LiveLoop, LiveStats } from '../../app/live';
-import type { CameraController, CameraSnapshot, EditState } from '../../types';
-import { lensFor, LIVE_PERSONS, type PersonInfo } from '../../edit/lens';
+import { cameraTapAction, ChipGate, coverTapUv } from '../../app/faceTracks';
+import { liveRoute, type LiveLoop, type LiveStats } from '../../app/live';
+import type { LivePersonId } from '../../app/livePersons';
+import type { CameraController, CameraSnapshot, EditState, Facing } from '../../types';
+import { lensFor, LIVE_PERSONS, type Lens, type PersonInfo } from '../../edit/lens';
+import { handOverOf } from '../../edit/migrate';
 import { cameraScreenSwap } from '../../edit/sides';
-import { cameraEdit, LIVE, lookOf } from '../../edit/state';
+import { cameraEdit, LIVE, neutralPerson, personOf } from '../../edit/state';
+import { takeCameraPersonsHint, takeGroupModeHint, takeGroupModeOnToast } from '../../store/settings';
 import { cameraErrorCopy } from '../cameraErrors';
+import { beginDrag, cameraLensInfo, cameraSession, endCameraSession, keepDrag, panelPerson, writePerson, type CameraDrag } from '../cameraSession';
 import { BeautyPanel, FACE_TABS } from '../components/BeautyPanel';
 import { CameraFaceMarker } from '../components/CameraFaceMarker';
 import { CanvasHost } from '../components/CanvasHost';
@@ -16,15 +20,16 @@ import { IconButton } from '../components/Controls';
 import { EngineStatus } from '../components/EngineStatus';
 import { SliderRow } from '../components/Slider';
 import { Status } from '../components/Status';
-import { reportError } from '../debug';
+import { debug, reportError } from '../debug';
 import { deps } from '../deps';
 import { openInEditor, pickPhoto } from '../flows';
+import { GROUP_MODE_LABEL, groupModeAvailable, showGroupSceneHints, toggleGroupMode, warmsOnStart } from '../groupMode';
 import { Icon } from '../icons';
-import { cropImageData, grabOriginalFrame, normalizedCropRect, shotSeed } from '../imaging';
-import { CAMERA_BODY, INITIAL_SELECTION, makeupNote, sliderFor, type BodyContext, type PanelSelection } from '../panelModel';
+import { cropImageData, grabOriginalFrame, normalizedCropRect, shotPersons, shotSeed } from '../imaging';
+import { CAMERA_BODY, INITIAL_SELECTION, makeupNote, photoScoped, sliderFor, type BodyContext, type PanelSelection } from '../panelModel';
 import { haptic, isStandalone } from '../platform';
 import { ensureEngine, getCamera, stopCamera, svc } from '../services';
-import { app, go, RATIO_VALUE, RATIOS, setLook, TIMERS, toast } from '../state';
+import { app, go, RATIO_VALUE, RATIOS, setLook, setPrefs, TIMERS, toast } from '../state';
 import { useStore } from '../store';
 import { requestLut, useAdjustFailureNotice, useHold, useLutLoader } from './hooks';
 
@@ -37,12 +42,35 @@ const cameraBody: BodyContext = {
 /** basic-mode notes are announced once per engine bundle, not on every visit */
 let notedBundle: unknown = null;
 
+/**
+ * The graph the new stream's first detection runs (§6.3, liveRoute): 合照模式 on, the group path's IMAGE; off, one VIDEO
+ * pass (the front camera's solo path, the back camera's option C); each on its facing's detector. Run once the
+ * 「正在開啟相機…」 spinner has painted: the
+ * first full-range inference compiles for 1.1–1.3 s on the desktop GPU (§6.1) and blocks the main thread, so a call
+ * inside the tap would freeze the old preview before the spinner shows. When the stream wins the race, its first call
+ * pays the compile instead.
+ */
+function warmAfterPaint(f: Facing): void {
+  requestAnimationFrame(() =>
+    setTimeout(() => {
+      try {
+        const e = svc.get().engine;
+        const tracker = e.state === 'ready' ? e.bundle.tracker : null;
+        const r = liveRoute(f, app.get().prefs.groupMode);
+        tracker?.warm(r.mode, r.detector);
+      } catch (err) {
+        reportError(err, 'tracker.warm');
+      }
+    }, 0),
+  );
+}
+
 export function Camera() {
   const look = useStore(app, (s) => s.look);
   const prefs = useStore(app, (s) => s.prefs);
   const ratio = useStore(app, (s) => s.ratio);
   const timer = useStore(app, (s) => s.timer);
-  /** 全部套用 (S §2.5): in memory, kept across Review and retakes */
+  /** 全部套用 (S §2.5): in memory, kept across Review and retakes, mirrored into the camera session; off when the session ends */
   const cameraAll = useStore(app, (s) => s.cameraAll);
   const engine = useStore(svc, (s) => s.engine);
   const bundle = engine.state === 'ready' ? engine.bundle : null;
@@ -63,21 +91,56 @@ export function Camera() {
   /** the 全部套用 chip shows (ChipGate's 300 / 1200 ms debounce of the shown tracks) */
   const [chip, setChip] = useState(false);
   const chipGate = useRef(new ChipGate());
-  /** the accent ring of the last tap selection (800 ms, CameraFaceMarker) */
-  const [ring, setRing] = useState<{ id: TrackId; at: number } | null>(null);
+  /** the accent ring of the last tap selection: the tapped person (800 ms, CameraFaceMarker) */
+  const [ring, setRing] = useState<{ person: LivePersonId; at: number } | null>(null);
   /** shown tracks, from LiveStats: redraws the marker when the count changes */
   const [shownFaces, setShownFaces] = useState(0);
+  /** this mount already saw ≥ 2 faces: the one-time hints (§3.1, K22) are asked for once, not on every stats tick */
+  const sawGroup = useRef(false);
+  /** the second one-time hint, shown after the first (showGroupSceneHints); cancelled on unmount, its flag kept */
+  const hintTimer = useRef(0);
   /** LiveStats.gpLeftOnLeft: the tracked face's halves on the unmirrored frame (the 左／右 chips, S5 §3.4) */
   const [gpLeft, setGpLeft] = useState<boolean | null>(null);
 
   const lookRef = useRef(look);
   lookRef.current = look;
+  /** the camera session: every person's params, the selection, 全部套用 (camera per-person spec §3.11, §5.1) */
+  const session = cameraSession();
+  /** the slider drag in progress: it writes the persons it started on until it commits (§3.2, Review Focus #3) */
+  const drag = useRef<CameraDrag | null>(null);
+  /** LiveStats.personsVersion, and every panel write: a target or param change re-renders the panel */
+  const [, setPersonsTick] = useState(0);
   /** the camera is one person, 'live' (RM §3.7): the panel uses the editor's lens and code */
   // 左／右 follow the tracked face through the preview mirror (S5 §3.4): a front ↔ back flip, or the face turned upside
   // down, re-maps the side chips on the next render (S5 §7)
   const livePersons: PersonInfo[] = [{ ...LIVE_PERSONS[0], screenSwap: cameraScreenSwap(snap?.facing ?? 'user', gpLeft) }];
-  const lensOf = (l: typeof look) => lensFor(cameraEdit(l), { kind: 'person', id: LIVE }, livePersons, LIVE);
-  const setEdit = (e: EditState) => setLook(lookOf(e));
+  /**
+   * the panel's lens (§3.2): the photo look over one person, 'live', holding the target's params (a drag's lead while it
+   * runs; 基本模式: the session's ambient person, §3.6)
+   */
+  const lensOf = (l: typeof look): Lens => {
+    const basic = !!bundle?.basic;
+    const person = basic ? session.ambient : panelPerson(session, drag.current);
+    // noFace whenever there is no target (cameraLensInfo), before the stream is live too (C4), and whatever
+    // trackerHealth says: a person slider or preset would write nobody; while the tracker restarts its badge says why
+    return lensFor(cameraEdit(l.photo, person), { kind: 'person', id: LIVE }, livePersons, LIVE, {
+      camera: cameraLensInfo(session, drag.current, { shown: shownFaces, all: cameraAll, basic, live }),
+    });
+  };
+  /**
+   * a panel edit against the lens it was made on (`from`): the photo part to the look (meiyan.look.v1, its person 原圖,
+   * K15), the person part to the drag's persons or the target (全部套用: everyone in view), 基本模式 to the ambient person
+   */
+  const setEdit = (e: EditState, from: Lens = lensOf(lookRef.current)) => {
+    if (e.photo !== from.edit.photo) setLook({ photo: e.photo, person: neutralPerson() });
+    const person = personOf(e, LIVE);
+    if (person !== personOf(from.edit, LIVE)) {
+      if (bundle?.basic) session.setAmbient(person);
+      else writePerson(session, person, drag.current);
+    }
+    // a write re-renders the panel whether or not a loop runs (基本模式 before the stream is live included)
+    setPersonsTick(session.version);
+  };
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
   const countTimer = useRef(0);
@@ -124,13 +187,32 @@ export function Camera() {
   const live = snap?.state === 'live';
   useEffect(() => {
     if (!ctrl || !bundle || !live) return;
+    // a tracker come to a 基本模式 session (0.5.1's late tracker, RM §15): its all-skin edit goes on to every face as
+    // 全部套用 does, the chip with it (round-7 review J1)
+    if (bundle.tracker && cameraSession().ambientToAll()) app.set({ cameraAll: true });
     let l: LiveLoop;
     let lastFace: boolean | null = null;
     let faceTimer = 0;
     const onStats = (s: LiveStats) => {
       setShownFaces(s.faces);
       setGpLeft(s.gpLeftOnLeft);
+      // the target or someone's params changed (a tap, a re-identification, the auto pick): the panel re-reads (§3.2)
+      setPersonsTick(s.personsVersion);
       setChip(chipGate.current.update(s.faces, app.get().cameraAll, performance.now()));
+      // ≥ 2 faces shown: 「點選畫面中的臉，可個別調整」 the first time (§3.1, K12), then, with 合照模式 off, that it lets
+      // far people be selected (K22); each once per install, the second after the first (its flag taken when it shows)
+      if (s.faces >= 2 && !sawGroup.current) {
+        sawGroup.current = true;
+        showGroupSceneHints({
+          takePersons: takeCameraPersonsHint,
+          takeGroupMode: takeGroupModeHint,
+          skipGroupMode: () => app.get().prefs.groupMode || app.get().screen.name !== 'camera',
+          toast: (t) => toast(t, 3200),
+          later: (run, ms) => {
+            hintTimer.current = window.setTimeout(run, ms);
+          },
+        });
+      }
       if (s.face === lastFace) return;
       lastFace = s.face;
       clearTimeout(faceTimer);
@@ -143,10 +225,11 @@ export function Camera() {
         camera: ctrl,
         engine: bundle.engine,
         tracker: bundle.tracker,
-        getLook: () => lookRef.current,
-        getAll: () => app.get().cameraAll,
+        // the camera session outlives this loop (a new stream, Review → 重拍, a bundle change keep everyone, §3.11)
+        persons: cameraSession(),
+        getPhoto: () => lookRef.current.photo,
         getPrefs: () => prefsRef.current,
-        // the picture the shutter keeps (captureFrom crops to the same ratio): vignette and grain follow it
+        // the picture the shutter keeps (captureFrom crops to the same ratio): vignette, grain and the group path's views follow it
         getFrame: () => normalizedCropRect(ctrl.video.videoWidth, ctrl.video.videoHeight, RATIO_VALUE[app.get().ratio]),
         onStats,
       });
@@ -177,7 +260,13 @@ export function Camera() {
     };
   }, [ctrl, bundle, live]);
 
-  useEffect(() => () => clearInterval(countTimer.current), []);
+  useEffect(
+    () => () => {
+      clearInterval(countTimer.current);
+      clearTimeout(hintTimer.current);
+    },
+    [],
+  );
 
   const hold = useHold((on) => {
     compareOn.current = on;
@@ -200,10 +289,15 @@ export function Camera() {
       p = Promise.reject(e);
     }
     p.catch((e: unknown) => setStartErr(reportError(e, 'camera.start')));
+    // a start straight on the back camera, or on the front camera with 合照模式 on, warms its graph behind the spinner (§6.3)
+    if (warmsOnStart(ctrl.snapshot.facing, app.get().prefs.groupMode)) warmAfterPaint(ctrl.snapshot.facing);
   };
 
   const close = () => {
     clearInterval(countTimer.current);
+    // ✕ ends the camera session first, so the stopping loop's releases are dropped (Review Focus #1)
+    endCameraSession();
+    drag.current = null;
     stopCamera();
     go({ name: 'home' });
   };
@@ -244,8 +338,15 @@ export function Camera() {
     }
     file.catch((e: unknown) => reportError(e, 'encodeJpeg'));
     const mirror = prefsRef.current.mirrorOnSave && cam.snapshot.facing === 'user';
+    const vw = cam.video.videoWidth;
+    const vh = cam.video.videoHeight;
     // the hand-over (C2): the seed in the saved crop, mirrored as the shot
-    const faceSeed = shotSeed(shotOut.seed, cam.video.videoWidth, cam.video.videoHeight, ratioValue, mirror);
+    const faceSeed = shotSeed(shotOut.seed, vw, vh, ratioValue, mirror);
+    // U6 (camera per-person spec §3.8, §5.3): the photo look, each edited person in the picture (box in the saved crop,
+    // mirrored as saved, 左右分開 swapped) and 基本模式's ambient person; null when nothing is set (編輯 opens at 原圖)
+    const handOver = handOverOf(lookRef.current.photo, shotPersons(shotOut.persons, vw, vh, ratioValue, mirror), bundle?.basic ? cameraSession().ambient : null);
+    // what 編輯 is handed and what the camera knew of each person at the shutter (e2e, round-4 review F5)
+    debug({ shotHandOver: (handOver?.persons ?? []).map((p) => ({ ...p.box, edited: p.params !== null, held: !!p.held, stale: !!p.stale })) });
     let original: ImageBitmap | null = null;
     try {
       original = await grabOriginalFrame(cam.video, ratioValue, mirror);
@@ -258,7 +359,7 @@ export function Camera() {
       original?.close();
       return;
     }
-    go({ name: 'review', shot: { image, file, original, faceSeed } });
+    go({ name: 'review', shot: { image, file, original, faceSeed, handOver } });
   };
 
   const shutter = () => {
@@ -294,20 +395,36 @@ export function Camera() {
     const i = TIMERS.indexOf(timer);
     app.set({ timer: TIMERS[(i + 1) % TIMERS.length] });
   };
+  /**
+   * 合照模式 (K22): a camera setting (prefs, remembered across launches); the live loop reads it on its next frame and
+   * moves to the path it picks, keeping every person (liveRoute, live.ts syncPath). The first turn-on explains the trade
+   */
+  const toggleGroup = () => {
+    haptic();
+    const r = toggleGroupMode(app.get().prefs.groupMode, takeGroupModeOnToast);
+    setPrefs({ groupMode: r.groupMode });
+    if (r.toast) toast(r.toast, 3200);
+  };
   const flip = () => {
     if (!ctrl) return;
     haptic();
+    const next: Facing = ctrl.snapshot.facing === 'user' ? 'environment' : 'user';
+    // another camera, another scene: the session ends before the old stream stops (Review Focus #1, §3.11)
+    endCameraSession();
+    drag.current = null;
     ctrl.flip().catch((e: unknown) => setStartErr(reportError(e, 'camera.flip')));
+    // the new facing's graph, warmed while its stream opens behind the spinner (§6.3)
+    warmAfterPaint(next);
   };
 
-  /** S §2.5: with ≥ 2 shown tracks a tap on a face selects it (ring, haptic); otherwise the panel collapse toggles */
+  /** S §2.5: with ≥ 2 shown tracks a tap on a face selects its person (ring, haptic); otherwise the panel collapse toggles */
   const onStageClick = (e: MouseEvent) => {
     if ((e.target as Element).closest('.slider-row, .status, button')) return;
     if (!live) return;
     const l = loopRef.current;
     const canvas = bundle?.engine.canvas;
     const shown = l?.tracks().length ?? 0;
-    let hit: TrackId | null = null;
+    let hit: LivePersonId | null = null;
     if (l && canvas && ctrl && shown >= 2) {
       const m = coverTapUv(e.clientX, e.clientY, canvas.getBoundingClientRect(), ctrl.video.videoWidth, ctrl.video.videoHeight, snap?.facing === 'user');
       hit = l.hitTest(m.u, m.v, m.minW, m.minH);
@@ -318,17 +435,32 @@ export function Camera() {
       return;
     }
     haptic();
-    if (a.allOff) app.set({ cameraAll: false });
+    if (a.allOff) {
+      // a tap on a face turns 全部套用 off; nobody reverts (§3.4)
+      app.set({ cameraAll: false });
+      cameraSession().setAll(false);
+    }
     l!.select(a.id);
-    setRing({ id: a.id, at: performance.now() });
+    setRing({ person: a.id, at: performance.now() });
   };
 
-  const binding = sliderFor(lensOf(look), sel, cameraBody);
+  // above the lens: keepDrag reads them (a const read before its line throws)
   const state = snap?.state ?? 'idle';
   const ready = !!loop && live && !lost;
   // basic mode only: the live no-face state comes and goes (the badge covers it), the panel must not flicker
   const faceNote = ready && bundle?.basic ? '基本模式不支援臉型與美妝' : null;
   const faceOff = !!faceNote && FACE_TABS.includes(sel.tab);
+  let lens = lensOf(look);
+  let binding = sliderFor(lens, sel, cameraBody);
+  // SliderRow drops its drag without onCommit when its key changes or it unmounts (Slider.tsx), in this same render: a
+  // dropped drag never writes again (Review Focus #3). The lens and the binding are then read again on the session's
+  // target, so the row and the next beginDrag agree on the key
+  const kept = keepDrag(drag.current, ready && !collapsed && !faceOff ? (binding?.key ?? null) : null);
+  if (kept !== drag.current) {
+    drag.current = kept;
+    lens = lensOf(look);
+    binding = sliderFor(lens, sel, cameraBody);
+  }
   // the 美妝 note (S5 §2.5): no closed-eye or small-face note in the camera, they change every frame
   const mkNote = makeupNote(sel, { lensClosed: false, lashesClosed: false, lashesSmall: false, procFailed: !!bundle?.engine.procMakeupFailed });
 
@@ -405,6 +537,12 @@ export function Camera() {
               {timer ? `${timer}s` : '關'}
             </span>
           </button>
+          {/* 基本模式 finds no face and MAX_LIVE_FACES = 1 has no group path: no path to pick (groupModeAvailable, C18) */}
+          {groupModeAvailable(!!bundle?.basic) && (
+            <button type="button" class={`chip-btn${prefs.groupMode ? ' on' : ''}`} aria-pressed={prefs.groupMode} onClick={toggleGroup}>
+              <span>{GROUP_MODE_LABEL}</span>
+            </button>
+          )}
         </div>
         <IconButton icon="flip" label="切換鏡頭" onClick={flip} disabled={!live || count !== null} />
       </div>
@@ -421,6 +559,7 @@ export function Camera() {
               ring={ring}
               all={cameraAll}
               count={shownFaces}
+              dim={photoScoped(sel, lens)}
             />
           )}
           {ready && (chip || cameraAll) && !hold.held && (
@@ -431,7 +570,9 @@ export function Camera() {
               onClick={(e) => {
                 e.stopPropagation();
                 haptic();
+                // on copies the target's params to everyone in view; off reverts nobody (§3.4, K10)
                 app.set({ cameraAll: !cameraAll });
+                cameraSession().setAll(!cameraAll);
               }}
             >
               <span>全部套用</span>
@@ -461,8 +602,20 @@ export function Camera() {
           <SliderRow
             float
             binding={faceOff ? null : binding}
-            onChange={(v) => binding && setEdit(binding.apply(lensOf(lookRef.current), v))}
-            onCommit={(v) => binding && setEdit(binding.apply(lensOf(lookRef.current), v))}
+            onChange={(v) => {
+              if (!binding) return;
+              // the drag's first change fixes whom it writes (the target, 全部套用: everyone in view) until it commits
+              drag.current ??= beginDrag(session, binding.key);
+              const l = lensOf(lookRef.current);
+              setEdit(binding.apply(l, v), l);
+            }}
+            onCommit={(v) => {
+              if (binding) {
+                const l = lensOf(lookRef.current);
+                setEdit(binding.apply(l, v), l);
+              }
+              drag.current = null;
+            }}
             onSel={setSel}
           />
         )}
@@ -487,10 +640,10 @@ export function Camera() {
 
       <BeautyPanel
         id="beauty-panel"
-        lens={lensOf(look)}
+        lens={lens}
         sel={sel}
         onSel={setSel}
-        onEdit={setEdit}
+        onEdit={(e) => setEdit(e, lens)}
         collapsed={collapsed}
         faceNote={faceNote}
         body={cameraBody}

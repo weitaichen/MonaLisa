@@ -165,7 +165,12 @@ export function prepareFaces(lms: readonly Landmarks478[], width: number, height
 export function prepareWith(lms: readonly Landmarks478[], over: readonly { box: Rect; face: Face; lm: Float32Array }[], width: number, height: number): PreparedFaces {
   const rest = lms.filter((l) => {
     const m = measure(l, width, height);
-    return m !== null && !over.some((o) => sameHead(o, m, width, height) || boxIoU(o.box, m.box) > DUPLICATE_IOU);
+    return m !== null && !over.some((o) => sameFace(o, m, width, height));
   });
   return prepareFaces([...rest, ...over.map((o) => ({ points: o.lm }))], width, height);
+}
+
+/** prepareWith's rule: `b` stands in place of `a` (one head, sameHead, or boxed as a duplicate of it, IoU > 0.6) */
+export function sameFace(a: HeadLike, b: HeadLike, width: number, height: number): boolean {
+  return sameHead(a, b, width, height) || boxIoU(a.box, b.box) > DUPLICATE_IOU;
 }

@@ -10,7 +10,9 @@ describe('limits (S §3.5)', () => {
     expect(L.EDIT_DETECT_FACES).toBe(12);
     expect(L.MAX_RENDER_FACES).toBe(10);
     expect(L.MAX_EDIT_BODIES).toBe(4);
-    expect(L.MAX_LIVE_FACES).toBe(3);
+    // camera per-person spec §6.3 (K5): every face in view up to the editor's cap (3 until 0.6)
+    expect(L.MAX_LIVE_FACES).toBe(10);
+    expect(L.MAX_LIVE_FACES).toBe(L.MAX_EDIT_FACES);
     // sub-step 1e: the camera tracks every face it can show (T1)
     expect(L.LIVE_DETECT_FACES).toBe(L.MAX_LIVE_FACES);
     expect(L.MIN_FACE_FRAC).toBe(0.03);
@@ -23,6 +25,19 @@ describe('limits (S §3.5)', () => {
     // PR1 (S §6.3, §6.6): the faster carrier ships. Bench R, 2026-10-18 desktop, 8 faces at 2048: UBO 4.4–4.8 ms,
     // texture 11.8–12.3 ms
     expect(L.FACE_TABLE_CARRIER).toBe('ubo');
+    // camera per-person spec §7.3–§7.5 (K7, K8): re-identification gates, the track size gate, the idle limit
+    expect([L.REID_GRACE_MS, L.REID_DIST, L.REID_SIZE, L.REID_AMBIGUITY, L.TRACK_SIZE_JUMP, L.LIVE_IDLE_MAX_MS]).toEqual([4000, 1.5, 1.5, 1.25, 1.5, 60_000]);
+    // camera per-person spec §6.3, §6.6 (K17, K22): the group path's detectors, floors and schedule. Whether it runs is
+    // the user's 合照模式 (prefs.groupMode, off by default: PGN failed on the desktop, §10), not a build constant, and
+    // the front camera no longer moves between its paths by itself (K18's LIVE_SOLO_AFTER_MS is gone)
+    expect(L).not.toHaveProperty('LIVE_GROUP');
+    expect(L).not.toHaveProperty('LIVE_SOLO_AFTER_MS');
+    expect(L.LIVE_DETECTOR).toEqual({ user: 'camera', environment: 'photo' });
+    expect(L.LIVE_FACE_FLOOR).toEqual({ user: 0.05, environment: 0.03 });
+    expect(L.DETECTOR_FLOOR).toEqual({ camera: 0.11, photo: 0.08 });
+    expect([L.LIVE_SCAN_EVERY, L.LIVE_VIEW_MAX_EDGE]).toEqual([4, 1280]);
+    // camera per-person spec §6.4 (K6): the detection cadence keeps ≥ 24 fps on average, face updates ≥ 5 Hz
+    expect([L.LIVE_MIN_FPS, L.LIVE_MAX_DETECT_EVERY]).toEqual([24, 6]);
   });
   it('keeps the invariants the engine relies on', () => {
     expect(L.MAX_EDIT_FACES).toBeLessThanOrEqual(L.MAX_RENDER_FACES);

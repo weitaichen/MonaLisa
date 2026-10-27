@@ -290,6 +290,25 @@ export interface CameraLook {
 }
 /** camera → editor: the beautified face's centre in the saved image, 'all' under 全部套用, null = no face seen */
 export type FaceSeed = { x: number; y: number } | 'all' | null;
+/** camera → editor (camera per-person spec U6, §5.3): the camera's result in the saved image's space */
+export interface CameraHandOver {
+  /** the camera's photo look (meiyan.look.v1's photo): the edit's photo */
+  photo: PhotoParams;
+  /**
+   * the persons in the picture the editor pairs with its faces (§5.4): box in the saved image's UV (cropped to the ratio,
+   * mirrored as saved); params (左右分開 sides swapped when saved mirrored) for an edited person, null for one found at
+   * the shutter and never edited, whose box only keeps their own face from an edited person's (K14, round-1 review C7).
+   * `held`: missing at the shutter (held for LOST_HOLD_MS), so a miss is not counted for the toast: they may have left.
+   * `stale`: unseen at the shutter since a no-answer (round-3 review E5), or present but fed by no call on the captured
+   * frame (round-5 review, §6.6 Capture: its views had no answer there, or its only finds could not feed it; round-6
+   * review H7): not known missing, so counted, but the box is the last answer's. Either way the box is a guess: a held
+   * one pairs only by IoU, a stale one, as a found one, by IoU, else by the padded centre with a face of its size
+   * (pairsByCentre, matchHandOver, round-4 review F2, round-6 review H3, H4). Empty when nobody is edited (handOverOf)
+   */
+  persons: readonly { box: Rect; params: PersonParams | null; held?: boolean; stale?: boolean }[];
+  /** 基本模式: the all-skin person (§3.6), else null */
+  ambient: PersonParams | null;
+}
 
 /** raw 478×3 MediaPipe landmarks in O-space (adapt() derives Face on load); box = oval bbox */
 export interface CachedFace {
@@ -506,6 +525,12 @@ export interface BodyTrackerOptions {
   outputMask?: boolean;
 }
 
+/**
+ * The face detector of a detection: 'photo' runs what Tracker.photoDetector says (BlazeFace full-range once it is
+ * there), 'camera' the camera bundle's short-range detector (v0.6 spec §6.3).
+ */
+export type FaceDetectorKind = 'photo' | 'camera';
+
 export interface Tracker {
   /** Delegate of the current graph; re-read it on onStateChange('ok'): a rebuild under 'auto' may fall back to CPU. */
   readonly delegate: Delegate;
@@ -513,16 +538,30 @@ export interface Tracker {
    * VIDEO mode; tsMs must be strictly increasing. null = no answer (closed, frame not ready, tracker unusable, rebuild
    * throttled); [] = a completed inference without a face (A5). `maxFaces` is required (clamped to 1…EDIT_DETECT_FACES)
    * and travels with the mode in one setOptions: options are sticky, and every change rebuilds the graph. Throws on
-   * inference failure: the tracker rebuilds its graph on the next call.
+   * inference failure: the tracker rebuilds its graph on the next call. `detector`: 'camera' (default), or 'photo' for
+   * the back camera's one VIDEO pass when the group path is off (v0.6 spec §6.3).
    */
-  detectVideo(video: HTMLVideoElement, tsMs: number, opts: { maxFaces: number }): Landmarks478[] | null;
+  detectVideo(video: HTMLVideoElement, tsMs: number, opts: { maxFaces: number; detector?: FaceDetectorKind }): Landmarks478[] | null;
   /**
    * IMAGE mode on the same instance; the next detectVideo switches back. [] = no face, or not known (recovering /
    * unusable): callers keep the health check (editorModel.ts detectSession). Throws as detectVideo. `detector`:
    * 'photo' (default) runs what photoDetector says; 'camera' the camera's short-range detector, the retry for a face the
    * full-range one misses (a close-up, a face cut off by the frame's edge; app/still.ts, step-1 spec §6.5).
    */
-  detectImage(image: ImageBitmap | HTMLCanvasElement | HTMLImageElement, opts: { maxFaces: number; detector?: 'photo' | 'camera' }): Landmarks478[];
+  detectImage(image: ImageBitmap | HTMLCanvasElement | HTMLImageElement | OffscreenCanvas, opts: { maxFaces: number; detector?: FaceDetectorKind }): Landmarks478[];
+  /**
+   * The group path's IMAGE call (v0.6 spec §6.6) with the live path's guards: null = no answer (closed, an empty view, the
+   * instance unusable or being replaced, the rebuild throttle), as detectVideo; [] = a completed inference without a
+   * face. Throws as detectVideo. detectImage answers [] in those cases (its callers keep a health check), which the live
+   * loop would take for "no face" and drop every track after LOST_HOLD_MS (A5).
+   */
+  detectView(view: OffscreenCanvas | HTMLCanvasElement, opts: { maxFaces: number; detector: FaceDetectorKind }): Landmarks478[] | null;
+  /**
+   * Switch the graph to `mode` (count: IMAGE EDIT_DETECT_FACES, VIDEO LIVE_DETECT_FACES) and `detector`'s bundle, then run
+   * one call on a 64 × 64 blank canvas, so a graph's one-time GPU warm-up (the full-range compile) lands behind the
+   * camera's spinner instead of on a live frame (v0.6 spec §6.3). Never throws; a no-op when closed or unusable.
+   */
+  warm(mode: 'VIDEO' | 'IMAGE', detector: FaceDetectorKind): void;
   /**
    * The detector a 'photo' detection runs now: 'full-range' once TrackerOptions.fullRangeDetector has one (and the photo
    * bundle could be assembled), else 'short-range', the camera's (a 'camera' retry would then repeat the same detection).
@@ -760,6 +799,13 @@ export interface Prefs {
   exportFormat: ExportFormat;
   /** 設定 › 輸出解析度 (step 3): the stored choice; a block shows 標準 without changing it */
   exportSize: ExportSize;
+  /**
+   * the camera's 合照模式 (camera per-person spec K22, §6.3): on → both cameras run the group path (§6.6: far and small
+   * faces of upright group shots are found, the preview may be less smooth with many people); off (the default, and
+   * prefs saved before it existed) → one VIDEO pass over the whole frame per facing (the solo path; option C on the back
+   * camera)
+   */
+  groupMode: boolean;
 }
 
 export interface HistoryEntry {
@@ -841,8 +887,11 @@ export interface DebugState {
   detectRetries: number;
   /** editor: the face detections that waited for the full-range detector's first download (D1, services.ts photoDetectorPending) */
   detectorWaits?: number;
-  /** face boxes, normalized and unmirrored (editor: cache faces; camera: shown tracks) */
-  boxes: { id: string; x: number; y: number; w: number; h: number }[];
+  /**
+   * face boxes, normalized and unmirrored (editor: cache faces; camera: shown tracks). Camera only (camera per-person
+   * spec §6.6): the track's person `c{n}`, whether that person is edited, the view that last refreshed it and when
+   */
+  boxes: { id: string; x: number; y: number; w: number; h: number; person?: string; edited?: boolean; view?: string; seen?: number }[];
   /** editor: the cache's obstacles (faces it dropped, too small or over the cap), as `boxes` (the camera does not write it) */
   obstacles?: { x: number; y: number; w: number; h: number }[];
   /** editor: the cache's dropped counts (S §3.2; the camera does not write it) */
@@ -872,6 +921,21 @@ export interface DebugState {
   toneBuilds: number;
   /** pass list of the last display frame */
   passes: string[];
+  /** camera: frames per detection on the last frame (camera per-person spec §6.4) */
+  liveEvery?: number;
+  /** camera: the face detector of this stream session (§6.3) */
+  liveDetector?: 'short-range' | 'full-range';
+  /** camera: the detection path (§6.6): VIDEO on the whole frame, or IMAGE calls on the views */
+  livePath?: 'solo' | 'group';
+  /** camera: the group path's refresh views of the last detection ('whole', `t{col},{row}`); [] on the solo path (§6.6) */
+  liveViews?: string[];
+  /**
+   * camera: the last shot's hand-over to 編輯 (CameraHandOver.persons; [] when nobody is edited): each person's box in the
+   * saved photo's UV, edited (params set), held (known missing at the shutter), stale (not known missing, the box the
+   * last answer's: unseen there since a no-answer, or fed by no call on the captured frame).
+   * e2e (round-4 review F5): a scene that tests the found boxes' rules reads the same when the person was held there
+   */
+  shotHandOver?: { x: number; y: number; w: number; h: number; edited: boolean; held: boolean; stale: boolean }[];
 }
 
 declare global {

@@ -124,8 +124,11 @@ export function groupFace(copy) {
   };
 }
 
-/** Bundled Playwright chromium may be missing; fall back to the newest installed revision. */
-async function launch() {
+/**
+ * Bundled Playwright chromium may be missing; fall back to the newest installed revision. Exported for gen-y4m.mjs,
+ * which decodes JPEG sources (ten_faces.jpg → group10.y4m) in it.
+ */
+export async function launch() {
   // imported here, not at the top: gen-y4m.mjs and the unit tests import this module for its geometry only
   const { chromium } = await import('@playwright/test');
   try {

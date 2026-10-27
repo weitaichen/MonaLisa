@@ -1,0 +1,419 @@
+// The camera session (camera per-person spec §5.1, §7.4–§7.6): the persons the live camera has seen, their params, the
+// selection, 全部套用 and the away pool. Identity is geometry and time only (U5); every ambiguity is a new person at 原圖
+// (A2). An away person's grace counts only while the path that last found them is in use (合照模式, K22: setPath).
+// Pure: no DOM, no clock of its own (every time is the caller's, on the live loop's clock).
+import { LIVE_IDLE_MAX_MS, MAX_LIVE_FACES, REID_AMBIGUITY, REID_DIST, REID_GRACE_MS, REID_SIZE } from '../config/limits';
+import { isNeutralPerson, neutralPerson } from '../edit/state';
+import type { Facing, PersonParams, Rect } from '../types';
+
+/** a camera person, per session, counting up from 1 (debug id `c{n}`) */
+export type LivePersonId = number;
+
+/** the live loop's detection path (§6.3, §6.6), the one 合照模式 picks (K22) */
+export type LivePath = 'solo' | 'group';
+
+/**
+ * §7.4's distance of a new box `next` from a person last seen at `prev` (unmirrored video UV; `aspect` = frame width /
+ * height): the centre distance in frame-height units, or null when it is farther than REID_DIST × prev's width or the
+ * widths differ by more than × REID_SIZE
+ */
+export function reidDistance(prev: Rect, next: Rect, aspect: number): number | null {
+  if (!(prev.w > 0 && next.w > 0)) return null;
+  const d = Math.hypot((next.x + next.w / 2 - (prev.x + prev.w / 2)) * aspect, next.y + next.h / 2 - (prev.y + prev.h / 2));
+  if (!(d <= REID_DIST * prev.w * aspect)) return null;
+  if (Math.max(next.w / prev.w, prev.w / next.w) > REID_SIZE) return null;
+  return d;
+}
+
+/** the nearest candidate; null when there is none or another is within × REID_AMBIGUITY of it (two at 0 included, A2) */
+export function nearestUnambiguous<T>(cands: readonly { item: T; d: number }[]): T | null {
+  let best = -1;
+  for (let i = 0; i < cands.length; i++) if (best < 0 || cands[i].d < cands[best].d) best = i;
+  if (best < 0) return null;
+  const limit = REID_AMBIGUITY * cands[best].d;
+  for (let i = 0; i < cands.length; i++) if (i !== best && cands[i].d <= limit) return null;
+  return cands[best].item;
+}
+
+/** a person a call is about to `release` (their track past its hold, §7.3 item 6): the arguments that release takes */
+export interface PendingRelease {
+  id: LivePersonId;
+  box: Rect;
+  now: number;
+  path?: LivePath;
+}
+
+/** what FaceTracks needs of the session: persons for its tracks, the A7 pick in, the weights' and the marker's inputs out */
+export interface TrackPersons {
+  /**
+   * §7.4's away candidates for a new box: the away persons in grace whose last box passes the gates, each with its
+   * distance. Read-only: FaceTracks weighs them with its held tracks in one decision (§7.3 item 4, A2). `pending`: the
+   * persons the call releases once it has taken everyone it decided (I4, round-3 review E3), weighed as the away
+   * persons their release would make them, the pool's cap not yet applied
+   */
+  awayCandidates(box: Rect, aspect: number, now: number, pending?: readonly PendingRelease[]): { id: LivePersonId; d: number }[];
+  /** a new track's person: the away person `away` re-identified (FaceTracks' decision, §7.4), else a new one at 原圖 */
+  take(away: LivePersonId | null): LivePersonId;
+  /**
+   * a dropped track's person, with its last shown box and time and the path that last found them (K22): to the away
+   * pool when edited or remembered (§7.6)
+   */
+  release(id: LivePersonId, box: Rect, now: number, path?: LivePath): void;
+  /** the persons of the shown tracks (found or held) and the A7 auto pick, every step */
+  sync(inView: readonly LivePersonId[], auto: LivePersonId | null): void;
+  edited(id: LivePersonId): boolean;
+  params(id: LivePersonId): PersonParams | null;
+  target(): LivePersonId | null;
+  all(): boolean;
+}
+
+interface AwayEntry {
+  id: LivePersonId;
+  /** the track's last shown box (unmirrored video UV) and its time on the session clock */
+  box: Rect;
+  lastSeen: number;
+  /** the path that last found them (K22); null: any path (released before the loop named one, or without a path) */
+  path: LivePath | null;
+  /** the REID_GRACE_MS they spent before `from` */
+  spent: number;
+  /** since when their grace runs: their path is in use; null while the other path is (it cannot see them, §3.13) */
+  from: number | null;
+}
+
+/** the grace an away person has spent at `now`: only the time their path was in use counts (K22) */
+const graceSpent = (e: AwayEntry, now: number): number => e.spent + (e.from === null ? 0 : Math.max(0, now - e.from));
+
+export class LivePersons implements TrackPersons {
+  /** every person the session knows (in view, held or away) → params; null = never edited (原圖) */
+  private readonly known = new Map<LivePersonId, PersonParams | null>();
+  /** away persons (edited, or the remembered selection), at most MAX_LIVE_FACES, in release order */
+  private pool: AwayEntry[] = [];
+  private nextId = 1;
+  /** the pinned selection; null = 'auto' */
+  private pinned: LivePersonId | null = null;
+  /** a pinned person who left: claimed again before a tap, an edit or the pool clearing, they are pinned again (§7.6) */
+  private returnTo: LivePersonId | null = null;
+  private shown: readonly LivePersonId[] = [];
+  private autoPick: LivePersonId | null = null;
+  private allOn = false;
+  /** 全部套用's lead: the target when it was turned on (§7.6); it does not move while on */
+  private lead: LivePersonId | null = null;
+  /** 全部套用's params, given to every face entering the view; null = 原圖 */
+  private shared: PersonParams | null = null;
+  private amb: PersonParams = neutralPerson();
+  /** false after clear() until the next resume: releases from a loop that is stopping are dropped (Review Focus #1) */
+  private open = true;
+  private facing: Facing | null = null;
+  private pausedAt: number | null = null;
+  /** the path in use (setPath, K22) and since when; null until the live loop names one */
+  private lane: LivePath | null = null;
+  private laneSince = 0;
+  private v = 0;
+
+  /** moves on every change (the UI store reads it) */
+  get version(): number {
+    return this.v;
+  }
+
+  /** 基本模式's all-skin person (§3.6); 原圖 otherwise */
+  get ambient(): PersonParams {
+    return this.amb;
+  }
+
+  setAmbient(p: PersonParams): void {
+    this.amb = p;
+    this.v++;
+  }
+
+  /**
+   * 基本模式 gained a tracker in this session (0.5.1's late tracker adopted while the camera is open, RM §15): the
+   * all-skin person becomes 全部套用's shared params, given to every face as it enters the view, as 基本模式 drew it on
+   * everyone's skin, and the ambient person is 原圖 again (round-7 review J1: kept as the global skin, the edit left the
+   * faces and came back over the frame whenever no face was found, in shots too, out of the panel's and 編輯's reach).
+   * true when it turned 全部套用 on. An untouched ambient person (原圖) changes nothing, and neither does a session whose
+   * people already hold params of their own, or that 全部套用 already runs (a tracker lost mid-session, then 基本模式):
+   * they keep theirs, and the ambient person waits for 基本模式 again (round-8 review L2: it overwrote them)
+   */
+  ambientToAll(): boolean {
+    if (isNeutralPerson(this.amb) || this.allOn || [...this.known.values()].some((p) => p !== null)) return false;
+    this.allOn = true;
+    this.lead = null;
+    this.shared = this.amb;
+    this.put(this.shown, this.shared);
+    this.amb = neutralPerson();
+    this.v++;
+    return true;
+  }
+
+  params(id: LivePersonId): PersonParams | null {
+    return this.known.get(id) ?? null;
+  }
+
+  edited(id: LivePersonId): boolean {
+    return this.params(id) !== null;
+  }
+
+  /** `p` to each listed person the session knows (in view, held or away); neutral `p` → never edited again (§3.3) */
+  write(ids: readonly LivePersonId[], p: PersonParams): void {
+    this.put(ids, isNeutralPerson(p) ? null : p);
+    this.v++;
+  }
+
+  awayCandidates(box: Rect, aspect: number, now: number, pending: readonly PendingRelease[] = []): { id: LivePersonId; d: number }[] {
+    const out: { id: LivePersonId; d: number }[] = [];
+    const soon = pending.flatMap((r) => this.entryOf(r.id, r.box, r.now, r.path) ?? []);
+    for (const e of [...this.pool.filter((x) => !soon.some((y) => y.id === x.id)), ...soon]) {
+      if (!this.inGrace(e, now)) continue;
+      const d = reidDistance(e.box, box, aspect);
+      if (d !== null) out.push({ id: e.id, d });
+    }
+    return out;
+  }
+
+  /**
+   * the last boxes of the away persons in grace at `now` (every one `awayCandidates` may weigh): the shutter's cycle
+   * holds the view that refreshes each of them, so a person back just before the shutter is found there (§6.6 Capture)
+   */
+  awayBoxes(now: number): Rect[] {
+    return this.pool.filter((e) => this.inGrace(e, now)).map((e) => ({ ...e.box }));
+  }
+
+  /**
+   * `away` leaves the pool as the new track's person, pinned again when they are the selection that left (§7.6); null,
+   * or a person no longer away (the pool evicted them meanwhile), is a new person at 原圖
+   */
+  take(away: LivePersonId | null): LivePersonId {
+    this.v++;
+    const hit = away === null ? undefined : this.pool.find((e) => e.id === away);
+    if (hit) {
+      this.pool = this.pool.filter((e) => e !== hit);
+      if (hit.id === this.returnTo) {
+        this.pinned = hit.id;
+        this.returnTo = null;
+      }
+      return hit.id;
+    }
+    const id = this.nextId++;
+    this.known.set(id, null);
+    return id;
+  }
+
+  /** a box with no held track near it (§7.4): the nearest away person unless another is about as near, else a new one at 原圖 */
+  claim(box: Rect, aspect: number, now: number): LivePersonId {
+    return this.take(nearestUnambiguous(this.awayCandidates(box, aspect, now).map((c) => ({ item: c.id, d: c.d }))));
+  }
+
+  release(id: LivePersonId, box: Rect, now: number, path?: LivePath): void {
+    if (!this.open || !this.known.has(id)) return;
+    const entry = this.entryOf(id, box, now, path);
+    if (this.pinned === id) {
+      this.pinned = null;
+      this.returnTo = id;
+    }
+    if (this.shown.includes(id)) this.shown = this.shown.filter((x) => x !== id);
+    if (this.autoPick === id) this.autoPick = null;
+    if (entry) {
+      this.pool = this.pool.filter((e) => e.id !== id);
+      this.pool.push(entry);
+      while (this.pool.length > MAX_LIVE_FACES) {
+        let oldest = 0;
+        for (let i = 1; i < this.pool.length; i++) if (this.pool[i].lastSeen < this.pool[oldest].lastSeen) oldest = i;
+        const [gone] = this.pool.splice(oldest, 1);
+        this.known.delete(gone.id);
+        if (this.returnTo === gone.id) this.returnTo = null;
+      }
+    } else this.known.delete(id);
+    this.v++;
+  }
+
+  /**
+   * the away entry `release(id, box, now, path)` makes (§7.6): an edited person, or the pinned selection leaving (they
+   * are remembered); null when release forgets them, or the session is closed
+   */
+  private entryOf(id: LivePersonId, box: Rect, now: number, path?: LivePath): AwayEntry | null {
+    if (!this.open || !this.known.has(id)) return null;
+    if (!(this.edited(id) || this.pinned === id || this.returnTo === id)) return null;
+    // K22: last found by the other path, the path in use cannot see them (a toggle carried their track over and it was
+    // never found since): their grace spent is their path's time up to the toggle, and it waits for their path
+    const seenBy = path === undefined || this.lane === null ? null : path;
+    const own = seenBy === null || seenBy === this.lane;
+    return {
+      id,
+      box: { ...box },
+      lastSeen: now,
+      path: seenBy,
+      spent: own ? 0 : Math.max(0, this.laneSince - now),
+      from: own ? now : null,
+    };
+  }
+
+  sync(inView: readonly LivePersonId[], auto: LivePersonId | null): void {
+    const prev = this.shown;
+    const sameList = inView.length === prev.length && inView.every((id, i) => id === prev[i]);
+    if (sameList && auto === this.autoPick) return;
+    if (!sameList && this.allOn) {
+      // a face entering the view under 全部套用 gets the shared params, 原圖 included (§3.4)
+      const before = new Set(prev);
+      this.put(inView.filter((id) => !before.has(id)), this.shared);
+    }
+    this.shown = [...inView];
+    this.autoPick = auto;
+    this.v++;
+  }
+
+  inView(): readonly LivePersonId[] {
+    return this.shown;
+  }
+
+  selection(): 'auto' | LivePersonId {
+    return this.pinned ?? 'auto';
+  }
+
+  pin(id: LivePersonId): void {
+    this.pinned = id;
+    this.returnTo = null;
+    this.v++;
+  }
+
+  /** the person the sliders edit (§3.2): 全部套用's lead while in view, else the pinned person while in view, else the auto pick; null with no face shown */
+  target(): LivePersonId | null {
+    if (!this.shown.length) return null;
+    const first = this.allOn ? this.lead : this.pinned;
+    return first !== null && this.shown.includes(first) ? first : this.autoPick;
+  }
+
+  all(): boolean {
+    return this.allOn;
+  }
+
+  /** 全部套用 (§3.4, K10): on copies the target's params (原圖 when untouched) to everyone in view; off reverts nobody */
+  setAll(on: boolean): void {
+    if (on === this.allOn) return;
+    if (on) {
+      const lead = this.target();
+      this.lead = lead;
+      this.shared = lead === null ? null : this.params(lead);
+      this.put(this.shown, this.shared);
+    } else {
+      this.lead = null;
+      this.shared = null;
+    }
+    this.allOn = on;
+    this.v++;
+  }
+
+  /** the persons an edit writes: everyone in view under 全部套用, else the target, [] with no face shown */
+  editTargets(): LivePersonId[] {
+    if (this.allOn) return [...this.shown];
+    const t = this.target();
+    return t === null ? [] : [t];
+  }
+
+  /** the params the panel shows: the shared ones under 全部套用, else `lead`'s (a drag's) or the target's; 原圖 when untouched */
+  panelParams(lead: LivePersonId | null = null): PersonParams {
+    if (this.allOn) return this.shared ?? neutralPerson();
+    const id = lead ?? this.target();
+    return (id === null ? null : this.params(id)) ?? neutralPerson();
+  }
+
+  /**
+   * a panel edit to `ids` (a drag's persons, §3.2, else the edit targets): the first one while the selection is auto pins
+   * the auto pick (K9); under 全部套用 it writes everyone in view too, so a face that entered during a drag follows it
+   * (§3.4, K10); an edit to anyone but the pinned person who left cancels their return (§7.6), and a drag that keeps
+   * writing them does not
+   */
+  edit(p: PersonParams, ids: readonly LivePersonId[] = this.editTargets()): void {
+    if (!this.allOn && this.pinned === null && this.autoPick !== null && ids.includes(this.autoPick)) this.pinned = this.autoPick;
+    const to = this.allOn ? [...new Set([...ids, ...this.shown])] : ids;
+    if (this.returnTo !== null && !to.includes(this.returnTo)) this.returnTo = null;
+    if (this.allOn) this.shared = isNeutralPerson(p) ? null : p;
+    this.write(to, p);
+  }
+
+  /** the loop pauses or stops: the session clock stops here (§7.5) */
+  pause(now: number): void {
+    this.pausedAt ??= now;
+  }
+
+  /**
+   * the live loop's path on this frame (合照模式, K22, §3.13, §7.5): a toggle stops the grace of everyone away who was
+   * last found by the path it leaves, and runs the grace of those last found by the path it picks. A face only one path
+   * finds is unseen, not gone, while the other path is in use: turning the mode back gives its person the grace they
+   * had left (a far face dropped after the hold: about REID_GRACE_MS), at most LIVE_IDLE_MAX_MS after their last
+   * sighting (inGrace)
+   */
+  setPath(path: LivePath, now: number): void {
+    if (path === this.lane) return;
+    for (const e of this.pool) {
+      if (e.path === null) continue;
+      if (e.path === path) e.from ??= now;
+      else if (e.from !== null) {
+        e.spent = graceSpent(e, now);
+        e.from = null;
+      }
+    }
+    this.lane = path;
+    this.laneSince = now;
+  }
+
+  /**
+   * §7.4's REID_GRACE_MS (K22): on their own path, the time it was in use since their last sighting; on the other path,
+   * which could not see them, the usual time since it. Never more than LIVE_IDLE_MAX_MS after it
+   */
+  private inGrace(e: AwayEntry, now: number): boolean {
+    if (now - e.lastSeen > LIVE_IDLE_MAX_MS) return false;
+    return (e.from === null ? now - e.lastSeen : graceSpent(e, now)) <= REID_GRACE_MS;
+  }
+
+  /**
+   * the next live frame (§7.5): another facing ends the session first; the session opens on `facing`; a pause longer
+   * than LIVE_IDLE_MAX_MS forgets everyone away and the remembered selection, a shorter one costs the away pool no grace
+   */
+  resume(now: number, facing: Facing): void {
+    if (this.facing !== null && this.facing !== facing) this.clear();
+    const changed = !this.open || this.facing !== facing || this.pausedAt !== null;
+    this.open = true;
+    this.facing = facing;
+    if (this.pausedAt !== null) {
+      const span = now - this.pausedAt;
+      this.pausedAt = null;
+      if (span > LIVE_IDLE_MAX_MS) {
+        for (const e of this.pool) this.known.delete(e.id);
+        this.pool = [];
+        this.returnTo = null;
+      } else if (span > 0) {
+        for (const e of this.pool) {
+          e.lastSeen += span;
+          if (e.from !== null) e.from += span;
+        }
+        this.laneSince += span;
+      }
+    }
+    if (changed) this.v++;
+  }
+
+  /** a new session (✕, a flip, §3.11): ids from 1, nobody known, auto, 全部套用 off, ambient 原圖; closed until the next resume */
+  clear(): void {
+    this.known.clear();
+    this.pool = [];
+    this.nextId = 1;
+    this.pinned = null;
+    this.returnTo = null;
+    this.shown = [];
+    this.autoPick = null;
+    this.allOn = false;
+    this.lead = null;
+    this.shared = null;
+    this.amb = neutralPerson();
+    this.open = false;
+    this.facing = null;
+    this.pausedAt = null;
+    this.lane = null;
+    this.laneSince = 0;
+    this.v++;
+  }
+
+  private put(ids: readonly LivePersonId[], p: PersonParams | null): void {
+    for (const id of ids) if (this.known.has(id)) this.known.set(id, p);
+  }
+}

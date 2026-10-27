@@ -180,6 +180,176 @@ export async function debugState(page: Page): Promise<DebugState> {
   return d;
 }
 
+/**
+ * a camera debug box (unmirrored video UV) → its client point (the box centre) and its rect in fractions of the
+ * preview frame. The front camera's preview is mirrored (the default); the back camera's is not (`mirrored` false).
+ */
+export async function camBox(page: Page, id: string, mirrored = true): Promise<{ point: { x: number; y: number }; rect: Rect }> {
+  const b = (await debugState(page)).boxes.find((x) => x.id === id)!;
+  return page.evaluate(
+    ({ b, mirrored }) => {
+      const c = document.querySelector('.cam-stage canvas') as HTMLCanvasElement;
+      const v = document.querySelector('video') as HTMLVideoElement;
+      const r = c.getBoundingClientRect();
+      const s = Math.max(r.width / v.videoWidth, r.height / v.videoHeight);
+      const fx = (u: number) => (r.width - v.videoWidth * s) / 2 + (mirrored ? 1 - u : u) * v.videoWidth * s;
+      const fy = (y: number) => (r.height - v.videoHeight * s) / 2 + y * v.videoHeight * s;
+      const x0 = fx(mirrored ? b.x + b.w : b.x);
+      const x1 = fx(mirrored ? b.x : b.x + b.w);
+      return {
+        point: { x: r.left + (x0 + x1) / 2, y: r.top + fy(b.y + b.h / 2) },
+        rect: { x: x0 / r.width, y: fy(b.y) / r.height, w: (x1 - x0) / r.width, h: (fy(b.y + b.h) - fy(b.y)) / r.height },
+      };
+    },
+    { b, mirrored },
+  );
+}
+
+/** the camera screen, opened and live (front camera) */
+export async function open(page: Page): Promise<void> {
+  await page.goto('/');
+  await page.getByRole('button', { name: /拍攝/ }).click();
+  await page.getByRole('button', { name: '點擊開啟相機' }).click();
+  await expect.poll(async () => (await debugState(page)).cameraState, { timeout: 120_000 }).toBe('live');
+}
+
+/** flip to the back camera; resolves at its first live frame (Date.now()) */
+export async function flipBack(page: Page): Promise<number> {
+  await page.getByRole('button', { name: '切換鏡頭' }).click();
+  await expect.poll(async () => (await debugState(page)).cameraState, { timeout: 30_000, intervals: [50] }).not.toBe('live');
+  await expect
+    .poll(async () => {
+      const d = await debugState(page);
+      return d.cameraState === 'live' && d.fps > 0;
+    }, { timeout: 60_000, intervals: [50] })
+    .toBe(true);
+  return Date.now();
+}
+
+/** what is left of `ms` since `t0` (at least 1 ms): a poll timeout counted from an earlier moment */
+export const within = (t0: number, ms: number): number => Math.max(1, ms - (Date.now() - t0));
+
+/**
+ * The camera asks for an upright 1080×1920 stream (camera per-person spec §12.2 E4): Chrome's fake camera otherwise
+ * centre-crops a portrait clip to the app's landscape request (media/camera.ts cameraConstraints: 1920×1080, §6.1). An
+ * init script: call before page.goto.
+ */
+export async function uprightCamera(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const md = navigator.mediaDevices;
+    if (!md) return;
+    const getUserMedia = md.getUserMedia.bind(md);
+    md.getUserMedia = (c?: MediaStreamConstraints) => {
+      if (!c?.video) return getUserMedia(c);
+      const video = { ...(typeof c.video === 'object' ? c.video : {}), width: { ideal: 1080 }, height: { ideal: 1920 } };
+      return getUserMedia({ ...c, video });
+    };
+  });
+}
+
+/**
+ * Run MediaPipe on `delegate` (CPU by default: SwiftShader's GPU path runs many landmark inferences far slower, §12.2):
+ * `meiyan.prefs.v1` `{ delegate }` while the prefs are unset. An init script: call before page.goto.
+ */
+export async function cpuDelegate(page: Page, delegate: string = 'CPU'): Promise<void> {
+  await page.addInitScript((d: string) => {
+    try {
+      if (localStorage.getItem('meiyan.prefs.v1') === null) localStorage.setItem('meiyan.prefs.v1', JSON.stringify({ delegate: d }));
+    } catch {
+      // storage blocked: the app runs on its default delegate
+    }
+  }, delegate);
+}
+
+/** the camera's 合照模式 toggle in its top bar (camera per-person spec K22): a toggle button, aria-pressed */
+export const groupModeButton = (page: Page): Locator => page.getByRole('button', { name: '合照模式', exact: true });
+
+/**
+ * 合照模式 on or off as the user does it, a tap on the camera's toggle (a camera setting, kept in meiyan.prefs.v1): on
+ * runs the group path on both cameras, off (the default) one VIDEO pass (K22). The live loop moves on its next frame
+ */
+export async function setGroupMode(page: Page, on: boolean): Promise<void> {
+  const b = groupModeButton(page);
+  if ((await b.getAttribute('aria-pressed')) !== String(on)) await b.click();
+  await expect(b).toHaveAttribute('aria-pressed', String(on));
+}
+
+/** every toast text shown from now on (a hint lasts 3.2 s, a face-count poll can outlive it); call after page.goto */
+export const watchToasts = (page: Page): Promise<void> =>
+  page.evaluate(() => {
+    const w = window as unknown as { __toasts: string[] };
+    w.__toasts = [];
+    const scan = () => {
+      for (const el of document.querySelectorAll('.toast')) {
+        const t = (el.textContent ?? '').trim();
+        if (t && w.__toasts.at(-1) !== t) w.__toasts.push(t);
+      }
+    };
+    new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+export const toastsSeen = (page: Page): Promise<string[]> => page.evaluate(() => (window as unknown as { __toasts: string[] }).__toasts);
+
+/**
+ * The unprocessed frame the camera hands to 編輯 (grabOriginalFrame: createImageBitmap of a 2D canvas), copied to
+ * window.__shotOriginal once `window.__armOriginal` is set (the next shot's frame). An init script: call before page.goto.
+ */
+export async function armShotOriginal(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __armOriginal?: boolean; __shotOriginal?: { width: number; height: number; data: Uint8ClampedArray } };
+    const make = window.createImageBitmap.bind(window) as (...a: unknown[]) => Promise<ImageBitmap>;
+    (window as unknown as { createImageBitmap: unknown }).createImageBitmap = (src: unknown, ...rest: unknown[]) => {
+      if (w.__armOriginal && src instanceof HTMLCanvasElement) {
+        const g = src.getContext('2d')!;
+        w.__shotOriginal = { width: src.width, height: src.height, data: g.getImageData(0, 0, src.width, src.height).data };
+        w.__armOriginal = false;
+      }
+      return make(src, ...rest);
+    };
+  });
+}
+
+/** after a shot taken armed (armShotOriginal): 預覽's capture against the unprocessed frame (same size, MAD) */
+export async function capturedVsOriginal(page: Page): Promise<{ same: boolean; mad: number }> {
+  const { same, mads } = await capturedRegions(page, [{ x: 0, y: 0, w: 1, h: 1 }]);
+  return { same, mad: mads[0] };
+}
+
+/**
+ * after a shot taken armed (armShotOriginal): 預覽's capture against the unprocessed frame inside each rect (fractions
+ * of the shot, rounded as regionDiff does and clamped to it; MAD, −1 for an empty rect). The camera's preview rects
+ * (camBox) are the shot's: the shot is the preview's crop, mirrored as the preview (camera-group.spec.ts's hand-over).
+ * `same` false (every MAD −1) when the sizes differ.
+ */
+export async function capturedRegions(page: Page, rects: Rect[]): Promise<{ same: boolean; mads: number[] }> {
+  await expect.poll(async () => (await debugState(page)).screen).toBe('review');
+  await expect.poll(() => page.evaluate(() => !!(window as unknown as { __shotOriginal?: unknown }).__shotOriginal)).toBe(true);
+  return page.locator('canvas[aria-label="拍攝結果"]').evaluate((c: HTMLCanvasElement, rects: Rect[]) => {
+    const s = (window as unknown as { __shotOriginal: { width: number; height: number; data: Uint8ClampedArray } }).__shotOriginal;
+    if (c.width !== s.width || c.height !== s.height) return { same: false, mads: rects.map(() => -1) };
+    const W = c.width;
+    const H = c.height;
+    const a = c.getContext('2d')!.getImageData(0, 0, W, H).data;
+    const mads = rects.map((r) => {
+      const rx = Math.round(r.x * W);
+      const ry = Math.round(r.y * H);
+      const x0 = Math.max(0, rx);
+      const y0 = Math.max(0, ry);
+      const x1 = Math.min(W, rx + Math.round(r.w * W));
+      const y1 = Math.min(H, ry + Math.round(r.h * H));
+      let sum = 0;
+      let n = 0;
+      for (let y = y0; y < y1; y++)
+        for (let x = x0; x < x1; x++) {
+          const k = (y * W + x) * 4;
+          for (let ch = 0; ch < 3; ch++) sum += Math.abs(a[k + ch] - s.data[k + ch]);
+          n += 3;
+        }
+      return n ? sum / n : -1;
+    });
+    return { same: true, mads };
+  }, rects);
+}
+
 /** import a fixture through the home screen's picker and wait for the editor */
 export async function importFixture(page: Page, path: string): Promise<void> {
   await page.goto('/');
@@ -337,6 +507,64 @@ export function withExifOrientation(jpeg: Buffer, orientation: number): Buffer {
   const app1 = Buffer.concat([Buffer.from([0xff, 0xe1, len >> 8, len & 0xff]), body]);
   const at = jpeg[2] === 0xff && jpeg[3] === 0xe0 ? 4 + jpeg.readUInt16BE(4) : 2;
   return Buffer.concat([jpeg.subarray(0, at), app1, jpeg.subarray(at)]);
+}
+
+export interface Diff {
+  size: [number, number];
+  ref: [number, number];
+  mad: number;
+  max: number;
+}
+
+/**
+ * 儲存 → the long-press fallback's PNG, compared in the page with `ref`: a base64 file decoded at the export's size, or
+ * the pixels stashed under window.__shotOriginal (the camera's unprocessed frame, armShotOriginal)
+ */
+export async function exportDiff(page: Page, ref: { file: string; mime: string } | 'shot'): Promise<Diff> {
+  await page.getByRole('button', { name: '儲存' }).click();
+  const dlg = page.getByRole('dialog', { name: '儲存照片' });
+  await expect(dlg).toBeVisible({ timeout: 60_000 });
+  const img = dlg.getByRole('img', { name: '編輯結果' });
+  await expect.poll(() => img.evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
+  const arg = ref === 'shot' ? null : { b64: readFileSync(ref.file).toString('base64'), mime: ref.mime };
+  const d = await img.evaluate(async (i: HTMLImageElement, f: { b64: string; mime: string } | null) => {
+    const w = i.naturalWidth;
+    const h = i.naturalHeight;
+    const read = (draw: (g: CanvasRenderingContext2D) => void, cw = w, ch = h) => {
+      const c = document.createElement('canvas');
+      c.width = cw;
+      c.height = ch;
+      const g = c.getContext('2d', { willReadFrequently: true })!;
+      draw(g);
+      return g.getImageData(0, 0, cw, ch).data;
+    };
+    const a = read((g) => g.drawImage(i, 0, 0));
+    let b: Uint8ClampedArray;
+    let ref: [number, number];
+    if (f) {
+      const bytes = Uint8Array.from(atob(f.b64), (c) => c.charCodeAt(0));
+      const src = await createImageBitmap(new Blob([bytes], { type: f.mime }), { imageOrientation: 'from-image' });
+      ref = [src.width, src.height];
+      b = read((g) => g.drawImage(src, 0, 0, w, h));
+    } else {
+      const s = (window as unknown as { __shotOriginal: { width: number; height: number; data: Uint8ClampedArray } }).__shotOriginal;
+      ref = [s.width, s.height];
+      b = s.width === w && s.height === h ? s.data : new Uint8ClampedArray(a.length);
+    }
+    let sum = 0;
+    let max = 0;
+    let n = 0;
+    for (let k = 0; k < a.length; k += 4)
+      for (let ch = 0; ch < 3; ch++) {
+        const dv = Math.abs(a[k + ch] - b[k + ch]);
+        sum += dv;
+        max = Math.max(max, dv);
+        n++;
+      }
+    return { size: [w, h] as [number, number], ref, mad: sum / n, max };
+  }, arg);
+  await dlg.getByRole('button', { name: '關閉' }).click();
+  return d;
 }
 
 /** 儲存 → (a second tap when the pill turned 分享) → the long-press fallback's image: size, blob type and file name. */

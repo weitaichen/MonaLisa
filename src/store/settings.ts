@@ -6,7 +6,7 @@
 // saves never throw.
 import { sanitizeParams } from '../engine/params';
 import { splitLegacy } from '../edit/legacy';
-import { neutralLook, neutralPerson, sanitizePerson, sanitizePhoto } from '../edit/state';
+import { neutralLook, neutralPerson, sanitizePhoto } from '../edit/state';
 import type { BeautyParams, CameraLook, ExportFormat, ExportSize, Prefs } from '../types';
 
 export const PARAMS_KEY = 'meiyan.params.v1';
@@ -21,6 +21,7 @@ export const DEFAULT_PREFS: Prefs = {
   installHintDismissed: false,
   exportFormat: 'jpeg',
   exportSize: 'full',
+  groupMode: false,
 };
 
 const TIERS: readonly Prefs['tier'][] = ['auto', 'H', 'M', 'L'];
@@ -48,11 +49,13 @@ export const LOOK_KEY = 'meiyan.look.v1';
 
 /**
  * Untrusted camera look → valid (RM §3.7): a field it lacks is 原圖's (neutral), as nobody set it; no geometry / spots /
- * strokes in the camera.
+ * strokes in the camera. Only the photo part is kept (K15, camera per-person spec §9): `person` is never read and is
+ * always 原圖, since the camera's person settings live per person in the camera session (K4); a rollback to 0.5 then
+ * starts its faces at 原圖.
  */
 export function sanitizeLook(raw: unknown): CameraLook {
   const r = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-  return { photo: sanitizePhoto(r.photo), person: sanitizePerson(r.person, neutralPerson()) };
+  return { photo: sanitizePhoto(r.photo), person: neutralPerson() };
 }
 
 /**
@@ -61,18 +64,20 @@ export function sanitizeLook(raw: unknown): CameraLook {
  * camera look here: a fresh install, or an upgrader who never moved a camera slider or preset (0.3 wrote params.v1
  * only from the camera's own edits, 0.4.0 never wrote its default look). Both start at the 原圖 look (2026-10-18, the
  * user's 「全部都原圖」; 0.3 and 0.4.0 started at 自然) and nothing is written, so hasSavedSettings still tells a fresh
- * install from a returning user (announceUpdate).
+ * install from a returning user (announceUpdate). The migrated look keeps its photo part only, as every load and save
+ * does (K15).
  */
 export function loadLook(): CameraLook {
   const raw = readJson(LOOK_KEY);
   if (raw !== undefined) return sanitizeLook(raw);
   const legacy = readJson(PARAMS_KEY);
   if (legacy === undefined) return neutralLook();
-  const look = splitLegacy(sanitizeParams(legacy));
+  const look = sanitizeLook(splitLegacy(sanitizeParams(legacy)));
   writeJson(LOOK_KEY, look);
   return look;
 }
 
+/** the photo part as given, the person part as 原圖 (K15) */
 export function saveLook(l: CameraLook): void {
   writeJson(LOOK_KEY, sanitizeLook(l));
 }
@@ -82,7 +87,7 @@ export function sanitizePrefs(raw: unknown): Prefs {
   const out: Prefs = { ...DEFAULT_PREFS };
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
   const r = raw as Record<string, unknown>;
-  const bool = (k: 'mirrorOnSave' | 'matchGpupixel' | 'showLandmarks' | 'installHintDismissed') => {
+  const bool = (k: 'mirrorOnSave' | 'matchGpupixel' | 'showLandmarks' | 'installHintDismissed' | 'groupMode') => {
     const v = r[k];
     if (typeof v === 'boolean') out[k] = v;
   };
@@ -90,6 +95,7 @@ export function sanitizePrefs(raw: unknown): Prefs {
   bool('matchGpupixel');
   bool('showLandmarks');
   bool('installHintDismissed');
+  bool('groupMode');
   if (TIERS.includes(r.tier as Prefs['tier'])) out.tier = r.tier as Prefs['tier'];
   if (DELEGATES.includes(r.delegate as Prefs['delegate'])) out.delegate = r.delegate as Prefs['delegate'];
   if (FORMATS.includes(r.exportFormat as ExportFormat)) out.exportFormat = r.exportFormat as ExportFormat;
@@ -176,6 +182,42 @@ export function takePersonsHint(): boolean {
   writeJson(PERSONS_HINT_KEY, 1);
   // storage that silently drops writes (private mode) would repeat the hint on every photo: show it only if it stuck
   return readJson(PERSONS_HINT_KEY) !== undefined;
+}
+
+/** a UI flag, not a setting (camera per-person spec §3.1, §9) */
+export const CAM_PERSONS_HINT_KEY = 'meiyan.hint.camPersons.v1';
+
+/** The first time the camera shows ≥ 2 faces: 「點選畫面中的臉，可個別調整」 once per install (§3.1): true once, then false. */
+export function takeCameraPersonsHint(): boolean {
+  if (readJson(CAM_PERSONS_HINT_KEY) !== undefined) return false;
+  writeJson(CAM_PERSONS_HINT_KEY, 1);
+  // as takePersonsHint: storage that drops writes would repeat it in every camera session, so only if it stuck
+  return readJson(CAM_PERSONS_HINT_KEY) !== undefined;
+}
+
+/** UI flags of 合照模式 (camera per-person spec K22, §3.1, §9), not settings */
+export const GROUP_MODE_ON_KEY = 'meiyan.hint.groupModeOn.v1';
+export const GROUP_MODE_HINT_KEY = 'meiyan.hint.groupMode.v1';
+
+/** a one-time flag: true the first time (and only if the flag stuck, as takePersonsHint), then false */
+function takeOnce(key: string): boolean {
+  if (readJson(key) !== undefined) return false;
+  writeJson(key, 1);
+  return readJson(key) !== undefined;
+}
+
+/** 合照模式 turned on for the first time: 「遠處的人也能點選，人多時預覽可能較不順」 once per install (K22) */
+export function takeGroupModeOnToast(): boolean {
+  return takeOnce(GROUP_MODE_ON_KEY);
+}
+
+/**
+ * ≥ 2 faces shown with 合照模式 off: the hint that it lets far people be selected, once per install (K22); never once
+ * the mode was turned on here (its first-on toast taken: the user has found it)
+ */
+export function takeGroupModeHint(): boolean {
+  if (readJson(GROUP_MODE_ON_KEY) !== undefined) return false;
+  return takeOnce(GROUP_MODE_HINT_KEY);
 }
 
 // ───────────── full-resolution export: crash breadcrumb, cap and test knob (step-3 spec §3.7) ─────────────

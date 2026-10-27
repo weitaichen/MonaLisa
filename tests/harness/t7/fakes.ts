@@ -17,7 +17,6 @@ import type {
   CachedObstacle,
   CameraController,
   CameraErrorKind,
-  CameraLook,
   CameraSnapshot,
   Engine,
   EngineAssetsProgress,
@@ -25,6 +24,8 @@ import type {
   LiquifyField,
   LutKind,
   LutState,
+  PersonParams,
+  PhotoParams,
   Prefs,
   PxRect,
   RenderInput,
@@ -223,11 +224,12 @@ function fakeCamera(): CameraController {
   };
 }
 
-const fakeFrame = (look: CameraLook) => ({
+/** the fake camera finds no face: the photo look on the frame, and the session's ambient person on all skin (§3.6) */
+const fakeFrame = (photo: PhotoParams, ambient: PersonParams) => ({
   faces: [],
   obstacles: [],
-  globalSkin: { smooth: look.person.values['skin.smooth'], rosy: look.person.values['skin.rosy'], weight: 1 },
-  photo: look.photo,
+  globalSkin: { smooth: ambient.values['skin.smooth'], rosy: ambient.values['skin.rosy'], weight: 1 },
+  photo,
 });
 
 function fakeLiveLoop(d: LiveDeps): LiveLoop {
@@ -242,9 +244,21 @@ function fakeLiveLoop(d: LiveDeps): LiveLoop {
     e.setOptions({ mirror: d.camera.snapshot.facing === 'user' });
     const input = { source: v, width: v.videoWidth, height: v.videoHeight };
     if (compare) e.renderOriginal(input);
-    else e.render({ ...input, ...fakeFrame(d.getLook()) });
+    else e.render({ ...input, ...fakeFrame(d.getPhoto(), d.persons.ambient) });
     if (++n % 15 === 0) {
-      const s = { fps: 30, detectMs: 6.2, renderMs: 3.1, tier: e.tier, face: flag('face') !== '0', faces: flag('face') !== '0' ? 1 : 0, gpLeftOnLeft: null };
+      const s = {
+        fps: 30,
+        detectMs: 6.2,
+        renderMs: 3.1,
+        tier: e.tier,
+        face: flag('face') !== '0',
+        faces: flag('face') !== '0' ? 1 : 0,
+        gpLeftOnLeft: null,
+        target: null,
+        personsVersion: 0,
+        path: 'solo' as const,
+        every: 1,
+      };
       window.__meiyan && Object.assign(window.__meiyan, s);
       d.onStats?.(s);
     }
@@ -259,8 +273,9 @@ function fakeLiveLoop(d: LiveDeps): LiveLoop {
       if (!v.videoWidth) return null;
       const mirror = d.getPrefs().mirrorOnSave && d.camera.snapshot.facing === 'user';
       return {
-        image: e.renderToImageData({ source: v, width: v.videoWidth, height: v.videoHeight, ...fakeFrame(d.getLook()) }, { mirror }),
+        image: e.renderToImageData({ source: v, width: v.videoWidth, height: v.videoHeight, ...fakeFrame(d.getPhoto(), d.persons.ambient) }, { mirror }),
         seed: null,
+        persons: [],
       };
     },
     hitTest: () => null,
@@ -478,7 +493,7 @@ export async function installFakes(deps: Deps, defaults: { params: BeautyParams;
     createTracker: async () => {
       await sleep(150);
       if (flag('tracker') === 'fail') throw new Error('FaceLandmarker: GPU and CPU delegates both failed');
-      return { delegate: 'GPU', photoDetector: 'short-range', detectVideo: () => null, detectImage: () => [], close() {} } satisfies Tracker;
+      return { delegate: 'GPU', photoDetector: 'short-range', detectVideo: () => null, detectImage: () => [], detectView: () => null, warm() {}, close() {} } satisfies Tracker;
     },
     // pose=fail (download fails) · none (no person) · slow (download stalls at 40 %)
     loadPoseModel: async (_variant: string, onProgress?: (p: EngineAssetsProgress) => void) => {

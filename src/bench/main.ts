@@ -48,6 +48,7 @@ import { primaryBody } from '../detect/cache';
 import { formatAdjustBench, runAdjustBench } from './adjustBench';
 import { runExportBench } from './exportBench';
 import { runFaceDetailRows } from './faceDetailBench';
+import { BenchPersons, type FaceScope } from './faceScope';
 import { benchReplay, benchStamps, formatLiquifyReport, liquifyFrameRows, uploadMs, type LiquifyBenchRow, type LiquifyFrameScene } from './liquifyBench';
 import { mountMultiFace, noteFullRangeRun } from './multiFace';
 import { formatToneBench, runToneBench, spotGrid, type ToneBenchCase } from './toneBench';
@@ -111,10 +112,25 @@ const prefs: Prefs = {
   installHintDismissed: true,
   exportFormat: 'jpeg',
   exportSize: 'full',
+  groupMode: false,
 };
 
 let mode: Mode = 'skin+shape';
 let params = paramsFor(mode);
+/**
+ * Who the bench's live loop beautifies, 美顏對象 (round-1 review C24, round-2 review D12 and Codex #2; faceScope.ts):
+ * 'every' (the default), 全部套用 with the mode's person, so every tracked face runs its face passes: v0.6's worst case,
+ * as row LF edits every face, and not 0.5's bench, which drew only the target (getAll false: the other faces at weight
+ * 0). 'target': only the target, the auto pick (the largest face) as 0.5's, the others 原圖 wherever they are, so a
+ * multi-face /bench.html row compares like for like with 0.5's. One-face numbers are the same either way. Each sample
+ * records the scope it was taken in (Codex #3).
+ */
+const FACE_SCOPES: { id: FaceScope; label: string }[] = [
+  { id: 'every', label: '每張臉' },
+  { id: 'target', label: '僅選取的人（0.5）' },
+];
+/** the bench's camera session; it keeps itself to its scope (BenchPersons) */
+const livePersons = new BenchPersons(splitLegacy(params).person);
 let camera: CameraController | null = null;
 let engine: Engine | null = null;
 let tracker: Tracker | null = null;
@@ -246,6 +262,11 @@ const modeBtns = MODES.map((m) => {
   b.dataset.mode = m.id;
   return b;
 });
+const scopeBtns = FACE_SCOPES.map((f) => {
+  const b = button(f.label, () => setFaceScope(f.id));
+  b.dataset.scope = f.id;
+  return b;
+});
 const delegateBtn = button('改用 CPU 重啟', () => void restartTracker());
 const landmarksBtn = button('特徵點', () => {
   prefs.showLandmarks = !prefs.showLandmarks;
@@ -303,6 +324,7 @@ const panel = el(
   { className: 'panel' },
   el('div', { className: 'row' }, el('span', { textContent: '畫質' }), ...tierBtns),
   el('div', { className: 'row' }, el('span', { textContent: '參數' }), ...modeBtns),
+  el('div', { className: 'row' }, el('span', { textContent: '美顏對象' }), ...scopeBtns),
   el('div', { className: 'row' }, delegateBtn, landmarksBtn, compareBtn, captureBtn, stillBtn, faceDetailBtn, bodyBtn, liquifyBtn, toneBtn, adjustBtn, exportBtn, exportPhotoBtn, resumeBtn),
   el('div', { className: 'row' }, copyBtn, note),
   table,
@@ -402,8 +424,8 @@ function startLoop(): void {
     camera,
     engine,
     tracker,
-    getLook: () => splitLegacy(params),
-    getAll: () => false,
+    persons: livePersons,
+    getPhoto: () => splitLegacy(params).photo,
     getPrefs: () => prefs,
     onStats: (s) => {
       stats = s;
@@ -412,6 +434,11 @@ function startLoop(): void {
   });
   syncButtons();
   updateHud();
+}
+
+function setFaceScope(f: FaceScope): void {
+  livePersons.setScope(f);
+  syncButtons();
 }
 
 function onCamera(): void {
@@ -433,6 +460,7 @@ function setTier(t: Prefs['tier']): void {
 function setMode(m: Mode): void {
   mode = m;
   params = paramsFor(m);
+  livePersons.setLook(splitLegacy(params).person);
   if (still) still.render(stillFrame(still));
   syncButtons();
 }
@@ -920,6 +948,7 @@ function takeSample(): void {
     face: stats.face,
     mode,
     delegate: tracker?.delegate ?? 'none',
+    faces: livePersons.scope,
   });
   renderTable();
 }
@@ -1036,6 +1065,8 @@ function reportMeta(): Record<string, string> {
     delegate: tracker?.delegate ?? 'none (基本模式)',
     tierPref: prefs.tier,
     autoTier: autoTierSession(),
+    // round-1 review C24: 0.5's rows drew the target only; Codex #3: the scope is each sample's (its faces column)
+    faces: `per sample: every = every face edited (0.6 worst case), target = target only (as 0.5); now ${livePersons.scope}`,
     elapsed: formatElapsed(performance.now() - startedAt),
     lastError: dbg?.lastError ?? '',
   };
@@ -1086,6 +1117,7 @@ function updateHud(): void {
 function syncButtons(): void {
   for (const b of tierBtns) b.classList.toggle('on', b.dataset.tier === prefs.tier);
   for (const b of modeBtns) b.classList.toggle('on', b.dataset.mode === mode);
+  for (const b of scopeBtns) b.classList.toggle('on', b.dataset.scope === livePersons.scope);
   landmarksBtn.classList.toggle('on', prefs.showLandmarks);
   delegateBtn.textContent = tracker?.delegate === 'CPU' ? '改用 GPU 重啟' : '改用 CPU 重啟';
   captureBtn.disabled = !loop;

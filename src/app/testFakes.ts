@@ -21,9 +21,15 @@ import type {
   Tracker,
 } from '../types';
 
-/** performance.now() = fake-timer clock + simulated synchronous work (`work(ms)`). */
+/**
+ * performance.now() = fake-timer clock + simulated synchronous work (`work(ms)`). A second clock in the same test (two
+ * loops) adds its work on top of the first: spyOn returns the spy already installed, so its base is the first clock's
+ * implementation, not the spy itself (which would call itself).
+ */
 export function installWorkClock() {
-  const base = performance.now.bind(performance);
+  const installed = performance.now;
+  const prev = vi.isMockFunction(installed) ? installed.getMockImplementation() : undefined;
+  const base: () => number = prev ?? performance.now.bind(performance);
   let extra = 0;
   vi.spyOn(performance, 'now').mockImplementation(() => base() + extra);
   return {
@@ -72,6 +78,8 @@ export class FakeVideo {
   presentStep = 1;
   /** when true frames advance currentTime but no rVFC callback ever fires */
   rvfcSilent = false;
+  /** ms each callback runs after its frame's presentation (a device's latency): presentationTime is that much earlier */
+  presentLag = 0;
   private cbs = new Map<number, FrameCb>();
   private nextId = 1;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -107,8 +115,10 @@ export class FakeVideo {
     const list = [...this.cbs.values()];
     this.cbs.clear();
     // frame timestamps follow the fake-timer clock only; simulated work shows up in performance.now()
-    // differences (how the loop measures detect/render cost), not in the camera cadence
+    // differences (how the loop measures detect/render cost), not in the camera cadence. presentationTime is on
+    // performance.now()'s clock, as in a browser, so the loop can time its work from the frame's presentation
     const now = Date.now();
+    const presented = performance.now() - this.presentLag;
     for (const cb of list) {
       cb(now, {
         presentedFrames: this.presentedFrames,
@@ -116,7 +126,7 @@ export class FakeVideo {
         height: this.videoHeight,
         width: this.videoWidth,
         mediaTime: this.currentTime,
-        presentationTime: now,
+        presentationTime: presented,
       });
     }
   }
@@ -264,12 +274,14 @@ export interface FakeTracker extends Tracker {
   face: boolean;
   /** faces per detection */
   count: number;
-  /** detectVideo answers null (no answer) while set */
+  /** detectVideo and detectView answer null (no answer) while set */
   unusable: boolean;
-  /** simulated cost of each detect call, ms */
+  /** simulated cost of each live detect call (detectVideo, detectView), ms */
   cost: number;
   detectVideo: ReturnType<typeof vi.fn<Tracker['detectVideo']>>;
   detectImage: ReturnType<typeof vi.fn<Tracker['detectImage']>>;
+  detectView: ReturnType<typeof vi.fn<Tracker['detectView']>>;
+  warm: ReturnType<typeof vi.fn<Tracker['warm']>>;
 }
 
 export function fakeTracker(clock?: { work(ms: number): void }, face = true, count = 1): FakeTracker {
@@ -287,6 +299,12 @@ export function fakeTracker(clock?: { work(ms: number): void }, face = true, cou
       return t.face ? faces() : [];
     }),
     detectImage: vi.fn(() => (t.face ? faces() : [])),
+    detectView: vi.fn(() => {
+      clock?.work(t.cost);
+      if (t.unusable) return null;
+      return t.face ? faces() : [];
+    }),
+    warm: vi.fn(),
     close: vi.fn(),
   };
   return t as unknown as FakeTracker;
@@ -359,6 +377,7 @@ export function prefs(over: Partial<Prefs> = {}): Prefs {
     installHintDismissed: false,
     exportFormat: 'jpeg',
     exportSize: 'full',
+    groupMode: false,
     ...over,
   };
 }

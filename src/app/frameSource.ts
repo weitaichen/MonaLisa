@@ -6,6 +6,17 @@ export interface FrameInfo {
   now: number;
   /** rVFC metadata.presentedFrames (null in the rAF fallback) — lets the loop see dropped frames */
   presentedFrames: number | null;
+  /**
+   * rVFC metadata.mediaTime, s: the presented frame's own timestamp, which no main-thread work delays (null in the rAF
+   * fallback) — with presentedFrames, the camera's own frame interval (camera per-person spec §6.4's T)
+   */
+  mediaTime: number | null;
+  /**
+   * rVFC metadata.presentationTime: when the frame was handed to the compositor, on performance.now()'s clock (null in
+   * the rAF fallback) — the start of the span the frame's callback can keep the loop from seeing frames (§6.4,
+   * framesBlocked)
+   */
+  presentationTime: number | null;
 }
 
 export interface FrameSource {
@@ -31,7 +42,12 @@ export function createVideoFrameSource(video: HTMLVideoElement, opts: { rvfc?: b
         cancel();
         handle = video.requestVideoFrameCallback((now, md) => {
           handle = 0;
-          cb({ now, presentedFrames: typeof md?.presentedFrames === 'number' ? md.presentedFrames : null });
+          cb({
+            now,
+            presentedFrames: typeof md?.presentedFrames === 'number' ? md.presentedFrames : null,
+            mediaTime: typeof md?.mediaTime === 'number' ? md.mediaTime : null,
+            presentationTime: typeof md?.presentationTime === 'number' ? md.presentationTime : null,
+          });
         });
       },
       cancel,
@@ -53,7 +69,7 @@ export function createVideoFrameSource(video: HTMLVideoElement, opts: { rvfc?: b
         const t = video.currentTime;
         if (video.readyState >= HAVE_CURRENT_DATA && t !== lastTime) {
           lastTime = t;
-          cb({ now, presentedFrames: null });
+          cb({ now, presentedFrames: null, mediaTime: null, presentationTime: null });
         } else {
           raf = requestAnimationFrame(tick);
         }

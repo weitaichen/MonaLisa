@@ -112,6 +112,10 @@ describe('banner text', () => {
   it('names the camera fix 0.5.1 as v0.5.1 (RM §15)', () => {
     expect(bannerTitle(available({ next: '0.5.1' }))).toBe('有新版本 v0.5.1');
   });
+
+  it('names 0.6.0 as v0.6 (camera per-person spec §13, K16)', () => {
+    expect(bannerTitle(available({ next: '0.6.0' }))).toBe('有新版本 v0.6');
+  });
 });
 
 describe('update checks', () => {
@@ -163,5 +167,15 @@ describe('已更新至 notice (first launch of a new version)', () => {
 
   it('after the 0.5.1 update', () => {
     expect(updatedNotice('0.5.0', '0.5.1', true)).toBe('已更新至 v0.5.1');
+  });
+
+  it('after the 0.6.0 update, from 0.5 or from 0.5.1 (RM §16)', () => {
+    expect(updatedNotice('0.5.0', '0.6.0', true)).toBe('已更新至 v0.6');
+    expect(updatedNotice('0.5.1', '0.6.0', true)).toBe('已更新至 v0.6');
+  });
+
+  it('production 0.4.0 installs skip 0.5 (a preview only): 0.4.0 → 0.6.0 says so, a rollback to 0.4.0 says nothing (RM §16, round-1 review C26)', () => {
+    expect(updatedNotice('0.4.0', '0.6.0', true)).toBe('已更新至 v0.6');
+    expect(updatedNotice('0.6.0', '0.4.0', true)).toBeNull();
   });
 });

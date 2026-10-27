@@ -7,14 +7,29 @@ import {
   formatExportRows,
   formatMultiRows,
   formatReport,
+  gsRows,
+  jgRows,
+  jitterRms,
+  lagMs,
+  type LfSample,
+  lfRows,
   liveRows,
   maskCoverage,
   median,
+  parseOptionC,
+  pgnVerdict,
+  PGS_MAX_MS,
+  pj1gVerdict,
+  PLB_MAX_MS,
+  PWB_MAX_MS,
   summarize,
+  summarizeLf,
+  viewCallRows,
   visibilitySanity,
+  wbRows,
 } from './report';
 
-const row = (t: number, fps: number, face = true): BenchSample => ({
+const row = (t: number, fps: number, face = true, faces = 'every'): BenchSample => ({
   t,
   fps,
   detectMs: 10,
@@ -23,6 +38,7 @@ const row = (t: number, fps: number, face = true): BenchSample => ({
   face,
   mode: 'skin+shape',
   delegate: 'GPU',
+  faces,
 });
 
 describe('bench report', () => {
@@ -45,9 +61,20 @@ describe('bench report', () => {
     expect(lines[0]).toBe('# ua: Mozilla/5.0 (iPhone)');
     expect(lines[1]).toBe('# video: 1280×720');
     expect(lines[2]).toMatch(/^# summary: n=2 fps_avg=30\.0 fps_min=29\.9 /);
-    expect(lines[3].split('\t')).toEqual(['t_s', 'fps', 'detect_ms', 'render_ms', 'tier', 'face', 'mode', 'delegate']);
-    expect(lines[4].split('\t')).toEqual(['5', '29.9', '10.0', '4.0', 'M', '1', 'skin+shape', 'GPU']);
+    expect(lines[3].split('\t')).toEqual(['t_s', 'fps', 'detect_ms', 'render_ms', 'tier', 'face', 'mode', 'delegate', 'faces']);
+    expect(lines[4].split('\t')).toEqual(['5', '29.9', '10.0', '4.0', 'M', '1', 'skin+shape', 'GPU', 'every']);
     expect(lines).toHaveLength(6);
+  });
+
+  it('each row carries the 美顏對象 it was taken in, and samples of both get a summary per scope (Codex #3)', () => {
+    const lines = formatReport({}, [row(5, 30), row(10, 20, true, 'target'), row(15, 28)]).split('\n');
+    expect(lines[0]).toMatch(/^# summary: n=3 fps_avg=26\.0 /);
+    expect(lines[1]).toMatch(/^# summary faces=every: n=2 fps_avg=29\.0 fps_min=28\.0 /);
+    expect(lines[2]).toMatch(/^# summary faces=target: n=1 fps_avg=20\.0 /);
+    expect(lines[3].split('\t').at(-1)).toBe('faces');
+    expect(lines.slice(4).map((l) => l.split('\t').at(-1))).toEqual(['every', 'target', 'every']);
+    // one scope throughout: the one summary line, as before
+    expect(formatReport({}, [row(5, 30, true, 'target')]).split('\n')[1].startsWith('t_s')).toBe(true);
   });
 
   it('formatReport appends the 美體偵測 table only when body rows exist', () => {
@@ -190,6 +217,251 @@ describe('bench 多臉 L: the cost of a numFaces switch', () => {
     ]);
     expect(rows[0].values.switch_ms).toBe(912.4);
     expect(rows[1].values).not.toHaveProperty('switch_ms');
+  });
+});
+
+describe('bench 多臉 L, both detectors (camera per-person spec §12.4)', () => {
+  const ms = (center: number, n = 21) => Array.from({ length: n }, (_, i) => center + (i - (n >> 1)) * 0.1);
+  it('names the detector in each L row and gives PL2 from the camera detector rows only (the front solo path)', () => {
+    const rows = liveRows([
+      { delegate: 'GPU', detector: 'photo', numFaces: 1, times: ms(15), fps: 30, faces: 1 },
+      { delegate: 'GPU', detector: 'photo', numFaces: 10, times: ms(30), fps: 30, faces: 1 },
+      { delegate: 'GPU', detector: 'camera', numFaces: 1, times: ms(11), fps: 30, faces: 1 },
+      { delegate: 'GPU', detector: 'camera', numFaces: 3, times: ms(13), fps: 30, faces: 1 },
+      { delegate: 'GPU', detector: 'camera', numFaces: 10, times: ms(14), fps: 30, faces: 1 },
+    ]);
+    expect(rows.filter((r) => r.row === 'L').map((r) => r.config)).toEqual([
+      'GPU photo numFaces 1',
+      'GPU photo numFaces 10',
+      'GPU camera numFaces 1',
+      'GPU camera numFaces 3',
+      'GPU camera numFaces 10',
+    ]);
+    expect(rows.filter((r) => r.row === 'PL2')).toEqual([
+      { row: 'PL2', config: 'GPU', values: { delta_p50_ms: 3, delta_p95_ms: 3, delta_pct: 27.3, limit_ms: 5, verdict: 'pass' } },
+    ]);
+  });
+
+  it('viewCallRows: the group path’s call p50 per view kind, its copy p50, the faces it returned and its size', () => {
+    expect(
+      viewCallRows([
+        { delegate: 'CPU', detector: 'photo', view: 'whole', size: '540x720', times: ms(20), copyTimes: [0.4, 0.6, 0.5], faces: 1 },
+        { delegate: 'CPU', detector: 'camera', view: 't0,0', size: '540x540', times: [], copyTimes: [], faces: 0 },
+      ]),
+    ).toEqual([
+      { row: 'L', config: 'CPU photo view whole', values: { p50_ms: 20, p95_ms: 20.9, copy_ms: 0.5, faces: 1, frames: 21, size: '540x720' } },
+      { row: 'L', config: 'CPU camera view t0,0', values: { p50_ms: 'n/a', p95_ms: 'n/a', copy_ms: 'n/a', faces: 0, frames: 0, size: '540x540' } },
+    ]);
+  });
+});
+
+describe('camera per-person verdicts (camera per-person spec §10)', () => {
+  it('PGN: ≥ 24 fps average, every face ≥ 5 Hz, the longest frame no longer than option C’s', () => {
+    expect(pgnVerdict({ fps: 25, faceHz: [5.2, 7], longestMs: 60 }, 69)).toBe('pass');
+    expect(pgnVerdict({ fps: 23.9, faceHz: [7], longestMs: 60 }, 69)).toBe('fail');
+    expect(pgnVerdict({ fps: 25, faceHz: [4.9, 7], longestMs: 60 }, 69)).toBe('fail');
+    expect(pgnVerdict({ fps: 25, faceHz: [7], longestMs: 70 }, 69)).toBe('fail');
+    expect(pgnVerdict({ fps: 25, faceHz: [7], longestMs: 500 }, null)).toBe('pass');
+  });
+  it('PGN fails when no face’s refresh rate was measured', () => {
+    expect(pgnVerdict({ fps: 30, faceHz: [], longestMs: 40 }, null)).toBe('fail');
+  });
+  it('PJ1G: RMS ≤ max(0.4 px, 1.25 × numFaces 1) and lag ≤ 1.25 × numFaces 1', () => {
+    expect(pj1gVerdict(0.39, 0.1, 10, 10)).toBe('pass');
+    expect(pj1gVerdict(0.5, 0.39, 10, 10)).toBe('fail');
+    expect(pj1gVerdict(0.3, 0.3, 12.6, 10)).toBe('fail');
+  });
+  it('lfRows: PLB for one face on the back camera (detect p50 + render p50 ≤ 33 ms), PGN for ≥ 2 faces', () => {
+    const one = lfRows({ config: 'GPU back group', fps: 30, longestMs: 40, maxGapMs: 40, every: 1, faceHz: [30], views: ['whole'], detectP50: 19, renderP50: 5, faces: 1 }, null);
+    expect(one.find((r) => r.row === 'PLB')?.values).toMatchObject({ ms: 24, limit_ms: PLB_MAX_MS, verdict: 'pass' });
+    const ten = lfRows({ config: 'GPU back group', fps: 25, longestMs: 60, maxGapMs: 70, every: 1, faceHz: Array(10).fill(7), views: ['whole', 't0,0'], detectP50: 32, renderP50: 5, faces: 10 }, 69);
+    expect(ten.find((r) => r.row === 'PGN')?.values.verdict).toBe('pass');
+  });
+  it('lfRows: the LF row carries every measured value; no verdict without a face', () => {
+    const rows = lfRows(
+      { config: 'CPU back option C', fps: 23.66, longestMs: 88.04, maxGapMs: 100, every: 6, faceHz: [5.04, 6], views: [], detectP50: 82.04, renderP50: 4.96, faces: 10, tier: 'H' },
+      null,
+    );
+    expect(rows[0]).toEqual({
+      row: 'LF',
+      config: 'CPU back option C',
+      values: { fps: 23.7, longest_ms: 88, max_gap_ms: 100, every: 6, min_face_hz: 5, views: '—', detect_p50_ms: 82, render_p50_ms: 5, faces: 10, tier: 'H' },
+    });
+    expect(rows[1]).toMatchObject({ row: 'PGN', values: { verdict: 'fail', option_c_longest_ms: '—' } });
+    const none = lfRows({ config: 'GPU back group', fps: 30, longestMs: 40, maxGapMs: 40, every: 1, faceHz: [], views: ['whole'], detectP50: 15, renderP50: 4, faces: 0 }, null);
+    expect(none.map((r) => r.row)).toEqual(['LF']);
+    expect(none[0].values.min_face_hz).toBe('n/a');
+  });
+  it('lfRows: PLB fails over 33 ms; PGN judges the longest frame against option C’s when given', () => {
+    const slow = lfRows({ config: 'CPU back group', fps: 28, longestMs: 50, maxGapMs: 50, every: 1, faceHz: [28], views: ['whole'], detectP50: 29.5, renderP50: 4, faces: 1 }, null);
+    expect(slow.find((r) => r.row === 'PLB')?.values).toEqual({ ms: 33.5, limit_ms: 33, verdict: 'fail' });
+    const pgn = lfRows({ config: 'GPU back group', fps: 26, longestMs: 75, maxGapMs: 80, every: 1, faceHz: [6, 7], views: ['whole'], detectP50: 30, renderP50: 5, faces: 2 }, 69);
+    expect(pgn.find((r) => r.row === 'PGN')?.values).toMatchObject({ fps: 26, min_face_hz: 6, longest_ms: 75, option_c_longest_ms: 69, verdict: 'fail' });
+  });
+  it('parseOptionC: a bare number bounds both delegates', () => {
+    expect(parseOptionC('69')).toEqual({ GPU: 69, CPU: 69 });
+    expect(parseOptionC(' 68.5 ')).toEqual({ GPU: 68.5, CPU: 68.5 });
+  });
+  it('parseOptionC: a bound per delegate (= or :, any order, case and spaces ignored)', () => {
+    expect(parseOptionC('GPU=69,CPU=88')).toEqual({ GPU: 69, CPU: 88 });
+    expect(parseOptionC('GPU:69,CPU:88')).toEqual({ GPU: 69, CPU: 88 });
+    expect(parseOptionC('cpu = 88.2, gpu=69')).toEqual({ GPU: 69, CPU: 88.2 });
+  });
+  it('parseOptionC: a delegate left out has no bound', () => {
+    const gpu = parseOptionC('GPU=69');
+    expect(gpu).toEqual({ GPU: 69 });
+    expect(gpu?.CPU).toBeUndefined();
+    expect(parseOptionC('CPU:88')).toEqual({ CPU: 88 });
+  });
+  it('parseOptionC: anything else is refused (null), not read as no bound', () => {
+    for (const bad of ['', ' ', '0', '-5', 'abc', '1e2', '0x10', 'Infinity', 'NaN', '69,88', 'GPU=', 'GPU=0', 'GPU=-1', 'GPU=x', 'GPU=69,', ',', 'GPU=69,GPU=70', 'NPU=5', 'GPU=69;CPU=88', 'GPU69']) {
+      expect(parseOptionC(bad), bad).toBeNull();
+    }
+  });
+  it('PGN on each delegate is judged against that delegate’s option C (rowLF: the bound for d, none → not judged)', () => {
+    const bounds = parseOptionC('GPU=69,CPU=88');
+    const run = (config: string, longestMs: number) => ({ config, fps: 25, longestMs, maxGapMs: longestMs, every: 1, faceHz: Array(10).fill(7), views: ['whole'], detectP50: 30, renderP50: 5, faces: 10 });
+    const pgn = (rows: ReturnType<typeof lfRows>) => rows.find((r) => r.row === 'PGN')?.values;
+    // CPU's 80 ms frame is within CPU's option C (88), not GPU's (69); GPU's 72 ms frame is over GPU's
+    expect(pgn(lfRows(run('CPU back group', 80), bounds?.CPU ?? null))).toMatchObject({ option_c_longest_ms: 88, verdict: 'pass' });
+    expect(pgn(lfRows(run('GPU back group', 72), bounds?.GPU ?? null))).toMatchObject({ option_c_longest_ms: 69, verdict: 'fail' });
+    const gpuOnly = parseOptionC('GPU=69');
+    expect(pgn(lfRows(run('CPU back group', 500), gpuOnly?.CPU ?? null))).toMatchObject({
+      option_c_longest_ms: '—',
+      limit: expect.stringContaining('longest frame not judged'),
+      verdict: 'pass',
+    });
+  });
+});
+
+describe('bench 多臉 LF: the per-frame samples of the live loop (camera per-person spec §12.4)', () => {
+  const T = 1000 / 30;
+  const sample = (t: number, presented: number, over: Partial<LfSample> = {}): LfSample => ({
+    t,
+    presented,
+    every: 1,
+    views: ['whole', 't0,0'],
+    path: 'group',
+    faces: 2,
+    boxes: [],
+    ...over,
+  });
+  // a 30 fps camera for 1.2 s: frame 10 is never processed (the preview jumps two camera frames) and frame 11's callback
+  // runs 10 ms late (the longest frame, 2 T + 10, is longer than the gap it shows, 2 T); t1 is refreshed on every
+  // frame, t2 on every third sample, t3 is shown for the first nine samples only
+  const frames = Array.from({ length: 37 }, (_, k) => k).filter((k) => k !== 10);
+  const samples = frames.map((k, i) => {
+    const t = k * T + (k === 11 ? 10 : 0);
+    const boxes = [
+      { id: 't1', seen: t },
+      { id: 't2', seen: frames[i - (i % 3)] * T },
+      ...(i < 9 ? [{ id: 't3', seen: 0 }] : []),
+    ];
+    return sample(t, k, { boxes, faces: boxes.length, every: i < 5 ? 2 : 1, views: i < 5 ? ['whole'] : ['whole', 't0,0'] });
+  });
+
+  it('fps, the longest frame, the max gap between presented frames, k, the cycle and the faces', () => {
+    const s = summarizeLf(samples);
+    expect(s.fps).toBeCloseTo(35 / 1.2, 6);
+    expect(s.longestMs).toBeCloseTo(2 * T + 10, 6);
+    expect(s.maxGapMs).toBeCloseTo(2 * T, 6);
+    expect(s.every).toBe(1);
+    expect(s.views).toEqual(['whole', 't0,0']);
+    expect(s.faces).toBe(2);
+  });
+
+  it('each face shown at least a second: its distinct refreshes over the span it was shown', () => {
+    const s = summarizeLf(samples);
+    expect(s.faceHz).toHaveLength(2);
+    expect(s.faceHz[0]).toBeCloseTo(36 / 1.2, 6);
+    expect(s.faceHz[1]).toBeCloseTo(12 / 1.2, 6);
+  });
+
+  it('no samples: zeros, no face', () => {
+    expect(summarizeLf([])).toEqual({ fps: 0, longestMs: 0, maxGapMs: 0, every: 1, faceHz: [], views: [], faces: 0 });
+  });
+
+  it('gsRows: one PGS row per path change with the longest frame within ±1 s of it, and the GS row', () => {
+    const t = (i: number) => i * T;
+    const s: LfSample[] = [];
+    for (let i = 0; i <= 150; i++) {
+      const at = t(i) + (i > 31 ? 200 : 0) + (i > 120 ? 400 : 0);
+      s.push(sample(at, i, { path: i <= 30 ? 'solo' : 'group', faces: i <= 30 ? 2 : 5 }));
+    }
+    const rows = gsRows('GPU front', s);
+    expect(rows[0]).toMatchObject({ row: 'GS', config: 'GPU front', values: { changes: 1, longest_ms: 433.3, faces: 5 } });
+    expect(rows.slice(1)).toEqual([
+      { row: 'PGS', config: 'GPU front solo→group', values: { at_s: 1, longest_ms: 233.3, limit_ms: PGS_MAX_MS, verdict: 'pass' } },
+    ]);
+    const slow = s.map((x, i) => (i > 31 ? { ...x, t: x.t + 30 } : x));
+    expect(gsRows('CPU front', slow)[1].values).toMatchObject({ longest_ms: 263.3, verdict: 'fail' });
+    expect(gsRows('GPU front', s.slice(0, 20))).toEqual([{ row: 'GS', config: 'GPU front', values: { changes: 0, longest_ms: 33.3, faces: 2 } }]);
+  });
+});
+
+describe('bench 多臉 WB: the first back-camera frame after a flip (PWB)', () => {
+  it('a WB row per flip; PWB judges the cold one (≤ 300 ms after live)', () => {
+    expect(
+      wbRows('GPU', [
+        { kind: 'cold', warmMs: 1180.44, firstMs: 140.21, detectMs: 30.06, pageCold: true },
+        { kind: 'warm', warmMs: 12.04, firstMs: 60, detectMs: 25, pageCold: false },
+      ]),
+    ).toEqual([
+      { row: 'WB', config: 'GPU cold flip', values: { warm_ms: 1180.4, first_ms: 140.2, first_detect_ms: 30.1, page_cold: 'true' } },
+      { row: 'WB', config: 'GPU warm flip', values: { warm_ms: 12, first_ms: 60, first_detect_ms: 25, page_cold: 'false' } },
+      { row: 'PWB', config: 'GPU', values: { first_ms: 140.2, limit_ms: PWB_MAX_MS, verdict: 'pass' } },
+    ]);
+  });
+  it('no frame after the flip: n/a, and PWB fails', () => {
+    const rows = wbRows('CPU', [{ kind: 'cold', warmMs: 40, firstMs: null, detectMs: null, pageCold: false }]);
+    expect(rows[0].values).toMatchObject({ first_ms: 'n/a', first_detect_ms: 'n/a' });
+    expect(rows[1]).toEqual({ row: 'PWB', config: 'CPU', values: { first_ms: 'n/a', limit_ms: PWB_MAX_MS, verdict: 'fail' } });
+  });
+});
+
+describe('bench 多臉 JG: the group path’s jitter and lag (PJ1G)', () => {
+  const pts = (dx: number) => {
+    const p = new Float32Array(222);
+    for (let i = 0; i < 111; i++) p.set([0.5 + dx, 0.5], i * 2);
+    return p;
+  };
+  it('jitterRms: every pts111 point’s deviation from its mean, px at a 1080-px frame height, x scaled by the aspect', () => {
+    // (pts111 are Float32: 0.501 is off by up to 3e-8, 3e-5 px here)
+    expect(jitterRms([pts(0.001), pts(-0.001)], 1)).toBeCloseTo(1.08, 3);
+    expect(jitterRms([pts(0.001), pts(-0.001)], 16 / 9)).toBeCloseTo(1.92, 3);
+    expect(jitterRms([pts(0.001)], 1)).toBe(0);
+    expect(jitterRms([], 1)).toBeNull();
+  });
+  it('lagMs: the mean of (raw − smoothed) / raw velocity, samples without motion skipped', () => {
+    const t = Array.from({ length: 30 }, (_, i) => i * 33);
+    const raw = t.map((x) => 0.0001 * x);
+    const sm = t.map((x) => 0.0001 * (x - 50));
+    const r = lagMs(raw, sm, t);
+    expect(r.lag).toBeCloseTo(50, 6);
+    expect(r.n).toBe(27);
+    expect(lagMs(t.map(() => 0.5), t.map(() => 0.5), t)).toEqual({ lag: null, n: 0 });
+  });
+  it('jgRows: the app and MediaPipe per refresh kind, then PJ1G per kind; lag judged only where it was measured', () => {
+    const rows = jgRows([
+      { config: 'GPU whole', rms: 0.3, rms1: 0.3, lag: 10, lag1: 9, frames: 60, lagSamples: 100 },
+      { config: 'GPU tile t1,0', rms: 0.2, rms1: 0.1, lag: null, lag1: null, frames: 60, lagSamples: 0 },
+      { config: 'CPU tile', rms: null, rms1: null, lag: null, lag1: null, frames: 0, lagSamples: 0 },
+    ]);
+    expect(rows.filter((r) => r.row === 'JG')).toEqual([
+      { row: 'JG', config: 'GPU whole app', values: { rms_px1080: 0.3, lag_ms: 10, frames: 60, lag_samples: 100 } },
+      { row: 'JG', config: 'GPU whole mediapipe', values: { rms_px1080: 0.3, lag_ms: 9, frames: 60, lag_samples: 100 } },
+      { row: 'JG', config: 'GPU tile t1,0 app', values: { rms_px1080: 0.2, lag_ms: 'n/a', frames: 60, lag_samples: 0 } },
+      { row: 'JG', config: 'GPU tile t1,0 mediapipe', values: { rms_px1080: 0.1, lag_ms: 'n/a', frames: 60, lag_samples: 0 } },
+      { row: 'JG', config: 'CPU tile app', values: { rms_px1080: 'n/a', lag_ms: 'n/a', frames: 0, lag_samples: 0 } },
+      { row: 'JG', config: 'CPU tile mediapipe', values: { rms_px1080: 'n/a', lag_ms: 'n/a', frames: 0, lag_samples: 0 } },
+    ]);
+    expect(rows.filter((r) => r.row === 'PJ1G').map((r) => [r.config, r.values.judged, r.values.verdict])).toEqual([
+      ['GPU whole', 'jitter, lag', 'pass'],
+      ['GPU tile t1,0', 'jitter', 'pass'],
+      ['CPU tile', 'none', 'n/a'],
+    ]);
+    const lagFail = jgRows([{ config: 'GPU whole', rms: 0.3, rms1: 0.3, lag: 12, lag1: 9, frames: 60, lagSamples: 100 }]);
+    expect(lagFail.find((r) => r.row === 'PJ1G')?.values.verdict).toBe('fail');
   });
 });
 

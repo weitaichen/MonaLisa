@@ -4,6 +4,7 @@ import { splitLegacy } from '../edit/legacy';
 import { neutralLook, neutralPerson } from '../edit/state';
 import type { Prefs } from '../types';
 import {
+  CAM_PERSONS_HINT_KEY,
   clearExportCap,
   clearExportGuard,
   consumeExportGuardAtLaunch,
@@ -12,6 +13,8 @@ import {
   EXPORT_DEBUG_KEY,
   EXPORT_GUARD_KEY,
   exportCapped,
+  GROUP_MODE_HINT_KEY,
+  GROUP_MODE_ON_KEY,
   hasSavedSettings,
   loadLook,
   loadMakeupPartsSeen,
@@ -29,6 +32,9 @@ import {
   saveParams,
   savePrefs,
   SEEN_MAKEUP_PARTS_KEY,
+  takeCameraPersonsHint,
+  takeGroupModeHint,
+  takeGroupModeOnToast,
   takePersonsHint,
   VERSION_KEY,
   writeExportGuard,
@@ -217,6 +223,7 @@ describe('loadPrefs / savePrefs', () => {
       installHintDismissed: true,
       exportFormat: 'png',
       exportSize: 'standard',
+      groupMode: true,
     };
     savePrefs(p);
     expect([...store.map.keys()]).toEqual([PREFS_KEY]);
@@ -325,7 +332,8 @@ describe('camera look meiyan.look.v1 (RM §3.7, C3)', () => {
     const p = setParam(applyPreset('glow', 1), 'skin.whiten', 0.9);
     store.setItem(PARAMS_KEY, JSON.stringify(p));
     const look = loadLook();
-    expect(look).toEqual(splitLegacy(p));
+    // K15: the migrated person look is not kept (camera per-person spec §9)
+    expect(look).toEqual({ ...splitLegacy(p), person: neutralPerson() });
     expect(JSON.parse(store.getItem(LOOK_KEY)!)).toEqual(look);
     expect(JSON.parse(store.getItem(PARAMS_KEY)!)).toEqual(p);
     // the next launch reads the migrated look back unchanged
@@ -334,11 +342,10 @@ describe('camera look meiyan.look.v1 (RM §3.7, C3)', () => {
   it('round-trips and sanitizes', () => {
     const look = splitLegacy(applyPreset('refined', 0.4));
     saveLook(look);
-    expect(loadLook()).toEqual(look);
+    expect(loadLook()).toEqual({ ...look, person: neutralPerson() });
     store.setItem(LOOK_KEY, JSON.stringify({ photo: { filterId: 'nope' }, person: { values: { 'skin.smooth': 7 } } }));
     const s = loadLook();
     expect(s.photo.filterId).toBe('none');
-    expect(s.person.values['skin.smooth']).toBe(1);
   });
   it('a fresh install gets the 原圖 look (2026-10-18); hasSavedSettings sees the new key', () => {
     expect(loadLook()).toEqual(neutralLook());
@@ -374,7 +381,7 @@ describe('camera look meiyan.look.v1 (RM §3.7, C3)', () => {
   it('a stored look keeps what it holds; a field it lacks (or junk) is 原圖, never 自然', () => {
     const glow = splitLegacy(applyPreset('glow', 1));
     saveLook(glow);
-    expect(loadLook()).toEqual(glow);
+    expect(loadLook()).toEqual({ ...glow, person: neutralPerson() });
     for (const raw of ['{}', 'null', '{"photo":7,"person":"x"}']) {
       store.setItem(LOOK_KEY, raw);
       const l = loadLook();
@@ -384,8 +391,13 @@ describe('camera look meiyan.look.v1 (RM §3.7, C3)', () => {
     store.setItem(LOOK_KEY, JSON.stringify({ photo: { values: { 'skin.whiten': 0.4 } }, person: { values: { 'skin.smooth': 0.7 } } }));
     expect(loadLook().photo.values['skin.whiten']).toBe(0.4);
     expect(loadLook().photo.values['skin.sharpen']).toBe(0);
-    expect(loadLook().person.values['skin.smooth']).toBe(0.7);
-    expect(loadLook().person.values['shape.faceSlim']).toBe(0);
+  });
+  it('K15: the stored person is never read; every save writes it as 原圖; the photo part round-trips', () => {
+    const glow = splitLegacy(applyPreset('glow', 1));
+    store.setItem(LOOK_KEY, JSON.stringify(glow));
+    expect(loadLook()).toEqual({ photo: glow.photo, person: neutralPerson() });
+    saveLook(glow);
+    expect(JSON.parse(store.getItem(LOOK_KEY)!).person).toEqual(neutralPerson());
   });
 });
 
@@ -397,6 +409,24 @@ describe('first group photo hint (S §1.1 item 11)', () => {
     // storage that cannot keep the flag would repeat the hint on every photo: never shown there
     stubThrowingGetter();
     expect(takePersonsHint()).toBe(false);
+  });
+});
+
+describe('camera persons hint (camera per-person spec §3.1)', () => {
+  it('is true exactly once per install, under its own key (the photo hint does not take it)', () => {
+    expect(takePersonsHint()).toBe(true);
+    expect(takeCameraPersonsHint()).toBe(true);
+    expect(store.getItem(CAM_PERSONS_HINT_KEY)).not.toBeNull();
+    expect(CAM_PERSONS_HINT_KEY).toBe('meiyan.hint.camPersons.v1');
+    expect(takeCameraPersonsHint()).toBe(false);
+  });
+
+  it('is false when storage drops writes (private mode would repeat it on every camera session)', () => {
+    vi.spyOn(store, 'setItem').mockImplementation(() => undefined);
+    expect(takeCameraPersonsHint()).toBe(false);
+    expect(takeCameraPersonsHint()).toBe(false);
+    stubThrowingGetter();
+    expect(takeCameraPersonsHint()).toBe(false);
   });
 });
 
@@ -482,6 +512,51 @@ describe('export prefs and keys (step 3)', () => {
     expect(exportCapped()).toBe(false);
     expect(readExportDebug()).toEqual({});
     expect(() => clearExportCap()).not.toThrow();
+  });
+});
+
+describe('合照模式 (camera per-person spec K22): a camera setting in meiyan.prefs.v1, off by default', () => {
+  it('is off by default and for prefs saved before it existed (0.6.0 without the field); on round-trips', () => {
+    expect(DEFAULT_PREFS.groupMode).toBe(false);
+    expect(loadPrefs().groupMode).toBe(false);
+    store.setItem(PREFS_KEY, JSON.stringify({ mirrorOnSave: false, tier: 'M', delegate: 'CPU', exportFormat: 'png' }));
+    expect(loadPrefs()).toEqual({ ...DEFAULT_PREFS, mirrorOnSave: false, tier: 'M', delegate: 'CPU', exportFormat: 'png', groupMode: false });
+    savePrefs({ ...loadPrefs(), groupMode: true });
+    expect(loadPrefs().groupMode).toBe(true);
+    expect((JSON.parse(store.getItem(PREFS_KEY)!) as Prefs).groupMode).toBe(true);
+    savePrefs({ ...loadPrefs(), groupMode: false });
+    expect(loadPrefs().groupMode).toBe(false);
+  });
+
+  it('a wrongly-typed value is off; the other fields are kept', () => {
+    for (const v of ['true', 1, null, {}, []]) {
+      store.setItem(PREFS_KEY, JSON.stringify({ tier: 'H', groupMode: v }));
+      expect(loadPrefs()).toEqual({ ...DEFAULT_PREFS, tier: 'H' });
+    }
+  });
+
+  it('the first turn-on toast is true exactly once per install, under its own key', () => {
+    expect(GROUP_MODE_ON_KEY).toBe('meiyan.hint.groupModeOn.v1');
+    expect(takeCameraPersonsHint()).toBe(true);
+    expect(takeGroupModeOnToast()).toBe(true);
+    expect(store.getItem(GROUP_MODE_ON_KEY)).not.toBeNull();
+    expect(takeGroupModeOnToast()).toBe(false);
+  });
+
+  it('the 合照模式 hint is true exactly once per install, and never once the mode was turned on (its toast taken)', () => {
+    expect(GROUP_MODE_HINT_KEY).toBe('meiyan.hint.groupMode.v1');
+    expect(takeGroupModeHint()).toBe(true);
+    expect(takeGroupModeHint()).toBe(false);
+    store.clear();
+    expect(takeGroupModeOnToast()).toBe(true);
+    expect(takeGroupModeHint()).toBe(false);
+  });
+
+  it('both are false when storage drops writes or throws (private mode would repeat them in every camera session)', () => {
+    vi.spyOn(store, 'setItem').mockImplementation(() => undefined);
+    expect([takeGroupModeOnToast(), takeGroupModeHint()]).toEqual([false, false]);
+    stubThrowingGetter();
+    expect([takeGroupModeOnToast(), takeGroupModeHint()]).toEqual([false, false]);
   });
 });
 

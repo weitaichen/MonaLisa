@@ -81,8 +81,9 @@ export interface LiveLoop {
    * params, and every person found never edited with theirs and null (camera per-person spec §5.3, round-1 review C7);
    * `held`: missing at the shutter, known missing to a call that could see them (a person unseen since a no-answer is
    * not, round-2 review D7, and one held before it still is, round-3 review E5); `stale`: not known missing, the box
-   * the last answer's, not the captured frame's (unseen since a no-answer, E5, or found before the captured frame by a
-   * view that had no answer on it, §6.6 Capture). Each of them answered for on the captured frame first (K13,
+   * the last answer's, not the captured frame's (unseen since a no-answer, E5, or present but fed by no call on the
+   * captured frame: its views had no answer there, or its only finds could not feed it, §6.6 Capture; round-6 review
+   * H7). Each of them answered for on the captured frame first (K13,
    * detectForCapture) when the tracker answers. null if no frame yet.
    */
   capture(): { image: ImageData; seed: FaceSeed; persons: { rawBox: Rect; params: PersonParams | null; held: boolean; stale: boolean }[] } | null;
@@ -137,7 +138,8 @@ export function resetAutoTierSession(): void {
 
 /**
  * The detector of each camera stream (§6.3), keyed by the video's `srcObject` (one MediaStream per getUserMedia: a start,
- * a resume, a flip): fixed by the first loop session on it, so a later loop over the same live stream (Review → 重拍, a
+ * a resume, a flip): fixed by the first loop session with a tracker on it (a 基本模式 session runs no detector and fixes
+ * none, round-7 review J2), so a later loop over the same live stream (Review → 重拍, a
  * bundle change) and a pause on it (a context loss) keep it, and a full-range download landing meanwhile is taken by the
  * next stream, whose start warms the graph behind the spinner (Camera.tsx). Round-1 review C14: re-read on every loop's
  * first frame, 重拍 after the download compiled full-range (1.1–1.3 s on the desktop GPU) on a live frame.
@@ -251,6 +253,12 @@ export function liveRoute(facing: Facing, groupMode: boolean): { path: 'solo' | 
 
 export function startLiveLoop(deps: LiveDeps): LiveLoop {
   const { camera, engine, tracker, persons } = deps;
+  /**
+   * the persons as the frames draw them: with a tracker the global skin is 原圖, the ambient person being 基本模式's
+   * alone (§3.6; round-7 review J1: a loop with the late tracker on a 基本模式 session drew it over the frame whenever no
+   * face was found, in shots too)
+   */
+  const drawn: Pick<LivePersons, 'params' | 'ambient'> = tracker ? { params: (id) => persons.params(id), ambient: neutralOnce() } : persons;
   const video = camera.video;
   let frames: FrameSource = createVideoFrameSource(video);
 
@@ -609,7 +617,7 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
         source: video,
         width: w,
         height: h,
-        ...liveFrame(tracks.views(), tracks.anyFace, photo, persons),
+        ...liveFrame(tracks.views(), tracks.anyFace, photo, drawn),
         pictureFrame: deps.getFrame?.(),
         grainSeed,
       });
@@ -620,7 +628,7 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
   /**
    * New measurement window + fresh face state (start, resume, flip / resolution change): the tracks' persons go to the
    * away pool, then the session resumes on this facing (another facing ends it; its clock skips the paused span, §7.5).
-   * The stream's detector is fixed by its first session (§6.3, streamDetectors): 'photo' only on a facing whose
+   * The stream's detector is fixed by its first session with a tracker (§6.3, streamDetectors): 'photo' only on a facing whose
    * LIVE_DETECTOR is it and once the full-range detector is in, so a download landing mid-stream never rebuilds the graph
    * under the preview, in this loop or a later one on the same stream. The path is 合照模式's, synced on every frame
    * (syncPath).
@@ -631,11 +639,13 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
     tracks.reset();
     persons.resume(now, facing);
     sides = null;
-    // the stream's detector (streamDetectors): a stream without one (its first session) fixes it here
+    // the stream's detector (streamDetectors): a stream without one (its first session with a tracker) fixes it here. A
+    // 基本模式 session runs no detector, so it fixes none (round-7 review J2: 0.5.1's late tracker, adopted on the same
+    // stream, then kept the short-range detector it had fixed, though full-range was in)
     const stream = video.srcObject;
     const known = stream ? streamDetectors.get(stream) : undefined;
     detector = known ?? (tracker && LIVE_DETECTOR[facing] === 'photo' && tracker.photoDetector === 'full-range' ? 'photo' : 'camera');
-    if (stream && known === undefined) streamDetectors.set(stream, detector);
+    if (stream && known === undefined && tracker) streamDetectors.set(stream, detector);
     cadence.reset();
     schedule.reset();
     sinceDetect = Infinity;
@@ -831,7 +841,7 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
           source: video,
           width: video.videoWidth,
           height: video.videoHeight,
-          ...shotFrame(tracks.views(), tracks.anyFace, deps.getPhoto(), persons),
+          ...shotFrame(tracks.views(), tracks.anyFace, deps.getPhoto(), drawn),
           pictureFrame: deps.getFrame?.(),
           grainSeed,
         },
@@ -851,7 +861,8 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
       // where they were by the padded centre; round-4 review F2: by IoU alone, a person who had moved a third of a face
       // width was dropped and counted, though 編輯 found the face). So is one found before the captured frame whom no
       // call on it fed (`frameClock`, K13's record): their views had no answer at the shutter, which is no event for
-      // them (§6.6 Capture), so their box is not the frame's. A box fed on the captured frame, by the frame's own call or
+      // them (§6.6 Capture), or their only finds there could not feed them (a find its view's edge cut, a face left to
+      // another view; round-6 review H7), so their box is not the frame's. A box fed on the captured frame, by the frame's own call or
       // the shutter's, goes as found (round-4 review F3)
       const handed = views.filter(handedOver).map((v) => ({
         rawBox: v.rawBox,

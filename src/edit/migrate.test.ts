@@ -758,8 +758,12 @@ describe('firstAnswer (S §3.3 item 4, §5.3 answer-time rows, C2)', () => {
       const stale = at(0.7, 0.3);
       expect(boxIoU(stale, two.faces[1].box)).toBeLessThan(0.3);
       expect(seedPrimary({ x: 0.7, y: 0.4 }, [two.faces[1]])).toBe(two.faces[1].id);
+      // a found box takes no face of another size by the centre either (round-6 review H4: the 0.3 box's face is not f1,
+      // 0.12 wide, standing at its spot): it is missed, and counted, since it was found at the shutter
       const found = firstAnswer({ ...base, prepared: two, handOver: [{ box: stale, params: nat }] });
-      expect(found.rebase(opened).persons.f1).toEqual(nat); // a found box: the centre rule, its face on the captured frame
+      const fe = found.rebase(opened);
+      expect(fe.persons.f1 ?? fe.template).toEqual(neutralPerson());
+      expect(found.handOverMissed).toBe(1);
       const held = firstAnswer({ ...base, prepared: two, handOver: [{ box: stale, params: nat, held: true }] });
       const e = held.rebase(opened);
       expect(e.persons.f1 ?? e.template).toEqual(neutralPerson());

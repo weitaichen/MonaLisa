@@ -1010,12 +1010,30 @@ describe('createStillSession: the hand-over retries (camera per-person spec §5.
     expect(tracker.detectImage.mock.calls.map((c) => c[1])).toEqual([{ maxFaces: EDIT_DETECT_FACES }, { maxFaces: EDIT_DETECT_FACES, detector: 'camera' }]);
     expect(xs(s)).toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.75, 6)]);
   });
+  it('round-6 review H4 (round-7 review J3): a found box’s zoom that finds only a neighbour of another size, whose padded box holds its centre, has found nothing for it: the short-range pass looks for its own face', () => {
+    const bmp = bitmap();
+    // N: a face 0.3 wide (460 px) at (0.5, 0.5), claimed by no box. B: a found edited box 0.18 wide (276 px, 13.5 % of the
+    // 2048 px long edge: zoomed, and over short-range's floor), its centre in N's padded box, box IoU under 0.3
+    const b = { x: 0.61, y: 0.4325, w: 0.18, h: 0.135 };
+    const crop = zoomCrop(b, 1536, 2048);
+    /** N as the zoom's crop sees it (square in pixels: the radius is a fraction of the crop's width) */
+    const nInCrop = face((0.5 * 1536 - crop.x) / crop.w, (0.5 * 2048 - crop.y) / crop.h, (0.15 * 1536) / crop.w);
+    const tracker = fakeTracker();
+    tracker.photoDetector = 'full-range';
+    const calls = record(tracker, (img, o) => (img !== bmp ? [nInCrop] : o.detector === 'camera' ? [face(0.5, 0.5, 0.15), face(0.7, 0.5, 0.09)] : [face(0.5, 0.5, 0.15)]));
+    const s = createStillSession(fakeEngine(), tracker, bmp, { handOver: [ed(b)] });
+    expect(calls.map((c) => c.detector)).toEqual(['photo', 'photo', 'camera']);
+    expect(calls[1].size).toEqual([crop.w, crop.h]);
+    expect(xs(s)).toEqual([expect.closeTo(0.5, 6), expect.closeTo(0.7, 6)]);
+  });
   it('nothing more runs when every seed is found; a box its zoomed retry misses is left out (firstAnswer counts it)', () => {
     const bmp = bitmap();
     const found = fakeTracker();
     found.photoDetector = 'full-range';
     found.detectImage.mockImplementation(() => [face(0.25, 0.5, 0.15)]);
-    createStillSession(fakeEngine(), found, bmp, { handOver: [ed({ x: 0.2, y: 0.45, w: 0.1, h: 0.075 })] });
+    // the box is about the face's size (0.25 against 0.3 wide), its centre in the face's padded box: found by the centre
+    // rule (round-6 review H4: a face of another size would be someone else's, and the box retried)
+    createStillSession(fakeEngine(), found, bmp, { handOver: [ed({ x: 0.14, y: 0.42, w: 0.25, h: 0.1875 })] });
     expect(found.detectImage).toHaveBeenCalledTimes(1);
     const missed = fakeTracker();
     missed.photoDetector = 'full-range';

@@ -780,6 +780,17 @@ describe('the live loop on persons (camera per-person spec §8, §7.5)', () => {
     vi.advanceTimersByTime(100);
     expect(basic.engine.lastInput()!.globalSkin).toMatchObject({ smooth: naturalPerson().values['skin.smooth'], weight: 1 });
     basic.loop.stop();
+    basic.video.halt();
+    // the same session's ambient person on a loop with a tracker (round-7 review J1): no face in view, nothing drawn on
+    // the skin, in the preview and in a shot
+    const tracked = setup({ persons });
+    tracked.tracker!.face = false;
+    vi.advanceTimersByTime(33 * 10 + 1);
+    expect(tracked.engine.lastInput()!.globalSkin).toEqual({ smooth: 0, rosy: 0, weight: 1 });
+    tracked.video.currentTime += 1 / 30;
+    tracked.loop.capture();
+    expect(tracked.engine.renderToImageData.mock.calls.at(-1)![0].globalSkin).toEqual({ smooth: 0, rosy: 0, weight: 1 });
+    tracked.loop.stop();
   });
   it('liveFrame orders present edited faces first, then present, then held, cut at MAX_RENDER_FACES', () => {
     const persons = fresh();
@@ -1178,6 +1189,19 @@ describe('the group path in the live loop (§6.3, §6.4, §6.6, K13, K22)', () =
     vi.advanceTimersByTime(200);
     expect(last()).toBe('photo');
     c.stop();
+  });
+  it('round-7 review J2: a 基本模式 loop fixes no stream detector, so the late tracker on that back-camera stream takes the full-range one', () => {
+    const { camera, engine, video, clock, loop } = setup({ tracker: false, facing: 'environment', frame: whole });
+    Object.assign(video, { srcObject: {} });
+    vi.advanceTimersByTime(200);
+    loop.stop();
+    // 0.5.1's late tracker, full-range in, adopted while this stream stays live: a new loop on it (RM §15)
+    const tracker = fakeTracker(clock, true, 1);
+    tracker.photoDetector = 'full-range';
+    const b = startLiveLoop({ camera, engine, tracker, persons: new LivePersons(), getPhoto: () => look.photo, getPrefs: () => makePrefs(), getFrame: whole });
+    vi.advanceTimersByTime(200);
+    expect(tracker.detectVideo.mock.calls.at(-1)![2].detector).toBe('photo');
+    b.stop();
   });
   it('cadence: two faces and a 64 ms detection skip frames (every 5 at R 5 ms); one face detects every frame', () => {
     const { tracker, engine, clock, loop } = setup({ facing: 'environment', frame: whole, prefs: on });

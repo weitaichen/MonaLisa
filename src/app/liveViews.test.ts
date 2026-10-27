@@ -155,6 +155,8 @@ describe('assignment, scope and mapping (§6.6)', () => {
     expect(shutterScope([t00, t10], l).defers!([b], px(720, 80))).toBe(false);
     // nothing answered: the scope matches and misses nothing
     expect([shutterScope([], l).matchable(a), shutterScope([], l).missable(a)]).toEqual([false, false]);
+    // starting is each face's own view's (detectViews): the union has no startable (round-6 review H8)
+    expect(both.startable).toBeUndefined();
   });
   it('mapLandmarks: view-normalized x, y → stream UV by the rect; z scaled by the rect width over the frame width', () => {
     const lm = { points: new Float32Array(478 * 3) };

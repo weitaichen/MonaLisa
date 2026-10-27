@@ -293,6 +293,35 @@ describe('LivePersons: selection (§7.6, K9) and 全部套用 (§3.4, K10)', () 
     s.sync([1, 2, 3], 1);
     return s;
   };
+  it('round-7 review J1: a tracker come to a 基本模式 session takes its all-skin edit on as 全部套用, every face entering the view getting it; 原圖 changes nothing', () => {
+    const s = session();
+    expect(s.ambientToAll()).toBe(false);
+    expect(s.all()).toBe(false);
+    s.setAmbient(natural);
+    expect(s.ambientToAll()).toBe(true);
+    expect([s.all(), s.ambient]).toEqual([true, neutralPerson()]);
+    expect(s.panelParams()).toEqual(natural);
+    for (const x of [0.2, 0.5]) s.claim(at(x), ASPECT, 0);
+    s.sync([1, 2], 1);
+    expect([s.params(1), s.params(2)]).toEqual([natural, natural]);
+    // turned off, everyone keeps it (K10), and the next edit is one person's
+    s.setAll(false);
+    s.edit(refined);
+    expect([s.params(1), s.params(2)]).toEqual([refined, natural]);
+  });
+  it('round-8 review L2: a session whose people hold params of their own keeps them; the 基本模式 edit waits for 基本模式 again', () => {
+    const s = three();
+    s.edit(refined); // person 1, edited while the tracker ran
+    s.setAmbient(natural); // the tracker lost, 基本模式, a 磨皮 there
+    expect(s.ambientToAll()).toBe(false);
+    expect([s.all(), s.params(1), s.ambient]).toEqual([false, refined, natural]);
+    // 全部套用 already on (its shared params set): the same
+    const u = three();
+    u.setAll(true);
+    u.setAmbient(natural);
+    expect(u.ambientToAll()).toBe(false);
+    expect(u.ambient).toEqual(natural);
+  });
   it('the auto target until the first edit pins it', () => {
     const s = three();
     expect([s.selection(), s.target()]).toEqual(['auto', 1]);

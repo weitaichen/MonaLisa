@@ -135,6 +135,34 @@ bare.describe('a slow face-tracker build (0.5.1)', () => {
     expect(t.errors).toEqual([]);
   });
 
+  bare('a 磨皮 set in 基本模式 goes on to the faces when the tracker lands, as 全部套用 (round-7 review J1)', async ({ page }) => {
+    bare.setTimeout(240_000);
+    const t = await holdTracker(page);
+    await page.goto('/');
+    await page.getByRole('button', { name: /拍攝/ }).click();
+    await page.getByRole('button', { name: '點擊開啟相機' }).click();
+    await expect(page.locator('.toast', { hasText: '臉部偵測啟動較慢' })).toBeVisible({ timeout: 90_000 });
+    await expect
+      .poll(async () => {
+        const d = await debugState(page);
+        return d.cameraState === 'live' && d.fps > 0;
+      }, { timeout: 30_000, intervals: [250] })
+      .toBe(true);
+    // 基本模式: the panel edits the all-skin person
+    await page.getByRole('tab', { name: '美膚' }).click();
+    await page.getByRole('option', { name: '磨皮', exact: true }).click();
+    await dragSlider(page, 400);
+    await expect(page.getByRole('slider')).toHaveAttribute('aria-valuenow', '100');
+
+    t.release();
+    await expect(page.locator('.toast', { hasText: '臉部偵測已啟動' })).toBeVisible({ timeout: 90_000 });
+    // the face gets it, 全部套用 says so, and the panel shows it on the face
+    await expect.poll(async () => (await debugState(page)).boxes?.some((b) => b.edited) ?? false, { timeout: 60_000, intervals: [250] }).toBe(true);
+    await expect(page.locator('.all-chip')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('slider')).toHaveAttribute('aria-valuenow', '100');
+    expect(t.errors).toEqual([]);
+  });
+
   bare('按住對比 held in the camera when the tracker lands: the preview restarted under the finger still shows the original', async ({ page }) => {
     bare.setTimeout(240_000);
     const t = await holdTracker(page);

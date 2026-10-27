@@ -192,10 +192,11 @@ export const SHUTTER_SCOPE = 'shutter';
 
 /**
  * §6.6 Capture: the scope of the shutter's one call, the union of `views` (the views of its cycle that answered on the
- * captured frame): it matches, misses and starts what any of them can, so a track is missed only when a view that
- * answered could miss it (and no answer found its face, FaceTracks.detectViews), and a track none of them can match or
- * miss (its own view had no answer) is unknown to the call, a face whose owner turns on it left to that view (I3).
- * Each face keeps its own view's scope for what the call does with it (feeding, starting: detectViews).
+ * captured frame): it matches and misses what any of them can, so a track is missed only when a view that answered
+ * could miss it (and no answer found its face, FaceTracks.detectViews), and a track none of them can match or miss (its
+ * own view had no answer) is unknown to the call, a face whose owner turns on it left to that view (I3). Each face keeps
+ * its own view's scope for what the call does with it (feeding, starting: detectViews), so the union has no
+ * `startable` (round-6 review H8: it was never read).
  */
 export function shutterScope(views: readonly LiveView[], layout: ViewLayout): DetectScope {
   const scopes = views.map((v) => viewScope(v, layout));
@@ -207,7 +208,6 @@ export function shutterScope(views: readonly LiveView[], layout: ViewLayout): De
     view: { x: c.x / w, y: c.y / h, w: c.w / w, h: c.h / h },
     matchable: (box) => scopes.some((s) => s.matchable(box)),
     missable: (pred) => scopes.some((s) => s.missable(pred)),
-    startable: (box) => scopes.some((s) => s.startable?.(box) ?? s.matchable(box)),
     defers: (preds, box) => defersTo(preds, box, layout, (own) => ran.has(own.id)),
   };
 }

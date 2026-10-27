@@ -268,11 +268,19 @@ export class FaceTracks {
     /** the face's own view holds it whole once clipped to the crop (the solo path's whole frame: always) */
     const whole = (d: Det) => !d.src || d.src.matchable(d.box);
     const pred = new Map<Track, Rect>(this.list.map((t) => [t, this.predict(t, tsMs)]));
-    /** the track a find matches best by §7.3 item 2's IoU rule (IoU ≥ 0.3 against its predicted box, the size gate); null: none */
+    /** a track known missing: a call that could see it missed it */
+    const held = (t: Track) => !t.present && !t.stale;
+    /**
+     * the track not held that a find matches best by §7.3 item 2's IoU rule (IoU ≥ 0.3 against its predicted box, the
+     * size gate); null: none. A held track's predicted box is a guess of where someone hidden was, never evidence of who
+     * a face is (round-8 review L1: a person held behind another, their box drifting over that head, made one view's find
+     * of it a second face, which then fed them: their look drawn on the other's face, and handed over found)
+     */
     const bestTrack = (d: Det): Track | null => {
       let best: Track | null = null;
       let bestIoU = 0;
       for (const [t, p] of pred) {
+        if (held(t)) continue;
         const iou = boxIoU(p, d.box);
         if (iou >= 0.3 && iou > bestIoU && sizeOk(p, d.box)) [best, bestIoU] = [t, iou];
       }
@@ -282,20 +290,27 @@ export class FaceTracks {
     // overlapping tile's edge cuts, or that sees part of it) takes a track or a person beside it (I1); two people are
     // two faces, however their boxes overlap (round-6 review H2, Codex #2). One view's finds are kept as they came
     const dets = sources.length < 2 ? all : onePerFace(all, whole, bestTrack, w, h);
-    // two ROIs converged on one face (IoU > 0.6, T3's rule): keep the one matching a track, else the larger
+    // two ROIs converged on one face (IoU > 0.6, T3's rule): keep the one matching a track, else the larger. Never two
+    // finds of different views that onePerFace kept apart for matching two different tracks (round-7 review Codex: two
+    // tracked people one behind the other, box IoU over 0.6, each found by a different view of the shutter, were merged
+    // here after all, the other one held, and 編輯 dropped their edits)
     const onTrack = (b: Rect) => this.list.some((t) => boxIoU(t.box, b) >= 0.3);
+    const twoTracks = (a: Det, b: Det) => {
+      if (a.src === b.src) return false;
+      const [ta, tb] = [bestTrack(a), bestTrack(b)];
+      return ta !== null && tb !== null && ta !== tb;
+    };
     dets.sort((a, b) => area(b.box) - area(a.box));
     const unique: Det[] = [];
     for (const d of dets) {
-      const j = unique.findIndex((u) => boxIoU(u.box, d.box) > 0.6);
+      const j = unique.findIndex((u) => boxIoU(u.box, d.box) > 0.6 && !twoTracks(u, d));
       if (j < 0) unique.push(d);
       else if (!onTrack(unique[j].box) && onTrack(d.box)) unique[j] = d;
     }
     // §7.1 (round-2 review D1, D2, D5): what the call knows of each track. It sees a track whose predicted box its view
     // can match or miss (the solo path's whole frame sees every track); a held track is known missing whichever view
     // answers; any other, found elsewhere or unseen since a no-answer (stale, C9), is unknown to it: the call cannot
-    // tell whether that person is still where they were found (`pred`: each track's predicted box, above)
-    const held = (t: Track) => !t.present && !t.stale;
+    // tell whether that person is still where they were found (`pred`: each track's predicted box, and `held`, above)
     const misses = (t: Track) => !scope || scope.missable(pred.get(t)!);
     const unknown = (t: Track) => !!scope && !held(t) && !scope.matchable(pred.get(t)!) && !scope.missable(pred.get(t)!);
     /** the call may feed the pair: the face's view holds the track's predicted box or the face whole, each clipped to the crop */

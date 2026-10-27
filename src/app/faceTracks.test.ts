@@ -678,6 +678,7 @@ describe('FaceTracks on the group path: a call matches and misses only what its 
       missable: (p) => ss.some((s) => s.missable(p)),
     });
     const state = (t: FaceTracks) => [...t.views()].sort((a, b) => a.box.x - b.box.x).map((v) => [v.present, v.stale, v.seen]);
+    const centreX = (b: Rect) => b.x + b.w / 2;
     it('Codex P2: a face one view found is found though another view that holds it found no face there; one call per view marked it missing', () => {
       const a = () => lmAt(0.4, 0.5, 0.06); // in both views
       const e = () => lmAt(0.8, 0.5, 0.06); // sR's only
@@ -765,6 +766,85 @@ describe('FaceTracks on the group path: a call matches and misses only what its 
       for (let now = 33; now <= LOST_HOLD_MS + 100; now += 33) t.detect([], now, W, H, sL);
       expect(t.views()).toHaveLength(0); // dropped past the hold: away, edited, in grace
       t.detectViews(answers([sL, [p()]], [sR, [lmAt(0.401, 0.5, 0.059)]]), LOST_HOLD_MS + 300, W, H, union(sL, sR));
+      expect(t.views().map((v) => [v.person, v.edited])).toEqual([[id, true]]);
+    });
+    it('round-7 review Codex: two tracked people one behind the other (box IoU about 0.7), each found by a different view, stay two through the final dedup: both fed', () => {
+      const t = new FaceTracks(editedAll());
+      t.detect([lmAt(0.3, 0.5, 0.06), lmAt(0.5, 0.5, 0.06)], 0, W, H);
+      expect(t.views()).toHaveLength(2);
+      // they walk together, A seen by sL only and B by sR only, until their boxes overlap past the dedup's 0.6
+      let now = 0;
+      for (let i = 1; i <= 10; i++) {
+        now = i * 33;
+        t.detectViews(answers([sL, [lmAt(0.3 + 0.01 * i, 0.5, 0.06)]], [sR, [lmAt(0.5 - 0.009 * i, 0.5, 0.06)]]), now, W, H, union(sL, sR));
+      }
+      expect(boxIoU(ovalBox(adapt(lmAt(0.4, 0.5, 0.06), W, H)), ovalBox(adapt(lmAt(0.41, 0.5, 0.06), W, H)))).toBeGreaterThan(0.6);
+      expect(state(t)).toEqual([
+        [true, false, now],
+        [true, false, now],
+      ]);
+    });
+    it('round-8 review L1: a person held behind another, their predicted box over that head, takes neither view’s find of it at the shutter', () => {
+      // A stands at 0.40; B walks left behind A, found until 0.44, then hidden: held, B's predicted box drifting over A's head
+      const s = new LivePersons();
+      s.setPath('group', 0);
+      const t = new FaceTracks(s);
+      let now = 0;
+      for (let i = 0; i <= 10; i++, now += 33) t.detect([lmAt(0.4, 0.5, 0.06), lmAt(0.47 - 0.003 * i, 0.5, 0.06)], now, W, H, union(sL, sR));
+      const [pa, pb] = [...t.views()].sort((a, b) => a.box.x - b.box.x).map((v) => v.person);
+      s.write([pa], naturalPerson());
+      s.write([pb], personFromPreset('refined', 1));
+      const shot = 33 * 23;
+      for (; now < shot; now += 33) t.detect([lmAt(0.4, 0.5, 0.06)], now, W, H, now % 66 === 0 ? sL : sR);
+      const view = (p: number) => t.views().find((v) => v.person === p)!;
+      expect(view(pb).present).toBe(false);
+      // the shutter: sL finds A's head on A's predicted centre, sR a little toward B's predicted box
+      const ca = centreX(t.predicted(view(pa).id, shot)!);
+      const cb = centreX(t.predicted(view(pb).id, shot)!);
+      t.detectViews(answers([sL, [lmAt(ca, 0.5, 0.06)]], [sR, [lmAt(ca + 0.6 * (cb - ca), 0.5, 0.06)]]), shot, W, H, union(sL, sR));
+      expect([view(pa).present, view(pa).seen]).toEqual([true, shot]);
+      expect(view(pb).present).toBe(false); // still held: B's refined look is not drawn on A's face, nor handed over found
+    });
+    /** an edited person tracked from `lm`, then missed by `view` (one that holds them whole) past the hold: away, edited, in grace */
+    const awayEdited = (lm: () => Landmarks478, view: DetectScope) => {
+      const s = new LivePersons();
+      s.setPath('group', 0);
+      const t = new FaceTracks(s);
+      t.detect([lm()], 0, W, H, union(sL, sR));
+      const id = t.views()[0].person;
+      s.write([id], naturalPerson());
+      for (let now = 33; now <= LOST_HOLD_MS + 100; now += 33) t.detect([], now, W, H, view);
+      expect(t.views()).toHaveLength(0);
+      return { t, id };
+    };
+    // round-6 review H5: finds two views make of one face apart enough that decide's own dedup (IoU > 0.6) does not join them
+    it('round-6 review H5: an away edited person found whole by one view and in part by another (box IoU about 0.4) is re-identified once', () => {
+      const p = () => lmAt(0.4, 0.5, 0.06);
+      const part = () => outlineIn(p(), 0.6, 0.7);
+      const iou = boxIoU(ovalBox(adapt(p(), W, H)), ovalBox(adapt(part(), W, H)));
+      expect(iou).toBeGreaterThan(0.3);
+      expect(iou).toBeLessThan(0.6);
+      const { t, id } = awayEdited(p, sL);
+      t.detectViews(answers([sR, [part()]], [sL, [p()]]), LOST_HOLD_MS + 300, W, H, union(sL, sR));
+      expect(t.views().map((v) => [v.person, v.edited])).toEqual([[id, true]]);
+    });
+    /** N, whole in sR and cut by sL's edge (x 0.46–0.52), and sL's find of it: a larger box past the edge (as MediaPipe draws a cut face), N's own marks */
+    const n = () => lmAt(0.49, 0.5, 0.06);
+    const nCut = () => outlineIn(n(), 1.4, 1.3);
+    it('round-6 review H5: a new face found whole by one view and as a larger cut find past another view’s edge starts one track, from the whole find', () => {
+      const whole = ovalBox(adapt(n(), W, H));
+      const cut = ovalBox(adapt(nCut(), W, H));
+      expect([sR.matchable(whole), sL.matchable(cut), cut.w * cut.h > whole.w * whole.h]).toEqual([true, false, true]);
+      expect(boxIoU(whole, cut)).toBeGreaterThan(0.3);
+      expect(boxIoU(whole, cut)).toBeLessThan(0.6);
+      const t = new FaceTracks(new LivePersons());
+      t.detectViews(answers([sL, [nCut()]], [sR, [n()]]), 0, W, H, union(sL, sR));
+      expect(t.views()).toHaveLength(1);
+      expect(boxIoU(t.views()[0].rawBox, whole)).toBeCloseTo(1, 6);
+    });
+    it('round-6 review H5: a returner found whole by one view and as a larger cut find past another view’s edge is re-identified with their params', () => {
+      const { t, id } = awayEdited(n, sR);
+      t.detectViews(answers([sL, [nCut()]], [sR, [n()]]), LOST_HOLD_MS + 300, W, H, union(sL, sR));
       expect(t.views().map((v) => [v.person, v.edited])).toEqual([[id, true]]);
     });
     it('round-6 review H2: two finds that match two different tracks are two faces, even where their meshes put the eyes, nose and mouth at one place: each track fed', () => {

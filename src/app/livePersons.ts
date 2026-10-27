@@ -125,6 +125,26 @@ export class LivePersons implements TrackPersons {
     this.v++;
   }
 
+  /**
+   * 基本模式 gained a tracker in this session (0.5.1's late tracker adopted while the camera is open, RM §15): the
+   * all-skin person becomes 全部套用's shared params, given to every face as it enters the view, as 基本模式 drew it on
+   * everyone's skin, and the ambient person is 原圖 again (round-7 review J1: kept as the global skin, the edit left the
+   * faces and came back over the frame whenever no face was found, in shots too, out of the panel's and 編輯's reach).
+   * true when it turned 全部套用 on. An untouched ambient person (原圖) changes nothing, and neither does a session whose
+   * people already hold params of their own, or that 全部套用 already runs (a tracker lost mid-session, then 基本模式):
+   * they keep theirs, and the ambient person waits for 基本模式 again (round-8 review L2: it overwrote them)
+   */
+  ambientToAll(): boolean {
+    if (isNeutralPerson(this.amb) || this.allOn || [...this.known.values()].some((p) => p !== null)) return false;
+    this.allOn = true;
+    this.lead = null;
+    this.shared = this.amb;
+    this.put(this.shown, this.shared);
+    this.amb = neutralPerson();
+    this.v++;
+    return true;
+  }
+
   params(id: LivePersonId): PersonParams | null {
     return this.known.get(id) ?? null;
   }

@@ -299,11 +299,11 @@ export interface CameraHandOver {
    * mirrored as saved); params (左右分開 sides swapped when saved mirrored) for an edited person, null for one found at
    * the shutter and never edited, whose box only keeps their own face from an edited person's (K14, round-1 review C7).
    * `held`: missing at the shutter (held for LOST_HOLD_MS), so a miss is not counted for the toast: they may have left.
-   * `stale`: unseen at the shutter since a no-answer (round-3 review E5), or found before the captured frame by views
-   * that had no answer on it (round-5 review, §6.6 Capture): not known missing, so counted, but the box is the last
-   * answer's. Either way the box is a guess: a held one pairs only by IoU, a stale one by IoU, else by the
-   * padded centre with a face of its size (onShutterFrame, matchHandOver, round-4 review F2). Empty when nobody is
-   * edited (handOverOf)
+   * `stale`: unseen at the shutter since a no-answer (round-3 review E5), or present but fed by no call on the captured
+   * frame (round-5 review, §6.6 Capture: its views had no answer there, or its only finds could not feed it; round-6
+   * review H7): not known missing, so counted, but the box is the last answer's. Either way the box is a guess: a held
+   * one pairs only by IoU, a stale one, as a found one, by IoU, else by the padded centre with a face of its size
+   * (pairsByCentre, matchHandOver, round-4 review F2, round-6 review H3, H4). Empty when nobody is edited (handOverOf)
    */
   persons: readonly { box: Rect; params: PersonParams | null; held?: boolean; stale?: boolean }[];
   /** 基本模式: the all-skin person (§3.6), else null */
@@ -932,7 +932,7 @@ export interface DebugState {
   /**
    * camera: the last shot's hand-over to 編輯 (CameraHandOver.persons; [] when nobody is edited): each person's box in the
    * saved photo's UV, edited (params set), held (known missing at the shutter), stale (not known missing, the box the
-   * last answer's: unseen there since a no-answer, or not refreshed on the captured frame for a view's no-answer).
+   * last answer's: unseen there since a no-answer, or fed by no call on the captured frame).
    * e2e (round-4 review F5): a scene that tests the found boxes' rules reads the same when the person was held there
    */
   shotHandOver?: { x: number; y: number; w: number; h: number; edited: boolean; held: boolean; stale: boolean }[];

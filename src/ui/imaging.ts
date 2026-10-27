@@ -107,12 +107,12 @@ export function shotBox(box: UvRect, vw: number, vh: number, ratio: number, mirr
  * lies in the picture:
  * one outside it is not in the photo, so it is not handed over (never counted as a face the editor missed, Review Focus
  * #5). A held person whose last box a person not known missing overlaps (box IoU ≥ HANDOVER_IOU; found at the shutter,
- * or unseen there since a no-answer) is not handed over either: someone stands where they were, in front of them or in
- * their place, and the stale box would give that face the held person's params (round-1 review C7). `held` and `stale`
- * (round-3 review E5: unseen since a no-answer, or, round-5 review, found before the captured frame by views that had no
- * answer on it; the box the last answer's) go with the person: either box is a guess in
- * 編輯, a held one paired only by IoU, a stale one by IoU or by the padded centre with a face of its size
- * (onShutterFrame, round-4 review F2).
+ * or stale) is not handed over either: someone stands where they were, in front of them or in their place, and the
+ * stale box would give that face the held person's params (round-1 review C7). `held` and `stale` (round-3 review E5:
+ * unseen there since a no-answer; round-5 review: present but fed by no call on the captured frame, its views had no
+ * answer there or its only finds could not feed it; round-6 review H7; the box the last answer's) go with the person:
+ * either box is a guess in 編輯, a held one paired only by IoU, a stale one, as a found one, by IoU or by the padded
+ * centre with a face of its size (pairsByCentre, round-4 review F2, round-6 review H3, H4).
  */
 export function shotPersons(
   persons: readonly { rawBox: UvRect; params: PersonParams | null; held: boolean; stale?: boolean }[],

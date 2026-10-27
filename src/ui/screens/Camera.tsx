@@ -187,6 +187,9 @@ export function Camera() {
   const live = snap?.state === 'live';
   useEffect(() => {
     if (!ctrl || !bundle || !live) return;
+    // a tracker come to a 基本模式 session (0.5.1's late tracker, RM §15): its all-skin edit goes on to every face as
+    // 全部套用 does, the chip with it (round-7 review J1)
+    if (bundle.tracker && cameraSession().ambientToAll()) app.set({ cameraAll: true });
     let l: LiveLoop;
     let lastFace: boolean | null = null;
     let faceTimer = 0;

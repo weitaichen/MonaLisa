@@ -56,6 +56,12 @@ export interface ClipResult {
 
 export interface ClipRecorder {
   /**
+   * Resolves once, at the first end of the recording: the stop() call, an error, or the browser stopping it by itself
+   * (an encoder failure, its tracks ending). Never rejects. When it resolves without the caller's own stop(), the
+   * recording is over although nobody asked: stop() still hands out what was recorded.
+   */
+  readonly ended: Promise<void>;
+  /**
    * Stop and resolve with what was recorded; a second call returns the same promise. The recording ends at the first
    * of this call, an error and the browser stopping it by itself, and `durationMs` runs to that moment, not to the
    * late onstop. Resolves on onstop, or STOP_WAIT_MS after the call, whichever comes first.
@@ -88,13 +94,25 @@ export function startClipRecorder(stream: MediaStream, mime: string, env: Record
   const chunks: Blob[] = [];
   const startedAt = now();
   let endedAt: number | undefined;
+  /** set by the executor below, which runs at once */
+  let resolveEnded!: () => void;
+  const ended = new Promise<void>((resolve) => {
+    resolveEnded = resolve;
+  });
   /** the browser's stop event came (after stop(), or by itself) */
   let stopped = false;
   /** set while stop() waits for the stop event */
   let whenStopped: (() => void) | null = null;
 
-  // the recording ends at the first of: the stop() call, an error, the browser stopping by itself (not the late onstop)
-  const markEnd = (): number => (endedAt ??= now());
+  // the recording ends at the first of: the stop() call, an error, the browser stopping by itself (not the late
+  // onstop); `ended` resolves there
+  const markEnd = (): number => {
+    if (endedAt === undefined) {
+      endedAt = now();
+      resolveEnded();
+    }
+    return endedAt;
+  };
   // stop() throws on an inactive recorder; one that throws anyway is left to the STOP_WAIT_MS timer
   const halt = () => {
     if (rec.state === 'inactive') return;
@@ -122,6 +140,7 @@ export function startClipRecorder(stream: MediaStream, mime: string, env: Record
 
   let result: Promise<ClipResult> | null = null;
   return {
+    ended,
     stop() {
       result ??= new Promise<ClipResult>((resolve) => {
         const durationMs = markEnd() - startedAt;

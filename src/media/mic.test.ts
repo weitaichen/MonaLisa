@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MIC_ANSWER_MS, MIC_PROMPT_MS, createMic } from './mic';
+import { MIC_ANSWER_MS, MIC_PROMPT_MS, createMic, type Mic, type MicState } from './mic';
 
 // ── minimal fakes (no jsdom): the pieces of getUserMedia and MediaStream the microphone touches ──
 
@@ -60,6 +60,15 @@ function watch(p: Promise<unknown>) {
     w.done = true;
   });
   return w;
+}
+
+/** every state change `mic` announces from now on, in order */
+function listen(mic: Mic): MicState[] {
+  const heard: MicState[] = [];
+  mic.subscribe((s) => {
+    heard.push(s);
+  });
+  return heard;
 }
 
 /** let queued promise continuations run (timers are faked) */
@@ -325,13 +334,31 @@ describe('release()', () => {
       expect(mic.state).toBe('idle');
     });
 
-    it('a refusal nobody was waiting for leaves the state alone', async () => {
+    it("after release() with a request out, the state stays 'asking' until it settles, then 'idle'", async () => {
       const { mic, h } = setup();
       void mic.ensure(MIC_ANSWER_MS);
+      const heard = listen(mic);
+      mic.release(); // leaving 錄影 while the prompt is still up
+      expect(mic.state).toBe('asking'); // a camera request issued now would queue behind it
+      expect(heard).toEqual([]);
+
+      const t = h.answer();
+      await flush();
+      expect(t.stopped).toBe(true);
+      expect(mic.state).toBe('idle');
+      expect(heard).toEqual(['idle']); // once, at the settle
+    });
+
+    it("an abandoned refusal ends 'idle', not 'off'", async () => {
+      const { mic, h } = setup();
+      const heard = listen(mic);
+      void mic.ensure(MIC_ANSWER_MS);
       mic.release();
+      expect(mic.state).toBe('asking'); // the request is still out
       h.refuse();
       await flush();
-      expect(mic.state).toBe('idle');
+      expect(mic.state).toBe('idle'); // a refusal nobody wants says nothing about the microphone now
+      expect(heard).toEqual(['asking', 'idle']);
     });
 
     it('a refusal of a request a newer ensure() joined turns the state off', async () => {
@@ -343,6 +370,78 @@ describe('release()', () => {
       await expect(p).resolves.toEqual([]);
       expect(mic.state).toBe('off');
     });
+  });
+});
+
+describe('subscribe()', () => {
+  it('hears every state change: idle → asking → on → idle; none on subscribe or after unsubscribing', async () => {
+    const { mic, h } = setup();
+    const heard: MicState[] = [];
+    const unsubscribe = mic.subscribe((s) => {
+      heard.push(s);
+    });
+    expect(heard).toEqual([]); // the state it has is not announced
+
+    const p = mic.ensure(MIC_ANSWER_MS);
+    h.answer();
+    await p;
+    mic.release();
+    expect(heard).toEqual(['asking', 'on', 'idle']);
+
+    unsubscribe();
+    const again = mic.ensure(MIC_ANSWER_MS);
+    h.answer();
+    await again;
+    mic.release();
+    expect(h.getUserMedia).toHaveBeenCalledTimes(2); // it did run another round
+    expect(heard).toEqual(['asking', 'on', 'idle']);
+  });
+
+  it('is not told of a state set to the value it already has', async () => {
+    const { mic, h } = setup();
+    const heard = listen(mic);
+    mic.release(); // idle already
+    void mic.ensure(MIC_ANSWER_MS);
+    void mic.ensure(MIC_PROMPT_MS); // joins the request: asking already
+    mic.release(); // the request is out: still asking
+    void mic.ensure(MIC_ANSWER_MS); // joins it again
+    expect(heard).toEqual(['asking']);
+
+    h.answer();
+    await flush();
+    expect(heard).toEqual(['asking', 'on']);
+    await mic.ensure(MIC_ANSWER_MS); // held: nothing to ask or change
+    expect(heard).toEqual(['asking', 'on']);
+  });
+
+  it.each([
+    ['state', (mic: Mic) => void mic.state, ['asking', 'on', 'idle']],
+    ['tracks()', (mic: Mic) => void mic.tracks(), ['asking', 'on', 'idle']],
+    ['ensure()', (mic: Mic) => void mic.ensure(MIC_ANSWER_MS), ['asking', 'on', 'idle', 'asking']],
+  ])("hears 'idle' when a held stream's tracks ended by themselves and %s finds out", async (_how, find, expected) => {
+    const { mic, h } = setup();
+    const heard = listen(mic);
+    const p = mic.ensure(MIC_ANSWER_MS);
+    const t = h.answer();
+    await p;
+    t.end(); // a headset unplugged; nobody has looked yet
+    expect(heard).toEqual(['asking', 'on']);
+    find(mic);
+    expect(heard).toEqual(expected);
+  });
+
+  it('a listener that throws does not stop the others, nor the microphone', async () => {
+    const { mic, h } = setup();
+    mic.subscribe(() => {
+      throw new Error('a bug in a listener');
+    });
+    const heard = listen(mic); // after the one that throws
+    const p = mic.ensure(MIC_ANSWER_MS);
+    const t = h.answer(); // heard from inside the answer, which must still settle ensure()
+    await expect(p).resolves.toEqual([t]);
+    expect(() => mic.release()).not.toThrow();
+    expect(heard).toEqual(['asking', 'on', 'idle']);
+    expect(mic.state).toBe('idle');
   });
 });
 

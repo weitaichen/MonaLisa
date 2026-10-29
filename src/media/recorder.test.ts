@@ -370,6 +370,62 @@ describe('startClipRecorder', () => {
       expect(r.durationMs).toBe(1_000);
     });
   });
+
+  // The camera shows 「● 00:12」 over the recording; `ended` is how it learns the recording is over without stop().
+  describe('ended', () => {
+    it('resolves on an error before any stop(), and stop() still hands out the chunks', async () => {
+      const { clip, rec } = setup();
+      const w = watch(clip.ended);
+      rec.emit('aa');
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(w.done).toBe(false);
+      rec.fail();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(w.done).toBe(true); // no stop() yet
+      const p = clip.stop();
+      rec.finish();
+      const r = await p;
+      expect(await r.blob.text()).toBe('aa');
+      expect(r.durationMs).toBe(1_500);
+    });
+
+    it('resolves when the browser stops by itself', async () => {
+      const { clip, rec } = setup();
+      const w = watch(clip.ended);
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(w.done).toBe(false);
+      rec.finish(); // the tracks ended: a stop event nobody asked for
+      await vi.advanceTimersByTimeAsync(0);
+      expect(w.done).toBe(true);
+      expect(rec.stopCalls).toBe(0); // and no stop() was called
+    });
+
+    it('resolves on stop(), at the call and not at the late onstop', async () => {
+      const { clip, rec } = setup();
+      const w = watch(clip.ended);
+      const p = clip.stop();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(w.done).toBe(true); // the stop event has not come yet
+      rec.finish();
+      await p;
+    });
+
+    it('stays pending while the recording runs', async () => {
+      const { clip, rec } = setup();
+      const w = watch(clip.ended);
+      rec.emit('aa'); // a chunk is no end
+      await vi.advanceTimersByTimeAsync(10_000);
+      rec.emit('bb');
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(w.done).toBe(false);
+    });
+
+    it('is one promise however often it is read', () => {
+      const { clip } = setup();
+      expect(clip.ended).toBeInstanceOf(Promise);
+      expect(clip.ended).toBe(clip.ended);
+    });
+  });
 });
 
 describe('clipFile', () => {

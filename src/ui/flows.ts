@@ -1,9 +1,9 @@
 // Multi-step user flows shared by several screens.
 import { importEdit, openState } from '../edit/migrate';
-import type { CameraHandOver, EditState, FaceSeed, HistoryEntry } from '../types';
+import type { CameraHandOver, EditState, FaceSeed, HistoryEntry, SaveResult } from '../types';
 import { reportError } from './debug';
 import { deps } from './deps';
-import { app, go, toast, type EditorSource } from './state';
+import { app, go, showSaveFallback, toast, type EditorSource } from './state';
 
 /** the working copy's long edge an import or a reopen decodes at; also the edge 設定 names for 標準 (C D6) */
 export function maxImportEdge(): number {
@@ -87,4 +87,32 @@ export function pickPhoto(onFile: (f: File) => void): void {
   }
   onPicked = onFile;
   fileInput.click();
+}
+
+/**
+ * 儲存's hand-off of a ready file (Review, the Editor, the clip screen): the share sheet, and when it is unavailable or
+ * fails the save dialog (long-press the photo, or download the clip). 'shared' says 完成, 'cancelled' nothing; a rejection
+ * is reported and then handled like a fallback.
+ *
+ * MUST be called synchronously inside the tap, with nothing awaited before it: the share sheet needs the tap's transient
+ * activation (RB §1 #10). saveFile is called before this returns.
+ */
+export function shareFile(file: File): void {
+  let p: Promise<SaveResult>;
+  try {
+    p = deps.saveFile(file);
+  } catch (e) {
+    // a synchronous throw takes the rejection's way
+    p = Promise.reject(e);
+  }
+  p.then(
+    (r) => {
+      if (r === 'fallback') showSaveFallback(file);
+      else if (r === 'shared') toast('完成');
+    },
+    (e: unknown) => {
+      reportError(e, 'saveFile');
+      showSaveFallback(file);
+    },
+  );
 }

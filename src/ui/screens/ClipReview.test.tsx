@@ -1,22 +1,22 @@
 // Clip screen 預覽 (beauty video spec §4.5): what showSaveFallback tells the save dialog, 儲存 handing the file to the
 // share sheet inside the tap, and the screen revoking its object URL when it goes. The screen is mounted with real
-// Preact on a tiny DOM stand-in (vitest runs in node), as HeightBandOverlay.test.tsx and Slider.test.tsx do.
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+// Preact on a tiny DOM stand-in (vitest runs in node), as HeightBandOverlay.test.tsx and Slider.test.tsx do. What
+// happens once saveFile answers is shareFile's, tested in flows.share.test.ts.
+import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { render } from 'preact';
 import { act } from 'preact/test-utils';
 import type { SaveResult } from '../../types';
 import { deps } from '../deps';
 import { haptic } from '../platform';
-import { app, closeSaveFallback, showSaveFallback, toast, type Clip } from '../state';
+import { app, closeSaveFallback, showSaveFallback, type Clip } from '../state';
 import { ClipReview } from './ClipReview';
 
 // state.ts → debug.ts keeps window.__meiyan from import on; node has no `window`
 vi.hoisted(() => {
   (globalThis as { window?: unknown }).window = globalThis;
 });
-// haptic() is a no-op in node (no HTMLInputElement) and toast() starts a timer: spy on both instead
+// haptic() is a no-op in node (no HTMLInputElement): spy on it to see the tap buzz
 vi.mock('../platform', async (orig) => ({ ...(await orig<typeof import('../platform')>()), haptic: vi.fn() }));
-vi.mock('../state', async (orig) => ({ ...(await orig<typeof import('../state')>()), toast: vi.fn() }));
 
 class FakeNode {
   childNodes: FakeNode[] = [];
@@ -111,11 +111,9 @@ afterAll(() => {
   (globalThis as { document?: unknown }).document = saved;
 });
 afterEach(() => {
-  vi.restoreAllMocks(); // deps.saveFile, URL, console.error
-  vi.mocked(toast).mockClear();
+  vi.restoreAllMocks(); // deps.saveFile, URL
   vi.mocked(haptic).mockClear();
   app.set({ screen: { name: 'home' }, saveFallback: null, saveFallbackName: null, saveFallbackKind: 'image' });
-  if (window.__meiyan) window.__meiyan.lastError = null;
 });
 
 const clip = (): Clip => ({
@@ -147,9 +145,6 @@ function tap(el: FakeElement) {
     fn.call(el, { type: 'click', currentTarget: el, target: el });
   });
 }
-
-/** the save promise's handlers have run */
-const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 it('showSaveFallback sets the video kind for a video file and the image kind for a photo', () => {
   const create = vi.spyOn(URL, 'createObjectURL').mockReturnValueOnce('blob:one').mockReturnValueOnce('blob:two').mockReturnValueOnce('blob:three');
@@ -208,46 +203,4 @@ it('the clip screen sends 重錄 back to the camera', () => {
   tap(ui.button('重錄'));
   expect(haptic).toHaveBeenCalledTimes(1);
   expect(app.get().screen).toEqual({ name: 'camera' });
-});
-
-describe('the clip screen once saveFile answers', () => {
-  /** taps 儲存 with saveFile answering `answer`, and waits until the answer has been handled */
-  async function saveWith(answer: () => Promise<SaveResult>, c = clip()) {
-    vi.spyOn(deps, 'saveFile').mockImplementation(answer);
-    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:dialog');
-    vi.spyOn(console, 'error').mockImplementation(() => undefined); // reportError logs
-    tap(mount(c).button('儲存'));
-    await settle();
-    return c;
-  }
-
-  it("says 完成 for 'shared' and nothing for 'cancelled', and opens no dialog", async () => {
-    await saveWith(() => Promise.resolve('shared'));
-    expect(toast).toHaveBeenCalledTimes(1);
-    expect(toast).toHaveBeenCalledWith('完成');
-    await saveWith(() => Promise.resolve('cancelled'));
-    expect(toast).toHaveBeenCalledTimes(1);
-    expect(app.get().saveFallback).toBeNull();
-  });
-
-  it("opens the video dialog on the clip's file for 'fallback'", async () => {
-    const c = await saveWith(() => Promise.resolve('fallback'));
-    expect(app.get()).toMatchObject({ saveFallback: 'blob:dialog', saveFallbackName: c.file.name, saveFallbackKind: 'video' });
-    expect(toast).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['a rejection', () => Promise.reject(new Error('share failed'))],
-    [
-      'a synchronous throw',
-      () => {
-        throw new Error('share failed');
-      },
-    ],
-  ])('reports %s, then opens the dialog like a fallback', async (_what, answer) => {
-    await saveWith(answer);
-    expect(window.__meiyan?.lastError).toBe('saveFile: share failed');
-    expect(app.get()).toMatchObject({ saveFallback: 'blob:dialog', saveFallbackKind: 'video' });
-    expect(toast).not.toHaveBeenCalled();
-  });
 });

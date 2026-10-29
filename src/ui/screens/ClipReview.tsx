@@ -1,35 +1,18 @@
 // Clip 預覽 (beauty video spec §4.5): the recording plays back on a loop; 重錄 · 儲存. The file exists already when
-// the screen opens, so 儲存 calls the share sheet synchronously inside the tap (RB §1 #10), as Review does. No 編輯.
+// the screen opens, so 儲存 calls the share sheet synchronously inside the tap (RB §1 #10) through shareFile, as Review
+// does. No 編輯.
 import { useEffect } from 'preact/hooks';
-import { reportError } from '../debug';
-import { deps } from '../deps';
+import { shareFile } from '../flows';
 import { Icon } from '../icons';
 import { haptic } from '../platform';
-import { go, showSaveFallback, toast, type Clip } from '../state';
+import { go, type Clip } from '../state';
 
 export function ClipReview({ clip }: { clip: Clip }) {
   // the screen owns the clip's object URL (the camera made it): nothing keeps the Blob alive once it goes
   useEffect(() => () => URL.revokeObjectURL(clip.url), [clip.url]);
 
-  const save = () => {
-    // no await before this call: the share sheet needs the tap's transient activation
-    let p: Promise<string>;
-    try {
-      p = deps.saveFile(clip.file);
-    } catch (e) {
-      p = Promise.reject(e);
-    }
-    p.then(
-      (r) => {
-        if (r === 'fallback') showSaveFallback(clip.file);
-        else if (r === 'shared') toast('完成');
-      },
-      (e: unknown) => {
-        reportError(e, 'saveFile');
-        showSaveFallback(clip.file);
-      },
-    );
-  };
+  // no await before this call: the share sheet needs the tap's transient activation
+  const save = () => shareFile(clip.file);
 
   const retake = () => {
     haptic();

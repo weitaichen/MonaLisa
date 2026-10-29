@@ -1721,6 +1721,18 @@ button:focus-visible {
   height: auto;
   object-fit: contain;
 }
+/* the clip screen (beauty video spec §4.5) is this page with a <video> where the canvas is; the same fit, plus
+   min-height: 0: a grid item's automatic minimum height is its own, which grew the stage's row to a tall clip's height
+   (a 9:16 clip on a short phone ran past the stage, its controls cut off) instead of letting max-height: 100% fit it */
+.clip-stage video {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  object-fit: contain;
+}
 .review-bar {
   flex: none;
   margin-bottom: var(--sab);
@@ -2507,6 +2519,15 @@ button.row:active {
   -webkit-user-select: auto;
   user-select: auto;
 }
+/* a clip is played and downloaded, not long-pressed: no touch-callout lines; min-height: 0 as on .clip-stage video, or a
+   tall clip grows the row past the area and under the hint */
+.fallback-img video {
+  max-width: 100%;
+  max-height: 100%;
+  min-height: 0;
+  object-fit: contain;
+  border-radius: 6px;
+}
 .fallback-hint {
   flex: none;
   padding: 12px 20px calc(var(--sab) + 12px);
@@ -2520,6 +2541,13 @@ button.row:active {
 .fallback-hint span {
   font-size: 13px;
   color: var(--text-2);
+}
+/* the clip dialog's 下載影片 link: a .btn.primary on a line of its own between the instruction and the note */
+.fallback-hint .btn {
+  display: flex;
+  width: fit-content;
+  margin: 12px auto;
+  text-decoration: none;
 }
 
 .fatal {

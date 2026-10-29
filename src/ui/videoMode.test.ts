@@ -93,11 +93,30 @@ describe('錄影 in the camera (beauty video spec §4.1, §4.4)', () => {
     expect(clipCapMs()).toBe(MAX_CLIP_MS);
   });
 
-  it('clipOutcome: the clip screen from 1 s on; a shorter clip is discarded; a recording with no data at all failed', () => {
-    const blob = (size: number) => ({ size });
-    expect(clipOutcome({ durationMs: 999, blob: blob(10) })).toBe('short');
-    expect(clipOutcome({ durationMs: 1000, blob: blob(10) })).toBe('clip');
-    expect(clipOutcome({ durationMs: 30_000, blob: blob(0) })).toBe('empty');
-    expect(clipOutcome({ durationMs: 400, blob: blob(0) })).toBe('short');
+  describe('clipOutcome: what a stopped recording gives', () => {
+    const r = (durationMs: number, size: number) => ({ durationMs, blob: { size } });
+
+    it('stopped by the camera: the clip screen from 1 s on, a shorter clip discarded, empty or not (no chunk is due yet)', () => {
+      expect(clipOutcome(r(999, 10), false)).toBe('short');
+      expect(clipOutcome(r(400, 0), false)).toBe('short');
+      expect(clipOutcome(r(1000, 10), false)).toBe('clip');
+      expect(clipOutcome(r(30_000, 10), false)).toBe('clip');
+    });
+
+    it('stopped by the camera after 1 s or more with no data at all: the recorder failed', () => {
+      expect(clipOutcome(r(1000, 0), false)).toBe('empty');
+      expect(clipOutcome(r(30_000, 0), false)).toBe('empty');
+    });
+
+    it('ended by itself with no data: the recorder failed, however short (not 錄影時間太短 on every try)', () => {
+      expect(clipOutcome(r(0, 0), true)).toBe('empty');
+      expect(clipOutcome(r(400, 0), true)).toBe('empty');
+      expect(clipOutcome(r(5000, 0), true)).toBe('empty');
+    });
+
+    it('ended by itself with data: kept as any recording (the clip screen from 1 s on)', () => {
+      expect(clipOutcome(r(400, 10), true)).toBe('short');
+      expect(clipOutcome(r(5000, 10), true)).toBe('clip');
+    });
   });
 });

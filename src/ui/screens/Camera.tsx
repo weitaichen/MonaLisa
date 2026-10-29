@@ -550,8 +550,9 @@ export function Camera() {
       toast(VIDEO_TOASTS.capped, 3200);
       void stopRecording(r);
     }, clipCapMs());
-    // ruling 14: a recorder that ends by itself (an error, its tracks ending) is an interruption: stop and keep
-    void recorder.ended.then(() => stopRecording(r));
+    // ruling 14: a recorder that ends by itself (an error, its tracks ending) is an interruption: stop and keep. It is
+    // by itself when it gets here first: Camera's own stop marks the recording stopping before the recorder ends
+    void recorder.ended.then(() => stopRecording(r, true));
     if (tracks.length === 0 && !silentNoted.current) {
       silentNoted.current = true;
       toast(VIDEO_TOASTS.silent, 3200);
@@ -576,17 +577,17 @@ export function Camera() {
 
   /**
    * The first stop trigger (spec §4.6): the 停止錄影 tap, the cap, the preview going away, the recorder ending by
-   * itself. The controls stay locked and the shutter busy until the recorder hands out the clip; then the clip screen
-   * (MIN_CLIP_MS or more) or 錄影時間太短. Only for this mount still on the camera screen, as captureFrom checks
-   * (ruling 15)
+   * itself (`selfEnded`). The controls stay locked and the shutter busy until the recorder hands out the clip; then the
+   * clip screen (MIN_CLIP_MS or more) or 錄影時間太短, or 這個瀏覽器無法錄影 for a recording with no data that cannot be
+   * a short one (clipOutcome). Only for this mount still on the camera screen, as captureFrom checks (ruling 15)
    */
-  const stopRecording = async (r: Recording): Promise<void> => {
+  const stopRecording = async (r: Recording, selfEnded = false): Promise<void> => {
     if (rec.current !== r || r.stopping) return;
     setRecPhase('stopping');
     const result = await finishRecording(r);
     if (!mounted.current || app.get().screen.name !== 'camera') return;
     setRecPhase('idle');
-    const outcome = clipOutcome(result);
+    const outcome = clipOutcome(result, selfEnded);
     if (outcome === 'short') {
       toast(VIDEO_TOASTS.short);
       return;
@@ -908,6 +909,8 @@ export function Camera() {
         )}
       </div>
 
+      {/* ruling 17: the 美體 note's 匯入照片 opens the editor, which would end a recording unkept (as 相簿 would): the
+          same note without it while recording. Usable otherwise: the panel's edits are recorded */}
       <BeautyPanel
         id="beauty-panel"
         lens={lens}
@@ -916,7 +919,7 @@ export function Camera() {
         onEdit={(e) => setEdit(e, lens)}
         collapsed={collapsed}
         faceNote={faceNote}
-        body={cameraBody}
+        body={recLocked ? CAMERA_BODY : cameraBody}
         lookFailed={(id) => bundle?.engine.lutState('look', id) === 'failed'}
         onRetryLook={(id) => bundle && requestLut(bundle.engine, 'look', id)}
         makeupNote={mkNote}

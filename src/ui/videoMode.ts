@@ -62,10 +62,13 @@ export function clipCapMs(g: object = globalThis): number {
 }
 
 /**
- * What a stopped recording gives (spec §4.1): the clip screen; 'short' under MIN_CLIP_MS (discarded, 錄影時間太短); 'empty'
- * when no data arrived at all, a recorder that failed (there is nothing to play or save).
+ * What a stopped recording gives (spec §4.1): the clip screen; 'short' under MIN_CLIP_MS (discarded, 錄影時間太短);
+ * 'empty' when no data arrived at all and the recorder failed (nothing to play or save, 這個瀏覽器無法錄影).
+ * `selfEnded`: the recorder ended by itself, not by the camera's stop. With no data that is a failure at any length (an
+ * error right after the start would otherwise read as 錄影時間太短 on every try); a stop of the camera's under
+ * MIN_CLIP_MS is short whatever it holds, as no chunk is due yet then (one per second).
  */
-export function clipOutcome(r: { durationMs: number; blob: { size: number } }): 'clip' | 'short' | 'empty' {
-  if (r.durationMs < MIN_CLIP_MS) return 'short';
-  return r.blob.size > 0 ? 'clip' : 'empty';
+export function clipOutcome(r: { durationMs: number; blob: { size: number } }, selfEnded: boolean): 'clip' | 'short' | 'empty' {
+  if (r.blob.size === 0 && (selfEnded || r.durationMs >= MIN_CLIP_MS)) return 'empty';
+  return r.durationMs < MIN_CLIP_MS ? 'short' : 'clip';
 }

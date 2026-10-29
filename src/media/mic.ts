@@ -6,7 +6,7 @@
 
 /** A record tap waits this long for the microphone; then the clip goes ahead without sound. */
 export const MIC_ANSWER_MS = 3_000;
-/** Entering 錄影 waits this long: the permission prompt may be up. */
+/** The bound of the request sent on entering 錄影 (the permission prompt may be up); nothing waits for its answer. */
 export const MIC_PROMPT_MS = 8_000;
 
 /**

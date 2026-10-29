@@ -94,8 +94,9 @@ export function pickPhoto(onFile: (f: File) => void): void {
  * fails the save dialog (long-press the photo, or download the clip). 'shared' says 完成, 'cancelled' nothing; a rejection
  * is reported and then handled like a fallback.
  *
- * MUST be called synchronously inside the tap, with nothing awaited before it: the share sheet needs the tap's transient
- * activation (RB §1 #10). saveFile is called before this returns.
+ * MUST be called inside the tap's transient activation, with nothing awaited before saveFile: the share sheet needs
+ * that activation (RB §1 #10). Most callers call it synchronously in the tap; the Editor's deliver calls it from the
+ * export's continuation, inside the tap's activation window. saveFile is called before this returns.
  */
 export function shareFile(file: File): void {
   let p: Promise<SaveResult>;

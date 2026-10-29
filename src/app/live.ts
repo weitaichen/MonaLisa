@@ -80,7 +80,9 @@ export interface LiveLoop {
    * its draw, in the same task (the display canvas is cleared once presented). The crop is getFrame's as it is, source
    * UV: the ratio's centre crop, which the front camera's preview mirror leaves in place (an off-centre one would need
    * mirroring there); `flipX` when the preview is mirrored and a saved photo would not be. Never a 按住對比 frame or a
-   * lost engine's. A sink that throws is reported and dropped; stop() drops it too, and a new loop starts without one.
+   * lost engine's. A sink that throws is reported and dropped, and nobody is told: the recorder runs on, its picture
+   * frozen at the last frame copied while the sound goes on. stop() drops the sink too, and a new loop starts without
+   * one.
    */
   setRecordSink(sink: RecordSink | null): void;
   /**
@@ -399,7 +401,8 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
     draw(photo, w, h);
     const workEnd = performance.now();
     const renderMs = workEnd - t1;
-    // after renderMs: the copy's cost stays out of the auto tier's sample, so a recording alone never lowers the tier
+    // after renderMs: the copy is not charged as render work in the auto tier's sample (a copy that holds the main
+    // thread past a frame still shows as skipped frames)
     feedRecording(facing, prefs);
     haveFrame = true;
 
@@ -639,9 +642,9 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
   }
 
   /**
-   * The frame step() has just drawn, copied into the recording canvas (setRecordSink). Not a 按住對比 frame, and none
-   * while the engine is lost (it draws nothing: the clip would get a black frame). Only step() calls it, so a redraw is
-   * never recorded. A sink that throws is reported and dropped: the recording ends, the preview does not.
+   * The frame step() has just drawn, copied into the recording canvas: the contract is setRecordSink's. Only step()
+   * calls it, so a redraw is never recorded; the `engine.lost` test is defensive, as step() already pauses a lost
+   * engine.
    */
   function feedRecording(facing: Facing, prefs: Prefs): void {
     if (!recordSink || compare || engine.lost) return;
@@ -651,6 +654,7 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
     try {
       recordSink.frame(engine.canvas, crop, flipX);
     } catch (err) {
+      // dropped, and nobody told: the clip's picture freezes while its sound goes on (setRecordSink)
       reportError('live record', err);
       recordSink = null;
     }

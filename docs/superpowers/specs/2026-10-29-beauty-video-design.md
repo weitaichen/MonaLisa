@@ -57,13 +57,13 @@ Success: in the Home Screen app on an iPhone, the user switches to 錄影, taps 
 ## 4. Design
 
 ### 4.1 Mode and controls (Camera.tsx)
-- A two-option switch 「拍照」「錄影」 sits above the shutter, a radiogroup like the iOS camera. It starts on 拍照 and is kept in app state, in memory only, as 比例 and 計時 are. (As built: the row costs the preview 32 px of height. The switch is also locked during a 計時 countdown, as 切換鏡頭 already is, because the countdown's end acts by the mode.)
+- A two-option switch 「拍照」「錄影」 sits above the shutter, a radiogroup like the iOS camera. It starts on 拍照 and is kept in app state, in memory only, as 比例 and 計時 are. (As built: the row costs the preview 32 px of height. The switch is also locked during a 計時 countdown, as 切換鏡頭 already is: the countdown ends in the mode it began in, a photo or a recording as the tap decided, and a switch meanwhile would leave the screen showing the other mode.)
 - **In 錄影:**
   - The shutter is red. aria-label 「開始錄影」; while recording, a red square, 「停止錄影」.
   - The 計時 self-timer counts down before the recording starts, reusing the photo countdown.
 - **While recording:**
   - A red dot and the elapsed time 「● 00:12」 show over the frame. (As built: at the top centre, as the iOS camera's timer; the status badges (基本模式 and the others) move below it while it shows.)
-  - Locked: 比例, 計時, 合照模式, 切換鏡頭, 相簿, 按住對比, ✕ and the mode switch. (As built: the locks also hold while a recording starts (the microphone wait of at most 3 s after the tap) and while it stops (until the clip is handed out), and the shutter is busy then. The list gains the 美體 note's 「匯入照片」, which is hidden while recording because it leaves the camera and would end the recording unkept.)
+  - Locked: 比例, 計時, 合照模式, 切換鏡頭, 相簿, 按住對比, ✕ and the mode switch. (As built: the locks also hold while a recording starts (the microphone wait of at most 3 s after the tap) and while it stops (until the clip is handed out), and the shutter is busy then. The list gains the 美體 note's 「匯入照片」, which is hidden while recording because it leaves the camera and would end the recording unkept, and the camera cards' 「改用匯入照片」, since a card (a failed restart, say) can show while a recording stops. These ways to the photo picker (相簿 and the two imports) are also locked during a 錄影 countdown, which would otherwise end behind the picker into a recording that a pick then drops; the photo countdown leaves them as they were.)
   - The beauty panel stays usable; its edits are recorded.
 - **Limits:**
   - At 60 s the recording stops by itself with 「已錄滿 60 秒」.
@@ -76,7 +76,7 @@ Success: in the Home Screen app on an iPhone, the user switches to 錄影, taps 
 - **One request at a time, bounded:**
   - `getUserMedia({ audio: true, video: false })`, with echo cancellation and noise suppression on (browser defaults).
   - It is not asked while the camera's own request is out (`snapshot.state !== 'live'`): the camera gets the WebKit queue first (0.5.1).
-  - No answer within `MIC_ANSWER_MS` = 3 s at a record tap (8 s on entering 錄影, when the prompt may be up): the recording goes ahead silently.
+  - Entering 錄影 sends the request and does not wait for it. A record tap with no answer yet waits up to `MIC_ANSWER_MS` = 3 s, then records without sound. (As built, replacing "8 s on entering 錄影": `MIC_PROMPT_MS` = 8 s bounds only the 錄影 tap's own call, whose answer nothing waits for; the request itself stays out until iOS answers.)
   - A late answer is kept while the microphone is held, so the next recording in 錄影 has sound without asking again; `release()` stops it. (As built, replacing "stopped, not kept": a slow answer leaves the microphone on, with iOS's indicator, until one of the releases below; the anti-goal is a microphone left on after leaving 錄影 or the camera, which those releases still end. An answer that comes after a `release()` that nobody has asked again since is stopped.)
   - A request that is out locks 切換鏡頭, in both modes. (As built, the 0.5.1 lesson: WebKit answers `getUserMedia` one request at a time, so the other camera's request would queue behind it. "Out" is `Mic.state` 'asking', which stays so after a `release()` until the request settles, because a `getUserMedia` cannot be cancelled. A request that is never answered keeps 切換鏡頭 locked for the page's life; that is accepted, as the lesser evil against a flip queued behind it. There is one microphone per page, `getMic()` beside `getCamera()` in `services.ts`, not one per camera visit, so a request a visit left out still locks the next.)
 - **Released** on leaving 錄影, leaving the camera, the app hiding, a flip (the camera restarts, and the microphone is asked again at the next record tap) and the camera leaving 'live'.
@@ -103,7 +103,7 @@ Success: in the Home Screen app on an iPhone, the user switches to 錄影, taps 
   5. `video/webm`
 
   None: tapping 錄影 says 「這個瀏覽器無法錄影」 and stays on 拍照.
-- **Bitrate:** `videoBitsPerSecond` ≈ 0.1 bit per pixel per frame at 30 fps, between 2 and 6 Mbps; `audioBitsPerSecond` 128 kbps.
+- **Bitrate:** `videoBitsPerSecond` ≈ 0.1 bit per pixel per frame at 30 fps, between 2 and 6 Mbps; `audioBitsPerSecond` 128 kbps. (As built: for the clip's own size, the recording canvas's, which the camera passes to `startClipRecorder`; the canvas track's settings are not read.)
 - **Lifecycle:** `start(1000)` (one-second chunks).
   - `stop()` resolves with `{ blob, mime, durationMs, hasAudio }` on `onstop`.
   - Or after `STOP_WAIT_MS` = 2 s it assembles what arrived (the iOS 15 `onstop` bug).
@@ -123,7 +123,7 @@ Success: in the Home Screen app on an iPhone, the user switches to 錄影, taps 
 
 ### 4.6 Interruptions (G5)
 Stop and keep what was recorded:
-- the app hidden (0.5.1 stops the camera then);
+- the app hidden (0.5.1 stops the camera then; as built, the recording and the microphone stop inside that same call, not after the next frame, which a hidden page never draws, so neither captures on into a suspension);
 - the camera leaving 'live';
 - a display-context loss;
 - the recorder ending by itself (an encoder error, or the browser stopping it);
@@ -146,24 +146,29 @@ Then open the clip screen (≥ 1 s) or discard (< 1 s). The tap that stops is th
   - `outputFileName` for video.
 - **e2e** (Chromium fake camera and microphone):
   - Record about 2 s: the clip screen plays a `video/mp4` of 1.5 s or more, with an audio track. (As built: the clip's type, size, name and audio are read from the debug field `__meiyan.clip`, since the production CSP (`connect-src 'self'`) blocks a fetch of a blob: URL; the `<video>`'s `videoWidth` shows the file decodes.)
+  - What the clip shows (as built): drawn from the clip screen's `<video>` into a canvas, its frames have the 比例 in use (3:4, and 1:1 in a second run), an edit made while recording (brighter at the end than at the start), and the preview's picture facing the same way (closer to the preview than to its mirror image). A probe also records a 1080×1440 canvas with the picked MIME: Chromium records and decodes it at that size.
   - 儲存 gives the fallback dialog with a video.
   - The locked controls while recording; the 60 s cap (a test-only shorter cap through a debug hook).
-  - The background (visibility hidden) mid-recording keeps the clip; a silent clip when the microphone is refused.
+  - The background (visibility hidden) mid-recording keeps the clip; a silent clip when the microphone is refused. (As built: the recorder is inactive and the microphone track ended within the hide's own call.)
 - **Device checks** (no automation possible; they need the preview deploy after the push):
   - The iOS share sheet offers 「儲存影片」, and H.264 + AAC plays in Photos: only the phone can say what Photos accepts.
-  - The microphone prompt on entering 錄影, and its 8 s / 3 s bounds: the prompt's timing was never measured on iOS.
+  - The microphone prompt on entering 錄影, and a record tap's 3 s wait for an answer still out: the prompt's timing was never measured on iOS.
   - The orange microphone indicator goes off after leaving 錄影, hiding the app, a flip, and on the clip screen: the anti-goal, and only iOS shows the indicator.
   - Recording from the Home Screen app twice across a relaunch, on WebKit's 2D-canvas `captureStream` + MediaRecorder MP4 in standalone mode: a failure on a later launch is reported (§3).
   - The copy's cost per frame on a phone: it is kept out of the tier's render sample, but a copy slower than a frame still lowers the quality tier through skipped frames.
   - 切換鏡頭 locked while a microphone request is out has no ceiling: a request iOS never answers locks it for the page's life, and camera.ts's own restart after the background can still queue behind a stuck microphone request.
   - A 9:16 clip fits the clip screen and the save dialog (`min-height: 0`, measured in Chromium only), and a real 1080-wide clip fits across.
   - The clip autoplays muted and inline, and `<a download>` of a blob works in the Home Screen app: iOS decides both.
-  - A microphone granted mid-session does not interrupt or mute the preview: the camera is already live when the first request is answered, and only an iPhone shows whether its stream then pauses or mutes.
+  - A microphone grant does not mute the camera: camera.ts treats a mute longer than `MUTE_GRACE_MS` (800 ms) as a dead track and ends the stream as 'interrupted'. If iOS mutes the camera track while it grants the microphone, entering 錄影 would show 相機已暫停, and a record tap after 重錄 or a flip (which asks again) would stop its own recording. The camera is already live when the first request is answered, and only an iPhone shows whether its stream then pauses or mutes.
   - `onstop` after a return from the background: iOS may suspend timers while hidden, and the clip screen opens on the return.
   - The 32 px mode row's 44 px targets under a finger, and the REC badge and the toasts with the real safe areas: Chromium's touch emulation has no real finger and no safe areas.
   - ✕ → home → reopen the camera while a microphone request is stuck: the camera's own start can queue behind it (0.5.1's 「相機還沒有回應」 hint is the fallback).
   - After 重錄 the microphone is released: if iOS asks again at the first record tap, the answer has only 3 s (`MIC_ANSWER_MS`), so that clip may be silent, with the note.
-  - The bitrate is sized from the canvas track's `getSettings()` (recorder.ts falls back to 1280×720): check that WebKit's canvas track reports its size.
+  - The clip has real, moving frames: WebKit's capture of a canvas that is in no document is unverified (Chromium records one). If the clip is black or frozen, the known fix is to attach the canvas offscreen in the document.
+  - Lip-sync, with a clap: frames are stamped when they are copied, after the beauty pipeline, and the sound when it is captured, so the sound may lead the picture.
+  - On the clip screen the sound plays from the loudspeaker at full volume, right after the microphone was released: the audio route and volume after a capture are iOS's to decide, and Chromium has no loudspeaker to show it.
+  - A 1080×1440 clip (an iPhone's 3:4) plays in Photos: `avc1.42E01E` names H.264 Baseline level 3.0, and a phone's clip exceeds that level's frame-size limit. Chromium records and decodes that size with it (the e2e probe); what WebKit writes and Photos accepts only the phone shows.
+  - A trip to the background while the microphone prompt is up: the camera restarts by itself on the return, and its request can queue behind the prompt's (WebKit answers one at a time), so check that the camera comes back and the prompt's answer still lands.
 
 ## 6. Left to the builder
 Exact CSS, the switch's look, test names, the debug hook's shape, and whether `Clip` carries a poster frame.

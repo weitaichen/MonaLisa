@@ -2031,10 +2031,11 @@ describe('setRecordSink: the live loop feeds the beauty video’s recording (bea
     loop.stop();
   });
 
-  it('the copy’s cost stays out of the render sample: a recording alone does not step the tier down', () => {
+  it('the copy is not charged as render work: on frames that still come on time, it does not step the tier down', () => {
     const { clock, engine, loop } = setup({ engineTier: 'H' });
     engine.cost = 1;
-    // 60 ms of copy per 33 ms frame, over the 40 ms budget were it counted in the frame's work
+    // 60 ms of copy per 33 ms frame, over the 40 ms budget were it counted in the frame's work. (A real copy that held
+    // the main thread past a frame would still show as skipped frames; this fake clock delivers every frame.)
     loop.setRecordSink({ frame: () => clock.work(60) });
     vi.advanceTimersByTime(AUTO_TIER.warmupMs + AUTO_TIER.sustainMs + 1000);
     expect(dbg()?.renderMs).toBeCloseTo(1, 3);

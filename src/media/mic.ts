@@ -19,16 +19,20 @@ export const MIC_PROMPT_MS = 8_000;
 export type MicState = 'idle' | 'asking' | 'on' | 'off';
 
 export interface Mic {
-  /** Reading it notices a held stream whose tracks all ended by themselves: that drop to 'idle' is announced. */
+  /**
+   * Reading it notices a held stream whose tracks all ended by themselves: that drop to 'idle' is announced. tracks()
+   * and ensure() notice it too, and announce it the same way.
+   */
   readonly state: MicState;
   /**
    * Run `fn` with the new state after every change of `state`, inside the call that changed it. Not on subscribe, and
    * not when the state is set to the value it already has. A listener that throws is ignored. Returns the function that
-   * unsubscribes. A listener should only observe: one that calls ensure() or release() may make the listeners after it
-   * hear the states out of order.
+   * unsubscribes. The listeners are a set: the same function subscribed twice is one listener, run once. A listener
+   * should only observe: one that calls ensure() or release() changes the state inside that round, so the listeners
+   * after it may end on a stale state.
    */
   subscribe(fn: (state: MicState) => void): () => void;
-  /** the held live audio tracks; none unless the state is 'on' */
+  /** the held live audio tracks; none unless the state is 'on' (a held stream found dead is dropped, as for `state`) */
   tracks(): MediaStreamTrack[];
   /**
    * The microphone's live audio tracks, asked for when it is not held. Call it inside the tap: getUserMedia is issued
@@ -72,6 +76,7 @@ export function createMic(
   let request: MicRequest | null = null;
   /** the ensure() calls still waiting; each settles itself with [] */
   const waiting = new Set<() => void>();
+  /** a set: subscribing the same function again adds nothing */
   const listeners = new Set<(state: MicState) => void>();
 
   /**
@@ -172,7 +177,9 @@ export function createMic(
       timer = setTimeout(giveUp, timeoutMs);
       void req.done.then(() => settle(liveTracks()));
     });
-    set('asking'); // after the call is registered: a listener may call release()
+    // last, after the call is registered: a listener finds the module consistent (one that broke the observe-only
+    // contract with a release() would still settle this call)
+    set('asking');
     return answer;
   }
 

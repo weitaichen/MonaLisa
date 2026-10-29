@@ -936,6 +936,12 @@ export interface DebugState {
    * e2e (round-4 review F5): a scene that tests the found boxes' rules reads the same when the person was held there
    */
   shotHandOver?: { x: number; y: number; w: number; h: number; edited: boolean; held: boolean; stale: boolean }[];
+  /**
+   * camera: the last clip it handed to the clip screen (beauty video spec §4.5): the file's name, type and size, and
+   * whether the recording had a microphone track. e2e: the production CSP (connect-src 'self') blocks fetch() of its
+   * blob: URL
+   */
+  clip?: { name: string; type: string; size: number; hasAudio: boolean };
 }
 
 declare global {

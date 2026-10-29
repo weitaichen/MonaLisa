@@ -181,6 +181,10 @@ button:focus-visible {
 .chip-btn.on > span {
   color: var(--accent);
 }
+/* locked while recording (beauty video spec §4.1) */
+.chip-btn:disabled > span {
+  color: var(--dim);
+}
 
 .pill {
   height: 44px;
@@ -1412,6 +1416,38 @@ button:focus-visible {
   align-items: center;
   padding: 0 24px;
 }
+/* 拍照 / 錄影 (beauty video spec §4.1): the iOS camera's mode labels just above the shutter, the chosen one in the
+   accent. A 32 px row: each label's 44 px target reaches 12 px down into the shutter row's empty top band (the 76 px
+   shutter is centred in 100 px), painted above it */
+.mode-switch {
+  flex: none;
+  position: relative;
+  z-index: 1;
+  height: 32px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 4px;
+}
+.mode-switch button {
+  height: 44px;
+  min-width: 64px;
+  padding: 0 12px 12px;
+  /* smaller than the panel's tabs just above: these belong to the shutter */
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  color: var(--text-2);
+  transition:
+    color 160ms,
+    opacity 160ms;
+}
+.mode-switch button.on {
+  color: var(--accent);
+}
+.mode-switch button:disabled {
+  opacity: 0.38;
+}
 .side-btn {
   justify-self: center;
   width: 64px;
@@ -1477,6 +1513,22 @@ button:focus-visible {
 }
 .shutter:disabled > span {
   background: var(--dim);
+}
+/* 錄影 (beauty video spec §4.1): a red disc; while recording a red square (停止錄影), dim while it waits for the
+   microphone or its stop. Its countdown is the photo's accent square, like any countdown the shutter cancels */
+.shutter.rec > span {
+  background: var(--danger);
+  transition:
+    transform 140ms var(--ease-out),
+    border-radius 140ms var(--ease-out),
+    background-color 160ms;
+}
+.shutter.rec:disabled > span {
+  background: var(--dim);
+}
+.shutter.recording > span {
+  transform: scale(0.5);
+  border-radius: 8px;
 }
 .shutter.counting > span {
   background: var(--accent);
@@ -1568,6 +1620,45 @@ button:focus-visible {
 .badge.error {
   color: #ff8a80;
   white-space: normal;
+}
+
+/* 「● 00:12」 while recording (beauty video spec §4.1): top centre over the frame, as the iOS camera's timer; the status
+   badges (基本模式, 臉部偵測…, 未偵測到臉部) sit below it meanwhile */
+.rec-badge {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 650;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.rec-dot {
+  color: var(--danger);
+  animation: rec-pulse 1.2s ease-in-out infinite alternate;
+}
+@keyframes rec-pulse {
+  to {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rec-dot {
+    animation: none;
+  }
+}
+.rec-badge ~ .badge {
+  top: 44px;
 }
 
 /* status (gate / loading / error) laid over the stage. A card taller than the stage (a long one on a small iPhone, with

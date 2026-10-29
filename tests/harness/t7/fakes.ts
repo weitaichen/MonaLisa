@@ -269,6 +269,7 @@ function fakeLiveLoop(d: LiveDeps): LiveLoop {
     setCompare: (on) => {
       compare = on;
     },
+    setRecordSink: () => undefined,
     capture: () => {
       if (!v.videoWidth) return null;
       const mirror = d.getPrefs().mirrorOnSave && d.camera.snapshot.facing === 'user';

@@ -10,6 +10,7 @@ import { EDIT_DETECT_FACES, LIVE_DETECT_FACES, LIVE_DETECTOR, MAX_LIVE_FACES, MA
 import { gpLeftOnLeft } from '../edit/sides';
 import { neutralPerson } from '../edit/state';
 import { photoLuts } from '../engine/looks';
+import type { RecordSink } from '../media/recordCanvas';
 import type {
   CameraController,
   Engine,
@@ -74,6 +75,14 @@ export interface LiveLoop {
   stop(): void;
   /** hold-to-compare: render the unprocessed frame while true */
   setCompare(on: boolean): void;
+  /**
+   * The beauty video's recording canvas (spec §4.3), null for none: each beautified frame is copied into it right after
+   * its draw, in the same task (the display canvas is cleared once presented). The crop is getFrame's as it is, source
+   * UV: the ratio's centre crop, which the front camera's preview mirror leaves in place (an off-centre one would need
+   * mirroring there); `flipX` when the preview is mirrored and a saved photo would not be. Never a 按住對比 frame or a
+   * lost engine's. A sink that throws is reported and dropped; stop() drops it too, and a new loop starts without one.
+   */
+  setRecordSink(sink: RecordSink | null): void;
   /**
    * Full-resolution render of the latest frame with every shown face at its person's params (mirror per
    * prefs.mirrorOnSave), the hand-over seed (C2): the target's track's last raw box centre in unmirrored video UV, 'all'
@@ -280,6 +289,8 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
   let grainSeed = 0;
   let stopped = false;
   let compare = false;
+  /** the beauty video's recording canvas (setRecordSink), fed by step() only */
+  let recordSink: RecordSink | null = null;
   let paused = true;
   let detectedLastFrame = false;
   /** the frames the last frame's amortized detection (every > 1) kept the loop from seeing, else 0 (§6.4, C3, D3) */
@@ -388,6 +399,8 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
     draw(photo, w, h);
     const workEnd = performance.now();
     const renderMs = workEnd - t1;
+    // after renderMs: the copy's cost stays out of the auto tier's sample, so a recording alone never lowers the tier
+    feedRecording(facing, prefs);
     haveFrame = true;
 
     if (interval !== null && interval > 0) fpsEma.update(interval, interval);
@@ -626,6 +639,24 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
   }
 
   /**
+   * The frame step() has just drawn, copied into the recording canvas (setRecordSink). Not a 按住對比 frame, and none
+   * while the engine is lost (it draws nothing: the clip would get a black frame). Only step() calls it, so a redraw is
+   * never recorded. A sink that throws is reported and dropped: the recording ends, the preview does not.
+   */
+  function feedRecording(facing: Facing, prefs: Prefs): void {
+    if (!recordSink || compare || engine.lost) return;
+    const crop = deps.getFrame?.() ?? { x: 0, y: 0, w: 1, h: 1 };
+    // the preview is always mirrored on the front camera: flip it back when a saved photo would not be
+    const flipX = facing === 'user' && !prefs.mirrorOnSave;
+    try {
+      recordSink.frame(engine.canvas, crop, flipX);
+    } catch (err) {
+      reportError('live record', err);
+      recordSink = null;
+    }
+  }
+
+  /**
    * New measurement window + fresh face state (start, resume, flip / resolution change): the tracks' persons go to the
    * away pool, then the session resumes on this facing (another facing ends it; its clock skips the paused span, §7.5).
    * The stream's detector is fixed by its first session with a tracker (§6.3, streamDetectors): 'photo' only on a facing whose
@@ -820,6 +851,7 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
       clearInterval(watchdog);
       unsubscribe();
       releaseCopies();
+      recordSink = null;
       // a loop stopped while live (重拍's loop, a bundle change) hands its people to the away pool as a pause does
       if (!paused) {
         paused = true;
@@ -830,6 +862,9 @@ export function startLiveLoop(deps: LiveDeps): LiveLoop {
       if (compare === on) return;
       compare = on;
       redraw();
+    },
+    setRecordSink(sink) {
+      recordSink = sink;
     },
     capture() {
       if (stopped || paused || !haveFrame || !isLive() || !hasVideoFrame()) return null;

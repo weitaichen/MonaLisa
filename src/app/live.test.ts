@@ -3,6 +3,7 @@ import { EDIT_DETECT_FACES, LIVE_DETECT_FACES, LOST_HOLD_MS, REID_GRACE_MS } fro
 import { splitLegacy } from '../edit/legacy';
 import { defaultPhoto, naturalPerson, neutralPerson } from '../edit/state';
 import { applyPreset } from '../engine/params';
+import type { RecordSink } from '../media/recordCanvas';
 import { adapt } from '../tracking/adapter111';
 import type { CameraLook, DebugState, Face, Facing, PersonParams, Prefs, Rect } from '../types';
 import { normalizedCropRect } from '../ui/imaging';
@@ -1898,6 +1899,147 @@ describe('調節 and 質感 in the live loop (step-2 spec §2.3, §4.4–4.5)', 
     vi.advanceTimersByTime(33 * 5 + 1);
     expect(engine.loadLut.mock.calls.filter(([k, id]) => k === 'filter' && id === 'warm')).toHaveLength(1);
     expect(engine.loadLut.mock.calls.filter(([k, id]) => k === 'look' && id === 'ccd')).toHaveLength(1);
+    loop.stop();
+  });
+});
+
+describe('setRecordSink: the live loop feeds the beauty video’s recording (beauty-video spec §4.3)', () => {
+  /** a RecordSink that logs its calls */
+  const fakeSink = () => ({ frame: vi.fn<RecordSink['frame']>() });
+
+  it('each frame after a beautified draw reaches the sink with the frame crop', () => {
+    const crop = normalizedCropRect(1280, 720, 3 / 4);
+    const { engine, loop } = setup({ frame: () => crop });
+    const sink = fakeSink();
+    loop.setRecordSink(sink);
+    vi.advanceTimersByTime(33 * 5 + 1);
+    expect(sink.frame).toHaveBeenCalledTimes(5);
+    for (const [src, rect] of sink.frame.mock.calls) {
+      expect(src).toBe(engine.canvas);
+      expect(rect).toEqual(crop);
+    }
+    // each copy comes after its own frame's draw and before the next: the same task, the drawing buffer still valid
+    const drawn = engine.render.mock.invocationCallOrder;
+    sink.frame.mock.invocationCallOrder.forEach((copied, i) => {
+      expect(copied).toBeGreaterThan(drawn[i]);
+      expect(copied).toBeLessThan(drawn[i + 1] ?? Infinity);
+    });
+    loop.stop();
+  });
+
+  it('without a picture frame the whole frame goes to the sink', () => {
+    const { loop } = setup();
+    const sink = fakeSink();
+    loop.setRecordSink(sink);
+    vi.advanceTimersByTime(33 * 2 + 1);
+    expect(sink.frame.mock.calls.map((c) => c[1])).toEqual([whole(), whole()]);
+    loop.stop();
+  });
+
+  // the preview is always mirrored on the front camera: the recording is flipped back when a saved photo would not be
+  const flips: [Facing, boolean, boolean][] = [
+    ['user', false, true],
+    ['user', true, false],
+    ['environment', false, false],
+    ['environment', true, false],
+  ];
+  it.each(flips)(
+    'flipX only on the front camera with mirrorOnSave off: %s camera, mirrorOnSave %s → flipX %s',
+    (facing, mirrorOnSave, flipX) => {
+      const { loop } = setup({ tracker: false, facing, prefs: { mirrorOnSave } });
+      const sink = fakeSink();
+      loop.setRecordSink(sink);
+      vi.advanceTimersByTime(33 * 3 + 1);
+      expect(sink.frame.mock.calls.map((c) => c[2])).toEqual([flipX, flipX, flipX]);
+      loop.stop();
+    },
+  );
+
+  it('flipX is read on every frame: a pref or a camera flip changes the next frame', () => {
+    const { camera, loop, setPrefs } = setup({ tracker: false });
+    const sink = fakeSink();
+    loop.setRecordSink(sink);
+    vi.advanceTimersByTime(33 + 1);
+    setPrefs({ mirrorOnSave: false });
+    vi.advanceTimersByTime(33);
+    camera.set({ facing: 'environment' });
+    vi.advanceTimersByTime(33);
+    expect(sink.frame.mock.calls.map((c) => c[2])).toEqual([false, true, false]);
+    loop.stop();
+  });
+
+  it('no frame reaches the sink while 按住對比 holds; setRecordSink(null) stops it', () => {
+    const { engine, loop } = setup();
+    const sink = fakeSink();
+    loop.setRecordSink(sink);
+    vi.advanceTimersByTime(33 * 3 + 1);
+    expect(sink.frame).toHaveBeenCalledTimes(3);
+    loop.setCompare(true);
+    vi.advanceTimersByTime(33 * 3);
+    expect(sink.frame).toHaveBeenCalledTimes(3);
+    // the toggle's redraw shows the beautified frame again at once; it is no new camera frame, so it is not recorded
+    loop.setCompare(false);
+    expect(engine.render).toHaveBeenCalledTimes(4);
+    expect(sink.frame).toHaveBeenCalledTimes(3);
+    vi.advanceTimersByTime(33 * 2);
+    expect(sink.frame).toHaveBeenCalledTimes(5);
+    loop.setRecordSink(null);
+    vi.advanceTimersByTime(33 * 3);
+    expect(sink.frame).toHaveBeenCalledTimes(5);
+    loop.stop();
+  });
+
+  it('a sink that throws is dropped, the preview goes on', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { engine, loop, stats } = setup();
+    const sink = fakeSink();
+    sink.frame.mockImplementation(() => {
+      throw new Error('canvas gone');
+    });
+    loop.setRecordSink(sink);
+    vi.advanceTimersByTime(33 + 1);
+    // reported as the sink's own, and the frame it threw in ran to its end (its stats went out)
+    expect(sink.frame).toHaveBeenCalledTimes(1);
+    expect(dbg()?.lastError).toBe('live record: canvas gone');
+    expect(stats).toHaveLength(1);
+    vi.advanceTimersByTime(33 * 9);
+    expect(engine.render).toHaveBeenCalledTimes(10);
+    expect(sink.frame).toHaveBeenCalledTimes(1);
+    expect(stats.length).toBeGreaterThan(1);
+    loop.stop();
+  });
+
+  it('a lost engine’s frames do not reach the sink', () => {
+    const { engine, loop } = setup();
+    const sink = fakeSink();
+    loop.setRecordSink(sink);
+    vi.advanceTimersByTime(33 * 2 + 1);
+    expect(sink.frame).toHaveBeenCalledTimes(2);
+    // the context goes in the third frame's render, which then draws nothing: a copy of it would be a black frame
+    // (the later frames are paused by the loop itself, as in 'does not render while the engine context is lost')
+    engine.render.mockImplementationOnce((input) => {
+      engine.lost = true;
+      return { cpuMs: 0, width: input.width, height: input.height, passes: [] };
+    });
+    vi.advanceTimersByTime(33 * 5);
+    expect(engine.render).toHaveBeenCalledTimes(3);
+    expect(sink.frame).toHaveBeenCalledTimes(2);
+    // back: the clip goes on with the next frame
+    engine.lost = false;
+    vi.advanceTimersByTime(33 * 2);
+    expect(sink.frame).toHaveBeenCalledTimes(4);
+    loop.stop();
+  });
+
+  it('the copy’s cost stays out of the render sample: a recording alone does not step the tier down', () => {
+    const { clock, engine, loop } = setup({ engineTier: 'H' });
+    engine.cost = 1;
+    // 60 ms of copy per 33 ms frame, over the 40 ms budget were it counted in the frame's work
+    loop.setRecordSink({ frame: () => clock.work(60) });
+    vi.advanceTimersByTime(AUTO_TIER.warmupMs + AUTO_TIER.sustainMs + 1000);
+    expect(dbg()?.renderMs).toBeCloseTo(1, 3);
+    expect(engine.tier).toBe('H');
+    expect(autoTierSession()).toBe('H');
     loop.stop();
   });
 });

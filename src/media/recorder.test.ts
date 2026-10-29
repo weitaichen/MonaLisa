@@ -68,8 +68,11 @@ function fakeStream({ video = { width: 1280, height: 720 }, audio = true }: Stre
   } as unknown as MediaStream;
 }
 
-/** the clock is the faked Date and the timers the faked ones: advancing time moves all of them */
-function setup(spec?: StreamSpec, mime = MP4_H264) {
+/**
+ * the clock is the faked Date and the timers the faked ones: advancing time moves all of them. `size` is the clip's
+ * (the recording canvas's), 1280×720 unless said
+ */
+function setup(spec?: StreamSpec, mime = MP4_H264, size = { width: 1280, height: 720 }) {
   const env: RecorderEnv = {
     MediaRecorder: FakeRecorder as unknown as RecorderEnv['MediaRecorder'],
     now: () => Date.now(),
@@ -77,7 +80,7 @@ function setup(spec?: StreamSpec, mime = MP4_H264) {
     clearTimeout,
   };
   const stream = fakeStream(spec);
-  const clip = startClipRecorder(stream, mime, env);
+  const clip = startClipRecorder(stream, mime, size, env);
   return { clip, rec: FakeRecorder.last, stream };
 }
 
@@ -148,7 +151,7 @@ describe('videoBitrate', () => {
 });
 
 describe('startClipRecorder', () => {
-  it('starts one-second chunks of the given MIME, with the bitrates of the stream size', () => {
+  it('starts one-second chunks of the given MIME, with the bitrates of the clip size', () => {
     const { rec, stream } = setup();
     expect(rec.stream).toBe(stream);
     expect(rec.options).toEqual({
@@ -163,18 +166,18 @@ describe('startClipRecorder', () => {
     [1080, 1920, 6_000_000],
     [320, 240, 2_000_000],
     [1080, 1440, 4_665_600],
-  ])('reads the size from the video track: %i×%i is %i bit/s', (width, height, bps) => {
-    const { rec } = setup({ video: { width, height } });
+  ])('sizes the bitrate for the clip size it is given: %i×%i is %i bit/s', (width, height, bps) => {
+    const { rec } = setup(undefined, MP4_H264, { width, height });
     expect(rec.options.videoBitsPerSecond).toBe(bps);
   });
 
   it.each([
-    ['no video track', null],
-    ['no size in the settings', {}],
-    ['only half of a size', { width: 1080 }],
-  ])('assumes 1280×720 with %s', (_what, video) => {
-    const { rec } = setup({ video });
-    expect(rec.options.videoBitsPerSecond).toBe(videoBitrate(1280, 720));
+    ['another size', { width: 1280, height: 720 }],
+    ['no size', {}],
+    ['no video track at all', null],
+  ])('does not read the video track, whose settings may report %s', (_what, video) => {
+    const { rec } = setup({ video }, MP4_H264, { width: 1080, height: 1440 });
+    expect(rec.options.videoBitsPerSecond).toBe(4_665_600);
   });
 
   it('stop() stops the recorder and resolves on onstop with every non-empty chunk', async () => {
@@ -272,7 +275,7 @@ describe('startClipRecorder', () => {
         clearTimeout(id);
       } as unknown as typeof clearTimeout,
     };
-    const clip = startClipRecorder(fakeStream(), MP4_H264, env);
+    const clip = startClipRecorder(fakeStream(), MP4_H264, { width: 1280, height: 720 }, env);
     const p = clip.stop();
     FakeRecorder.last.finish();
     await expect(p).resolves.toMatchObject({ mime: 'video/mp4' });

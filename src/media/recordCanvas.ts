@@ -8,8 +8,8 @@ import type { Rect as UvRect } from '../types';
 const MAX_SHORT_EDGE = 1080;
 /** The clip's long edge is at most this. */
 const MAX_LONG_EDGE = 1920;
-/** The capture rate; recorder.ts sizes the bitrate for the same 30. */
-const FRAME_RATE = 30;
+/** The clip's frame rate: the recording canvas is captured at it, and recorder.ts sizes the bitrate for it. */
+export const CLIP_FRAME_RATE = 30;
 /**
  * A crop size is a UV fraction times a pixel size, then scaled by a division: it can come out as 1919.9999999999998
  * for 1920. Rounding down must not cost the clip a pixel for that.
@@ -55,7 +55,7 @@ export function createRecordCanvas(width: number, height: number, doc: Document 
   canvas.height = height;
   const ctx = canvas.getContext('2d', { alpha: false });
   if (!ctx) throw new Error('recordCanvas: 2D canvas unavailable');
-  const stream = canvas.captureStream(FRAME_RATE);
+  const stream = canvas.captureStream(CLIP_FRAME_RATE);
   // taken now: a track added to `stream` later (the microphone) stays with whoever owns it
   const tracks = stream.getTracks();
   return {

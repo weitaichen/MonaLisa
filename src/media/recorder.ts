@@ -1,6 +1,7 @@
 // Beauty video recorder (beauty-video spec §4.4): which MIME the browser records, the bitrate, the MediaRecorder
 // lifecycle and the file name. Pure: the browser pieces come in through RecorderEnv, so a test needs no camera.
 import { stampedName } from './exporter';
+import { CLIP_FRAME_RATE } from './recordCanvas';
 
 /**
  * Best first. Plain video/mp4 comes after the named H.264 forms: Chromium would record VP9 in it, which iPhone Photos
@@ -24,12 +25,9 @@ export const STOP_WAIT_MS = 2_000;
 /** One-second chunks, so an onstop that never comes still leaves what was recorded. */
 const TIMESLICE_MS = 1_000;
 const AUDIO_BPS = 128_000;
-const FRAME_RATE = 30;
 const BITS_PER_PIXEL = 0.1;
 const MIN_VIDEO_BPS = 2_000_000;
 const MAX_VIDEO_BPS = 6_000_000;
-/** assumed for a stream whose video track does not report its size */
-const DEFAULT_SIZE = { width: 1280, height: 720 };
 
 /** The first of VIDEO_MIMES that `isSupported` accepts; null when the browser records none of them. */
 export function pickVideoMime(isSupported: (type: string) => boolean): string | null {
@@ -37,9 +35,9 @@ export function pickVideoMime(isSupported: (type: string) => boolean): string | 
   return VIDEO_MIMES.find((type) => isSupported(type)) ?? null;
 }
 
-/** About 0.1 bit per pixel per frame at 30 fps, kept between 2 and 6 Mbps. */
+/** About 0.1 bit per pixel per frame at the clip's 30 fps, kept between 2 and 6 Mbps. */
 export function videoBitrate(width: number, height: number): number {
-  const bps = Math.round(width * height * FRAME_RATE * BITS_PER_PIXEL);
+  const bps = Math.round(width * height * CLIP_FRAME_RATE * BITS_PER_PIXEL);
   return Math.min(MAX_VIDEO_BPS, Math.max(MIN_VIDEO_BPS, bps));
 }
 
@@ -78,17 +76,22 @@ export interface RecorderEnv {
 }
 
 /**
- * Record `stream` as `mime` (an entry of VIDEO_MIMES, from pickVideoMime). Throws what MediaRecorder throws, e.g.
- * NotSupportedError for a MIME it refuses. The chunks kept before an error are still handed out by stop().
+ * Record `stream` as `mime` (an entry of VIDEO_MIMES, from pickVideoMime), its bitrate sized for `size`: the clip's
+ * own size, the recording canvas's (its track's settings may report another size, or none). Throws what MediaRecorder
+ * throws, e.g. NotSupportedError for a MIME it refuses. The chunks kept before an error are still handed out by stop().
  */
-export function startClipRecorder(stream: MediaStream, mime: string, env: RecorderEnv): ClipRecorder {
+export function startClipRecorder(
+  stream: MediaStream,
+  mime: string,
+  size: { width: number; height: number },
+  env: RecorderEnv,
+): ClipRecorder {
   // called detached: the browser's setTimeout throws "Illegal invocation" as a method of another object
   const { now, setTimeout, clearTimeout } = env;
-  const { width, height } = streamSize(stream);
   const hasAudio = stream.getAudioTracks().length > 0;
   const rec = new env.MediaRecorder(stream, {
     mimeType: mime,
-    videoBitsPerSecond: videoBitrate(width, height),
+    videoBitsPerSecond: videoBitrate(size.width, size.height),
     audioBitsPerSecond: AUDIO_BPS,
   });
   const chunks: Blob[] = [];
@@ -169,12 +172,6 @@ export function clipFile(r: ClipResult, d: Date = new Date()): File {
 }
 
 // ── internals ──
-
-/** The size the encoder will get: the video track's settings, else DEFAULT_SIZE. */
-function streamSize(stream: MediaStream): { width: number; height: number } {
-  const s = stream.getVideoTracks()[0]?.getSettings();
-  return s?.width && s.height ? { width: s.width, height: s.height } : DEFAULT_SIZE;
-}
 
 /** video/mp4;codecs=avc1.42E01E,mp4a.40.2 → video/mp4 */
 function baseMime(type: string): string {

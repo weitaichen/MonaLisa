@@ -233,6 +233,11 @@ button:focus-visible {
 .btn:active {
   transform: scale(0.98);
 }
+/* the camera's 改用匯入照片 while a pick would drop a recording (beauty video spec §4.1) */
+.btn:disabled {
+  opacity: 0.4;
+  transform: none;
+}
 .btn.primary {
   background: var(--accent);
   color: var(--accent-ink);

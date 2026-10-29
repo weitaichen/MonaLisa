@@ -217,7 +217,19 @@ export function Camera() {
     }
     setCtrl(c);
     setSnap(c.snapshot);
-    return c.subscribe(setSnap);
+    return c.subscribe((s) => {
+      setSnap(s);
+      // beauty video spec §4.6: the camera no longer live stops a recording (kept) and turns the microphone off here,
+      // in the camera's own call. The app hidden is one (0.5.1 ends the stream inside the visibilitychange handler):
+      // the [ready] and [live] effects below do the same only after the next frame, which a hidden page never draws,
+      // so the recorder and the microphone would capture on, maybe into a suspension (camera.ts: the next launch's
+      // stuck camera). They stay for a lost context and a loop gone, and find it done. Refs and stable setters only:
+      // this closure is the first render's. At once on subscribe too, with no recording and an idle microphone: nothing
+      if (s.state === 'live') return;
+      cancelStart();
+      if (rec.current) void stopRecording(rec.current);
+      getMic().release();
+    });
   }, []);
 
   // engine (no gesture needed): resolves while the user looks at the gate
@@ -532,7 +544,9 @@ export function Camera() {
     try {
       rc = createRecordCanvas(size.width, size.height);
       const stream = new MediaStream([...rc.stream.getVideoTracks(), ...tracks]);
-      recorder = startClipRecorder(stream, mime, { MediaRecorder, now: () => performance.now(), setTimeout, clearTimeout });
+      // the bitrate is sized for the clip's own size, the recording canvas's
+      const env = { MediaRecorder, now: () => performance.now(), setTimeout, clearTimeout };
+      recorder = startClipRecorder(stream, mime, { width: rc.width, height: rc.height }, env);
     } catch (err) {
       reportError(err, 'recorder.start');
       rc?.release();
@@ -734,12 +748,18 @@ export function Camera() {
   /** the shutter is 停止錄影, a red square, while recording and while that stop runs (disabled then, aria-busy) */
   const recStop = recPhase === 'recording' || recPhase === 'stopping';
   const shutterLabel = count !== null ? '取消倒數' : !inVideo ? '拍照' : recStop ? '停止錄影' : '開始錄影';
+  /**
+   * the ways to the photo picker, whose pick opens the editor and so ends the camera screen, unkept (相簿, the 美體
+   * note's 匯入照片, 改用匯入照片): locked with the rest, and also during a 錄影 countdown, which would end behind the
+   * picker sheet into a recording. The photo countdown leaves them as they were
+   */
+  const pickLocked = recLocked || (inVideo && count !== null);
 
   let overlay = null;
   if (fatal) {
     overlay = (
       <Status icon="warning" tone="danger" title="相機無法啟動" body="可以改用匯入照片來修圖。" detail={fatal}>
-        <ImportButton />
+        <ImportButton disabled={pickLocked} />
       </Status>
     );
   } else if (state === 'idle') {
@@ -756,7 +776,7 @@ export function Camera() {
       const m = cameraErrorCopy('noanswer', isStandalone(), location.origin);
       overlay = (
         <Status spinner title={m.title} body={m.body} steps={m.steps} detail={m.detail}>
-          <ImportButton />
+          <ImportButton disabled={pickLocked} />
         </Status>
       );
     } else overlay = <Status spinner title="正在開啟相機…" />;
@@ -772,7 +792,7 @@ export function Camera() {
         <button type="button" class="btn primary" onClick={start}>
           重試
         </button>
-        <ImportButton />
+        <ImportButton disabled={pickLocked} />
       </Status>
     );
   } else if (state === 'interrupted') {
@@ -910,7 +930,8 @@ export function Camera() {
       </div>
 
       {/* ruling 17: the 美體 note's 匯入照片 opens the editor, which would end a recording unkept (as 相簿 would): the
-          same note without it while recording. Usable otherwise: the panel's edits are recorded */}
+          same note without it while the picker is locked (pickLocked). Usable otherwise: the panel's edits are
+          recorded */}
       <BeautyPanel
         id="beauty-panel"
         lens={lens}
@@ -919,7 +940,7 @@ export function Camera() {
         onEdit={(e) => setEdit(e, lens)}
         collapsed={collapsed}
         faceNote={faceNote}
-        body={recLocked ? CAMERA_BODY : cameraBody}
+        body={pickLocked ? CAMERA_BODY : cameraBody}
         lookFailed={(id) => bundle?.engine.lutState('look', id) === 'failed'}
         onRetryLook={(id) => bundle && requestLut(bundle.engine, 'look', id)}
         makeupNote={mkNote}
@@ -946,7 +967,7 @@ export function Camera() {
         <button
           type="button"
           class="side-btn"
-          disabled={recLocked}
+          disabled={pickLocked}
           onClick={() => {
             haptic();
             pickPhoto((f) => void openInEditor(f, { returnTo: 'camera', picked: true }));
@@ -999,11 +1020,13 @@ function RecBadge({ since }: { since: number }) {
   );
 }
 
-function ImportButton() {
+/** 改用匯入照片 on the camera's cards; `disabled` while a pick would drop a recording (pickLocked) */
+function ImportButton({ disabled }: { disabled?: boolean }) {
   return (
     <button
       type="button"
       class="btn"
+      disabled={disabled}
       onClick={() => {
         haptic();
         pickPhoto((f) => void openInEditor(f, { returnTo: 'camera', picked: true }));

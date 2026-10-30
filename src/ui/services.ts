@@ -1,7 +1,9 @@
-// Session-wide singletons: the display canvas, one Engine, one Tracker, one CameraController,
-// the engine-asset download, (美體, on demand) one BodyTracker and (瘦臉 background limit, on demand) one person
-// segmenter. Exposed as an observable store so screens can show loading / error states instead of failing silently.
+// Session-wide singletons: the display canvas, one Engine, one Tracker, one CameraController, (錄影, on demand) one
+// microphone, the engine-asset download, (美體, on demand) one BodyTracker and (瘦臉 background limit, on demand) one
+// person segmenter. Exposed as an observable store so screens can show loading / error states instead of failing
+// silently.
 import type { EngineModels } from '../engine/assets';
+import { createMic, type Mic } from '../media/mic';
 import type { PersonSegmenter } from '../tracking/segmenter';
 import type { BodyTracker, CameraController, Engine, EngineAssetsProgress, Prefs, Tracker, TrackerState } from '../types';
 import { debug, errorText, reportError } from './debug';
@@ -829,4 +831,18 @@ export function stopCamera(): void {
   } catch (e) {
     reportError(e, 'camera.stop');
   }
+}
+
+// ───────────── microphone ─────────────
+
+let mic: Mic | null = null;
+
+/**
+ * The page's one microphone (beauty video spec §4.2), created on first use. One per page, not per camera visit: WebKit
+ * answers getUserMedia one request at a time page-wide, so a request a visit left out still locks 切換鏡頭 on the next
+ * (the camera mirrors its state).
+ */
+export function getMic(): Mic {
+  mic ??= createMic(typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined);
+  return mic;
 }

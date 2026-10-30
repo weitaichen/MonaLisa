@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { canShareFiles, createSurface, encodeOutput, encodePng, jpegFileName, outputFileName, saveFile } from './exporter';
+import { canShareFiles, createSurface, encodeOutput, encodePng, jpegFileName, outputFileName, saveFile, stampedName } from './exporter';
 
 describe('jpegFileName', () => {
   it('is meiyan-YYYYMMDD-HHMMSS.jpg in local time, zero-padded', () => {
@@ -90,6 +90,21 @@ describe('outputFileName', () => {
     expect(outputFileName('jpeg', d)).toBe('meiyan-20261012-080402.jpg');
     expect(outputFileName('png', d)).toBe('meiyan-20261012-080402.png');
     expect(jpegFileName(d)).toBe(outputFileName('jpeg', d));
+  });
+});
+
+describe('stampedName', () => {
+  it('is meiyan-YYYYMMDD-HHMMSS.<ext> in local time, zero-padded', () => {
+    expect(stampedName('mp4', new Date(2026, 9, 29, 8, 5, 3))).toBe('meiyan-20261029-080503.mp4');
+    expect(stampedName('webm', new Date(2027, 0, 1, 23, 59, 59))).toBe('meiyan-20270101-235959.webm');
+  });
+  it('defaults to now', () => {
+    expect(stampedName('mp4')).toMatch(/^meiyan-\d{8}-\d{6}\.mp4$/);
+  });
+  it('is the stamp outputFileName puts on photos', () => {
+    const d = new Date(2026, 9, 12, 8, 4, 2);
+    expect(outputFileName('jpeg', d)).toBe(stampedName('jpg', d));
+    expect(outputFileName('png', d)).toBe(stampedName('png', d));
   });
 });
 

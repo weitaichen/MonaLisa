@@ -116,6 +116,10 @@ describe('banner text', () => {
   it('names 0.6.0 as v0.6 (camera per-person spec §13, K16)', () => {
     expect(bannerTitle(available({ next: '0.6.0' }))).toBe('有新版本 v0.6');
   });
+
+  it('names 0.7.0 as v0.7 (beauty video spec §4.7)', () => {
+    expect(bannerTitle(available({ next: '0.7.0' }))).toBe('有新版本 v0.7');
+  });
 });
 
 describe('update checks', () => {
@@ -177,5 +181,9 @@ describe('已更新至 notice (first launch of a new version)', () => {
   it('production 0.4.0 installs skip 0.5 (a preview only): 0.4.0 → 0.6.0 says so, a rollback to 0.4.0 says nothing (RM §16, round-1 review C26)', () => {
     expect(updatedNotice('0.4.0', '0.6.0', true)).toBe('已更新至 v0.6');
     expect(updatedNotice('0.6.0', '0.4.0', true)).toBeNull();
+  });
+
+  it('after the 0.7.0 update', () => {
+    expect(updatedNotice('0.6.0', '0.7.0', true)).toBe('已更新至 v0.7');
   });
 });

@@ -7,6 +7,7 @@ import { reportError } from './debug';
 import { deps } from './deps';
 import { Icon } from './icons';
 import { Camera } from './screens/Camera';
+import { ClipReview } from './screens/ClipReview';
 import { Editor } from './screens/Editor';
 import { Home } from './screens/Home';
 import { Review } from './screens/Review';
@@ -62,6 +63,7 @@ export function App() {
       {screen.name === 'home' && <Home />}
       {screen.name === 'camera' && <Camera />}
       {screen.name === 'review' && <Review key={screen.shot.image} shot={screen.shot} />}
+      {screen.name === 'clip' && <ClipReview key={screen.clip.url} clip={screen.clip} />}
       {screen.name === 'editor' && <Editor key={screen.source.bitmap} source={screen.source} />}
       <UpdateBanner place="home" />
       <SettingsSheet />
@@ -92,18 +94,23 @@ function Busy() {
   );
 }
 
-/** Share sheet unavailable → long-press the image to save (RB §4 "Capture and save"). */
+/**
+ * Share sheet unavailable → long-press the image to save (RB §4 "Capture and save"); a clip (beauty video spec §4.5)
+ * cannot be long-pressed to Photos, so it gets a player and a download link that leads to the Files app.
+ */
 function SaveFallback() {
   const url = useStore(app, (s) => s.saveFallback);
   const name = useStore(app, (s) => s.saveFallbackName);
+  const kind = useStore(app, (s) => s.saveFallbackKind);
   const dlg = useRef<HTMLDivElement>(null);
   // aria-modal: start VoiceOver / keyboard focus inside the dialog
   useEffect(() => {
     if (url) dlg.current?.focus({ preventScroll: true });
   }, [url]);
   if (!url) return null;
+  const video = kind === 'video';
   return (
-    <div class="fallback" role="dialog" aria-modal="true" aria-label="儲存照片" ref={dlg} tabIndex={-1}>
+    <div class="fallback" role="dialog" aria-modal="true" aria-label={video ? '儲存影片' : '儲存照片'} ref={dlg} tabIndex={-1}>
       <div class="topbar">
         <button type="button" class="icon-btn" aria-label="關閉" onClick={closeSaveFallback}>
           <Icon name="close" />
@@ -112,10 +119,19 @@ function SaveFallback() {
         <span style={{ width: 44 }} />
       </div>
       <div class="fallback-img">
-        <img src={url} alt="編輯結果" data-name={name ?? undefined} />
+        {video ? <video src={url} controls playsInline data-name={name ?? undefined} /> : <img src={url} alt="編輯結果" data-name={name ?? undefined} />}
       </div>
       <div class="fallback-hint">
-        <b>長按圖片 → 儲存到照片</b>
+        {video ? (
+          <>
+            <b>點「下載影片」，再到「檔案」App 存到照片</b>
+            <a class="btn primary" href={url} download={name ?? ''}>
+              下載影片
+            </a>
+          </>
+        ) : (
+          <b>長按圖片 → 儲存到照片</b>
+        )}
         <span>這個瀏覽器無法直接開啟分享選單</span>
       </div>
     </div>

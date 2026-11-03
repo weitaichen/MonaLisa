@@ -11,12 +11,17 @@ export const FULL_JPEG_QUALITY = 0.95;
 const MIME: Record<ExportFormat, 'image/jpeg' | 'image/png'> = { jpeg: 'image/jpeg', png: 'image/png' };
 const EXT: Record<ExportFormat, string> = { jpeg: 'jpg', png: 'png' };
 
-/** meiyan-YYYYMMDD-HHMMSS.jpg|.png in local time (the prefix stays, C §3.8) */
-export function outputFileName(format: ExportFormat, d: Date = new Date()): string {
+/** meiyan-YYYYMMDD-HHMMSS.<ext> in local time (the prefix stays, C §3.8); photos and videos are named alike */
+export function stampedName(ext: string, d: Date = new Date()): string {
   const p = (n: number) => String(n).padStart(2, '0');
   const date = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
   const time = `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-  return `meiyan-${date}-${time}.${EXT[format]}`;
+  return `meiyan-${date}-${time}.${ext}`;
+}
+
+/** meiyan-YYYYMMDD-HHMMSS.jpg|.png in local time (the prefix stays, C §3.8) */
+export function outputFileName(format: ExportFormat, d: Date = new Date()): string {
+  return stampedName(EXT[format], d);
 }
 
 /** meiyan-YYYYMMDD-HHMMSS.jpg in local time. */

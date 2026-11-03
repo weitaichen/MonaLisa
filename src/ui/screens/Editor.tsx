@@ -117,6 +117,7 @@ import {
 } from '../editorModel';
 import { deliverAction, exportOutcome, noSourceNote, pillLabel, planSig, preEncodes, shareReady, tapAction, tileDrawState, type Pill, type ShareCache } from '../exportFlow';
 import { FaceProtectSource, isContourEdit, maskCoversFace, paramsPatch, type FaceProtectRecord } from '../faceProtectModel';
+import { shareFile } from '../flows';
 import { Icon } from '../icons';
 import {
   bandOrSuggested,
@@ -146,7 +147,7 @@ import {
 } from '../panelModel';
 import { haptic } from '../platform';
 import { ensureBodyTracker, ensureEngine, ensureFaceSegmenter, ensurePhotoDetector, photoDetectorPending, svc, trackerComing } from '../services';
-import { app, go, setPendingHistory, showSaveFallback, toast, type EditorSource } from '../state';
+import { app, go, setPendingHistory, toast, type EditorSource } from '../state';
 import { useStore } from '../store';
 import { requestLut, useAdjustFailureNotice, useElementSize, useHold, useLutLoader } from './hooks';
 import { useZoomPan, type BrushHooks } from './zoomPan';
@@ -1830,25 +1831,6 @@ export function Editor({ source }: { source: EditorSource }) {
   };
   const clearAllStrokes = () => update(clearStrokes(editRef.current), true); // update commits a live stroke first
 
-  const share = (file: File) => {
-    let p: Promise<string>;
-    try {
-      p = deps.saveFile(file);
-    } catch (e) {
-      p = Promise.reject(e);
-    }
-    p.then(
-      (r) => {
-        if (r === 'fallback') showSaveFallback(file);
-        else if (r === 'shared') toast('完成');
-      },
-      (e: unknown) => {
-        reportError(e, 'saveFile');
-        showSaveFallback(file);
-      },
-    );
-  };
-
   /**
    * 儲存 (S §2.3): the plan of the user's state at the tap. A file ready for it (the debounced JPEG, or the last export's
    * file for these output settings) and a slow export's delivered file (「分享」) are shared synchronously inside the tap;
@@ -1865,7 +1847,7 @@ export function Editor({ source }: { source: EditorSource }) {
       const file = delivered.current!;
       delivered.current = null;
       setPill('save');
-      share(file); // synchronous inside the tap: a fresh transient activation
+      shareFile(file); // synchronous inside the tap: a fresh transient activation
       return;
     }
     const s = session;
@@ -1884,7 +1866,7 @@ export function Editor({ source }: { source: EditorSource }) {
     const sig = planSig(plan);
     if (shareReady(fresh.current, key, gen, sig)) {
       setPill('save');
-      share(fresh.current!.file); // synchronous inside the tap
+      shareFile(fresh.current!.file); // synchronous inside the tap
       return;
     }
     if (noSourceNote(plan, sourceRef.current, photo) && !noSourceToastDone.current) {
@@ -1904,7 +1886,7 @@ export function Editor({ source }: { source: EditorSource }) {
     const action = deliverAction(t0, performance.now(), current);
     if (action === 'share') {
       setPill('save');
-      share(file);
+      shareFile(file);
     } else if (action === 'pending') {
       delivered.current = file;
       setPill('share');

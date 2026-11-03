@@ -4,10 +4,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { handOverEdit, importEdit } from '../../edit/migrate';
 import { errorText, reportError } from '../debug';
 import { deps } from '../deps';
-import { freshSource } from '../flows';
+import { freshSource, shareFile } from '../flows';
 import { Icon } from '../icons';
 import { haptic } from '../platform';
-import { app, go, showSaveFallback, toast, type Shot } from '../state';
+import { app, go, toast, type Shot } from '../state';
 
 export function Review({ shot }: { shot: Shot }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -61,22 +61,7 @@ export function Review({ shot }: { shot: Shot }) {
       return;
     }
     // no await before this call: the share sheet needs the tap's transient activation
-    let p: Promise<string>;
-    try {
-      p = deps.saveFile(file);
-    } catch (e) {
-      p = Promise.reject(e);
-    }
-    p.then(
-      (r) => {
-        if (r === 'fallback') showSaveFallback(file);
-        else if (r === 'shared') toast('完成');
-      },
-      (e: unknown) => {
-        reportError(e, 'saveFile');
-        showSaveFallback(file);
-      },
-    );
+    shareFile(file);
   };
 
   const retake = () => {

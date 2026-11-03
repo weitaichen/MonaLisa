@@ -206,4 +206,62 @@ bare.describe('a slow face-tracker build (0.5.1)', () => {
     expect(mad(await grab(frame), original, band)).toBeGreaterThan(2);
     expect(t.errors).toEqual([]);
   });
+
+  bare('a live-loop restart mid-recording keeps recording (beauty video spec §4.3)', async ({ page }) => {
+    bare.setTimeout(240_000);
+    const t = await holdTracker(page);
+    // the frames copied into the recording canvas (the one canvas captureStream is called on, recordCanvas.ts): a loop
+    // restarted without the sink would leave the clip frozen, yet decodable. The cap moves out of a slow adoption's way
+    await page.addInitScript(() => {
+      const w = window as unknown as { __recFrames: number; __meiyanClipCapMs: number };
+      w.__recFrames = 0;
+      w.__meiyanClipCapMs = 600_000;
+      const capture = HTMLCanvasElement.prototype.captureStream;
+      HTMLCanvasElement.prototype.captureStream = function (this: HTMLCanvasElement, fps?: number) {
+        const g = this.getContext('2d') as (CanvasRenderingContext2D & { drawImage: (...a: unknown[]) => void }) | null;
+        if (g) {
+          const draw = g.drawImage.bind(g) as (...a: unknown[]) => void;
+          g.drawImage = (...a: unknown[]) => {
+            w.__recFrames++;
+            draw(...a);
+          };
+        }
+        return capture.call(this, fps);
+      };
+    });
+    const frames = () => page.evaluate(() => (window as unknown as { __recFrames: number }).__recFrames);
+    await page.goto('/');
+    await page.getByRole('button', { name: /拍攝/ }).click();
+    await page.getByRole('button', { name: '點擊開啟相機' }).click();
+    await expect(page.locator('.toast', { hasText: '臉部偵測啟動較慢' })).toBeVisible({ timeout: 90_000 });
+    await expect
+      .poll(async () => {
+        const d = await debugState(page);
+        return d.cameraState === 'live' && d.fps > 0;
+      }, { timeout: 30_000, intervals: [250] })
+      .toBe(true);
+
+    // 基本模式 records too
+    await page.getByRole('radio', { name: '錄影' }).click();
+    await page.getByRole('button', { name: '開始錄影' }).click();
+    const badge = page.getByRole('timer');
+    await expect(badge).toBeVisible();
+    await page.waitForTimeout(1000);
+    expect(await frames()).toBeGreaterThan(0);
+
+    t.release();
+    // adopted: the live loop restarts with the new bundle within one render, and the new loop feeds the same recording
+    const started = page.locator('.toast', { hasText: '臉部偵測已啟動' });
+    await expect(started).toBeVisible({ timeout: 90_000 });
+    const atRestart = await frames();
+    await expect.poll(frames, { timeout: 10_000 }).toBeGreaterThan(atRestart + 5);
+    await expect(badge).toBeVisible();
+    await page.waitForTimeout(1000);
+    await page.getByRole('button', { name: '停止錄影' }).click();
+
+    await expect.poll(async () => (await debugState(page)).screen, { timeout: 30_000 }).toBe('clip');
+    const video = page.locator('video[aria-label="錄影結果"]');
+    await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.videoWidth), { timeout: 30_000 }).toBeGreaterThan(0);
+    expect(t.errors).toEqual([]);
+  });
 });

@@ -30,6 +30,15 @@ export interface Shot {
   handOver: CameraHandOver | null;
 }
 
+/** A finished recording (beauty video spec §4.5), what the camera hands to the clip screen. */
+export interface Clip {
+  file: File;
+  /** object URL of `file` for the clip screen's <video>: the screen revokes it when it goes (the save dialog makes its own) */
+  url: string;
+  durationMs: number;
+  hasAudio: boolean;
+}
+
 export interface EditorSource {
   /** owned by the editor session afterwards */
   bitmap: ImageBitmap;
@@ -69,6 +78,7 @@ export type Screen =
   | { name: 'home' }
   | { name: 'camera' }
   | { name: 'review'; shot: Shot }
+  | { name: 'clip'; clip: Clip }
   | { name: 'editor'; source: EditorSource };
 
 export type Sheet = null | 'settings' | 'credits';
@@ -84,11 +94,18 @@ export interface AppState {
   prefs: Prefs;
   ratio: Ratio;
   timer: TimerSec;
+  /**
+   * 拍照 or 錄影 (beauty video spec §4.1): in memory only, 'photo' at app start, kept across the clip screen so 重錄
+   * opens the camera in whichever mode it was left in
+   */
+  cameraMode: 'photo' | 'video';
   toast: { id: number; text: string } | null;
   /** object URL shown full-screen for long-press saving when the share sheet is unavailable */
   saveFallback: string | null;
   /** file name of the save-fallback image (the e2e reads the format from it) */
   saveFallbackName: string | null;
+  /** what the save-fallback dialog shows: the photo to long-press, or a video with a download link (from the file's type) */
+  saveFallbackKind: 'image' | 'video';
   /** blocking work in progress (e.g. decoding an imported photo) */
   busy: string | null;
   /**
@@ -114,9 +131,11 @@ export const app = createStore<AppState>({
   prefs: safeLoad(() => deps.loadPrefs(), () => ({ ...DEFAULT_PREFS }), 'loadPrefs'),
   ratio: '3:4',
   timer: 0,
+  cameraMode: 'photo',
   toast: null,
   saveFallback: null,
   saveFallbackName: null,
+  saveFallbackKind: 'image',
   busy: null,
   cameraAll: false,
 });
@@ -193,11 +212,15 @@ export function toast(text: string, ms = 2200): void {
 export function showSaveFallback(file: File): void {
   const prev = app.get().saveFallback;
   if (prev) URL.revokeObjectURL(prev);
-  app.set({ saveFallback: URL.createObjectURL(file), saveFallbackName: file.name });
+  app.set({
+    saveFallback: URL.createObjectURL(file),
+    saveFallbackName: file.name,
+    saveFallbackKind: file.type.startsWith('video/') ? 'video' : 'image',
+  });
 }
 
 export function closeSaveFallback(): void {
   const prev = app.get().saveFallback;
   if (prev) URL.revokeObjectURL(prev);
-  app.set({ saveFallback: null, saveFallbackName: null });
+  app.set({ saveFallback: null, saveFallbackName: null, saveFallbackKind: 'image' });
 }
